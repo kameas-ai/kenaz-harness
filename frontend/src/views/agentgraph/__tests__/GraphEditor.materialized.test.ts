@@ -95,6 +95,7 @@ function mountWith(spec?: Partial<GraphSpec>) {
       }),
       getRunTrace: async () => [],
       resume: async () => undefined,
+      resolveApproval: async () => undefined,
       cancelRun: async () => undefined,
       materializeRun,
     },
@@ -154,6 +155,16 @@ describe('GraphEditor — materialized run', () => {
     const badge = wrapper.find('[data-testid="editor-materialized-degraded"]');
     expect(badge.exists()).toBe(true);
     expect(badge.text()).toContain('topology shown may differ');
+    // agentgraph-settings-linkage-01DOGF0D WP04 (FR-3): the provenance
+    // tier in plain words, not only the technical caveat.
+    expect(badge.text()).toContain('Reconstructed from the library graph');
+    // feat/graph-resolved-spec WP02: a reconstruction is a run whose
+    // exact spec was never recorded — it predates recording, or its spec
+    // was refused for size — and the banner names both causes rather
+    // than blaming memory (review F3).
+    expect(badge.text()).toContain('exact spec was never');
+    expect(badge.text()).toContain('predates spec recording');
+    expect(badge.text()).toContain('exceeded the');
   });
 
   it('does not badge a faithful projection', async () => {
@@ -252,5 +263,34 @@ describe('GraphEditor — materialized run', () => {
     });
     await flushPromises();
     expect(wrapper.text()).toContain('not found');
+  });
+
+  // agentgraph-settings-linkage-01DOGF0D review L6: the backend's
+  // ErrRunIDReused refusal (a pre-fix chat-<n> id reused across app
+  // sessions) reads as a sentence, not a raw Go error string.
+  it('explains a reused pre-fix run id in plain words', async () => {
+    const client = createFakeHarnessClient({
+      graph: {
+        ...createFakeHarnessClient().graph,
+        materializeRun: vi.fn(async () => {
+          throw new Error(
+            'agentgraph: materialize: run id was reused by several runs; its events cannot be attributed to one turn: run "chat-3" has 2 run_start events',
+          );
+        }),
+      },
+    });
+    const wrapper = mount(GraphEditor, {
+      global: {
+        provide: { [HarnessClientKey as symbol]: client },
+        stubs: {
+          CanvasHead: {
+            template: '<div class="canvas-head"><slot name="trailing" /></div>',
+          },
+        },
+      },
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain('This run graph cannot be shown');
+    expect(wrapper.text()).not.toContain('agentgraph: materialize');
   });
 });

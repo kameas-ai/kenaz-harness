@@ -23,7 +23,7 @@ import SettingsShell from '@/views/settings/SettingsShell.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { Bundle, TrustAnchor } from '@/lib/types';
 // fleet-share-and-sync-01NDFSEX14 WP03 — Publish to team catalog
-import PublishDialog from '@/views/marketplace/PublishDialog.vue';
+import PublishDialog from '@/views/catalog/PublishDialog.vue';
 import { signedIn } from '@/lib/featureFlags';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';

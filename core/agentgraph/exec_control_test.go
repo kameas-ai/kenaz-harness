@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestBranchExpr_Eq(t *testing.T) {
@@ -152,6 +155,199 @@ func TestLoopExecutor_ConditionShortCircuit(t *testing.T) {
 	iter := r.Outputs["iterations"].(int)
 	if iter < 1 || iter > 5 {
 		t.Errorf("iter %d out of expected range", iter)
+	}
+}
+
+// fakeTurnPauseGate is a race-safe test double for TurnPauseGate
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, AC-10).
+// pausedAt is the 0-indexed Wait() call number at which Wait starts
+// blocking (every call before that returns nil immediately). blockCh
+// is closed by the test to simulate Resume; blockedSig fires (buffered
+// 1) the instant Wait actually parks, so the test can synchronize on
+// "the loop is now blocked" without sleep-based polling.
+type fakeTurnPauseGate struct {
+	mu       sync.Mutex
+	calls    int
+	pausedAt int
+	blockCh  chan struct{}
+	blocked  chan struct{}
+}
+
+func (g *fakeTurnPauseGate) Wait(ctx context.Context) error {
+	g.mu.Lock()
+	n := g.calls
+	g.calls++
+	g.mu.Unlock()
+	if n < g.pausedAt {
+		return nil
+	}
+	select {
+	case g.blocked <- struct{}{}:
+	default:
+	}
+	select {
+	case <-g.blockCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (g *fakeTurnPauseGate) callCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.calls
+}
+
+// TestLoopExecutor_TurnPause_FreezesTurnCountUntilResumed is AC-10's
+// proof: "a paused sub-agent starts no further turn; a resumed one
+// does" — asserted via the ACTUAL turn (loop-iteration) count the real
+// production loopExecutor.Execute produces, never via any status
+// field. This exercises the real consult site added to exec_control.go
+// (env.TurnPause.Wait before each iteration) directly, with no LLM or
+// chat-stack scaffolding required.
+//
+// Mutation proof (manually verified 2026-09-10, matching PR #331's
+// Abort/Steer convention): commenting out the
+// `if env.TurnPause != nil { ... }` block this test exercises makes
+// this test fail immediately — bodyRuns reaches 6 before the pause
+// boundary is ever observed (gate.blocked never fires, so the test
+// times out waiting for it), which is exactly the "implement pause as
+// a status write" mutation AC-10 names. Reverting the comment-out
+// restores green.
+func TestLoopExecutor_TurnPause_FreezesTurnCountUntilResumed(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	bodyRuns := 0
+	g := &Graph{Nodes: []Node{
+		{ID: "loop", Kind: NodeKindLoop, Attrs: LoopAttrs{
+			MaxIterations: 6, Body: []string{"step"},
+		}},
+		{ID: "step", Kind: NodeKindTransform, Attrs: TransformAttrs{Name: "count_turn"}},
+	}}
+	env := newTestEnv(g)
+	env.Transforms.Register("count_turn", func(_ context.Context, _ PortValues, _ map[string]any) (PortValues, error) {
+		mu.Lock()
+		bodyRuns++
+		mu.Unlock()
+		return PortValues{"out": "x"}, nil
+	})
+	gate := &fakeTurnPauseGate{pausedAt: 3, blockCh: make(chan struct{}), blocked: make(chan struct{}, 1)}
+	env.TurnPause = gate
+
+	ex := loopExecutor{}
+	type outcome struct {
+		r   Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		r, err := ex.Execute(context.Background(), env, &g.Nodes[0], PortValues{"in": "x"})
+		done <- outcome{r, err}
+	}()
+
+	select {
+	case <-gate.blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the loop to park at the pause boundary — TurnPause is not being consulted")
+	}
+
+	mu.Lock()
+	turnsBeforeResume := bodyRuns
+	mu.Unlock()
+	if turnsBeforeResume != 3 {
+		t.Fatalf("turn count while paused = %d, want exactly 3 (assert turn count, not status: AC-10)", turnsBeforeResume)
+	}
+	if got := gate.callCount(); got != 4 {
+		t.Errorf("TurnPause.Wait call count while parked = %d, want 4 (consulted once per turn, including the one now blocked)", got)
+	}
+
+	close(gate.blockCh) // Resume: clears the pause so turns begin again.
+
+	select {
+	case out := <-done:
+		if out.err != nil {
+			t.Fatalf("Execute: %v", out.err)
+		}
+		if out.r.Outputs["iterations"] != 6 {
+			t.Errorf("iterations = %v, want 6 (all turns ran after resume)", out.r.Outputs["iterations"])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the loop to resume and finish after Resume cleared the pause")
+	}
+
+	mu.Lock()
+	finalRuns := bodyRuns
+	mu.Unlock()
+	if finalRuns != 6 {
+		t.Errorf("body ran %d times total, want 6", finalRuns)
+	}
+}
+
+// TestLoopExecutor_TurnPause_NilGateNeverBlocks pins the default: a
+// hand-built Env (every Kernel.Run caller except a dispatched
+// sub-agent) leaves TurnPause nil, and the loop must run to completion
+// exactly as before this UNIT-8 addition existed.
+func TestLoopExecutor_TurnPause_NilGateNeverBlocks(t *testing.T) {
+	t.Parallel()
+	g := &Graph{Nodes: []Node{
+		{ID: "loop", Kind: NodeKindLoop, Attrs: LoopAttrs{
+			MaxIterations: 3, Body: []string{"step"},
+		}},
+		{ID: "step", Kind: NodeKindTransform, Attrs: TransformAttrs{Name: "uppercase"}},
+	}}
+	env := newTestEnv(g)
+	if env.TurnPause != nil {
+		t.Fatalf("newTestEnv/applyEnvDefaults must leave TurnPause nil by default")
+	}
+	ex := loopExecutor{}
+	r, err := ex.Execute(context.Background(), env, &g.Nodes[0], PortValues{"in": "abc"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if r.Outputs["iterations"] != 3 {
+		t.Errorf("iterations = %v, want 3", r.Outputs["iterations"])
+	}
+}
+
+// TestLoopExecutor_TurnPause_CtxCancelUnblocksWait covers the Abort
+// interaction E-002 requires: "mid-turn cost is not bounded by Pause
+// ... that is Abort ... which is also what unblocks a Wait call". A
+// cancelled ctx must unblock a parked Wait rather than hang forever.
+func TestLoopExecutor_TurnPause_CtxCancelUnblocksWait(t *testing.T) {
+	t.Parallel()
+	g := &Graph{Nodes: []Node{
+		{ID: "loop", Kind: NodeKindLoop, Attrs: LoopAttrs{
+			MaxIterations: 5, Body: []string{"step"},
+		}},
+		{ID: "step", Kind: NodeKindTransform, Attrs: TransformAttrs{Name: "uppercase"}},
+	}}
+	env := newTestEnv(g)
+	gate := &fakeTurnPauseGate{pausedAt: 0, blockCh: make(chan struct{}), blocked: make(chan struct{}, 1)}
+	env.TurnPause = gate
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ex := loopExecutor{}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ex.Execute(ctx, env, &g.Nodes[0], PortValues{"in": "abc"})
+		done <- err
+	}()
+
+	select {
+	case <-gate.blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the loop to park on the pause gate")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Execute err = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for ctx cancellation to unblock the paused Wait call")
 	}
 }
 
@@ -332,6 +528,74 @@ func TestForkExecutor_RealImpl_FiresFork(t *testing.T) {
 	}
 	if !sawBranchFork {
 		t.Error("missing branch_fork event")
+	}
+}
+
+// TestForkExecutor_PreToolUseHookLabel is WP15's regression test
+// (trust-surfaces-that-fire-01PMZ202, R-09). The branch-fork lifecycle
+// hook actually dispatches FirePreToolUse (tool "branch.fork"), so a
+// block from it must be attributed to pre_tool_use everywhere it is
+// reported — the "at" value on the EventHookDenied audit event, and the
+// returned error string. Before this fix both said "subagent_start", an
+// event SubagentStartEvent (core/hooks/fire.go) that is never
+// constructed anywhere in the repo, so the audit trail attributed the
+// decision to a hook the user could not have written.
+//
+// AC-15a: labels say pre_tool_use.
+// AC-15b (regression guard): the hook still actually blocks the fork —
+// this WP must not change behaviour, only the label.
+//
+// Mutation: restore the old "subagent_start" labels (comment, the "at"
+// value, and the error string) in exec_control.go. Must fail on both
+// the "at" assertion and the error-string assertion below.
+func TestForkExecutor_PreToolUseHookLabel(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(&Graph{})
+	seam := NewFakeBranchSeam()
+	env.Branch = seam
+	hooks := &fakeLifecycleHookRunner{
+		preResult: LifecycleMergedOutput{Blocked: true, BlockReason: "denied by policy"},
+	}
+	env.LifecycleHooks = hooks
+	ex := branchExecutor{}
+	node := &Node{ID: "fk", Kind: NodeKindBranch, Attrs: BranchAttrs{Title: "child"}}
+
+	res, err := ex.Execute(context.Background(), env, node, PortValues{"context": "seed"})
+
+	// AC-15b: the fork is still blocked, and Fork itself is never called.
+	if err == nil {
+		t.Fatalf("expected an error from a blocked pre_tool_use hook")
+	}
+	if len(seam.Forks) != 0 {
+		t.Errorf("Fork calls = %d, want 0 (blocked before Fork)", len(seam.Forks))
+	}
+
+	// AC-15a: the error names pre_tool_use, not subagent_start.
+	if !strings.Contains(err.Error(), "pre_tool_use") {
+		t.Errorf("error = %q, want it to name pre_tool_use", err.Error())
+	}
+	if strings.Contains(err.Error(), "subagent_start") {
+		t.Errorf("error = %q, still names the retired subagent_start label", err.Error())
+	}
+
+	// AC-15a: the EventHookDenied audit event's "at" value is
+	// pre_tool_use, not subagent_start.
+	var sawDenied bool
+	for _, e := range res.Events.Events {
+		if e.Kind != EventHookDenied {
+			continue
+		}
+		sawDenied = true
+		var payload map[string]any
+		if uerr := json.Unmarshal(e.Payload, &payload); uerr != nil {
+			t.Fatalf("decode EventHookDenied payload: %v", uerr)
+		}
+		if payload["at"] != "pre_tool_use" {
+			t.Errorf(`EventHookDenied payload["at"] = %v, want "pre_tool_use"`, payload["at"])
+		}
+	}
+	if !sawDenied {
+		t.Fatalf("expected an EventHookDenied event")
 	}
 }
 

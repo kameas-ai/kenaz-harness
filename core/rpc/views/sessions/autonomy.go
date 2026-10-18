@@ -130,6 +130,7 @@ func toAutonomyKnobValues(r autonomy.ResolvedKnobs, global, project, session aut
 		RecapStyle:               string(r.RecapStyle),
 		ContinueOnError:          string(r.ContinueOnError),
 		DestructiveActionPosture: string(r.DestructiveActionPosture),
+		RiskThreshold:            r.RiskThreshold,
 		SourceTrace:              trace,
 		Tier:                     tier,
 	}

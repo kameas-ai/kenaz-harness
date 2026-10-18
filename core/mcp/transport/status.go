@@ -58,3 +58,22 @@ type RecipeStatus struct {
 	StderrTail      string    `json:"stderr_tail,omitempty"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
+
+// HealthObserver is invoked by a remote (http/sse) sub-pool whenever a
+// server's live-probed health state changes — the push signal
+// connector-lifecycle-truth-01PMZ303 UNIT-8 publishes to the desktop
+// (mcp:health-changed) and the audit log (KindMCPHealthChanged).
+// previousState is "" on the first observed transition (no prior
+// probe result to compare against). current is the freshly-computed
+// RecipeStatus for id — the same struct AllRecipeStatuses/RecipeStatus
+// return, so a caller never sees a second, divergent shape.
+//
+// stdio has no equivalent hook: its AllRecipeStatuses already reflects
+// the supervisor's real-time state on every poll (RecipeStatus reads
+// the live ServerInstance under its lifecycle lock), so there was
+// never a synthesised value to correct and therefore no transition
+// that only a push signal — as opposed to the next poll — could
+// reveal. http/sse are different: before UNIT-7 they returned a
+// permanently-synthesised "running" that never changed, so their
+// transitions need an explicit push once they start being real.
+type HealthObserver func(id, previousState string, current RecipeStatus)

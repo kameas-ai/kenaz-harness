@@ -106,6 +106,15 @@ const (
 	// Full URL (which may contain auth tokens) and response body are NEVER
 	// recorded (privacy invariant).
 	KindWorkflowNetworkFetch Kind = "workflow.network_fetch"
+	// KindWorkflowNotifySent fires once per surface a `notify` step
+	// dispatches to successfully (automation-actually-runs-01PMZ404
+	// UNIT-8). Payload: WorkflowNotifySentPayload. notify is the only
+	// workflow step kind that reaches outside the process (OS
+	// notification, Slack, email, push); before this unit it was the
+	// only one with no audit trail. Per the privacy invariant, only the
+	// target name and a TRUNCATED title (≤60 chars, enforced by the
+	// caller) are recorded — the notification body is NEVER included.
+	KindWorkflowNotifySent Kind = "workflow.notify_sent"
 
 	// KindMCPHealthChanged fires when an installed MCP recipe transitions
 	// state (stopped → starting → running → restarting → failed).
@@ -143,6 +152,11 @@ const (
 	//   "unknown"     — caller did not specify (today: the ordinary
 	//                   "+ Fork" button, which sends neither
 	//                   ParentMessageID nor CreationPath).
+	//   "auto_act"    — the advice hook's auto-act branch (stored on the
+	//                   row; that path writes via conversation.Manager
+	//                   directly).
+	//   "model_tool"  — the model forked its own session via
+	//                   kenaz__fork_conversation.
 	KindBranchCreated Kind = "branch.created"
 
 	// KindSlashCommandRun fires when a user-defined slash command is
@@ -323,6 +337,14 @@ const (
 	// Privacy invariant: body, title, and metadata are NEVER included.
 	KindFleetContextPublished Kind = "fleet.context_published"
 
+	// KindFleetContextPushRejected fires when fleet answered a context push
+	// 200 but rejected a pushed node per-item (kenaz-fleet PR #173
+	// `rejected[]`, reason "not_permitted": the id belongs to another user
+	// or org). The failure counterpart of KindFleetContextPublished — a
+	// rejected node must never be recorded as published. Payload: id,
+	// classification, reason — no title/body.
+	KindFleetContextPushRejected Kind = "fleet.context_push_rejected"
+
 	// KindFleetContextPulled fires once per successful PullDelta call that
 	// returns at least one node. The payload is a batch summary (node count,
 	// cursor) — no individual entry contents.
@@ -350,6 +372,14 @@ const (
 	// Payload: FleetCatalogPublishedPayload.
 	KindFleetCatalogPublished Kind = "fleet.catalog_published"
 
+	// KindFleetCatalogUnpublished fires when a publisher or fleet admin
+	// withdraws a workflow, agent pack, or bundle from the team catalog
+	// (fleet-enforcement-truth-01PMZ505 WP11, register C-3). Publish
+	// already emitted through WithEmitter; withdrawal did not — an audit
+	// trail that records publications but not retractions is a worse
+	// record than none. Payload: FleetCatalogUnpublishedPayload.
+	KindFleetCatalogUnpublished Kind = "fleet.catalog_unpublished"
+
 	// ── Fleet skills (fleet-skills-sync-01NDFSEX18 WP07) ────────────────────
 
 	// KindFleetSkillPublished fires when the user successfully publishes a
@@ -366,6 +396,29 @@ const (
 	// store and unregistered from the registry.
 	// Payload: FleetSkillUninstalledPayload.
 	KindFleetSkillUninstalled Kind = "fleet.skill_uninstalled"
+
+	// ── Fleet catalog lifecycle (skill-library-01SKLIB01) ───────────────────
+
+	// KindFleetCatalogRevokedUninstalled fires when the revocation sweep
+	// uninstalls a copy the USER installed from the catalog (skill
+	// Source=catalog, or a workflow with catalog provenance) because the
+	// org revoked that version (WP03, fleet ruling OQ-5 = H4a). Never fires
+	// for an org-mandated or user-authored item. Payload:
+	// FleetCatalogRevokedUninstalledPayload.
+	KindFleetCatalogRevokedUninstalled Kind = "fleet.catalog_revoked_uninstalled"
+
+	// KindFleetMandatedItemRemoved fires when the org stops requiring an
+	// item and the bundle reconcile uninstalls (or hands back) the local
+	// copy (WP04). Payload: FleetMandatedItemPayload.
+	KindFleetMandatedItemRemoved Kind = "fleet.mandated_item_removed"
+
+	// KindFleetMandatedItemUpgraded fires instead of a removal when the
+	// org promoted a required item to a new version that took over the
+	// same local skill/workflow in the same bundle (v1→v2): locally it was
+	// an upgrade, nothing was uninstalled — even though the ACK still says
+	// "removed" for v1, which fleet groups as "superseded" (WP04, H3).
+	// Payload: FleetMandatedItemPayload.
+	KindFleetMandatedItemUpgraded Kind = "fleet.mandated_item_upgraded"
 
 	// ── ACP envelope audit kind (acp-orchestration-integration-01NDFSEX06) ──
 
@@ -495,6 +548,31 @@ const (
 	// so a silent write failure cannot masquerade as a grant.
 	KindToolConfirmGrantWritten Kind = "tool.confirm_grant_written"
 
+	// KindToolsActivated fires when tools are added to a session's
+	// activated set, so their full schemas are sent on the session's next
+	// model calls (kenaz__load_tools, the composer's load action, or the
+	// auto-activation of a summary tool the model called by exact name).
+	// Payload: ToolsActivatedPayload.
+	//
+	// Activation changes what the model is SHOWN, never what it is
+	// permitted to call: an activated tool still passes every permission
+	// gate at call time.
+	//
+	// Privacy invariant: ids, server names, a count, the sticky flag and
+	// who asked. No tool arguments, no tool names beyond their servers.
+	KindToolsActivated Kind = "tools.activated"
+
+	// KindToolsEvicted fires when a model call's tool definitions exceed
+	// the schema budget and loaded tools are left out of the call: the
+	// activated tools least recently used first, then pinned tools. The
+	// evicted tools stay activated; their servers are listed again in the
+	// call's "available but not loaded" digest. One row per change of a
+	// session's evicted set. Payload: ToolsEvictedPayload.
+	//
+	// Privacy invariant: ids, server names, counts and token sizes. No
+	// tool arguments, no tool names beyond their servers.
+	KindToolsEvicted Kind = "tools.evicted"
+
 	// ── Bundle install audit kinds
 	// (bundle-download-and-verify-01PMZ909 UNIT-7) ──────────────────
 
@@ -542,7 +620,167 @@ const (
 	// auto_approve_window_seconds timeout, so a run resolved without a
 	// human is as auditable as one a human resolved.
 	KindApprovalResolved Kind = "agentgraph.approval_resolved"
+
+	// Sub-agent control-verb audit kinds (subagent-control-and-
+	// background-tasks-01PMZB11 UNIT-8, AC-09/owner ruling C-5: a
+	// control verb that mutates a running agent is trust-relevant, so
+	// it is recorded, not silent).
+	//
+	// Both fire exactly once per verb call that actually took effect —
+	// NOT once per call. A no-op Abort against an already-terminal
+	// sub-agent (the task registry's ErrAlreadyTerminal) writes zero
+	// additional records: the state transition already happened once,
+	// on the call that produced it, and the idempotent re-call has
+	// nothing new to attest to (AC-09's "one audit record, not two").
+
+	// KindSubagentAborted fires when Subagent_Abort actually stops a
+	// running sub-agent (Registry.Abort returned nil, not
+	// ErrAlreadyTerminal).
+	//
+	// Privacy invariant: only ids — no transcript content, no tool
+	// arguments, no LLM output — crosses the audit boundary.
+	KindSubagentAborted Kind = "subagent.aborted"
+
+	// KindSubagentSteered fires when Subagent_Steer appends a message
+	// to a dispatched sub-agent's child session.
+	//
+	// Privacy invariant: the steering message's TEXT is never included
+	// — only its rune length, matching this package's established
+	// no-user-content convention (see KindElicitationRequest /
+	// KindSlashCommandRun above). The message itself is already
+	// persisted as an ordinary session message; the audit record is
+	// evidence THAT a steer happened and WHEN, not a second copy of
+	// WHAT was said.
+	KindSubagentSteered Kind = "subagent.steered"
+
+	// Sub-agent Pause/Resume audit kinds (subagent-control-and-
+	// background-tasks-01PMZB11 UNIT-8, AC-09/owner ruling C-5: a
+	// control verb that mutates a running agent is trust-relevant, so
+	// it is recorded, not silent). Mirror the shape of PR #331's
+	// KindSubagentAborted/KindSubagentSteered (Abort/Steer, same
+	// mission).
+	//
+	// Both fire exactly once per verb call that actually changed the
+	// pause state — NOT once per call. A no-op Pause against an
+	// already-paused branch, or a no-op Resume against a branch that
+	// was never paused, writes zero additional records (AC-09's "one
+	// audit record, not two", mirrored from Abort's idempotency
+	// contract).
+
+	// KindSubagentPaused fires when Subagent_Pause actually arms the
+	// pause signal for a dispatched sub-agent's child session (i.e. the
+	// branch was not already paused).
+	//
+	// Privacy invariant: only ids — no transcript content, no tool
+	// arguments, no LLM output — crosses the audit boundary.
+	KindSubagentPaused Kind = "subagent.paused"
+
+	// KindSubagentResumed fires when Subagent_Resume actually clears an
+	// armed pause signal (i.e. the branch was paused).
+	//
+	// Privacy invariant: ids only, same as KindSubagentPaused.
+	KindSubagentResumed Kind = "subagent.resumed"
+
+	// ── Blocked permission request audit kind
+	// (model-scheduled-jobs-01PMSJ01 WP06, FR-004) ──────────────────
+
+	// KindBlockedPermissionRequest fires once per denied permission
+	// request core/tools/fs.RecordingPrompter observes — the same event
+	// that also writes a durable blocked_permission_requests row
+	// (migration sessions/0338). The audit record and the row are
+	// deliberately BOTH written: the audit log has a real reader
+	// (Audit_ListEntries -> AuditView.vue) but is an append-only fact,
+	// not a work item with a pending -> granted -> dismissed lifecycle a
+	// surfacing UI can query cheaply — see the migration file's "why this
+	// table" doc for the full four-candidate-homes argument.
+	//
+	// Privacy invariant: origin, originID, sessionID, family, action,
+	// resource (a canonical path, not file contents) and reason (a short
+	// policy explanation, never tool arguments or file contents) cross
+	// the boundary. Nothing else does.
+	KindBlockedPermissionRequest Kind = "policy.blocked_permission_request"
+
+	// KindModelSwitched fires when a user-initiated model move changes
+	// which (profileID, modelOverride) pair serves a session's next turn
+	// (laya-advisors-01LAYA001 WP08, design §5.2 / §5.1's escalate_model
+	// row: "new model.switched audit + event-log kinds at the
+	// 01PMCH01 move-switch site — a named Phase-0 deliverable; no
+	// capture point exists today"). Fires from
+	// core/rpc/views/agentgraph/chat.ChatRunner.StartStream, comparing
+	// the (profileID, modelOverride) pair the call arrives with against
+	// the pair the SAME session's most recent StartStream used — never
+	// on a session's first turn (there is no prior model to switch away
+	// from). This is a raw behavioral signal for the escalate_model
+	// advice kind's future label corpus (design §5.1's "Unprompted
+	// positives" column), captured as audit+event only in this WP —
+	// see that call site's own comment for why it is not also folded
+	// into an advice_labels row directly.
+	//
+	// Privacy invariant: provider/model identifiers and the session id
+	// only — no message content, no rationale text.
+	KindModelSwitched Kind = "model.switched"
+
+	// KindAdviceAutoActed fires when the advisor seam (core/advice) auto-
+	// acts a SafetyReversible recommendation at the Autonomous tier
+	// (laya-advisors-01LAYA001 WP07, spec §3: "may auto-act and notify
+	// (banner + audit event)"). v1's only auto-act-eligible kind is
+	// branch_now; this kind is deliberately NOT reused from the
+	// pre-existing branch_advisor.* family (KindBranchAdvisorAccepted et
+	// al) — that family is the LEGACY heuristic chip's own suggest/accept/
+	// dismiss lifecycle (core/branchadvisor), a distinct feature from the
+	// advisor seam even though branch_now's rung-R1 heuristic reuses the
+	// SAME detector as a feature extractor (see
+	// core/advice/kinds/branchnow's package doc). Conflating the two
+	// audit trails would make it impossible to tell, from the audit log
+	// alone, which system actually created a given branch. Payload:
+	// AdviceAutoActedPayload.
+	//
+	// Privacy invariant: ids, kind id, model id, and confidence only —
+	// no feature values, no rationale text.
+	KindAdviceAutoActed Kind = "advice.auto_acted"
 )
+
+// BlockedPermissionRequestPayload is the KindBlockedPermissionRequest
+// payload. Field names mirror core/tools/fs.BlockedRequest /
+// core/policy/blockedrequests.Record 1:1 — this is the audit-log
+// projection of the same fact the durable row records.
+type BlockedPermissionRequestPayload struct {
+	Origin    string `json:"origin"`
+	OriginID  string `json:"origin_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	Family    string `json:"family"`
+	Action    string `json:"action"`
+	Resource  string `json:"resource"`
+	Reason    string `json:"reason"`
+}
+
+// ModelSwitchedPayload is the KindModelSwitched payload
+// (laya-advisors-01LAYA001 WP08). FromProfileID/FromModelID are the
+// prior turn's resolved pair for this session; empty on the very first
+// switch this process observes for a session it has no prior record
+// for locally (the emitter's own call site never fires on a session's
+// genuine first turn — see ChatRunner.StartStream — so in practice these
+// are always populated, but the fields stay non-pointer strings rather
+// than *string to keep JSON decoding simple for the rare degenerate
+// case).
+type ModelSwitchedPayload struct {
+	SessionID     string `json:"session_id"`
+	FromProfileID string `json:"from_profile_id"`
+	FromModelID   string `json:"from_model_id"`
+	ToProfileID   string `json:"to_profile_id"`
+	ToModelID     string `json:"to_model_id"`
+}
+
+// AdviceAutoActedPayload is the KindAdviceAutoActed payload
+// (laya-advisors-01LAYA001 WP07). ChildSessionID is the newly created
+// branch session's id (branch_now is v1's only auto-act-eligible kind).
+type AdviceAutoActedPayload struct {
+	SessionID      string `json:"session_id"`
+	KindID         string `json:"kind_id"`
+	ChildSessionID string `json:"child_session_id"`
+	ModelID        string `json:"model_id"`
+	Confidence     int    `json:"confidence"`
+}
 
 // ToolConfirmPath names which branch of the confirm-each dispatch path
 // produced a decision. Values are stable wire strings.
@@ -575,6 +813,83 @@ const (
 	// so the prompt was never offered and the verdict behaved as
 	// auto-allow (FR-006).
 	ToolConfirmPathToggleOff ToolConfirmPath = "toggle_off"
+
+	// ToolConfirmPathLayer1Forbid — risk-rated-autonomy-01PMRA01 WP02.
+	// Cedar's layer 1 (an explicit forbid policy) denied the call before
+	// any autonomy-posture rung was consulted. Hard: no rating, no
+	// autonomy knob, can ever override this.
+	ToolConfirmPathLayer1Forbid ToolConfirmPath = "layer1_forbid"
+
+	// ToolConfirmPathLayer2Permit — risk-rated-autonomy-01PMRA01 WP02.
+	// Cedar's layer 2 (an explicit permit policy) allowed the call
+	// before any autonomy-posture rung was consulted. Hard, like
+	// ToolConfirmPathLayer1Forbid.
+	ToolConfirmPathLayer2Permit ToolConfirmPath = "layer2_permit"
+
+	// ToolConfirmPathLayer3Confirm — risk-rated-autonomy-01PMRA01 WP02.
+	// Cedar had no opinion (NotApplicable) and layer 3 said a human
+	// decision is required, so the call was routed straight to the
+	// prompt rung, bypassing every autonomy-posture auto-skip mechanism
+	// (skip_set, toggle_off, session/persisted grants, headless policy).
+	// This is the rung this mission exists to add: it converts an
+	// unmatched action from "silently follows whatever the confirm-each
+	// ladder would otherwise have decided" into "always asks", pending
+	// WP03-WP06 giving layer 3 a real score to compare against a
+	// threshold instead of always asking.
+	ToolConfirmPathLayer3Confirm ToolConfirmPath = "layer3_confirm"
+
+	// ToolConfirmPathLayer3RaterAllow — risk-rated-autonomy-01PMRA01
+	// WP05. Cedar had no opinion (layer 3), a RiskRater was wired,
+	// REACHABLE, and consulted (threshold > 0, per FR-008's bypass
+	// rule), and its family-floored score (WP06's ApplyFamilyFloor)
+	// fell BELOW the resolved autonomy threshold — so the call was
+	// allowed WITHOUT a prompt. This is the new terminal outcome WP05
+	// introduces: before it, layer 3 could only ever reach
+	// ToolConfirmPathPrompted (via ToolConfirmPathLayer3Confirm's
+	// routing). A transient/malformed rater failure, or a score
+	// at/above threshold, still routes to the ordinary prompted path
+	// (Layer=3 is recorded there too); TRUE unreachability routes to
+	// ToolConfirmPathLayer3OfflineFloor instead (never this path) — see
+	// that constant's doc comment.
+	ToolConfirmPathLayer3RaterAllow ToolConfirmPath = "layer3_rater_allow"
+
+	// ToolConfirmPathLayer3Timeout — risk-rated-autonomy-01PMRA01 WP07.
+	// A layer-3-originated confirm prompt (one that bypassed rungs 1-5
+	// because Cedar had no opinion and no rater resolved it to Allow)
+	// received no answer within its own bounded deadline. Per owner
+	// directive, expiry always DENIES — never "allow on timeout" — so
+	// the run can continue rather than park forever. This deadline is
+	// new and applies ONLY to layer-3-originated prompts; an organically
+	// reached rung-6 confirm_each prompt (Layer=0) still has no timeout
+	// at all (owner decision 1, confirm-each-enforcement-01PMAG05 §3.1)
+	// and is unaffected. Also fires (with a distinct reason string, same
+	// path) when an UNATTENDED run reaches a layer-3 prompt and denies
+	// immediately rather than waiting out the deadline.
+	ToolConfirmPathLayer3Timeout ToolConfirmPath = "layer3_timeout"
+
+	// ToolConfirmPathLayer3OfflineFloor — risk-rated-autonomy-01PMRA01
+	// WP07 (spec.md FR-004 amendment, lines 271-274). The rater was
+	// wired and consulted, but Rate returned a TRUE UNREACHABILITY error
+	// (errors.Is(err, risk.ErrUnreachable) — no route to the model at
+	// all: no credentials, DNS/dial failure, or a context deadline with
+	// zero bytes ever received), as opposed to a transient provider
+	// fault or a malformed response (which still route to the ordinary
+	// prompted path, FR-004 unchanged). The amendment's whole point:
+	// degrade to the SAME family floor WP06 already computes (using a
+	// baseline score of 0 in place of a live rating) rather than a
+	// blanket stop, so a benign un-granted MCP tool still proceeds while
+	// a destructive/unclassifiable one still surfaces — and log the
+	// degrade distinctly so "we are running on the offline floor" is
+	// visible in the audit trail rather than inferred from a reused
+	// rater-failed path. Always emitted the moment unreachability is
+	// detected (Approved reflects whether the floored score cleared
+	// threshold); when Approved is false the call ALSO still falls
+	// through to the ordinary prompt/timeout machinery, so an unattended
+	// run's eventual immediate denial is additionally recorded under
+	// ToolConfirmPathLayer3Timeout — two records for one call in that
+	// case, deliberately: "we went blind" and "here is what happened
+	// next" are two distinct facts.
+	ToolConfirmPathLayer3OfflineFloor ToolConfirmPath = "layer3_offline_floor"
 )
 
 // AllToolConfirmPaths is the canonical list. WP06's coverage test walks
@@ -587,7 +902,58 @@ var AllToolConfirmPaths = []ToolConfirmPath{
 	ToolConfirmPathSkipSet,
 	ToolConfirmPathHeadlessPolicy,
 	ToolConfirmPathToggleOff,
+	ToolConfirmPathLayer1Forbid,
+	ToolConfirmPathLayer2Permit,
+	ToolConfirmPathLayer3Confirm,
+	ToolConfirmPathLayer3RaterAllow,
+	ToolConfirmPathLayer3Timeout,
+	ToolConfirmPathLayer3OfflineFloor,
 }
+
+// ToolsActivatedPayload is the payload for KindToolsActivated.
+type ToolsActivatedPayload struct {
+	SessionID string `json:"session_id"`
+	// Servers are the distinct servers of the newly activated tools,
+	// sorted.
+	Servers []string `json:"servers"`
+	// ToolCount is how many tools were newly activated or newly made
+	// sticky.
+	ToolCount int `json:"tool_count"`
+	// Sticky reports whether the activations survive TTL expiry.
+	Sticky bool `json:"sticky"`
+	// By is one of ToolsActivatedByModel, ToolsActivatedByUser,
+	// ToolsActivatedByAuto.
+	By string `json:"by"`
+}
+
+// ToolsEvictedPayload is the payload for KindToolsEvicted.
+type ToolsEvictedPayload struct {
+	SessionID string `json:"session_id"`
+	// Servers are the distinct servers of the evicted tools, sorted.
+	Servers []string `json:"servers"`
+	// ToolCount is how many tools were evicted.
+	ToolCount int `json:"tool_count"`
+	// PinnedCount is how many of them were pinned (project or session
+	// sticky) rather than merely activated.
+	PinnedCount int `json:"pinned_count"`
+	// Budget is the effective schema budget of the call, in tokens.
+	Budget int `json:"budget"`
+	// OverBy is how far the call's tool definitions exceeded Budget
+	// before eviction, in tokens.
+	OverBy int `json:"over_by"`
+}
+
+// Values of ToolsActivatedPayload.By.
+const (
+	// ToolsActivatedByModel: the model called kenaz__load_tools.
+	ToolsActivatedByModel = "model"
+	// ToolsActivatedByUser: the user loaded tools from the composer.
+	ToolsActivatedByUser = "user"
+	// ToolsActivatedByAuto: the model called a summary tool by its exact
+	// name before loading it; the harness activated it and told the model
+	// to call again.
+	ToolsActivatedByAuto = "auto"
+)
 
 // ToolConfirmDecisionPayload is the KindToolConfirmDecision payload.
 //
@@ -612,6 +978,23 @@ type ToolConfirmDecisionPayload struct {
 	// Path names which branch decided. One of ToolConfirmPath.
 	Path ToolConfirmPath `json:"path"`
 
+	// Layer names which of the three risk-rated-autonomy-01PMRA01 layers
+	// decided (1 = Cedar forbid, 2 = Cedar permit, 3 = the rating
+	// resolver), or 0 for every pre-existing rung this mission did not
+	// touch (skip_set, toggle_off, grants, headless, prompted-via-rung-6).
+	// FR-007 requires the deciding layer be reconstructable from the
+	// audit trail; omitted (0) rather than required so every pre-mission
+	// record — and every path this mission did not touch — keeps
+	// encoding exactly as before.
+	Layer int `json:"layer,omitempty"`
+
+	// Threshold is the resolved autonomy.ResolvedKnobs.RiskThreshold
+	// (WP03) at the time of a Layer 1-3 decision, 0 for every
+	// pre-existing rung. Recorded so a stochastic layer-3 decision
+	// (WP05+) is reproducible after the fact: FR-007 requires the
+	// threshold the score was compared against, not just the outcome.
+	Threshold int `json:"threshold,omitempty"`
+
 	// Approved is the outcome: true when the call dispatched.
 	Approved bool `json:"approved"`
 
@@ -624,6 +1007,41 @@ type ToolConfirmDecisionPayload struct {
 	// "dismissed", "headless policy: deny", the resolver's reason). Not
 	// free-form user input and never tool arguments.
 	Reason string `json:"reason,omitempty"`
+
+	// ── risk-rated-autonomy-01PMRA01 WP10: structured layer-3 detail ──
+	//
+	// Score/Tier/Model/PromptVersion/CacheHit are populated ONLY for a
+	// Layer==3 decision that consulted a real or offline-floor rating
+	// (ToolConfirmPathLayer3RaterAllow, ToolConfirmPathLayer3Confirm
+	// routed via a rating, ToolConfirmPathLayer3Timeout when it followed
+	// a rating, and ToolConfirmPathLayer3OfflineFloor). Every other path
+	// leaves them at their zero value. Kept as separate typed fields
+	// rather than parsed out of Reason's free text so the audit VIEW can
+	// render them without re-deriving structure from a string built for
+	// a tool-error message.
+	//
+	// Privacy: same invariant as the rest of this payload (no argument
+	// values, no args summary, no tool output) — Score is the rater's
+	// numeric judgment, Model/PromptVersion identify WHICH rater
+	// produced it, and neither ever carries call content.
+
+	// Score is the FLOORED score (post risk.ApplyFamilyFloor) that was
+	// actually compared against Threshold — the number that determined
+	// the outcome, not necessarily the rater's raw output.
+	Score int `json:"score,omitempty"`
+	// Tier is risk.BandFor(Score)'s named band ("low".."critical"),
+	// mirroring owner decision 3: humans reviewing the trail want a
+	// word, not just a number.
+	Tier string `json:"tier,omitempty"`
+	// Model is the rater model id that produced Score, empty when Score
+	// came from the offline floor (no live model was consulted).
+	Model string `json:"model,omitempty"`
+	// PromptVersion identifies the rater system-prompt fixture in force,
+	// empty when Score came from the offline floor.
+	PromptVersion string `json:"prompt_version,omitempty"`
+	// CacheHit is true when Score came from the session-scoped rating
+	// cache rather than a fresh model call (FR-007).
+	CacheHit bool `json:"cache_hit,omitempty"`
 }
 
 // ToolConfirmGrantWrittenPayload is the KindToolConfirmGrantWritten
@@ -1026,6 +1444,27 @@ type WorkflowNetworkFetchPayload struct {
 	Bytes    int    `json:"bytes"`
 }
 
+// WorkflowNotifySentPayload carries signalling for KindWorkflowNotifySent
+// (automation-actually-runs-01PMZ404 UNIT-8).
+//
+// Privacy invariant: Title is the CALLER-truncated title (≤60 chars —
+// core/workflows/runners_notify.go's notifyTitleAuditMaxLen); the
+// notification body is NEVER included, here or anywhere upstream of
+// this struct. corewf.Deps.Audit's own EmitNotifySent(ctx, target,
+// title string) signature has no body parameter to begin with.
+//
+// This struct does not carry WorkflowID/RunID/StepID, unlike its
+// siblings above: notifyRunner.Run (runners_notify.go) discards the
+// *RunContext that would supply them (its third parameter is `_`), so
+// they are not available at the EmitNotifySent call site. Threading
+// RunContext through would let a future revision add them; not required
+// by FR-008 / AC-009, which asks only for the target and truncated
+// title.
+type WorkflowNotifySentPayload struct {
+	Target string `json:"target"`
+	Title  string `json:"title"`
+}
+
 // BranchCreatedPayload carries signalling for KindBranchCreated
 // (branching-ux-polish-01KQ8TD7 WP01). Emitted from both creation
 // paths so the audit view can show two distinct events after the
@@ -1040,7 +1479,8 @@ type BranchCreatedPayload struct {
 	ParentSessionID string `json:"parent_session_id"`
 	ParentMessageID string `json:"parent_message_id,omitempty"`
 	BranchSessionID string `json:"branch_session_id"`
-	// CreationPath is "explicit" | "edit_resend" | "unknown" — mirrors
+	// CreationPath is "explicit" | "edit_resend" | "unknown" |
+	// "auto_act" | "model_tool" — mirrors
 	// conversation.Branch.CreationPath (core/conversation/types.go),
 	// which is where the value actually comes from.
 	CreationPath string `json:"creation_path"`
@@ -1285,16 +1725,33 @@ type AuditBulkPurgeBlockedByPolicyPayload struct {
 // FleetConfigAppliedPayload is the audit payload for KindFleetConfigApplied.
 //
 // Privacy invariant: no bundle contents (cedar rules, weight URLs, model IDs)
-// are recorded — only the bundle_id, issuance time, and which sections were
-// present in the bundle.
+// are recorded — only the bundle_id, issuance time, which sections were
+// present, org identity, and the org-provisioned recipe ids that were
+// installed. ProvisionedRecipeIDs are identifiers the org itself declared
+// (spec.md fleet-org-config-inheritance-01NORGX01 §3.1's recipe_id), never
+// secret material.
 type FleetConfigAppliedPayload struct {
 	// BundleID is the bundle_id of the applied bundle.
 	BundleID int64 `json:"bundle_id"`
 	// IssuedAt is the server-side issuance time of the applied bundle.
 	IssuedAt time.Time `json:"issued_at"`
 	// Sections is the list of non-empty sections that were present:
-	// "cedar_delta", "mcp_allowlist", "model_prefs", "kameas_ml_weight_urls".
+	// "cedar_delta", "mcp_allowlist", "model_prefs",
+	// "kameas_ml_weight_urls", "provisioned_mcp", "mandated_items",
+	// "org_config".
 	Sections []string `json:"sections"`
+	// OrgID / OrgName name the org this bundle was pulled for (fleet-org-
+	// config-inheritance-01NORGX01 WP05, FR-010), read from the cached
+	// fleet.Identity at apply time. Both are empty when no identity is
+	// cached yet (e.g. the first bundle applied before FleetSignIn's
+	// enroll response has been persisted).
+	OrgID   string `json:"org_id,omitempty"`
+	OrgName string `json:"org_name,omitempty"`
+	// ProvisionedRecipeIDs lists the recipe_ids from the bundle's
+	// provisioned_mcp section that were installed as org-managed recipes
+	// on this apply (FR-010's "naming... the recipe/provider ids"). Empty
+	// when the bundle carried no provisioned_mcp section.
+	ProvisionedRecipeIDs []string `json:"provisioned_recipe_ids,omitempty"`
 }
 
 // FleetConfigSignatureRejectedPayload is the audit payload for
@@ -1378,12 +1835,20 @@ type FleetPolicyPublishedPayload struct {
 type FleetCatalogPublishedPayload struct {
 	// CatalogID is the server-assigned catalog item ID.
 	CatalogID string `json:"catalog_id"`
-	// Kind is the item kind (workflow, agent_pack, bundle).
+	// Kind is the fleet catalog item kind (workflow, pack, bundle, skill).
 	Kind string `json:"kind"`
 	// Slug is the human-readable catalog slug.
 	Slug string `json:"slug,omitempty"`
 	// Version is the published SemVer string.
 	Version string `json:"version,omitempty"`
+}
+
+// FleetCatalogUnpublishedPayload carries the signalling for
+// KindFleetCatalogUnpublished. Same privacy invariant as its publish
+// counterpart: no payload bytes, metadata only.
+type FleetCatalogUnpublishedPayload struct {
+	// CatalogID is the server-assigned catalog item ID that was withdrawn.
+	CatalogID string `json:"catalog_id"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload
@@ -1435,6 +1900,15 @@ type FleetContextPublishedPayload struct {
 	Classification string `json:"classification"`
 	// Version is the version sent to the server.
 	Version int `json:"version"`
+}
+
+// FleetContextPushRejectedPayload is the audit payload for
+// KindFleetContextPushRejected.
+type FleetContextPushRejectedPayload struct {
+	NodeID         string `json:"node_id"`
+	Classification string `json:"classification"`
+	Reason         string `json:"reason"`
+	Version        int    `json:"version"`
 }
 
 // FleetContextPulledPayload is the audit payload for KindFleetContextPulled.
@@ -1489,6 +1963,44 @@ type FleetSkillInstalledPayload struct {
 	Version string `json:"version,omitempty"`
 	// Trigger is the slash-command trigger (no leading slash).
 	Trigger string `json:"trigger"`
+}
+
+// FleetCatalogRevokedUninstalledPayload carries the audit signalling for
+// KindFleetCatalogRevokedUninstalled. Catalog metadata only — never the
+// payload.
+type FleetCatalogRevokedUninstalledPayload struct {
+	// CatalogID is the revoked catalog version's id.
+	CatalogID string `json:"catalog_id"`
+	// Kind is the catalog kind ("skill" | "workflow").
+	Kind string `json:"kind"`
+	// Version is the installed (revoked) version.
+	Version string `json:"version,omitempty"`
+	// LocalID is the skill store id / workflow id that was removed.
+	LocalID string `json:"local_id"`
+	// Reason is always "revoked".
+	Reason string `json:"reason"`
+}
+
+// FleetMandatedItemPayload carries the audit signalling for
+// KindFleetMandatedItemRemoved and KindFleetMandatedItemUpgraded.
+type FleetMandatedItemPayload struct {
+	// CatalogID / Version identify the mandated version that ended.
+	CatalogID string `json:"catalog_id"`
+	Kind      string `json:"kind"`
+	Version   string `json:"version,omitempty"`
+	// LocalID is the skill store id / workflow id.
+	LocalID string `json:"local_id,omitempty"`
+	// ToCatalogID / ToVersion: the version that took over LocalID (upgrade
+	// only).
+	ToCatalogID string `json:"to_catalog_id,omitempty"`
+	ToVersion   string `json:"to_version,omitempty"`
+	// Restored is true when the removal handed the user's own earlier copy
+	// back instead of deleting (removal only).
+	Restored bool `json:"restored,omitempty"`
+	// RestoreRefused is the policy reason a snapshotted earlier copy was
+	// NOT restored (the save gate denied it); the mandated copy was deleted
+	// instead (removal only).
+	RestoreRefused string `json:"restore_refused,omitempty"`
 }
 
 // FleetSkillUninstalledPayload carries the audit signalling for
@@ -1579,6 +2091,12 @@ type FleetSessionHandoffPayload struct {
 	RecipientUserID string `json:"recipient_user_id"`
 	// InboxItemID is the fleet inbox item ID (non-empty on inbound shares).
 	InboxItemID string `json:"inbox_item_id,omitempty"`
+	// SenderUserID is the opaque user ID of the sender (inbound shares;
+	// device-keys-handoff-01DEVKH01 review fix #10 — previously the sender
+	// was written into RecipientUserID).
+	SenderUserID string `json:"sender_user_id,omitempty"`
+	// LocalSessionID is the local session an inbound share was saved as.
+	LocalSessionID string `json:"local_session_id,omitempty"`
 }
 
 // ── Fleet audit-archival payloads (fleet-audit-archival-01NDFSEX13) ──────────
@@ -1689,4 +2207,47 @@ type ApprovalResolvedPayload struct {
 	Approver string `json:"approver,omitempty"`
 	// Reason is the human-supplied or system-generated justification.
 	Reason string `json:"reason,omitempty"`
+}
+
+// SubagentAbortedPayload is the audit payload for KindSubagentAborted
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8).
+//
+// Privacy invariant: ids only — no transcript content.
+type SubagentAbortedPayload struct {
+	// BranchID is the aborted sub-agent's branch row id.
+	BranchID string `json:"branch_id"`
+	// TaskID is the core/tasks.Registry id backing the branch's spawned
+	// run — empty if the branch had no tracked task (e.g. dispatched
+	// before the task registry was wired).
+	TaskID string `json:"task_id,omitempty"`
+}
+
+// SubagentSteeredPayload is the audit payload for KindSubagentSteered
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8).
+//
+// Privacy invariant: MessageLength is a rune count, never the message
+// text itself.
+type SubagentSteeredPayload struct {
+	// BranchID is the steered sub-agent's branch row id.
+	BranchID string `json:"branch_id"`
+	// MessageLength is the appended steering message's rune count.
+	MessageLength int `json:"message_length"`
+}
+
+// SubagentPausedPayload is the audit payload for KindSubagentPaused
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8).
+//
+// Privacy invariant: ids only — no transcript content.
+type SubagentPausedPayload struct {
+	// BranchID is the paused sub-agent's branch row id.
+	BranchID string `json:"branch_id"`
+}
+
+// SubagentResumedPayload is the audit payload for KindSubagentResumed
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8).
+//
+// Privacy invariant: ids only — no transcript content.
+type SubagentResumedPayload struct {
+	// BranchID is the resumed sub-agent's branch row id.
+	BranchID string `json:"branch_id"`
 }

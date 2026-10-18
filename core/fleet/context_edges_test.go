@@ -34,7 +34,7 @@ func TestEdgePush_TwoPhase(t *testing.T) {
 	nodeEntry := ContextNodeEntry{
 		ID:     "node-from",
 		Layer:  contextpack.LayerTeam,
-		Kind:   "fact",
+		Kind:   "guidance",
 		Title:  "Source concept",
 		Body:   "body",
 		TeamID: &teamID,
@@ -75,8 +75,12 @@ func TestEdgePush_TwoPhase(t *testing.T) {
 	if len(req.Edges) != 1 {
 		t.Errorf("server edges=%d, want 1", len(req.Edges))
 	}
-	if req.Edges[0].FromNodeID != "node-from" {
-		t.Errorf("edge.from=%q, want node-from", req.Edges[0].FromNodeID)
+	// Edge endpoints are mapped to the SAME wire ids their nodes get (WP01).
+	if want := syncer.WireNodeID("node-from"); req.Edges[0].FromNodeID != want || !IsWireUUID(want) {
+		t.Errorf("edge.from=%q, want wire id %q", req.Edges[0].FromNodeID, want)
+	}
+	if !IsWireUUID(req.Edges[0].ID) || !IsWireUUID(req.Edges[0].ToNodeID) {
+		t.Errorf("edge id/to = %q/%q, want UUIDs", req.Edges[0].ID, req.Edges[0].ToNodeID)
 	}
 	if req.Edges[0].Kind != "references" {
 		t.Errorf("edge.kind=%q, want references", req.Edges[0].Kind)
@@ -89,8 +93,8 @@ func TestEdgePull_RoundTrip(t *testing.T) {
 	fake := &contextFakeServer{}
 	fake.addPullResponse(contextPullResponse{
 		Nodes: []ContextPulledNode{
-			{ID: "n1", Classification: ClassTeamShared, Kind: "fact", Title: "n1", Body: "b", Version: 1, UpdatedAt: "2026-06-08T10:00:00Z"},
-			{ID: "n2", Classification: ClassTeamShared, Kind: "fact", Title: "n2", Body: "b", Version: 1, UpdatedAt: "2026-06-08T10:00:00Z"},
+			{ID: "n1", Classification: ClassTeamShared, Kind: "guidance", Title: "n1", Body: "b", Version: 1, UpdatedAt: "2026-06-08T10:00:00Z"},
+			{ID: "n2", Classification: ClassTeamShared, Kind: "guidance", Title: "n2", Body: "b", Version: 1, UpdatedAt: "2026-06-08T10:00:00Z"},
 		},
 		Edges: []ContextPulledEdge{
 			{
@@ -150,14 +154,14 @@ func TestTombstone_ExistingEntryRemoved(t *testing.T) {
 	// First pull: entry is alive.
 	fake.addPullResponse(contextPullResponse{
 		Nodes: []ContextPulledNode{
-			{ID: "n1", Classification: ClassTeamShared, Kind: "fact", Title: "alive", Body: "b", Version: 1, UpdatedAt: updatedAt},
+			{ID: "n1", Classification: ClassTeamShared, Kind: "guidance", Title: "alive", Body: "b", Version: 1, UpdatedAt: updatedAt},
 		},
 		Cursor: updatedAt,
 	})
 	// Second pull: same entry is now tombstoned.
 	fake.addPullResponse(contextPullResponse{
 		Nodes: []ContextPulledNode{
-			{ID: "n1", Classification: ClassTeamShared, Kind: "fact", Title: "alive", Body: "b", Version: 2, UpdatedAt: tombstoneAt, DeletedAt: &tombstoneAt},
+			{ID: "n1", Classification: ClassTeamShared, Kind: "guidance", Title: "alive", Body: "b", Version: 2, UpdatedAt: tombstoneAt, DeletedAt: &tombstoneAt},
 		},
 		Cursor: tombstoneAt,
 	})

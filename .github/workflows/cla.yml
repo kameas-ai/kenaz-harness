@@ -38,7 +38,11 @@ permissions:
 
 jobs:
   cla:
-    runs-on: ubuntu-latest
+    # Self-hosted per org runner policy (PR-time CI never uses GitHub-hosted
+    # runners — the billing cap blocks provisioning; this job sat 15 min
+    # twice on 2026-10-05 with no runner and cancelled, blocking PR #372).
+    # Same pool + override var as pr-title.yml.
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     steps:
       - name: Mint installation token from kameas-ai-oss-bot App
         if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'

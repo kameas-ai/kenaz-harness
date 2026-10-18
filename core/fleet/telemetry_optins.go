@@ -61,6 +61,10 @@ var KnownTelemetryClasses = []string{
 	"sigil.heuristics",
 	"sigil.predictions",
 	"sigil.suggestions",
+	// workflow_events is the member's own hosted-inference opt-in under
+	// org policy member_choice (kenaz-fleet docs/contract-harness-ml.md,
+	// "workflow_events opt-in class"); written by SetWorkflowEventsOptIn.
+	TelemetryClassWorkflowEvents,
 }
 
 // GetTelemetryOptIns fetches the per-class opt-in set from the fleet store.

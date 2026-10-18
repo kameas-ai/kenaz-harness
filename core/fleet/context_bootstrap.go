@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -257,7 +258,7 @@ func (b *BootstrapClient) GetBootstrapRun(ctx context.Context, runID string) (*B
 	if err := b.requireCap(); err != nil {
 		return nil, err
 	}
-	resp, err := b.client.Get(ctx, "/api/v1/context/bootstrap/"+runID)
+	resp, err := b.client.Get(ctx, "/api/v1/context/bootstrap/"+url.PathEscape(runID))
 	if err != nil {
 		return nil, fmt.Errorf("fleet: bootstrap get: %w", err)
 	}
@@ -282,7 +283,7 @@ func (b *BootstrapClient) PatchBootstrapRun(ctx context.Context, runID string, p
 	if err := b.requireCap(); err != nil {
 		return err
 	}
-	resp, err := b.client.PatchJSON(ctx, "/api/v1/context/bootstrap/"+runID, patch)
+	resp, err := b.client.PatchJSON(ctx, "/api/v1/context/bootstrap/"+url.PathEscape(runID), patch)
 	if err != nil {
 		return fmt.Errorf("fleet: bootstrap patch: %w", err)
 	}
@@ -303,7 +304,7 @@ func (b *BootstrapClient) ResumeBootstrapRun(ctx context.Context, runID string) 
 	if err := b.requireCap(); err != nil {
 		return nil, err
 	}
-	resp, err := b.client.PostJSON(ctx, "/api/v1/context/bootstrap/"+runID+"/resume", struct{}{})
+	resp, err := b.client.PostJSON(ctx, "/api/v1/context/bootstrap/"+url.PathEscape(runID)+"/resume", struct{}{})
 	if err != nil {
 		return nil, fmt.Errorf("fleet: bootstrap resume: %w", err)
 	}
@@ -375,6 +376,17 @@ func NewClientForTesting(baseURL string) *Client {
 		httpClient:  &http.Client{},
 		httpTimeout: 5 * time.Second,
 	}
+}
+
+// NewClientForTestingWithDataDir is NewClientForTesting with the data dir
+// production clients get from ClientOpts.DataDir — identity cache, node
+// id, device signing key and handoff identity all persist under it, so
+// cross-package tests drive those through REAL files
+// (device-keys-handoff-01DEVKH01). Test seam ONLY.
+func NewClientForTestingWithDataDir(baseURL, dataDir string) *Client {
+	c := NewClientForTesting(baseURL)
+	c.dataDir = dataDir
+	return c
 }
 
 // drainClose drains and closes an HTTP response body (keep-alive reuse + no leak).

@@ -8,8 +8,12 @@
 //   - shell — exec a user-configured command, pipe lifecycle JSON over
 //     stdin, read mutated JSON from stdout. Mirrors Claude Code's hook
 //     stdin/stdout protocol.
-//   - mcp — invoke a configured MCP server tool by name. Stub-only for
-//     v1; the seam is documented for the MCP-pool wiring mission.
+//   - mcp — invoke a configured MCP server tool by name. Dispatches
+//     through the MCPInvoker seam (runner.go); the production
+//     implementation (core/rpc's mcpHookInvokerAdapter,
+//     hooks_mcp_invoker.go) routes to the same MCP dispatch pool every
+//     other tool-call path uses. MCPTool must be a "<server>__<tool>"
+//     namespaced identifier — see MCPInvoker's doc.
 //
 // Persistence: <DataDir>/hooks.json (mode 0600). The Registry is the
 // only writer; all callers go through Registry.Add / Update / Remove
@@ -126,8 +130,22 @@ type HookOutput struct {
 	// Reason explains the decision; surfaced in audit log + UI.
 	Reason string `json:"reason,omitempty"`
 
-	// AdditionalContext is injected as a system message into the next
-	// LLM turn when returned from pre_tool_use or user_prompt_submit.
+	// AdditionalContext reaches the model as system context. Where it
+	// lands depends on the event (v0.86.0 unwired sweep, 2026-10-04):
+	//   - pre_tool_use / post_tool_use / post_tool_use_failure: the
+	//     session's next ASSISTANT-TURN model call on a chat run (the
+	//     chat runner's PendingContext queue; router / review / escalation
+	//     calls do not consume it); dropped, with a log line, on a
+	//     library-graph run outside chat.
+	//   - session_start / subagent_start: persisted as a session-scoped
+	//     system attachment on the new (or child) session, under an
+	//     "Additional context from the user's <event> hook:" heading, so
+	//     it is part of that session's system prompt from its first turn
+	//     on. It is listed in the session's Resolved Context panel, where
+	//     the user can remove it.
+	//   - user_prompt_submit / setup: those events do not fire yet (see
+	//     scripts/ci/allowlists/i17-eventless-hook-events.txt).
+	//   - every other event: ignored.
 	// Multiple AdditionalContexts from peer hooks are joined with "\n\n".
 	AdditionalContext string `json:"additional_context,omitempty"`
 
@@ -173,6 +191,14 @@ const (
 
 // Hook is a configured lifecycle hook. The persisted shape mirrors
 // the JSON the operator edits in the UI.
+//
+// MCPTool (kind=mcp only) is the tool identifier production dispatch
+// (core/rpc's mcpHookInvokerAdapter) expects in the namespaced
+// "<server>__<tool>" form — the same convention
+// core/rpc/views/llm.ToolNameSeparator uses elsewhere to fold an MCP
+// (server, tool) pair into one string. A value with no "__" separator
+// dispatches with an empty server and fails with an explicit "unknown
+// server" error rather than silently no-opping.
 type Hook struct {
 	ID      string         `json:"id"`
 	Name    string         `json:"name"`

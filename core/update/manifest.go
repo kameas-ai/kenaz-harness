@@ -50,7 +50,7 @@ type manifestAsset struct {
 // block; pinned here by TestStableManifestURL_MatchesFrontendConstant.
 const (
 	stableManifestURL     = "https://downloads.kameas.ai/kenaz-harness/manifest.json"
-	prereleaseManifestURL = "https://stage-downloads.kameas.ai/kenaz-harness/manifest.json"
+	prereleaseManifestURL = "https://stage.downloads.kameas.ai/kenaz-harness/manifest.json"
 )
 
 // channelManifestURL returns the manifest URL for the given channel.

@@ -37,6 +37,30 @@
 
 import type { Message } from './types';
 
+/**
+ * The turn span id stamped on in-flight (and, until the next reload,
+ * just-committed) moves: `live:<stream sub id>`. The stream announces a
+ * move's position but not the id of the user message that opened the
+ * turn, so useSession keys live rows by the stream instead.
+ */
+export const LIVE_SPAN_PREFIX = 'live:';
+
+export function liveSpanId(subID: string): string {
+  return `${LIVE_SPAN_PREFIX}${subID}`;
+}
+
+/**
+ * The kernel run id behind a live span, or '' for a durable span.
+ * Since agentgraph-settings-linkage-01DOGF0D WP02 the chat stream's sub
+ * id IS the kernel run id, so a `live:<sub>` row needs no lookup to be
+ * linked to its run graph — which matters because those rows keep the
+ * live span until the transcript is reloaded (review H2).
+ */
+export function runIdFromLiveSpan(spanId: string | undefined): string {
+  if (!spanId || !spanId.startsWith(LIVE_SPAN_PREFIX)) return '';
+  return spanId.slice(LIVE_SPAN_PREFIX.length);
+}
+
 /** Lifecycle of an inline tool chip. */
 type ToolChipStatus = 'running' | 'ok' | 'error';
 
@@ -301,6 +325,24 @@ export function projectTranscript(
     // assistant_move | final. A textless one has nothing to draw — see
     // the answer-selection note above; it neither takes an ordinal nor
     // closes the open trail.
+    //
+    // KNOWN LIMITATION (model-settings-reach-the-model-01PMZ101 WP16
+    // review follow-up, tracked as a follow-up rather than fixed here):
+    // this filter keys on `content`, not on whether the row has
+    // anything to show. A move whose model emitted reasoning but no
+    // text yet — or a turn that errors before its first token — has a
+    // non-empty `reasoning` field and an empty `content`, so it is
+    // skipped here too. Because this function runs over the live
+    // concatenation as well as the committed list (see the file
+    // docstring), that reasoning is invisible from the FIRST frame, not
+    // merely dropped at commit — worse than the classic (kind-less)
+    // path, where a reasoning-only row renders live via
+    // `streamingMoves` direct binding and is only lost when
+    // `commitStreamingMoves`'s own `content.length > 0` filter runs at
+    // turn end. WP16 (UNIT-5) scoped the reasoning render to the common
+    // case — reasoning followed by text on the same move, which is
+    // solved and tested — and deliberately left this textless-turn gap
+    // unfixed on both paths.
     if (m.content.length === 0) continue;
     const isAnswer = (m.moveIndex ?? 0) === answerIndexBySpan.get(spanId);
     if (isAnswer) {

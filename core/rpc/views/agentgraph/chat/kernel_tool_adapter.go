@@ -11,10 +11,27 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
 )
+
+// defaultLayer3PromptTimeout bounds how long a layer-3-originated
+// confirm prompt (risk-rated-autonomy-01PMRA01 WP07) may sit unanswered
+// before it auto-denies. Mirrors core/rpc/views/agentgraph's
+// defaultApprovalTimeout (24h, approval-node-01PMZC12 UNIT-4): both are
+// "someone must eventually decide, but an autonomous run must never
+// park literally forever" backstops, not snappy per-request SLAs — a
+// human working an attended session should not have a real confirm
+// modal spuriously auto-deny out from under them because they stepped
+// away. This is DELIBERATELY separate from confirm.go's rung-6 "no
+// deadline" invariant (owner decision 1): only prompts that reached the
+// confirm bus via layer 3 (an unmatched Cedar action a rater could not
+// resolve to Allow) get this deadline at all.
+const defaultLayer3PromptTimeout = 24 * time.Hour
 
 // AutonomyKnobsProvider is the narrow surface the kernel tool adapter
 // needs to apply the autonomy posture before each tool call. The
@@ -64,6 +81,12 @@ type kernelToolAdapter struct {
 	// (model-moves-transcript-01PMCH01 WP02). Non-nil on the chat path;
 	// nil (or inert) leaves Call byte-identical to the pre-mission path.
 	moves *turnJournal
+
+	// exposure, when set, stops calls to catalog tools the session was
+	// not sent (summary tier and not activated, or off) before any
+	// permission check: see exposureTurn.gateCall. nil dispatches every
+	// call as before.
+	exposure *exposureTurn
 
 	// autonomy is the optional knobs provider for autonomy-dial WP04.
 	// When non-nil the adapter reads AutoApproveFamilies before each
@@ -125,6 +148,29 @@ type kernelToolAdapter struct {
 
 	// now is the injected clock for audit timestamps. nil → time.Now.
 	now func() time.Time
+
+	// gate is the Cedar gate risk-rated-autonomy-01PMRA01 WP02 consults
+	// BEFORE rungs 1-5 of resolveConfirmEach. nil disables the new rung
+	// entirely — resolveConfirmEach behaves byte-identically to the
+	// pre-WP02 ladder, which is what every existing caller (every test
+	// in this package that does not call withGate) gets. Production
+	// wiring passes the same live Cedar engine already used for
+	// SecretGate (see chat.Config.RiskGate / core/rpc/api.go).
+	gate cedar.Gate
+
+	// rater is risk-rated-autonomy-01PMRA01 WP05's RiskRater. Consulted
+	// ONLY when gate is wired AND the resolved threshold > 0 (FR-008: a
+	// call whose result cannot change the answer must not spend a model
+	// call). nil leaves rung 0's layer-3 branch at the WP02/WP03 stub
+	// (always Confirm) — byte-identical to every caller that has not
+	// wired a rater.
+	rater risk.RiskRater
+
+	// layer3PromptTimeout bounds a layer-3-originated confirm prompt
+	// (WP07). Zero (the constructor default before any withRater/test
+	// override) falls back to defaultLayer3PromptTimeout at call time —
+	// see promptConfirmEach.
+	layer3PromptTimeout time.Duration
 }
 
 // newKernelToolAdapter wraps the chassis-side pool + resolver.
@@ -145,10 +191,46 @@ func (a *kernelToolAdapter) withMoves(j *turnJournal) *kernelToolAdapter {
 	return a
 }
 
+// withToolExposure attaches the turn's tool-exposure view.
+func (a *kernelToolAdapter) withToolExposure(t *exposureTurn) *kernelToolAdapter {
+	a.exposure = t
+	return a
+}
+
 // withAutonomy attaches an AutonomyKnobsProvider to the adapter.
 // Returns the same pointer so callers can chain at construction time.
 func (a *kernelToolAdapter) withAutonomy(provider AutonomyKnobsProvider) *kernelToolAdapter {
 	a.autonomy = provider
+	return a
+}
+
+// withGate attaches the Cedar gate risk-rated-autonomy-01PMRA01 WP02
+// consults before the rest of resolveConfirmEach's ladder. Returns the
+// same pointer so callers can chain at construction time. A nil gate
+// (the default) leaves resolveConfirmEach unchanged from before WP02.
+func (a *kernelToolAdapter) withGate(g cedar.Gate) *kernelToolAdapter {
+	a.gate = g
+	return a
+}
+
+// withRater attaches the risk-rated-autonomy-01PMRA01 WP05 RiskRater
+// consulted after a layer-3 Confirm verdict, ahead of the prompt. A nil
+// rater (the default) leaves rung 0's layer-3 branch at the WP02/WP03
+// stub. Returns the same pointer so callers can chain at construction
+// time.
+func (a *kernelToolAdapter) withRater(r risk.RiskRater) *kernelToolAdapter {
+	a.rater = r
+	return a
+}
+
+// withLayer3PromptTimeout overrides defaultLayer3PromptTimeout (WP07).
+// d <= 0 is ignored. Test-only escape hatch — production wiring does
+// not call this, mirroring
+// core/rpc/views/agentgraph.WithApprovalTimeout's contract.
+func (a *kernelToolAdapter) withLayer3PromptTimeout(d time.Duration) *kernelToolAdapter {
+	if d > 0 {
+		a.layer3PromptTimeout = d
+	}
 	return a
 }
 
@@ -318,6 +400,18 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 			return coreag.ToolResult{}, fmt.Errorf("chat: unknown tool %q", call.Name)
 		}
 	}
+	if a.exposure != nil {
+		// The namespaced name, not call.Name: a bare-name call resolved
+		// to (server, tool) above must face the same exposure gate.
+		if res, stopped := a.exposure.gateCall(ctx, server+"__"+tool); stopped {
+			// Refused before the tool ran: a denied call, not a tool
+			// failure (ml-producer-01MLPRD01 WP02 typed outcome).
+			res.Outcome = coreag.ToolOutcomeDenied
+			return res, nil
+		}
+		ctx = loadtools.WithTurnView(ctx, a.exposure.willSend)
+		ctx = loadtools.WithTurnBudget(ctx, a.exposure.fitLoaded)
+	}
 	if a.perms != nil {
 		v, err := a.perms.Resolve(ctx, a.sessionID, server, tool)
 		if err != nil {
@@ -337,6 +431,7 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 			return coreag.ToolResult{
 				Content: fmt.Sprintf("tool %q denied: %s", call.Name, reason),
 				IsError: true,
+				Outcome: coreag.ToolOutcomeDenied,
 			}, nil
 
 		case string(toolloop.PolicyConfirmEach):
@@ -347,6 +442,9 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 				return coreag.ToolResult{}, err
 			}
 			if !proceed {
+				// Declined / denied confirmation (or a layer-3 deadline):
+				// the tool never ran.
+				res.Outcome = coreag.ToolOutcomeDenied
 				return res, nil
 			}
 
@@ -370,8 +468,15 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 			return coreag.ToolResult{
 				Content: fmt.Sprintf("tool %q denied: unrecognised permission policy %q", call.Name, v.Policy),
 				IsError: true,
+				Outcome: coreag.ToolOutcomeDenied,
 			}, nil
 		}
+	}
+
+	// Past every gate: the call runs, so it counts as a use of the tool
+	// (a denied or declined call does not).
+	if a.exposure != nil {
+		a.exposure.markCalled(ctx, server+"__"+tool)
 	}
 
 	argsJSON, err := json.Marshal(call.Args)
@@ -382,15 +487,28 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 	// Stuff the session ID into ctx so built-in tools that need it
 	// (kenaz__save_artifact) can pull it out without a parameter.
 	// Tools that don't read it pay nothing.
-	out, err := a.pool.Call(toolloop.WithSessionID(ctx, a.sessionID), server, tool, argsJSON)
+	dispatchCtx := toolloop.WithSessionID(ctx, a.sessionID)
+	// The live turn's span (the user message that opened it), for tools
+	// that must reason about "before this turn" — kenaz__fork_conversation's
+	// default branch point. Read-only after newTurnJournal; an inert
+	// journal (empty span) attaches nothing.
+	if a.moves != nil {
+		dispatchCtx = toolloop.WithTurnSpanID(dispatchCtx, a.moves.spanID)
+	}
+	out, err := a.pool.Call(dispatchCtx, server, tool, argsJSON)
 	if err != nil {
 		// WP02 (tool-error-legibility-01PMDL02): append a conservative
 		// environment-drift hint when the raw error signature-matches a
 		// well-known case. Never rewrites err.Error().
-		return coreag.ToolResult{
+		res := coreag.ToolResult{
 			Content: coreag.AppendEnvironmentDriftHint(err.Error()),
 			IsError: true,
-		}, nil
+		}
+		if ctx.Err() != nil {
+			// The run was stopped while the tool was in flight.
+			res.Outcome = coreag.ToolOutcomeCancelled
+		}
+		return res, nil
 	}
 	return coreag.ToolResult{
 		Content: string(out),
@@ -403,6 +521,18 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 func init() {
 	knobcoverage.Register[autonomy.ResolvedKnobs]("AutoApproveFamilies", "chat.promptSkipSet")
 	knobcoverage.Register[autonomy.ResolvedKnobs]("DestructiveActionPosture", "chat.promptSkipSet")
+	// risk-rated-autonomy-01PMRA01 WP03: resolveConfirmEach's rung 0
+	// reads RiskThreshold and threads it into cedar.ThreeLayerResolve,
+	// which already branches on threshold<=0 to record the FR-008
+	// rater-bypass reason distinctly (see risk_layer.go); the value is
+	// also persisted on every Layer 1-3 audit record
+	// (audit.ToolConfirmDecisionPayload.Threshold) so a stochastic
+	// layer-3 decision stays reproducible once WP05 lands. WP05 is what
+	// makes the threshold change the OUTCOME (score < threshold ->
+	// Allow); until then this is real, observable consumption (the
+	// audited reason and the persisted record), not a copy into an
+	// otherwise-unread struct.
+	knobcoverage.Register[autonomy.ResolvedKnobs]("RiskThreshold", "chat.kernelToolAdapter.resolveConfirmEach rung 0 + cedar.ThreeLayerResolve")
 }
 
 // promptSkipSet translates resolved autonomy knobs into the set of tool
@@ -449,6 +579,19 @@ func promptSkipSet(knobs autonomy.ResolvedKnobs) toolloop.PromptSkipSet {
 // that decides silently is the defect this mission repaired, and "decides
 // silently on a path nobody thought about" is the same defect.
 //
+// risk-rated-autonomy-01PMRA01 WP02 adds rung 0, consulted BEFORE rung 1
+// when a.gate is wired (nil disables it — byte-identical to pre-WP02):
+//
+//  0. cedar.ThreeLayerResolve — layer 1 (Cedar forbid) denies outright;
+//     layer 2 (Cedar permit) allows outright, skipping every rung below;
+//     layer 3 (Cedar had no opinion) is Confirm, which skips straight to
+//     rung 6's prompt — bypassing rungs 1-5's various auto-skip
+//     mechanisms. This is the property the mission exists for: today,
+//     an autonomy posture whose skip-set includes a tool's family (rung
+//     1) auto-approves it even when NO Cedar policy ever looked at the
+//     specific action. Rung 0 makes an explicit Cedar permit the thing
+//     that grants a skip, not the tool's coarse family classification.
+//
 //  1. Autonomy prompt-skip set — the session's posture auto-approves
 //     this tool's FAMILY. Per-family, per-call: `autoApproveFamilies:
 //     [read]` auto-approves reads and still confirms writes. A tool the
@@ -480,6 +623,73 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 	server, tool, reason string,
 ) (coreag.ToolResult, bool, error) {
 	family := toolloop.ClassifyToolFamily(server, tool)
+
+	// 0. Risk-rated autonomy layer (risk-rated-autonomy-01PMRA01 WP02).
+	//    nil gate -> this rung is a no-op, byte-identical to every
+	//    caller that has not wired one (every pre-WP02 test, and any
+	//    build that predates production wiring).
+	if a.gate != nil {
+		// risk-rated-autonomy-01PMRA01 WP03: the threshold dial. nil
+		// autonomy provider (not wired) fails toward the strict-tier
+		// value (0 -> the rater is bypassed and every unmatched action
+		// asks) rather than defaulting to some permissive value.
+		threshold := 0
+		if a.autonomy != nil {
+			threshold = a.autonomy(ctx, a.sessionID).RiskThreshold
+		}
+		d := cedar.ThreeLayerResolve(ctx, a.gate, cedar.UserUID(), cedar.ActionUseTool, cedar.ToolUID(server, tool), nil, threshold)
+		switch d.Outcome {
+		case cedar.Deny:
+			a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+				SessionID: a.sessionID,
+				Server:    server,
+				Tool:      tool,
+				Family:    family,
+				Path:      audit.ToolConfirmPathLayer1Forbid,
+				Layer:     1,
+				Threshold: threshold,
+				Approved:  false,
+				Reason:    d.Reason,
+			})
+			return coreag.ToolResult{
+				Content: fmt.Sprintf("tool %q denied: %s", call.Name, d.Reason),
+				IsError: true,
+			}, false, nil
+
+		case cedar.Allow:
+			a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+				SessionID: a.sessionID,
+				Server:    server,
+				Tool:      tool,
+				Family:    family,
+				Path:      audit.ToolConfirmPathLayer2Permit,
+				Layer:     2,
+				Threshold: threshold,
+				Approved:  true,
+				Reason:    d.Reason,
+			})
+			return coreag.ToolResult{}, true, nil
+
+		case cedar.Confirm:
+			// Layer 3: Cedar had no opinion. Either way, an unmatched
+			// action must never reach rungs 1-5's auto-skip mechanisms —
+			// that is exactly the hole this mission closes: the tool's
+			// coarse FAMILY no longer decides for it when Cedar itself
+			// had no opinion.
+			//
+			// risk-rated-autonomy-01PMRA01 WP05: when a rater is wired
+			// AND threshold > 0 (FR-008 — threshold<=0 means every
+			// layer-3 case already always asks, so a rater call could
+			// never change the answer and must be skipped, not spent),
+			// consult it and let a family-floored (WP06) below-threshold
+			// score resolve straight to Allow. A nil rater, or
+			// threshold<=0, keeps the WP02/WP03 stub: always confirm.
+			if a.rater != nil && threshold > 0 {
+				return a.resolveLayer3Rating(ctx, call, server, tool, family, threshold)
+			}
+			return a.promptConfirmEach(ctx, call, server, tool, d.Reason, family, 3, threshold, nil)
+		}
+	}
 
 	// 1. Autonomy prompt-skip set (WP04). This is what makes the two
 	//    permission branches genuinely different: skipPrompt finally has
@@ -601,10 +811,248 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 	}
 
 	// 6. Prompt.
-	//
-	// One batch per turn: every call dispatched under the same
-	// WithConfirmBatch context shares an ID so the frontend renders one
-	// modal with N rows. Ungrouped callers get a batch of one.
+	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 0, 0, nil)
+}
+
+// riskPromptDetail carries risk-rated-autonomy-01PMRA01 WP10's
+// structured score/tier/model/prompt-version/cache-hit detail from
+// wherever a rating (live or offline-floor) was computed through to
+// both the audit record and the confirm-each prompt itself. A nil
+// *riskPromptDetail means "not a risk-rated layer-3 prompt" — the
+// legacy rung-6 call (layer 0) and the WP02/WP03 always-confirm stub
+// (no rater wired / threshold<=0) both pass nil, and every consumer
+// (auditConfirm call sites, promptConfirmEach's ConfirmRequest
+// construction) must treat nil as "omit these fields" rather than
+// synthesizing a zero score — 0 is itself a valid (very low) score and
+// must never be confused with "no rating was computed."
+type riskPromptDetail struct {
+	Score         int
+	Tier          string
+	Model         string
+	PromptVersion string
+	CacheHit      bool
+	Rationale     string
+}
+
+// resolveLayer3Rating is rung 0's WP05 extension: a rater is wired and
+// threshold > 0 (the caller already checked FR-008's bypass), so a real
+// rating can resolve this layer-3 Confirm to Allow instead of always
+// prompting. Every failure mode (rater error, out-of-range score) falls
+// back to the prompt — never to Allow — per RiskRater's failure
+// contract (spec FR-004: fail closed to the prompt, never fail-open).
+func (a *kernelToolAdapter) resolveLayer3Rating(
+	ctx context.Context,
+	call coreag.ToolCall,
+	server, tool, family string,
+	threshold int,
+) (coreag.ToolResult, bool, error) {
+	rating, rerr := a.rater.Rate(ctx, call.Name, risk.NormalizeArgs(call.Args), risk.SessionContext{SessionID: a.sessionID})
+	if rerr != nil {
+		if errors.Is(rerr, risk.ErrUnreachable) {
+			// spec.md FR-004's amendment (lines 271-274): TRUE
+			// unreachability — no route to the model at all — degrades
+			// to the offline floor rather than a blanket "always ask".
+			// A transient/malformed failure (below) still prompts, per
+			// FR-004 unchanged.
+			return a.resolveLayer3OfflineFloor(ctx, call, server, tool, family, threshold, rerr)
+		}
+		reason := fmt.Sprintf("layer 3: risk rater failed (%s); asking", rerr.Error())
+		// No riskPromptDetail: a transient/malformed rater failure never
+		// produced a usable score (rating is the zero value here), so
+		// there is nothing structured to show — only the prompt's
+		// generic "why" applies.
+		return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold, nil)
+	}
+
+	// WP06: the family floor the rater cannot lower a score past. Applied
+	// here, in Go, after the model's output has already been parsed and
+	// validated — a successful prompt-injection attack against the
+	// rater's own prompt still cannot escape it.
+	floored := risk.ApplyFamilyFloor(family, rating.Score)
+	tier := string(risk.BandFor(floored))
+
+	if floored < threshold {
+		a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+			SessionID:     a.sessionID,
+			Server:        server,
+			Tool:          tool,
+			Family:        family,
+			Path:          audit.ToolConfirmPathLayer3RaterAllow,
+			Layer:         3,
+			Threshold:     threshold,
+			Approved:      true,
+			Reason:        fmt.Sprintf("risk rating %d (floored %d) below threshold %d: %s", rating.Score, floored, threshold, rating.Rationale),
+			Score:         floored,
+			Tier:          tier,
+			Model:         rating.Model,
+			PromptVersion: rating.PromptVersion,
+			CacheHit:      rating.CacheHit,
+		})
+		return coreag.ToolResult{}, true, nil
+	}
+
+	reason := fmt.Sprintf("layer 3: risk rating %d (floored %d) at/above threshold %d: %s", rating.Score, floored, threshold, rating.Rationale)
+	detail := &riskPromptDetail{
+		Score:         floored,
+		Tier:          tier,
+		Model:         rating.Model,
+		PromptVersion: rating.PromptVersion,
+		CacheHit:      rating.CacheHit,
+		Rationale:     rating.Rationale,
+	}
+	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold, detail)
+}
+
+// resolveLayer3OfflineFloor is spec.md FR-004's amendment (lines
+// 271-274): Rate returned TRUE unreachability (errors.Is(err,
+// risk.ErrUnreachable)) — no live rating is possible — so this degrades
+// to the SAME family floor WP06 already computes (floor.go's
+// ApplyFamilyFloor), using a baseline score of 0 (the most permissive
+// value) in place of a live rating. For FamilyDestructive/FamilyUnknown
+// this still yields familyFloorScore (81, above every tier's
+// threshold), so a destructive or unclassifiable call still surfaces;
+// every other family yields 0, which clears any positive threshold and
+// proceeds. This is "degrade to the static policy you already have,"
+// not "stop everything" — an autonomous unattended run with a laptop
+// that just lost its network connection must not deny every
+// un-granted MCP tool for the rest of the run.
+//
+// Always emits ToolConfirmPathLayer3OfflineFloor the moment
+// unreachability is detected, regardless of outcome, so "we are running
+// on the offline floor" is visible in the audit trail rather than
+// inferred from a reused rater-failed reason string. When the floored
+// score does not clear threshold, the call ALSO falls through to
+// promptConfirmEach as normal (which records its own, separate decision
+// once resolved — see that path's own doc comment for why two records
+// for one call is deliberate here).
+func (a *kernelToolAdapter) resolveLayer3OfflineFloor(
+	ctx context.Context,
+	call coreag.ToolCall,
+	server, tool, family string,
+	threshold int,
+	rerr error,
+) (coreag.ToolResult, bool, error) {
+	// The baseline is 0 — no live signal, so no assumed risk beyond
+	// whatever the family itself statically implies. ApplyFamilyFloor is
+	// the exact same function WP06 already tests and mutation-proves;
+	// reusing it here means the offline floor can never drift from the
+	// online floor's own value.
+	offlineScore := risk.ApplyFamilyFloor(family, 0)
+	tier := string(risk.BandFor(offlineScore))
+	approved := offlineScore < threshold
+
+	reason := fmt.Sprintf(
+		"risk rater unreachable (%s); running on the offline floor for family %q (score %d) against threshold %d",
+		rerr.Error(), family, offlineScore, threshold,
+	)
+	a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+		SessionID: a.sessionID,
+		Server:    server,
+		Tool:      tool,
+		Family:    family,
+		Path:      audit.ToolConfirmPathLayer3OfflineFloor,
+		Layer:     3,
+		Threshold: threshold,
+		Approved:  approved,
+		Reason:    reason,
+		// Score/Tier only — Model/PromptVersion/CacheHit stay zero: no
+		// live rater was consulted, per this function's own doc comment.
+		Score: offlineScore,
+		Tier:  tier,
+	})
+
+	if approved {
+		return coreag.ToolResult{}, true, nil
+	}
+	detail := &riskPromptDetail{
+		Score:     offlineScore,
+		Tier:      tier,
+		Rationale: reason,
+	}
+	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold, detail)
+}
+
+// promptConfirmEach parks the call on the confirm bus and blocks until
+// the user answers. It is rung 6 of resolveConfirmEach's ladder, and —
+// since risk-rated-autonomy-01PMRA01 WP02 — also the destination a
+// layer-3 Confirm verdict jumps to directly, bypassing rungs 1-5. Both
+// callers share this one implementation so "exactly one audit record per
+// decision" (FR-007) holds regardless of which rung produced the prompt.
+//
+// layer is 0 for the legacy rung-6 call (unchanged encoding — see
+// audit.ToolConfirmDecisionPayload.Layer's doc comment) or 3 when a
+// risk-rated-autonomy layer-3 Confirm verdict routed here. threshold is
+// the resolved autonomy.ResolvedKnobs.RiskThreshold at the time of the
+// decision (0 for the legacy rung-6 call, where the concept does not
+// apply) — recorded on the audit record so FR-007's reproducibility
+// requirement holds once WP05 makes the threshold decision-relevant.
+//
+// One batch per turn: every call dispatched under the same
+// WithConfirmBatch context shares an ID so the frontend renders one
+// modal with N rows. Ungrouped callers get a batch of one.
+//
+// There is no timeout on the legacy rung-6 call (layer==0): an
+// unanswered confirmation parks the run until the user answers, the
+// batch is cancelled, or ctx is cancelled (owner decision 1). Do not
+// add a deadline to THAT case — it is unchanged by WP07.
+//
+// risk-rated-autonomy-01PMRA01 WP07: a layer==3 call (one that reached
+// here via a Cedar-unmatched action a rater could not resolve to Allow)
+// gets its OWN bounded deadline (layer3PromptTimeout, default
+// defaultLayer3PromptTimeout) on top of ctx cancellation. Expiry always
+// DENIES — never "allow on timeout" — and the run continues rather than
+// parking forever, which is the whole point: an unattended run at the
+// autonomous tier must not hang on the first un-granted MCP tool. This
+// is a NEW, additive deadline scoped to layer==3 only; it does not
+// touch or shorten the rung-6 no-deadline invariant above.
+func (a *kernelToolAdapter) promptConfirmEach(
+	ctx context.Context,
+	call coreag.ToolCall,
+	server, tool, reason, family string,
+	layer, threshold int,
+	riskDetail *riskPromptDetail,
+) (coreag.ToolResult, bool, error) {
+	// WP07 refinement: a layer-3 prompt reached under an UNATTENDED run
+	// posture denies IMMEDIATELY rather than waiting out
+	// layer3PromptTimeout. Rung 0 bypasses rungs 1-5 entirely on a
+	// layer-3 Confirm (that is the whole point of WP02 — see
+	// resolveConfirmEach's doc comment), so rung 5's own
+	// `unattended -> always deny, no wait` fast path never gets a chance
+	// to fire for this case; without this check, an unattended run would
+	// wait out the FULL bound (minutes to hours, tuned for a human who
+	// might be away from their desk) before self-correcting, on EVERY
+	// layer-3 call in the run — a materially worse outcome than "never
+	// park" implies, since nobody is present to answer regardless of how
+	// long the wait is. Mirrors rung 5's own unattended semantics
+	// exactly (runposture.IsUnattended(ctx) -> deny, unconditionally),
+	// just reached from the layer-3 entry point instead.
+	if layer == 3 && runposture.IsUnattended(ctx) {
+		unattendedReason := "unattended run (scheduled dispatch): a layer-3 risk-rated prompt denies immediately, same as an organic confirm_each verdict (no wait — nobody is present to answer)"
+		payload := audit.ToolConfirmDecisionPayload{
+			SessionID: a.sessionID,
+			Server:    server,
+			Tool:      tool,
+			Family:    family,
+			Path:      audit.ToolConfirmPathLayer3Timeout,
+			Layer:     layer,
+			Threshold: threshold,
+			Approved:  false,
+			Reason:    unattendedReason,
+		}
+		if riskDetail != nil {
+			payload.Score = riskDetail.Score
+			payload.Tier = riskDetail.Tier
+			payload.Model = riskDetail.Model
+			payload.PromptVersion = riskDetail.PromptVersion
+			payload.CacheHit = riskDetail.CacheHit
+		}
+		a.auditConfirm(ctx, payload)
+		return coreag.ToolResult{
+			Content: fmt.Sprintf("tool %q denied: %s", call.Name, unattendedReason),
+			IsError: true,
+		}, false, nil
+	}
+
 	batchID := toolloop.ConfirmBatchFromContext(ctx)
 	if batchID == "" {
 		batchID = toolloop.NewConfirmID("batch")
@@ -620,13 +1068,70 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 		ArgsSummary: toolloop.SummarizeArgs(call.Args),
 		Reason:      reason,
 	}
+	if riskDetail != nil {
+		req.HasRiskRating = true
+		req.RiskScore = riskDetail.Score
+		req.RiskTier = riskDetail.Tier
+		req.RiskThreshold = threshold
+		req.RiskRationale = riskDetail.Rationale
+	}
 
-	decision, err := a.confirm.Pending(ctx, req)
+	waitCtx := ctx
+	if layer == 3 {
+		d := a.layer3PromptTimeout
+		if d <= 0 {
+			d = defaultLayer3PromptTimeout
+		}
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
+
+	decision, err := a.confirm.Pending(waitCtx, req)
 	if err != nil {
+		if layer == 3 && ctx.Err() == nil {
+			// The layer-3 deadline fired, not the caller's own ctx (that
+			// is still alive — otherwise ctx.Err() would be non-nil
+			// too, since waitCtx is a child of ctx and inherits its
+			// cancellation). Deny, tell the model why, and let the run
+			// continue: never "allow on timeout", at any tier (WP07
+			// owner directive).
+			d := a.layer3PromptTimeout
+			if d <= 0 {
+				d = defaultLayer3PromptTimeout
+			}
+			timeoutReason := fmt.Sprintf("no confirmation received within %s; risk-rated layer-3 prompts deny on deadline rather than parking indefinitely", d)
+			payload := audit.ToolConfirmDecisionPayload{
+				SessionID: a.sessionID,
+				CallID:    req.CallID,
+				BatchID:   req.BatchID,
+				Server:    server,
+				Tool:      tool,
+				Family:    family,
+				Path:      audit.ToolConfirmPathLayer3Timeout,
+				Layer:     layer,
+				Threshold: threshold,
+				Approved:  false,
+				Reason:    timeoutReason,
+			}
+			if riskDetail != nil {
+				payload.Score = riskDetail.Score
+				payload.Tier = riskDetail.Tier
+				payload.Model = riskDetail.Model
+				payload.PromptVersion = riskDetail.PromptVersion
+				payload.CacheHit = riskDetail.CacheHit
+			}
+			a.auditConfirm(ctx, payload)
+			return coreag.ToolResult{
+				Content: fmt.Sprintf("tool %q denied: %s", call.Name, timeoutReason),
+				IsError: true,
+			}, false, nil
+		}
 		// Context cancellation (run stopped / session torn down) or a
 		// caller bug. Either way the call must not dispatch. No audit
 		// record: nothing was decided, which is exactly owner decision
-		// 1's "elapsed time resolves to nothing".
+		// 1's "elapsed time resolves to nothing" (still true for the
+		// layer==0 rung-6 case, which never installs a deadline above).
 		return coreag.ToolResult{}, false, fmt.Errorf("chat: tool confirmation: %w", err)
 	}
 
@@ -650,6 +1155,8 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 		Tool:            tool,
 		Family:          family,
 		Path:            audit.ToolConfirmPathPrompted,
+		Layer:           layer,
+		Threshold:       threshold,
 		Approved:        decision.Approved,
 		RememberSession: decision.Approved && decision.RememberSession,
 		Persisted:       persisted,

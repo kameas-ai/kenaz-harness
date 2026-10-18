@@ -28,6 +28,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
+	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
@@ -415,6 +416,60 @@ func (a *graphAuthorAdapter) MaterializeRun(ctx context.Context, runID string) (
 	}, nil
 }
 
+// scheduledRunWriterAdapter wraps scheduledchatview.ScheduledChatAPI and
+// implements harness.ScheduledRunWriter (model-scheduled-jobs-01PMSJ01
+// WP10).
+//
+// It ALWAYS calls CreateAsModel, never Create — created_by="model" is a
+// Go call-site choice made here, not data threaded through from the
+// tool's JSON args (harness.ScheduledRunCreateInput has no CreatedBy
+// field to smuggle a value through in the first place, mirroring
+// scheduledchatview.CreateInput's own shape). CreateAsModel itself
+// refuses a request with an empty ToolAllowlist (owner ruling B-3) and
+// evaluates ActionScheduledRunCreate with context.created_by="model"
+// (WP09) — this adapter adds no security logic of its own, it only
+// translates types.
+//
+// What enforces the allowlist this adapter persists: when the row fires,
+// LiveChatRunDispatcher binds the run's session to it
+// (scheduler.ResolveRunContainment -> ScheduledRunContainmentRegistry)
+// and the session arm of harness-self-attach-01PMHS01 WP04's merged,
+// session-aware PermissionResolver denies and records every off-list call
+// (model-harness-toolset-01MHTS001 WP02, finding H-1). Per spec.md §6.1
+// F2, a tool_allowlist enforced by a session-blind static resolver would
+// be indistinguishable from an unenforced one — and until WP02 it was
+// unenforced: the merged resolver existed but read no allowlist.
+type scheduledRunWriterAdapter struct{ api scheduledchatview.ScheduledChatAPI }
+
+var _ harness.ScheduledRunWriter = scheduledRunWriterAdapter{}
+
+func (a scheduledRunWriterAdapter) CreateScheduledRun(ctx context.Context, in harness.ScheduledRunCreateInput) (harness.ScheduledRunSummary, error) {
+	if a.api == nil {
+		return harness.ScheduledRunSummary{}, errors.New("scheduledchat: api not configured")
+	}
+	entry, err := a.api.CreateAsModel(ctx, scheduledchatview.CreateInput{
+		Name:           in.Name,
+		PromptTemplate: in.PromptTemplate,
+		Cron:           in.Cron,
+		Timezone:       in.Timezone,
+		Model:          in.Model,
+		OutputSink:     in.OutputSink,
+		Enabled:        in.Enabled,
+		ToolAllowlist:  in.ToolAllowlist,
+	})
+	if err != nil {
+		return harness.ScheduledRunSummary{}, err
+	}
+	return harness.ScheduledRunSummary{
+		ID:            entry.ID,
+		Name:          entry.Name,
+		Cron:          entry.Cron,
+		Enabled:       entry.Enabled,
+		CreatedBy:     entry.CreatedBy,
+		ToolAllowlist: entry.ToolAllowlist,
+	}, nil
+}
+
 // harnessServer wraps a harness.Server and exposes its concrete type for
 // the in-process transport (WP09). Held on rpc.API so future WPs can
 // attach the server to the MCP pool without re-constructing it.
@@ -437,6 +492,7 @@ func buildHarnessManagers(
 	projectsAPI projectsview.ProjectsAPI,
 	graphAPI graphview.API,
 	auditImpl *audit.API,
+	scheduledChatAPI scheduledchatview.ScheduledChatAPI,
 ) harness.Managers {
 	m := harness.Managers{}
 
@@ -476,17 +532,17 @@ func buildHarnessManagers(
 		m.GraphAuthor = ga
 		m.GraphMaterializer = ga
 	}
-	// Managers.Status (StatusReporter) and Managers.RecipesWriter
-	// (RecipeWriter) remain unwired: no adapter exists yet for either.
-	// harness_read_get_status and harness_write_install_mcp_recipe are
-	// therefore still errNotConfigured for every caller — a real,
-	// pre-existing gap this unit's attach makes reachable (and so
-	// observable) for the first time. Not fixed here: StatusReporter
-	// needs a projects count PLUS an "installed MCP servers" count PLUS
-	// a policy count, none of which has an obvious single source on
-	// this call path yet, and RecipeWriter's idOrConfig contract (a
-	// curated-registry id OR a raw config blob, ToolsAPI.InstallRecipe
-	// wants id+env+config separately) needs a real design decision, not
-	// a guessed adapter. Flagged in the mission report as a follow-up.
+	if scheduledChatAPI != nil {
+		// model-scheduled-jobs-01PMSJ01 WP10 — see
+		// scheduledRunWriterAdapter's doc comment for the sequencing
+		// this depends on (harness-self-attach-01PMHS01 WP04's merged
+		// resolver, already live by this point in New()).
+		m.ScheduledRunWriter = scheduledRunWriterAdapter{api: scheduledChatAPI}
+	}
+	// harness_read_get_status and harness_write_install_mcp_recipe (and
+	// their Managers.Status / Managers.RecipesWriter fields) were removed
+	// by model-harness-toolset-01MHTS001 WP03 (H-2): neither ever had an
+	// adapter here, so both were advertised to the model and always
+	// failed "not configured". See docs/unwired-ledger.md.
 	return m
 }

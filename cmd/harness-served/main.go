@@ -44,8 +44,8 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/cmd/harness-served/dispatch"
 	"github.com/kameas-ai/kenaz-harness/cmd/mcpsubcmd"
+	"github.com/kameas-ai/kenaz-harness/cmd/servedfleet"
 	"github.com/kameas-ai/kenaz-harness/core"
-	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
@@ -157,11 +157,18 @@ func main() {
 	// token never crosses into the VM.
 	authCfg := authbroker.ReadConfig(os.Getenv)
 	connTokens := authbroker.NewConnectorTokens(authCfg, log)
+	// Named so the same emitter also backs authbroker.WithLedgerEmit below
+	// (fleet-enforcement-truth-01PMZ505 WP14) — one reporter-ingest-socket
+	// emitter for both connector-lifecycle and session-lifecycle events.
+	// Both served entry points must agree (Spec 078 precedent) — wiring
+	// only main.go and not this binary would reproduce exactly the
+	// SD-11 divergence class this file's own header already warns about.
+	ledgerEmitter := connectors.NewLedgerEmitterFromEnv(os.Getenv, log)
 	connSup := connectors.NewSupervisor(connectors.SupervisorConfig{
 		Provisioning: mcpProv,
 		Getenv:       os.Getenv,
 		Tokens:       connTokens,
-		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, log),
+		Ledger:       ledgerEmitter,
 		// D13/US5: include operator-authored user recipes baked under
 		// <dataDir>/mcp/recipes so whitelisted custom connector ids
 		// resolve in served mode. The whitelist still gates every id.
@@ -219,7 +226,11 @@ func main() {
 	// disk, same mechanism as SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
 	//
 	// Privacy: broker token and access token bytes are never logged.
-	authSession := authbroker.NewSession(ctx, authCfg, log)
+	// WithLedgerEmit (fleet-enforcement-truth-01PMZ505 WP14): reuse the
+	// connector-lifecycle emitter so "session.signed_out" reaches the
+	// same reporter ingest socket as connector.* events.
+	authSession := authbroker.NewSession(ctx, authCfg, log,
+		authbroker.WithLedgerEmit(ledgerEmitter.EmitSessionLifecycle))
 	log.Info("harness-served: auth session initialised",
 		"auth_state", authSession.State().String(),
 		"broker_addr", authCfg.BrokerAddr,
@@ -231,20 +242,12 @@ func main() {
 	// has no OS keychain for the default store to read, and renewal is owned
 	// host-side; no refresh token ever crosses the boundary. Guarded on
 	// BrokerAddr so a bare local run keeps keychain-backed sign-in.
-	if authCfg.BrokerAddr != "" {
-		fleet.SetExternalTokenSource(authSession.AccessToken)
-		if authSession.State() == authbroker.StateSignedIn {
-			// One-shot enroll → activates the fleet OTLP pipeline. On
-			// desktop FleetSignIn does this post-login; served mode has no
-			// sign-in affordance, so the signed-in seed is the trigger.
-			// Best-effort: failure means telemetry stays off, nothing else.
-			go func() {
-				if _, err := api.Settings().FleetRefreshIdentity(ctx); err != nil {
-					log.Info("harness-served: fleet enroll skipped", "reason", err.Error())
-				}
-			}()
-		}
-	}
+	//
+	// servedfleet.Start also runs the enroll supervisor: enroll with backoff,
+	// recover from an anonymous boot or a host sign-out/in, re-enroll on an
+	// account change. It replaced a one-shot enroll that only fired when the
+	// host was already signed in at boot and never retried.
+	fleetEnroll := servedfleet.Start(ctx, api, authCfg, authSession, log)
 
 	token := os.Getenv(serve.EnvToken)
 	addr := *listenAddr
@@ -274,11 +277,22 @@ func main() {
 
 	srv := serve.New(api, addr, token, servedFS, log,
 		serve.WithAuthSession(authSession),
+		serve.WithFleetEnroll(fleetEnroll),
 		serve.WithConnectors(connSup),
 		// SD-16 (served-mode-is-a-real-mode-01PMZ707 WP08): both served
 		// entry points must agree — see main.go's identical wiring.
 		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
-	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
+	serveErr := srv.Serve(ctx)
+	// Two findings, one call: #68 (v0.78.1) -- this binary never called
+	// api.Shutdown(), leaving a queued post_send embed and the
+	// prune/compaction schedulers running; and #70 -- it never called
+	// core.Shutdown(ctx), so storage, MCP and telemetry never closed.
+	// Shared with main.go's runServeMode via serve.ShutdownServedCore
+	// (see that function's doc comment) so both served entry points
+	// cannot drift from each other. Runs even when serveErr is a real
+	// error.
+	serve.ShutdownServedCore(ctx, api, c, log, "harness-served")
+	if serveErr != nil && serveErr != context.Canceled {
 		log.Error("harness-served: server error", "err", serveErr)
 		os.Exit(1)
 	}

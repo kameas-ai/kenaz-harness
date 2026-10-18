@@ -52,7 +52,7 @@ func TestHealthProbe_TripsOnHTTP401(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
-	probeFn := httptransport.NewToolsListProbe(conn, nil)
+	probeFn := httptransport.NewToolsListProbe(conn, nil, nil)
 
 	// First: confirm a single probe call against the 401 server returns a
 	// non-nil error — the structural claim ★2 asks about, executed rather

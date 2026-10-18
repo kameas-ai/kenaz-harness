@@ -6,8 +6,10 @@ import (
 
 // Store is the persistence contract Manager consumes. Two
 // implementations ship in this package: an in-memory store (memStore,
-// returned by NewMemoryStore) used by unit tests, and a SQL-backed
-// store (sqlStore, returned by NewSQLStore) for runtime.
+// returned by NewMemoryStore) used by unit tests, and the units-backed
+// SQL store (unitsStore, returned by NewUnitsStore / NewSQLStore) for
+// runtime — artifacts are core/units rows with kind='artifact' since
+// migration units/1104-artifacts-to-units.
 //
 // All methods are safe for concurrent use.
 type Store interface {

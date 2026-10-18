@@ -1609,6 +1609,16 @@ the Compliance panel, retention settings, export and BulkPurge all come out.
 > **Interacts with A-1:** the bundle-verify mission builds real signature
 > verification. Check whether its key handling can serve catalog items before
 > inventing a second scheme.
+>
+> **Update 2026-10-05 (kenaz-fleet owner, answering the fleet-session-truth
+> brief):** option 1 is closed — the control plane will **never** publish
+> per-device or per-org catalog keys. Org-mandated items already verify:
+> they ship inside the ed25519-signed config bundle checked against the
+> build-time-pinned key (`config_pull.go` `VerifyWithKeySet` →
+> `ApplyMandatedSkills`). Non-mandated catalog installs have no fleet
+> signature. Option 2 (sign item payloads with the bundle key) is the only
+> remaining path and is a pending fleet-owner decision; `WithPubKey` stays
+> as its seam.
 
 
 **Instances.** `fleet-enforcement-truth-01PMZ505` E-001 **(blocks any real
@@ -2418,6 +2428,23 @@ record, a verdict-carrying resume verb (`Graph_Resume` takes free text), the
 `rejected` port write, and durable run state — `Manager.runs` is a plain map,
 so **AC-PI-1 is unmet today for ANY pause, `ask` included.** That enlargement is
 `01PMZC12` E-002.
+
+**Update (2026-09-12, mission finish pass).** E-002 shipped the "abandoned"
+alternative spec.md §5.5 sanctioned rather than full durable pause (UNIT-6 as
+originally scoped — rebuilding a resumable `*coreag.Env` from the event log —
+remains cut). `Manager.rehydrateAbandonedRuns`, called from `NewManager`,
+scans `EventLog.PausedRunIDs()` at boot and marks an orphaned paused run
+`RunStateAbandoned` with a recorded reason and an `EventRunAbandoned` event,
+instead of `GetRunStatus` answering "not found" forever for a trace whose last
+word claims a human was asked and never answered. This is generic over pause
+kind — it keys on the last durable event being `run_paused`, not on the node
+kind — so it also closes the gap for `ask` pauses, not only `approval` ones.
+`RunView` renders the abandoned state distinctly from a resolvable pending
+decision. `TestUpgradePath_PausedApprovalIsAbandonedAcrossRestart`
+(`core/storage/sqlite/upgrade_path_approval_test.go`) proves this against a
+real upgraded database, not an empty one. A run still cannot be *resumed*
+after a restart — only truthfully reported — so G7 ("resumes under the next
+release") is met via the fallback disposition, not literally.
 
 ### F-2 — `01NORGX01` was never ownerless
 

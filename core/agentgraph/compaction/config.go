@@ -43,8 +43,24 @@ type SiteConfig struct {
 	// PreCallThreshold is the fraction of MaxTokens above which
 	// pre_call compaction fires (FR-041 default 0.85).
 	PreCallThreshold float64 `json:"pre_call_threshold,omitempty" yaml:"pre_call_threshold,omitempty"`
-	// ToolResultMaxBytes is the threshold above which post_tool
-	// compaction fires (FR-041 default 16 KiB).
+	// ToolResultMaxBytes is round-tripped through the compaction
+	// Settings RPC and the strategy panel (a real field, a real
+	// preset default, a real per-layer override), but does NOT gate
+	// post_tool firing.
+	//
+	// CK-04/CK-05/CK-06 justify(blocker: "post_tool firing is driven by
+	// the pre_call site's token-watermark verdict
+	// (Env.automaticCompactionCrossed), which has no byte-count input
+	// to compare this against; wiring it would mean adding a second,
+	// independent firing condition to exec_compute.go's post_tool site
+	// — a behaviour change, not a wiring fix", owner: alec, date:
+	// 2026-08-29; chat-turn-integrity-01PMZ606 WP13): this field is
+	// absent from CompactOpts (compactor.go), so mergeOpts cannot carry
+	// it into ANY strategy dispatch — a repo-wide search finds no
+	// branching read anywhere. exec_compute.go's actual post_tool
+	// trigger is `tr.Content != "" && env.automaticCompactionCrossed()`
+	// — the pre_call site's watermark crossing, not a byte-size check
+	// against this field.
 	ToolResultMaxBytes int `json:"tool_result_max_bytes,omitempty" yaml:"tool_result_max_bytes,omitempty"`
 	// MaxRecursionDepth is the bound on custom_subgraph nesting
 	// (FR-045 default 2).
@@ -469,8 +485,19 @@ func SafeDefaults() CompactionConfig {
 	}}
 }
 
-// SortedSites returns the sites in canonical order — used by
-// resolver implementations and tests that iterate over the cascade.
+// SortedSites returns the sites in canonical (alphabetical) order.
+//
+// CK-11 justify(blocker: "both resolver implementations in this file
+// iterate AllSites() (compactor.go), not this function — a repo-wide
+// grep, including tests, finds no caller of SortedSites at all", owner:
+// alec, date: 2026-08-29; chat-turn-integrity-01PMZ606 WP13): the doc
+// used to claim "used by resolver implementations and tests" — nobody
+// uses it. AllSites() already returns a stable, declaration-ordered
+// slice (["pre_call", "post_tool", "manual"], NOT alphabetical — this
+// function's sort would reorder it) and every actual iterator in this
+// package reaches for AllSites, not this. It predates AllSites or was
+// written for a caller that never landed. Under A-0 this is not
+// deleted.
 func SortedSites() []Site {
 	out := AllSites()
 	sort.Slice(out, func(i, j int) bool { return string(out[i]) < string(out[j]) })

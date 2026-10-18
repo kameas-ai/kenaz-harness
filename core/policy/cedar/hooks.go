@@ -191,6 +191,18 @@ func CheckFileWrite(ctx context.Context, g Gate, path string) error {
 // through core/tools/fs.Gate, which evaluates
 // ActionReadFilesystem/ActionWriteFilesystem against the FilesystemOp
 // resource family instead (trust-surfaces-that-fire-01PMZ202 WP18).
+//
+// That WP18 split ("graph nodes: Cedar file_read/file_write only;
+// tools: fs.Gate") is SUPERSEDED by graph-fs-gate-01GFSG01 (owner
+// ruling 2026-10-03: one permission model everywhere). The graph
+// read_file / write_file executors still call this and CheckFileWrite
+// first — a Cedar deny short-circuits — and then consult the SAME
+// fs.Gate instance the fs builtin tools use, through the optional
+// agentgraph.FileAccessGate seam the graph PolicyGateAdapter
+// implements. Since the embedded default bundle permits file_read /
+// file_write for every resource, this Cedar check alone is not a
+// confinement boundary; fs.Gate (confirmed roots, prompt when attended,
+// deny when unattended) is. See docs/unwired-ledger.md, 2026-10-03.
 func CheckFileRead(ctx context.Context, g Gate, path string) error {
 	if g == nil {
 		return nil
@@ -336,6 +348,15 @@ func CheckCredentialAccess(ctx context.Context, g Gate, refID, purpose string, s
 			return errCredentialAccessDenied
 		}
 		return nil
+	case Confirm:
+		// risk-rated-autonomy-01PMRA01 WP01: no producer sends Confirm
+		// through this gate today (layer 3 lives in the chat kernel
+		// tool adapter's resolver, not here — see cedar.ThreeLayerResolve),
+		// and credential access has no interactive-prompt registry at
+		// this call site to ask through. Fail closed rather than treat
+		// "a human must decide" as "allow" the way the removed default
+		// branch below would have.
+		return &PolicyDeniedError{Decision: d}
 	default:
 		return nil
 	}
@@ -394,6 +415,18 @@ func GateMCPSpawn(
 			return nil
 		case Deny:
 			return &PolicyDeniedError{Decision: d}
+		case NotApplicable, Confirm:
+			// risk-rated-autonomy-01PMRA01 WP01: nothing produces
+			// Confirm at this call site today (layer 3 is scoped to
+			// tool/MCP dispatch through the chat kernel adapter, not
+			// credential-gated MCP spawn) — this is explicit rather
+			// than falling through a bare default so a future producer
+			// cannot silently regress to "not deny, so allow". Routed
+			// through the SAME registry-driven interactive path
+			// NotApplicable already uses below: ask if a registry is
+			// wired, default-allow only in the documented pre-boot
+			// nil-registry posture (step 5 in the doc comment above).
+			outcome = NotApplicable
 		default:
 			outcome = NotApplicable
 		}
@@ -875,6 +908,82 @@ func GateScheduledChatExecute(ctx context.Context, g Gate, id, createdBy string,
 	return d, &PolicyDeniedError{Decision: d}
 }
 
+// GateSubagentAbort is the gate-hook helper for the Subagent_Abort RPC
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, AC-09).
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// Default-allow when g is nil (pre-boot / test posture), same as every
+// other gate-hook helper in this file. branchID is the
+// core/rpc/views/branches.Branch.ID being aborted.
+func GateSubagentAbort(ctx context.Context, g Gate, branchID string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionToolSubagentAbort,
+			Resource: SubagentBranchUID(branchID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionToolSubagentAbort, SubagentBranchUID(branchID), nil)
+	return d, enforce(d)
+}
+
+// GateSubagentSteer is the gate-hook helper for the Subagent_Steer RPC
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, AC-09).
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// Default-allow when g is nil. branchID is the branch being steered;
+// messageLength is the steering message's rune count, carried as a
+// context attribute (not the message text itself — audit/gate context
+// attributes follow the same no-content-bytes convention as this
+// package's audit payloads).
+func GateSubagentSteer(ctx context.Context, g Gate, branchID string, messageLength int) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionToolSubagentSteer,
+			Resource: SubagentBranchUID(branchID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionToolSubagentSteer, SubagentBranchUID(branchID),
+		map[cedar.String]cedar.Value{
+			cedar.String("message_length"): cedar.Long(int64(messageLength)),
+		})
+	return d, enforce(d)
+}
+
+// GateSubagentPause is the gate-hook helper for the Subagent_Pause RPC
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, AC-09).
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// Default-allow when g is nil (pre-boot / test posture). branchID is the
+// core/rpc/views/branches.Branch.ID being paused.
+func GateSubagentPause(ctx context.Context, g Gate, branchID string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionToolSubagentPause,
+			Resource: SubagentBranchUID(branchID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionToolSubagentPause, SubagentBranchUID(branchID), nil)
+	return d, enforce(d)
+}
+
+// GateSubagentResume is GateSubagentPause's resume-action mirror
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, AC-09).
+func GateSubagentResume(ctx context.Context, g Gate, branchID string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionToolSubagentResume,
+			Resource: SubagentBranchUID(branchID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionToolSubagentResume, SubagentBranchUID(branchID), nil)
+	return d, enforce(d)
+}
+
 // CheckExportSession is the gate-hook helper for the Sessions_Export RPC
 // (session-export-01NDFSEX05 WP01). Returns nil on Allow / NotApplicable;
 // *PolicyDeniedError on Deny. Default-allow when g is nil.
@@ -952,9 +1061,16 @@ func CheckAuditBulkPurge(ctx context.Context, g Gate) error {
 	)
 	// Fail-closed: NotApplicable → Deny because ActionAuditBulkPurge is
 	// default-forbid per spec. Only an explicit Cedar permit should allow it.
+	// Confirm (risk-rated-autonomy-01PMRA01 WP01) is handled explicitly
+	// for the same reason as NotApplicable: this call site has no
+	// interactive-prompt mechanism, so "a human must decide" fails
+	// closed rather than falling through a bare default that would read
+	// identically to "allow" on casual inspection.
 	switch d.Outcome {
 	case Allow:
 		return nil
+	case Deny, NotApplicable, Confirm:
+		return &PolicyDeniedError{Decision: d}
 	default:
 		return &PolicyDeniedError{Decision: d}
 	}
@@ -1094,11 +1210,27 @@ func CheckBundleInstall(ctx context.Context, g Gate, locator string) error {
 
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
 // return nil (default-allow stance); Deny returns *PolicyDeniedError.
+//
+// Confirm (risk-rated-autonomy-01PMRA01 WP01) is handled explicitly and
+// does NOT join the Allow/NotApplicable nil branch. enforce() backs
+// every generic Check*/Gate* helper in this file (CheckTool,
+// CheckUseTool, CheckModel, CheckBundleInstall, CheckFileRead/Write,
+// CheckStateRead/Write, ...) — none of them carry a prompt registry, so
+// none of them can actually ask a human. Layer 3
+// (cedar.ThreeLayerResolve, risk_layer.go) is wired only into the chat
+// kernel tool adapter's own confirm-each ladder, which calls
+// ThreeLayerResolve directly rather than routing through enforce(); no
+// production path sends Confirm through this function today. This
+// branch exists so that if one ever does, the failure mode is "blocked,
+// investigate" rather than a silent re-opening of the exact default-
+// allow hole this mission was written to close.
 func enforce(d Decision) error {
 	switch d.Outcome {
 	case Allow, NotApplicable:
 		return nil
 	case Deny:
+		return &PolicyDeniedError{Decision: d}
+	case Confirm:
 		return &PolicyDeniedError{Decision: d}
 	default:
 		return nil

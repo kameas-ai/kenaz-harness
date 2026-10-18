@@ -68,6 +68,27 @@ type Provider struct {
 type CredentialReference struct {
 	Kind    string `json:"kind"`
 	Locator string `json:"locator"`
+	// Source is local | user_sync | org | team; empty means local
+	// (provider-credentials-client-01PCCLI01 B1).
+	Source string `json:"source,omitempty"`
+	// CredentialID is the Fleet credential id for a Fleet source. An
+	// identifier, never key material.
+	CredentialID string `json:"credentialId,omitempty"`
+}
+
+// CredentialKey is one key a provider profile can use, as the Providers
+// view lists it (§7a H2: many keys per provider, each labelled by scope).
+// Display metadata only: no key material and no keychain locator.
+type CredentialKey struct {
+	ID             string   `json:"id"`
+	Provider       string   `json:"provider"`
+	Source         string   `json:"source"`
+	ScopeName      string   `json:"scopeName,omitempty"`
+	ProfileIDs     []string `json:"profileIds"`
+	OrgDefault     bool     `json:"orgDefault,omitempty"`
+	TeamDefault    bool     `json:"teamDefault,omitempty"`
+	Preselected    bool     `json:"preselected,omitempty"`
+	UserSelectable bool     `json:"userSelectable"`
 }
 
 // AddProviderInput is the payload accepted by AddProvider. Mirrors the
@@ -110,6 +131,11 @@ type ModelInfo struct {
 	// response. 0 / missing means unknown — the UI should not render an
 	// explicit cap in that case (backend-context-window-length-01KQ8TD3 WP01).
 	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
+	// SupportsPromptCache is true when requests for this model carry
+	// explicit cache_control markers (tool-context-budget-01TCBUD01 WP05):
+	// the model picker's and session MODEL row's "caches prompts" badge.
+	// See modelCachesPrompts for how it is derived.
+	SupportsPromptCache bool `json:"supportsPromptCache,omitempty"`
 }
 
 // AttachmentLimitsView is the wire-safe view of capabilities.AttachmentDescriptor
@@ -259,10 +285,20 @@ type LLMConnectorAPI interface {
 
 	// TestProviderKey validates a plaintext API key against the given provider
 	// kind and resource host. Unlike TestAndRotateKey, this does NOT write the
-	// key to the keychain — it is a read-only probe used by the AddProvider form
-	// to display connection status before the user clicks Submit.
+	// key to the keychain — it is intended as a read-only pre-submit probe.
 	//
-	// kind       — the provider kind string ("azure-openai"; others are stubs for now).
+	// NOT the AddProvider form's actual pre-submit check (corrected
+	// model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11, spec C-1):
+	// AddProviderForm.vue's connection-status probe calls
+	// client.llm.listModels(kind, apiKey), not this method. No `.vue`
+	// caller of TestProviderKey exists anywhere in the tree — see the
+	// dated docs/unwired-ledger.md entry for this method's disposition
+	// (register A-0: not deleted, per this mission's "delete nothing"
+	// rule — the impl arm, binding and frontend declarations all stay).
+	//
+	// kind       — the provider kind string ("azure-openai" is the only
+	//              real implementation; every other kind is a stub that
+	//              always returns an error — see impl.go).
 	// host       — the provider-specific resource host (Azure: resource hostname,
 	//              e.g. "myresource.openai.azure.com"; other kinds: ignored).
 	// plaintextKey — the API key to test. Zeroed before this method returns.

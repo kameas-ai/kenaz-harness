@@ -34,6 +34,13 @@ type ProfileResolver func(ctx context.Context, profileID, modelOverride string) 
 // OverheadTotals is the running tally of auto-title LLM cost. The
 // struct mirrors core/agentgraph/compaction/wiring.OverheadTotals so the rpc
 // layer can surface it in the same per-session cost panel.
+//
+// CORRECTED (model-settings-reach-the-model-01PMZ101 WP07): this used to
+// describe an intent nothing delivered — Overhead() had zero non-test
+// callers. As of WP07, core/rpc.API holds the chat runner's
+// *LLMCaller (autotitleLLM) and core/rpc.API.CompactionOverhead projects
+// Overhead()'s tally onto CompactionOverheadInfo's AutoTitle* fields,
+// which SessionsView.vue renders alongside the compaction readout.
 type OverheadTotals struct {
 	// Total is the sum of every auto-title call's reducer-derived cost.
 	Total float64 `json:"total"`

@@ -49,6 +49,10 @@ describe('CreateBranchModal', () => {
           commitReintegration: vi.fn(),
           setAdvisorDismissed: vi.fn(),
           listWithBranchTree: vi.fn(),
+          abortSubagent: vi.fn(),
+          steerSubagent: vi.fn(),
+          pauseSubagent: vi.fn(),
+          resumeSubagent: vi.fn(),
         },
       },
     );
@@ -91,6 +95,10 @@ describe('CreateBranchModal', () => {
           commitReintegration: vi.fn(),
           setAdvisorDismissed: vi.fn(),
           listWithBranchTree: vi.fn(),
+          abortSubagent: vi.fn(),
+          steerSubagent: vi.fn(),
+          pauseSubagent: vi.fn(),
+          resumeSubagent: vi.fn(),
         },
       },
     );
@@ -125,6 +133,10 @@ describe('CreateBranchModal', () => {
           commitReintegration: vi.fn(),
           setAdvisorDismissed: vi.fn(),
           listWithBranchTree: vi.fn(),
+          abortSubagent: vi.fn(),
+          steerSubagent: vi.fn(),
+          pauseSubagent: vi.fn(),
+          resumeSubagent: vi.fn(),
         },
       },
     );

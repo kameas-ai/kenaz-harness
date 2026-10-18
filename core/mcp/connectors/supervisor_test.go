@@ -123,10 +123,29 @@ func testCatalog() func() *recipes.Catalog {
 	}
 }
 
-type fakeTokens struct{ token string }
+type fakeTokens struct {
+	token string
 
-func (f fakeTokens) ConnectorToken(context.Context, string) (string, error) {
+	mu          sync.Mutex
+	invalidated []string
+}
+
+func (f *fakeTokens) ConnectorToken(context.Context, string) (string, error) {
 	return f.token, nil
+}
+
+func (f *fakeTokens) Invalidate(recipeID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.invalidated = append(f.invalidated, recipeID)
+}
+
+func (f *fakeTokens) snapshotInvalidated() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.invalidated))
+	copy(out, f.invalidated)
+	return out
 }
 
 func phases(events []map[string]any, phase string) []map[string]any {
@@ -153,7 +172,7 @@ func TestSupervisor_Bootstrap(t *testing.T) {
 		Provisioning: Provisioning{Provisioned: true,
 			IDs: []string{"datadog", "google-drive", "slack", "ghost"}},
 		Getenv:  func(k string) string { return env[k] },
-		Tokens:  fakeTokens{token: "broker-token"},
+		Tokens:  &fakeTokens{token: "broker-token"},
 		Ledger:  ledger,
 		Catalog: testCatalog(),
 		Logger:  slog.Default(),
@@ -188,6 +207,15 @@ func TestSupervisor_Bootstrap(t *testing.T) {
 	// OAuth broker token injection (D8).
 	if got := byName["slack"].HeadersTemplate["Authorization"]; got != "Bearer broker-token" {
 		t.Errorf("slack Authorization = %q, want broker bearer", got)
+	}
+	// AC-026 (fleet-enforcement-truth-01PMZ505 WP14): the OAuth spec
+	// must carry an On401 hook wired to the token cache — this is the
+	// contract the http/sse transports call into on a real 401. Not a
+	// full end-to-end HTTP round trip (that lives in the transport
+	// packages' own tests); this pins that the supervisor actually
+	// wires the callback rather than leaving On401 nil.
+	if byName["slack"].On401 == nil {
+		t.Fatal("slack spec.On401 is nil — an OAuth connector's 401 has nowhere to invalidate the cached token")
 	}
 
 	// States: whitelist order, ghost unavailable.
@@ -229,6 +257,59 @@ func TestSupervisor_Bootstrap(t *testing.T) {
 				t.Errorf("credential material in ledger event: %v", e)
 			}
 		}
+	}
+}
+
+// TestSupervisor_OAuthConnector_On401InvalidatesCachedToken is AC-026's
+// core assertion at the supervisor layer: calling the wired On401 hook
+// must invalidate exactly the OAuth connector's own cached token — not
+// leave the cache untouched, and not invalidate an unrelated connector's
+// entry. The transport packages' own tests (core/mcp/transport/http and
+// .../sse) prove a real 401 response reaches this hook; this test proves
+// the hook, once called, reaches the right cache key.
+func TestSupervisor_OAuthConnector_On401InvalidatesCachedToken(t *testing.T) {
+	pool := &fakePool{}
+	ledger, _ := captureLedger()
+	tokens := &fakeTokens{token: "broker-token"}
+	sup := NewSupervisor(SupervisorConfig{
+		Provisioning: Provisioning{Provisioned: true, IDs: []string{"slack"}},
+		Getenv:       func(string) string { return "" },
+		Tokens:       tokens,
+		Ledger:       ledger,
+		Catalog:      testCatalog(),
+		Logger:       slog.Default(),
+	})
+	sup.SetPool(pool)
+	if err := sup.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	specs := pool.snapshot()
+	var slackSpec *coremcp.ServerSpec
+	for i := range specs {
+		if specs[i].Name == "slack" {
+			slackSpec = &specs[i]
+		}
+	}
+	if slackSpec == nil {
+		t.Fatal("slack spec not opened")
+	}
+	if slackSpec.On401 == nil {
+		t.Fatal("slack spec.On401 is nil")
+	}
+
+	if got := tokens.snapshotInvalidated(); len(got) != 0 {
+		t.Fatalf("Invalidate called before any 401: %v", got)
+	}
+
+	// Simulate the transport layer observing a 401 (this is exactly what
+	// core/mcp/transport/http's dispatch and core/mcp/transport/sse's
+	// notify401 do in production).
+	slackSpec.On401()
+
+	got := tokens.snapshotInvalidated()
+	if len(got) != 1 || got[0] != "slack" {
+		t.Fatalf("Invalidate calls = %v, want exactly [\"slack\"]", got)
 	}
 }
 

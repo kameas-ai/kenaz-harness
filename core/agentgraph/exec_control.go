@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/elicitation"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"golang.org/x/sync/semaphore"
 )
@@ -763,6 +764,26 @@ func (loopExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 	var adaptedLast bool
 iterLoop:
 	for iter = 0; iter < a.MaxIterations; iter++ {
+		// subagent-control-and-background-tasks-01PMZB11 UNIT-8 (owner
+		// ruling E-002): consult the turn-pause gate BEFORE beginning
+		// this iteration — i.e. before starting a new turn. Checked
+		// first, ahead of the condition below, so a pause issued before
+		// the run's very first turn (iter==0) holds it too. A nil gate
+		// (every Kernel.Run caller except a dispatched sub-agent run)
+		// never blocks. Whatever turn already completed stays completed
+		// — this only gates the NEXT one, which is the whole point: "the
+		// sub-agent finishes the turn it is on and starts no further
+		// turn" (spec.md §13 E-002), not an immediate mid-turn stop
+		// (that's Abort, PR #331, via ctx cancellation — which is also
+		// what unblocks a Wait call here if the paused run is aborted).
+		if env.TurnPause != nil {
+			if err := env.TurnPause.Wait(ctx); err != nil {
+				logging.L().Info("agentgraph.loop.turn_pause.unblocked_by_err",
+					"run_id", env.RunID, "node_id", node.ID, "iter", iter,
+					"err", err.Error())
+				return res, err
+			}
+		}
 		// Optional condition stops early when the body's outputs no
 		// longer satisfy it.
 		if a.Condition != "" && iter > 0 && !adaptedLast {
@@ -935,6 +956,16 @@ func isTerminalNodeError(ctx context.Context, err error) bool {
 		return true
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// A provider 4xx "invalid request" (400/404/413/422 — everything
+	// llm.ClassifyStatus does not mark transient, auth or payment) is a
+	// rejection of the request itself. Re-firing the same node sends the
+	// same request and gets the same answer, so it is never retried.
+	// Typed check, not string matching — core/llm already classifies the
+	// status.
+	var inv *corellm.ErrInvalidRequest
+	if errors.As(err, &inv) {
 		return true
 	}
 	return false
@@ -1155,7 +1186,15 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		})
 		// classify retryable / fatal: anything not ErrBudgetExceeded /
 		// ErrPaused / ErrNotImplemented is retryable for now.
-		if stepErr == ErrBudgetExceeded || stepErr == ErrPaused {
+		//
+		// errors.Is, not ==: checkBudget's callers now return
+		// *BudgetCapError (wraps ErrBudgetExceeded via Is) so the
+		// terminal chat message can name which cap fired. A bare ==
+		// here would stop matching that wrapped value and let a
+		// budget-exhausted step retry instead of terminating --
+		// exactly the fatal-vs-retryable regression this comment
+		// warns against.
+		if errors.Is(stepErr, ErrBudgetExceeded) || errors.Is(stepErr, ErrPaused) {
 			logging.L().Info("agentgraph.retry.end",
 				"run_id", env.RunID, "node_id", node.ID, "outcome", "fatal",
 				"attempts", attempt, "err", stepErr.Error(),
@@ -1262,7 +1301,19 @@ func (branchExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 		ParentMessageIDs: append([]string(nil), a.MessageSubset...),
 	}
 
-	// v2 lifecycle hook: subagent_start (WP04, hooks-event-surface-expansion).
+	// v2 lifecycle hook: pre_tool_use, tool "branch.fork"
+	// (trust-surfaces-that-fire-01PMZ202 WP15 / R-09). This used to be
+	// labelled "subagent_start" in the comment, the audit event's "at"
+	// value, and the error string below — but the call three lines down
+	// dispatches FirePreToolUse, not a subagent_start hook. That
+	// mislabel attributed a pre_tool_use decision to a hook the user
+	// could not have written: fixed here to say what actually fires.
+	// subagent_start now has its own producer —
+	// core/rpc/subagent_run_spawner.go fires it before the child run's
+	// first turn (2026-09-12, UNIT-7) — so do NOT add a second
+	// subagent_start fire here, and do not change which event this site
+	// fires: that would silently disable any pre_tool_use hook a user
+	// already has against branch forks.
 	// Fire before Fork so hooks can inspect / block the spawn before it commits.
 	// The BranchID is not yet known; use an empty string.
 	if env.LifecycleHooks != nil {
@@ -1271,9 +1322,9 @@ func (branchExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 		if saErr == nil && saMerged.Blocked {
 			_ = res.Events.AppendKind(env.RunID, node.ID, EventHookDenied, map[string]any{
 				"reason": saMerged.BlockReason,
-				"at":     "subagent_start",
+				"at":     "pre_tool_use",
 			})
-			return res, fmt.Errorf("branch: node %q: blocked by subagent_start hook: %s", node.ID, saMerged.BlockReason)
+			return res, fmt.Errorf("branch: node %q: blocked by pre_tool_use hook: %s", node.ID, saMerged.BlockReason)
 		}
 	}
 

@@ -19,6 +19,7 @@ func TestPresetTableExact(t *testing.T) {
 		{TierStrict, KnobRecapStyle, RecapNone},
 		{TierStrict, KnobContinueOnError, ErrorStop},
 		{TierStrict, KnobDestructiveActionPosture, DestructiveConfirm},
+		{TierStrict, KnobRiskThreshold, 0},
 		// Cautious
 		{TierCautious, KnobMaxIterations, 15},
 		{TierCautious, KnobAskOnAmbiguity, AskHard},
@@ -27,6 +28,7 @@ func TestPresetTableExact(t *testing.T) {
 		{TierCautious, KnobRecapStyle, RecapBrief},
 		{TierCautious, KnobContinueOnError, ErrorStop},
 		{TierCautious, KnobDestructiveActionPosture, DestructiveConfirm},
+		{TierCautious, KnobRiskThreshold, 20},
 		// Default
 		{TierDefault, KnobMaxIterations, 40},
 		{TierDefault, KnobAskOnAmbiguity, AskMajor},
@@ -35,6 +37,7 @@ func TestPresetTableExact(t *testing.T) {
 		{TierDefault, KnobRecapStyle, RecapBrief},
 		{TierDefault, KnobContinueOnError, ErrorRetryOnce},
 		{TierDefault, KnobDestructiveActionPosture, DestructiveConfirm},
+		{TierDefault, KnobRiskThreshold, 40},
 		// Bold
 		{TierBold, KnobMaxIterations, 100},
 		{TierBold, KnobAskOnAmbiguity, AskProceed},
@@ -43,6 +46,7 @@ func TestPresetTableExact(t *testing.T) {
 		{TierBold, KnobRecapStyle, RecapFull},
 		{TierBold, KnobContinueOnError, ErrorAdapt},
 		{TierBold, KnobDestructiveActionPosture, DestructiveCedarOnly},
+		{TierBold, KnobRiskThreshold, 60},
 		// Autonomous
 		{TierAutonomous, KnobMaxIterations, 0},
 		{TierAutonomous, KnobAskOnAmbiguity, AskNever},
@@ -51,6 +55,7 @@ func TestPresetTableExact(t *testing.T) {
 		{TierAutonomous, KnobRecapStyle, RecapFull},
 		{TierAutonomous, KnobContinueOnError, ErrorAdapt},
 		{TierAutonomous, KnobDestructiveActionPosture, DestructiveCedarOnly},
+		{TierAutonomous, KnobRiskThreshold, 80},
 	}
 	for _, c := range cases {
 		row := PresetForTier(c.tier)
@@ -87,6 +92,35 @@ func TestPresetForTierIsDefensiveCopy(t *testing.T) {
 	freshFS := fresh[KnobAutoApproveFamilies].(FamilySet)
 	if freshFS.Has(FamilyNetwork) {
 		t.Error("preset table mutation leaked: Default tier should not auto-approve network")
+	}
+}
+
+// TestRiskThresholdLadderIsMonotonic pins risk-rated-autonomy-01PMRA01
+// FR-003: the threshold ladder (strict -> cautious -> default -> bold ->
+// autonomous) must be non-decreasing. A non-monotonic ladder would mean
+// raising the autonomy tier — moving toward MORE trust — could LOWER the
+// score at which layer 3 stops asking, i.e. tighten the gate exactly
+// where the dial promises to loosen it. That inversion would be far
+// easier to introduce by editing one preset row than the other six knobs
+// (there is no type system connecting adjacent tiers' int values the way
+// FamilySet-superset checks could), so it gets its own explicit test
+// rather than relying on TestPresetTableExact's pinned literals alone.
+func TestRiskThresholdLadderIsMonotonic(t *testing.T) {
+	tiers := []Tier{TierStrict, TierCautious, TierDefault, TierBold, TierAutonomous}
+	prev := -1
+	for _, tier := range tiers {
+		row := PresetForTier(tier)
+		got, ok := row[KnobRiskThreshold].(int)
+		if !ok {
+			t.Fatalf("tier %v: KnobRiskThreshold missing or wrong type in preset row", tier)
+		}
+		if got < prev {
+			t.Fatalf("tier %v: RiskThreshold = %d, which is LOWER than the previous (less autonomous) tier's %d — the ladder must be non-decreasing", tier, got, prev)
+		}
+		if got < 0 || got > 100 {
+			t.Fatalf("tier %v: RiskThreshold = %d, out of the documented 0-100 range", tier, got)
+		}
+		prev = got
 	}
 }
 

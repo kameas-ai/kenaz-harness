@@ -15,6 +15,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/fallback"
+	"github.com/kameas-ai/kenaz-harness/core/llm/genaitrace"
 	"github.com/kameas-ai/kenaz-harness/core/llm/retry"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
@@ -77,13 +78,79 @@ type LLMProviderAdapter struct {
 	// discoverer; the kernel's LLMRequest.Tools slice is just a string
 	// allowlist, but the registry needs the full ToolSpec shape.
 	tools []corellm.ToolSpec
+	// exposure, when set, picks which of tools each call carries (hot,
+	// pinned and activated tools in full; the rest summarised in
+	// kenaz__load_tools' description). nil sends every tool.
+	exposure *exposureTurn
+	// modelWindow returns a (provider kind, model id) pair's context
+	// window in tokens, 0 when unknown; the schema budget is capped at
+	// 15 % of it. nil leaves every window unknown.
+	modelWindow ModelWindowFunc
 	// lastRespMu protects lastResp.
 	lastRespMu sync.Mutex
-	// lastResp stores the most recent llm.Response produced by Generate.
-	// The session_write HookPostLLM callback reads this to record usage.
-	// Overwritten on every Generate call; safe because each kernel run is
-	// sequential (one Generate completes before session_write fires, and
-	// session_write fires before the next Generate could start).
+	// lastResp stores the most recent llm.Response produced by Generate —
+	// a single mutable slot, overwritten by EVERY Generate call this
+	// adapter serves, tracked-move or not (the tool-call loop, the exit
+	// gate's private verdict, the escalation ladder, the fused router,
+	// the compaction strategy all reach this same adapter and all
+	// overwrite it).
+	//
+	// NOTHING ON THE USAGE-FIRING PATH READS THIS FIELD ANY MORE (fix/
+	// usage-persists-on-every-move, round 3). It is kept only because
+	// usage_pipeline_test.go independently pins that Generate() stores
+	// corellm.Stream.Final()'s response into it with no field dropped —
+	// a real regression class of its own (the "0 tok · $0.0000" footer
+	// bug), unrelated to who reads it afterward.
+	//
+	// CORRECTED THREE TIMES as the mutable-slot design kept failing one
+	// hop further down the pipeline:
+	//
+	//  1. This comment used to claim the slot was "safe because each
+	//     kernel run is sequential (one Generate completes before
+	//     session_write fires, and session_write fires before the next
+	//     Generate could start)". That was true only before
+	//     model-moves-transcript-01PMCH01 WP02 taught the chat graph to
+	//     loop Generate multiple times per turn — since then, a
+	//     multi-move turn overwrote this field N-1 times before anyone
+	//     read it (a 58-row, 3-move real-world turn contributed $0 to
+	//     its session's totals). Fixed by moves.go: RecordAssistantMove
+	//     now takes its own per-call corellm.Response snapshot the
+	//     instant each move completes, and turnJournal.flushHeld /
+	//     RecordPartial fire usage from THAT snapshot, never this field,
+	//     for every non-final assistant_move.
+	//
+	//  2. Round 1 of that fix left the `final` row reading THIS field
+	//     directly for the ABSORBED case (draft approved unchanged), on
+	//     the claim that "nothing else touches it between the last
+	//     RecordAssistantMove and session_write firing in the common,
+	//     non-revised case." True on the CLASSIC graph (AgenticTurnRouting
+	//     off, the shipped default); FALSE on the ROUTED graph (built,
+	//     gated off): exit_gate (kind: review) makes its own real,
+	//     costed Generate call between the loop and session_write,
+	//     overwriting this field with the GATE's small verdict usage
+	//     before the final row's hook could read it. Fixed by sourcing
+	//     the absorbed case from heldResp — the same per-call snapshot
+	//     moves use, captured before the gate's call could ever run.
+	//
+	//  3. Round 2 fixed the absorbed case but left the REVISED case
+	//     (exit gate or escalation ladder actually rewrote the draft)
+	//     reading this field as a fallback, reasoning "the last Generate
+	//     call before AppendEntry authored the revision." That reasoning
+	//     does not hold on the routed graph: reviewExecutor.Execute
+	//     calls Generate UNCONDITIONALLY on every fire, with no bypass,
+	//     and exit_gate sits on EVERY path into session_write — so the
+	//     gate's own verdict call is not usually last, it is ALWAYS
+	//     last, revised branch included. Reading this field there always
+	//     returned the gate's usage, never the reviser's — proved live:
+	//     chat move → ladder revision → gate verdict → the final row got
+	//     the GATE's numbers, not the ladder's. Fixed by
+	//     RecordCandidateUsage: every Generate call, tracked or not,
+	//     records its own (text, usage) pair immediately, and
+	//     AppendEntry looks up whichever call's text matches what is
+	//     actually being persisted — a lookup keyed by content, not by
+	//     "whatever ran last." See moves.go's file header, "USAGE
+	//     CAPTURE", and AppendEntry's / RecordCandidateUsage's doc
+	//     comments.
 	lastResp corellm.Response
 
 	// capturer is the optional generated-image auto-capture pipeline
@@ -149,6 +216,20 @@ type LLMProviderAdapter struct {
 	// NewSessionDialog.vue) was persisted correctly but never reached the
 	// model. See buildAttachmentsBlock.
 	attachments AttachmentsResolver
+
+	// pending is the runner's hook additional_context queue (v0.86.0
+	// unwired sweep). Generate drains this session's entries into the
+	// system prompt — the read half of env.PendingContext, which
+	// pre_tool_use / post_tool_use hooks write through. nil disables the
+	// layer. See pending_context.go.
+	pending *pendingContextQueue
+
+	// knobsDefault resolves the session-level RequestKnobs override
+	// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10). nil
+	// disables the layer — every request's Knobs stays nil, matching
+	// every chat turn before this field existed. See Generate's
+	// gen.Knobs assignment.
+	knobsDefault KnobsDefaultResolver
 }
 
 // ResolvedAttachment is the narrow shape buildAttachmentsBlock consumes.
@@ -169,6 +250,15 @@ type AttachmentsResolver interface {
 	ListResolved(ctx context.Context, sessionID string) ([]ResolvedAttachment, error)
 }
 
+// KnobsDefaultResolver loads the session-level RequestKnobs override
+// persisted via Sessions_SetKnobsDefault (model-settings-reach-the-model-
+// 01PMZ101 UNIT-6 / WP10, migration sessions/0330-knobs). nil means
+// "knobs not wired" — Generate leaves gen.Knobs nil, today's behaviour.
+// Implemented in production by *session.Manager.
+type KnobsDefaultResolver interface {
+	GetKnobsDefault(ctx context.Context, sessionID string) (*corellm.RequestKnobs, error)
+}
+
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
 // (profileID, sessionID, modelOverride, toolCatalog, capturer) tuple.
 // One adapter per chat run; the runner constructs it inside
@@ -181,6 +271,39 @@ func NewLLMProviderAdapter(reg corellm.Registry, profileID, modelOverride string
 		tools:         tools,
 		capturer:      capturer,
 	}
+}
+
+// withToolExposure attaches the turn's tool-exposure view. nil sends the
+// whole catalog on every call.
+func (a *LLMProviderAdapter) withToolExposure(t *exposureTurn) *LLMProviderAdapter {
+	a.exposure = t
+	return a
+}
+
+// withModelWindow attaches the context-window lookup the schema budget
+// is capped against.
+func (a *LLMProviderAdapter) withModelWindow(f ModelWindowFunc) *LLMProviderAdapter {
+	a.modelWindow = f
+	return a
+}
+
+// windowFor returns the context window of the model this call is
+// dispatched to — model, or the profile's dispatch default when empty
+// (llm.ProviderProfile.DispatchModel) — on this adapter's provider; 0
+// when unknown.
+func (a *LLMProviderAdapter) windowFor(model string) int {
+	if a.modelWindow == nil || a.reg == nil || a.profileID == "" {
+		return 0
+	}
+	prof, err := a.reg.Profile(a.profileID)
+	if err != nil {
+		return 0
+	}
+	dispatched := prof.DispatchModel(model)
+	if prof.Kind == "" || dispatched == "" {
+		return 0
+	}
+	return a.modelWindow(prof.Kind, dispatched)
 }
 
 // WithMoveJournal attaches the turn's move journal
@@ -219,6 +342,34 @@ func (a *LLMProviderAdapter) WithEnvContext(now func() time.Time, workspaceDir, 
 // (first-run-onboarding-01PMOB01 WP02). nil disables the layer.
 func (a *LLMProviderAdapter) WithAttachments(resolver AttachmentsResolver) *LLMProviderAdapter {
 	a.attachments = resolver
+	return a
+}
+
+// withPendingContext pins the runner's hook-context queue onto the
+// adapter. nil disables the layer.
+func (a *LLMProviderAdapter) withPendingContext(q *pendingContextQueue) *LLMProviderAdapter {
+	a.pending = q
+	return a
+}
+
+// takePendingContext removes this session's queued hook context for a
+// PRIMARY turn call only (req.StreamToChat — the assistant_turn model
+// node). Every other caller of Generate on the run (router, exit-gate
+// review, escalation rungs, compaction, task-state gate) gets nil and
+// leaves the queue untouched, so an auxiliary verdict can never consume
+// context meant for the assistant (review follow-up M2, 2026-10-04).
+func (a *LLMProviderAdapter) takePendingContext(req coreag.LLMRequest) []string {
+	if a == nil || a.pending == nil || !req.StreamToChat {
+		return nil
+	}
+	return a.pending.take(a.sessionID)
+}
+
+// WithKnobsDefault pins the session-knobs resolver onto the adapter
+// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10). nil disables
+// the layer.
+func (a *LLMProviderAdapter) WithKnobsDefault(resolver KnobsDefaultResolver) *LLMProviderAdapter {
+	a.knobsDefault = resolver
 	return a
 }
 
@@ -265,12 +416,13 @@ func (a *LLMProviderAdapter) envClockNow() time.Time {
 	return time.Now()
 }
 
-// buildEnvBlock gathers the live environment facts and renders the
-// compact environment-context Markdown block. Called once per Generate.
-// The workspace entry count is a cheap top-level os.ReadDir; a failure
+// buildEnvBlock gathers the live environment facts and renders them as
+// the session-stable environment block (system prefix) and the per-call
+// state block (after the cache marker). Called once per Generate. The
+// workspace entry count is a cheap top-level os.ReadDir; a failure
 // (missing dir, permission) degrades gracefully to "path only" rather
 // than aborting the turn. (system-prompt-layers WP03)
-func (a *LLMProviderAdapter) buildEnvBlock() string {
+func (a *LLMProviderAdapter) buildEnvBlock() (stable, state string) {
 	in := envContextInput{
 		Now:    a.envClockNow(),
 		GOOS:   runtime.GOOS,
@@ -287,7 +439,7 @@ func (a *LLMProviderAdapter) buildEnvBlock() string {
 			in.WorkspaceCounted = true
 		}
 	}
-	return buildEnvContext(in)
+	return buildEnvContext(in), buildEnvState(in)
 }
 
 // WithRecapStyle pins the autonomy recapStyle resolver onto the adapter
@@ -519,6 +671,21 @@ func KernelMessagesToWire(msgs []coreag.Message) []corellm.Message {
 // into the kernel's StreamSink (pulled from ctx via the kernel-pinned
 // helper), and returns the final response.
 func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
+	pending := a.takePendingContext(req)
+	resp, err := a.generate(ctx, req, pending)
+	if err != nil && len(pending) > 0 {
+		// A failed primary call must not swallow hook context (review
+		// follow-up L3): put it back for the retry / next turn.
+		a.pending.requeue(a.sessionID, pending)
+		logging.L().Info("chat.pending_context.requeued_after_error",
+			"session_id", a.sessionID, "entries", len(pending), "err", err.Error())
+	}
+	return resp, err
+}
+
+// generate is Generate's body; pending is the hook context this call
+// took from the queue (nil for auxiliary calls).
+func (a *LLMProviderAdapter) generate(ctx context.Context, req coreag.LLMRequest, pending []string) (coreag.LLMResponse, error) {
 	if a == nil || a.reg == nil {
 		return coreag.LLMResponse{}, errors.New("chat: nil llm registry adapter")
 	}
@@ -552,10 +719,48 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	// target_model is more specific than the session picker, the same
 	// precedence D-4 already gives /effort's knob over the chat-level
 	// reasoning control.
+	//
+	// "default" is a sentinel, not a model id (live-`wails dev` bug,
+	// 2026-09-09: "llm: model \"default\" not authorised for profile
+	// ... (allowed: [...])"). At least seven producers in
+	// core/agentgraph author it as the documented "no opinion, fall
+	// back to whatever the run already has" value — modelExecutor's
+	// `model` attr default, reflectExecutor, reviewExecutor,
+	// plannerExecutor, routerAskModel's `model` attr default (all in
+	// exec_compute.go / exec_router.go), and both
+	// exec_escalation_ladder.go rungs — exactly mirroring the
+	// convention prompt_render.go's resolvePromptTemplate and
+	// tier_defaults.go already document and treat as `model == "" ||
+	// model == "default"`. Before this fix only the `req.Model != ""`
+	// half of that convention was applied here, so an authored (or
+	// defaulted) "default" was treated as an explicit kernel choice and
+	// forwarded verbatim past this seam to the registry's authorisation
+	// check — which only ever knows concrete provider model ids and
+	// correctly rejects it. This is THE choke point every LLMRequest
+	// construction site in core/agentgraph funnels through before
+	// reaching the registry (see the WP15 comment above), so resolving
+	// the sentinel here — rather than patching each of the seven
+	// producers separately, or teaching the registry's authorisation
+	// check about "default" (which would weaken that boundary for every
+	// future producer) — is what makes the sentinel structurally unable
+	// to leak regardless of which executor authored it.
 	model := a.modelOverride
-	if req.Model != "" {
+	if req.Model != "" && req.Model != "default" {
 		model = req.Model
 	}
+	attachmentsBlock := a.buildAttachmentsBlock(ctx)
+	// The tools this call carries are chosen per call, not per turn: a
+	// kenaz__load_tools call earlier in the turn must reach this request.
+	// Tools go out in corellm.OrderTools order: hot then pinned, each by
+	// name (the stable, cache-marked prefix), then activated. Without
+	// exposure the whole list is one stable segment.
+	sendTools, stableTools := corellm.OrderTools(a.tools, nil, nil)
+	var sel toolSelection
+	if a.exposure != nil {
+		sel = a.exposure.selectTools(ctx, a.windowFor(model))
+		sendTools, stableTools = sel.tools, sel.stable
+	}
+	envStable, envState := a.buildEnvBlock()
 	gen := corellm.GenerationRequest{
 		ProfileID: a.profileID,
 		Model:     model,
@@ -566,11 +771,41 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		// composeSystemPrompt's default renderer reproduces today's
 		// plain join byte-for-byte, so this is a deliberate, documented
 		// gap rather than a half-wire.
-		// Recap sits before the user's custom instructions so a user
-		// instruction about verbosity still wins the last word.
-		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildAttachmentsBlock(ctx), a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), a.buildUserInstructionsBlock()),
-		Messages: llmMsgs,
-		Tools:    a.tools,
+		//
+		// System is the cacheable prefix and must be byte-identical
+		// across calls with unchanged settings (FR-C1): every layer in it
+		// is session-stable. SystemVolatile follows it on the wire (after
+		// the cache marker) and holds what changes call to call — the
+		// environment's date / workspace count / tool inventory, the
+		// hook-context layer, and the digest of tools not loaded (it
+		// changes with every activation; reference material, so it sits
+		// before the instructions) — then the user's custom instructions,
+		// which must be the last instruction layer in the whole system
+		// prompt so the user's standing preferences keep the last word.
+		System:         composeSystemPrompt(nil, req.SystemPrompt, attachmentsBlock, envStable, a.buildRecapBlock(), a.buildAskBarBlock()),
+		SystemVolatile: composeSystemPrompt(nil, envState, renderPendingContext(pending), sel.digest, a.buildUserInstructionsBlock()),
+		Messages:       llmMsgs,
+	}
+	gen.SetTools(sendTools, stableTools)
+
+	// Merge the session-level RequestKnobs default (model-settings-reach-
+	// the-model-01PMZ101 UNIT-6 / WP10) onto the wire request. Before this,
+	// llm.Request.Knobs had zero production writers anywhere in the tree —
+	// Sessions_SetKnobsDefault persisted a value to sessions.knobs_default
+	// that nothing ever read back into a live request (spec FR-009). This
+	// is the "reaches the model" half; the store round-trip alone is not
+	// consumption (CLAUDE.md sweep pass 4).
+	//
+	// Best-effort: a lookup failure degrades to no override rather than
+	// failing the turn, mirroring buildAttachmentsBlock's fail-open
+	// posture for the same class of optional per-session read.
+	if a.knobsDefault != nil {
+		if knobs, err := a.knobsDefault.GetKnobsDefault(ctx, a.sessionID); err != nil {
+			logging.L().Warn("chat.knobs_default.resolve_failed",
+				"session_id", a.sessionID, "err", err.Error())
+		} else if knobs != nil {
+			gen.Knobs = knobs
+		}
 	}
 
 	// Per-request tool-catalog visibility: log exactly what's attached to
@@ -593,6 +828,24 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		"count", len(toolNames),
 		"tools", toolNames,
 	)
+
+	// What this request sends, by part, measured once with the shared
+	// estimator; logged as llm.request.composition when the call ends
+	// (with the provider's own counts on success) and carried on the
+	// response for the usage hook.
+	comp := measureComposition(gen, attachmentsBlock)
+	comp.ToolsSummary = sel.summary
+	comp.Budget = sel.budget
+	comp.Evicted = sel.evicted
+	comp.PinnedOverBudgetBy = sel.pinnedOverBy
+	comp.HotOverBudgetBy = sel.hotOverBy
+	var (
+		compUsage corellm.Usage
+		compErr   error
+	)
+	defer func() {
+		logComposition(a.sessionID, a.ProviderKind(), comp, len(gen.FullSystem()), sel.stable, sel.autoActivated, compUsage, compErr)
+	}()
 
 	// Carry the per-node sampling knobs already threaded through the
 	// kernel seam (agentgraph.LLMRequest.MaxTokens/Temperature, populated
@@ -716,6 +969,11 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	// operator-saved chain matches. When FallbackChainId is empty the
 	// streamFn closure is byte-for-byte the pre-WP07 call — no Runner is
 	// constructed and behaviour is unchanged.
+	// One attempt sequence for this whole model request: every provider
+	// call it makes — registry retries, the RetryStream retries below,
+	// fallback hops — numbers its gen_ai.chat span's kenaz.llm.attempt
+	// from the same counter (llm-call-telemetry-01LLMTEL01 WP01).
+	ctx = genaitrace.WithCallSequence(ctx)
 	streamFn := func() (corellm.Stream, error) {
 		return a.reg.Stream(ctx, gen)
 	}
@@ -728,6 +986,7 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	}
 	stream, err := retry.RetryStream(ctx, retryPolicy, streamFn)
 	if err != nil {
+		compErr = err
 		return coreag.LLMResponse{}, fmt.Errorf("chat: registry stream: %w", err)
 	}
 
@@ -750,6 +1009,7 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	recordMoves := req.StreamToChat && a.moves.records()
 
 	sink, _ := coreag.StreamSinkFromContext(ctx)
+	providerKind := a.ProviderKind()
 	for ev := range stream.Events() {
 		// Open the move BEFORE the first token of the segment reaches
 		// the surface — a boundary that arrives after the text cannot
@@ -773,16 +1033,22 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		if sink == nil {
 			continue
 		}
-		sink.Emit(translateLLMStreamEvent(ev))
+		sink.Emit(translateLLMStreamEvent(ev, providerKind))
 	}
 
 	resp, ferr := stream.Final()
 	if ferr != nil {
+		compErr = ferr
 		// On error the kernel surfaces the error up the run; the
 		// runner's terminal goroutine is responsible for emitting the
 		// stream-closed payload with reason=backend-error.
 		return coreag.LLMResponse{}, fmt.Errorf("chat: stream final: %w", ferr)
 	}
+
+	compUsage = resp.Usage
+	comp.Cached = resp.Usage.CachedInputRead
+	measured := comp
+	resp.Composition = &measured
 
 	// Store the response for the HookPostLLM callback (token-cost-
 	// telemetry WP02). The session_write node fires after Generate
@@ -795,8 +1061,10 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	out := coreag.LLMResponse{
 		Content:      flattenContent(resp.Content),
 		FinishReason: resp.FinishReason,
-		TokensUsed:   resp.Usage.InputTokens + resp.Usage.OutputTokens,
-		CostUSD:      resp.Cost.Total,
+		// The run budget (max_tokens_per_run) counts the whole prompt, so
+		// a cache-heavy Anthropic call weighs what an OpenRouter one does.
+		TokensUsed: corellm.PromptTokensTotal(resp.Usage, providerKind) + resp.Usage.OutputTokens,
+		CostUSD:    resp.Cost.Total,
 	}
 	if len(resp.ToolCalls) > 0 {
 		calls := make([]coreag.ToolCallRequest, 0, len(resp.ToolCalls))
@@ -810,11 +1078,31 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		}
 		out.ToolCalls = calls
 	}
+	// Round 3 (fix/usage-persists-on-every-move): record THIS call's own
+	// (text, usage) pair unconditionally — chat move, exit gate verdict,
+	// escalation-ladder rung, replan draft, whatever this fire actually
+	// was. journal.AppendEntry needs this to recover a REVISED final
+	// row's real usage by matching on entry.Content, because exit_gate's
+	// own verdict call always runs last on the routed graph before
+	// AppendEntry and would otherwise be the only thing a "last
+	// response" read could ever find — see moves.go's
+	// RecordCandidateUsage / AppendEntry doc comments for the full
+	// mechanism. Safe on a bare adapter with no journal wired
+	// (a.moves is nil, RecordCandidateUsage no-ops) and on an
+	// empty-text fire (a pure tool-use response has nothing to key on).
+	if out.Content != "" {
+		a.moves.RecordCandidateUsage(out.Content, resp, a.ProviderKind(), a.ActiveModelID())
+	}
 	// One model fire = one move. Park its text; the journal decides
 	// whether it becomes an assistant_move or, if nothing follows it,
 	// the turn's `final` (model-moves-transcript-01PMCH01 WP02).
+	//
+	// resp travels with it (fix/usage-persists-on-every-move) so the
+	// journal can fire usage for THIS call specifically when it persists
+	// the move — not by re-reading a.lastResp later, which by then may
+	// already hold a DIFFERENT Generate call's response.
 	if recordMoves {
-		a.moves.RecordAssistantMove(ctx, out.Content)
+		a.moves.RecordAssistantMove(ctx, out.Content, resp, a.ProviderKind(), a.ActiveModelID())
 	}
 	return out, nil
 }
@@ -841,8 +1129,10 @@ func flattenContent(blocks []corellm.ContentBlock) string {
 
 // translateLLMStreamEvent maps a corellm.StreamEvent → the kernel's
 // agentgraph.StreamEvent shape. Inverse of translateAGStreamEvent in
-// stream_bridge.go.
-func translateLLMStreamEvent(ev corellm.StreamEvent) coreag.StreamEvent {
+// stream_bridge.go. UsageInputTokens is the whole prompt under
+// providerKind's convention (corellm.PromptTokensTotal), the same number
+// the persisted context-bar snapshot carries.
+func translateLLMStreamEvent(ev corellm.StreamEvent, providerKind string) coreag.StreamEvent {
 	out := coreag.StreamEvent{
 		Text:   ev.Text,
 		Finish: ev.Finish,
@@ -857,7 +1147,7 @@ func translateLLMStreamEvent(ev corellm.StreamEvent) coreag.StreamEvent {
 		out.Reasoning = ev.Reasoning.Content
 	}
 	if ev.Usage != nil {
-		out.UsageInputTokens = ev.Usage.InputTokens
+		out.UsageInputTokens = corellm.PromptTokensTotal(*ev.Usage, providerKind)
 		out.UsageOutputTokens = ev.Usage.OutputTokens
 		out.UsageReasoningTokens = ev.Usage.ReasoningTokens
 	}
@@ -878,4 +1168,83 @@ func translateLLMStreamEvent(ev corellm.StreamEvent) coreag.StreamEvent {
 		out.Kind = coreag.StreamEventKind(string(ev.Kind))
 	}
 	return out
+}
+
+// measureComposition estimates each part of an outbound request with
+// the shared tokenizer rule, so System + History equals what compaction
+// and the request-too-large check count for the same request.
+// attachmentsBlock is the attachments layer already joined into
+// gen.System; it is reported as its own part and subtracted from the
+// system part so the parts do not double-count.
+//
+// Memory is 0 (2026-10-09; owner alec): no producer feeds a memory part
+// to this seam — memory.retrieve output arrives as an ordinary message,
+// indistinguishable here from the rest of the history, and is counted in
+// History. A recall layer that reaches the request separately is what
+// fills it.
+func measureComposition(gen corellm.GenerationRequest, attachmentsBlock string) corellm.PromptComposition {
+	attachments := corellm.EstimateTokens(attachmentsBlock)
+	system := corellm.SystemTokens(gen.FullSystem()) - attachments
+	if system < 0 {
+		system = 0
+	}
+	return corellm.PromptComposition{
+		System:      system,
+		Attachments: attachments,
+		Tools:       corellm.ToolsTokens(gen.Tools),
+		History:     corellm.MessagesTokens(gen.Messages),
+		ToolsFull:   len(gen.Tools),
+	}
+}
+
+// logComposition writes the one llm.request.composition line of a model
+// call. usage is the provider's report (zero when the call failed before
+// one arrived). prompt_tokens is the provider's input count as reported;
+// prompt_tokens_total is the whole prompt under every provider's
+// convention (llm.PromptTokensTotal), which is the figure the estimates
+// are comparable with.
+//
+// tools_summary is the number of catalog tools listed only in
+// kenaz__load_tools' digest on this call; tools_stable is how many
+// leading tools are the hot + pinned prefix that stays identical from
+// call to call; auto_activated is how many
+// summary tools this turn has activated because the model called them by
+// name before loading them.
+//
+// budget is the call's effective schema budget (0 when no exposure view
+// applied one); evicted is how many loaded tools were left out to fit
+// it; pinned_over_budget_by is how much of the overage pinned tools
+// account for, and hot_over_budget_by how far the always-sent core tools
+// alone exceed it (the window is too small for them).
+// FR-H3 — the estimated parts reconciling with prompt_tokens_total
+// within 10 % — is asserted on the 2026-10-08 dogfood's recorded frames
+// by core/rpc/composition_recorded_frames_test.go (tool definitions at
+// the measured 2.5 bytes per token: 101 % there).
+func logComposition(sessionID, providerKind string, comp corellm.PromptComposition, systemChars, toolsStable, autoActivated int, usage corellm.Usage, err error) {
+	outcome := "ok"
+	if err != nil {
+		outcome = "error"
+	}
+	logging.L().Info("llm.request.composition",
+		"session_id", sessionID,
+		"provider_kind", providerKind,
+		"outcome", outcome,
+		"tools_full", comp.ToolsFull,
+		"tools_summary", comp.ToolsSummary,
+		"tools_tokens_est", comp.Tools,
+		"system_chars", systemChars,
+		"system_tokens_est", comp.System,
+		"attachments_tokens_est", comp.Attachments,
+		"history_tokens_est", comp.History,
+		"prompt_tokens", usage.InputTokens,
+		"prompt_tokens_total", corellm.PromptTokensTotal(usage, providerKind),
+		"cached_tokens", usage.CachedInputRead,
+		"cache_write_tokens", usage.CachedInputWrite,
+		"tools_stable", toolsStable,
+		"auto_activated", autoActivated,
+		"budget", comp.Budget,
+		"evicted", comp.Evicted,
+		"pinned_over_budget_by", comp.PinnedOverBudgetBy,
+		"hot_over_budget_by", comp.HotOverBudgetBy,
+	)
 }

@@ -233,6 +233,60 @@ func TestSignInRecipe_ArmSwitch_BakedLiteralClientIDLegacyArmStillAttempts(t *te
 	}
 }
 
+// TestSignInRecipe_OrgProvisionedOAuthRecipeReachesAWorkingArm is the
+// SignInRecipe-level proof for fleet-org-config-inheritance-01NORGX01 WP03:
+// recipes.ApplyProvisionedMCP's remap of the wire-level primary_auth:"oauth"
+// (spec.md §3.1's own example payload) to PrimaryAuthBrowserOAuthPKCE must
+// actually unblock SignInRecipe, not just change a struct field in
+// isolation. Before the WP03 fix, an org entry built exactly per the spec's
+// example landed on recipe.PrimaryAuth == recipes.PrimaryAuthOAuth, which
+// SignInRecipe fails closed unconditionally (the E-006 "no working sign-in
+// path yet" message) — so a fleet-provisioned recipe's Connect button
+// always errored, even though it carried a perfectly good client id.
+//
+// Mutation: reverting recipes.ApplyProvisionedMCP's remap (so the entry's
+// PrimaryAuth stays the literal "oauth") must fail this test — the error
+// would then contain "no working sign-in path yet" instead of attempting a
+// real (loopback-server-terminated) PKCE grant.
+func TestSignInRecipe_OrgProvisionedOAuthRecipeReachesAWorkingArm(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK) // not 401 → fails fast at Discover, no real grant
+	}))
+	defer srv.Close()
+
+	mc := recipes.NewMergedCatalog(nil, nil, nil)
+	errs := recipes.ApplyProvisionedMCP(mc, []recipes.ProvisionedMCPEntry{{
+		RecipeID:      "slack",
+		Transport:     recipes.TransportHTTP,
+		URL:           srv.URL,
+		PrimaryAuth:   "oauth", // spec.md §3.1's own example value, verbatim
+		OAuthClientID: "org-public-client-id",
+		OAuthScopes:   []string{"channels:read", "chat:write"},
+	}})
+	if len(errs) != 0 {
+		t.Fatalf("ApplyProvisionedMCP errs = %v, want none", errs)
+	}
+	orgRecipe, ok := mc.Get("slack")
+	if !ok {
+		t.Fatal("Get(slack) not found after apply")
+	}
+
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{orgRecipe}}
+	api := New(Config{Catalog: cat, Secrets: secrets.NewMemoryBackend()})
+
+	_, err := api.SignInRecipe(context.Background(), "slack")
+	if err == nil {
+		t.Fatal("want an error (the loopback test server never completes a real grant), got nil")
+	}
+	if strings.Contains(err.Error(), "no working sign-in path yet") {
+		t.Fatalf("org-provisioned recipe with a client id still hit the E-006 fail-closed arm: %v", err)
+	}
+	if strings.Contains(err.Error(), bareRejectMsg) {
+		t.Errorf("org-provisioned recipe hit the bare client_id reject despite carrying a client id: %v", err)
+	}
+}
+
 // ── UNIT-1: ${VAR} reaches Auth.ClientID / Auth.ClientSecret (spec.md FR-003) ──
 
 // byoOAuthRecipe returns a recipe whose Auth.ClientID (and, if

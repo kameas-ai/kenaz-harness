@@ -48,7 +48,7 @@ func TestRoutedTurn_ExitGateVerifiesBeforeThePersistedAnswer(t *testing.T) {
 	runner, broker, writer := buildIntegrationRunnerWithGraph(t, llm, newStubTools(), 25,
 		[]coreag.Message{{Role: "user", Content: "say hi"}}, loadRoutedChatGraph(t))
 
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "say hi"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("say hi")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -68,8 +68,10 @@ func TestRoutedTurn_ExitGateVerifiesBeforeThePersistedAnswer(t *testing.T) {
 
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
-	if len(writer.calls) < 2 {
-		t.Fatalf("len(writer.calls) = %d, want >=2 (user turn + assistant turn)", len(writer.calls))
+	// No user-turn call: the runner never writes the user row
+	// (chat-single-writer-01DOGF0G); the caller persisted it.
+	if len(writer.calls) < 1 {
+		t.Fatalf("len(writer.calls) = %d, want >=1 (the assistant turn)", len(writer.calls))
 	}
 	last := writer.calls[len(writer.calls)-1]
 	if last.role != "assistant" {
@@ -110,7 +112,7 @@ func TestRoutedTurn_ExitGateFailRewindsIntoTheLoop(t *testing.T) {
 	runner, broker, writer := buildIntegrationRunnerWithGraph(t, llm, newStubTools(), 25,
 		[]coreag.Message{{Role: "user", Content: "do the work"}}, loadRoutedChatGraph(t))
 
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "do the work"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("do the work")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -169,7 +171,7 @@ func TestRoutedTurn_GoalReachesTheExitGate(t *testing.T) {
 	runner, broker, _ := buildIntegrationRunnerWithGraph(t, llm, newStubTools(), 25,
 		[]coreag.Message{{Role: "user", Content: "Summarise the Q3 revenue report"}}, loadRoutedChatGraph(t))
 
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "Summarise the Q3 revenue report"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("Summarise the Q3 revenue report")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -230,7 +232,7 @@ func TestRoutedTurn_DoomLoopRoutesIntoTheLadder(t *testing.T) {
 	runner, broker, _ := buildIntegrationRunnerWithGraph(t, llm, tools, 25,
 		[]coreag.Message{{Role: "user", Content: "search for it"}}, loadRoutedChatGraph(t))
 
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "search for it"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("search for it")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {

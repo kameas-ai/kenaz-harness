@@ -191,6 +191,7 @@ func (c *Client) SiteDeploy(
 	req.Header.Set("Content-Type", "application/gzip")
 	req.Header.Set("X-Kameas-Bundle-Sha256", sha256Hex)
 	req.Header.Set("X-Kameas-Manifest", base64.StdEncoding.EncodeToString(manifestJSON))
+	setUserAgent(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -385,6 +386,13 @@ func mapSiteError(resp *http.Response) error {
 	msg := env.Message
 	if msg == "" {
 		msg = string(body)
+	}
+
+	// 403 org_paused (kenaz-fleet #206): a reversible staff hold, not a
+	// tier answer — never surfaced as "not in your tier". Deploy uses
+	// httpClient directly, so the Client.do choke point does not see it.
+	if pe := ParseOrgPaused(resp.StatusCode, body); pe != nil {
+		return pe
 	}
 
 	switch resp.StatusCode {

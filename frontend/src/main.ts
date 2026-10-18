@@ -8,6 +8,7 @@ import { installHarnessClient } from '@/lib/harnessClientContext';
 import { createHarnessClient } from '@/lib/harnessClient';
 import { bootFeatureFlags } from '@/lib/featureFlags';
 import { logEvent } from '@/lib/eventLog';
+import { redirectLegacySettingsTab } from '@/lib/legacyRoutes';
 import type { SentryTier } from '@/sentry';
 
 // Desktop route table — 20 wired routes as of entry-points-and-crash-
@@ -46,20 +47,36 @@ export const routes: RouteRecordRaw[] = [
     name: 'audit',
     component: () => import('@/views/audit/AuditView.vue'),
   },
+  // knowledge-home-01DOGF0E WP02 (FR-1, FR-2): Contexts and Memory are one
+  // Knowledge surface with Curated and Learned sections; the stores stay
+  // separate. The old paths redirect into the matching section, keeping the
+  // query string (MemoryView reads ?scopeKind=/?scopeId=, MemoryBadge pushes
+  // ?project=), so bookmarks, palette history and a persisted lastRoute of
+  // either old path still land in the right place.
+  { path: '/knowledge', redirect: (to) => ({ path: '/knowledge/curated', query: to.query }) },
   {
-    path: '/contexts',
-    name: 'contexts',
-    component: () => import('@/views/contexts/ContextsView.vue'),
+    path: '/knowledge/:section(curated|learned)',
+    name: 'knowledge',
+    component: () => import('@/views/knowledge/KnowledgeView.vue'),
   },
+  { path: '/contexts', redirect: (to) => ({ path: '/knowledge/curated', query: to.query }) },
   {
     path: '/projects/:id',
     name: 'project',
     component: () => import('@/views/projects/ProjectLandingPage.vue'),
   },
+  // `/memory/<chunk id>` (an old CrossReferenceLink target that never had a
+  // route) lands in Learned with the chunk targeted via ?chunk=<id>.
   {
-    path: '/memory',
-    name: 'memory',
-    component: () => import('@/views/memory/MemoryView.vue'),
+    path: '/memory/:pathMatch(.*)*',
+    redirect: (to) => {
+      const seg = to.params.pathMatch;
+      const chunk = Array.isArray(seg) ? seg[0] : seg;
+      return {
+        path: '/knowledge/learned',
+        query: chunk ? { ...to.query, chunk } : to.query,
+      };
+    },
   },
   {
     path: '/workflows',
@@ -70,21 +87,33 @@ export const routes: RouteRecordRaw[] = [
     path: '/settings',
     name: 'settings',
     component: () => import('@/views/settings/SettingsView.vue'),
+    // nav-ia-sweep-01DOGF0F WP05: ?tab=scheduledchats|tasks|workflows moved
+    // to the Workflows surface; old links redirect (lib/legacyRoutes.ts).
+    beforeEnter: redirectLegacySettingsTab,
   },
   {
     path: '/permissions/:family?',
     name: 'permissions',
     component: () => import('@/views/permissions/PermissionsView.vue'),
   },
+  // artifacts-as-units-01DOGF0C WP06 (FR-7): Artifacts and Documents are one
+  // Library surface with Captured and Authored views. The old paths redirect
+  // into the matching view, keeping the query string (DocumentsView reads
+  // ?session=), so bookmarks, palette history and a persisted lastRoute of
+  // either old path still land in the right place.
+  { path: '/library', redirect: (to) => ({ path: '/library/captured', query: to.query }) },
   {
-    path: '/artifacts',
-    name: 'artifacts',
-    component: () => import('@/views/artifacts/ArtifactsView.vue'),
+    path: '/library/:view(captured|authored)',
+    name: 'library',
+    component: () => import('@/views/library/LibraryView.vue'),
   },
+  { path: '/artifacts', redirect: (to) => ({ path: '/library/captured', query: to.query }) },
+  { path: '/documents', redirect: (to) => ({ path: '/library/authored', query: to.query }) },
   {
-    // FR-002 (01NKNOW01): Corpora surface retired; redirect to Contexts.
+    // FR-002 (01NKNOW01): Corpora surface retired; redirect to Contexts,
+    // which knowledge-home-01DOGF0E made Knowledge › Curated.
     path: '/corpora/:pathMatch(.*)*',
-    redirect: '/contexts',
+    redirect: '/knowledge/curated',
   },
   {
     path: '/agentgraph',
@@ -128,13 +157,11 @@ export const routes: RouteRecordRaw[] = [
     name: 'sites',
     component: () => import('@/views/sites/SitesView.vue'),
   },
-  {
-    // fleet-share-and-sync-01NDFSEX14 WP03 — Team catalog browser.
-    // Only useful when signed in; hidden by nav when signedIn is false.
-    path: '/marketplace',
-    name: 'marketplace',
-    component: () => import('@/views/marketplace/MarketplaceView.vue'),
-  },
+  // install-framework-01DOGF0B Phase 4 WP08/WP09: the Marketplace folded
+  // into the Capabilities surface (/tools) and MarketplaceView was deleted.
+  // Old links, palette history and a persisted lastRoute land there, query
+  // kept (?kind= picks a kind chip). Mirrored in main-served.ts.
+  { path: '/marketplace', redirect: (to) => ({ path: '/tools', query: to.query }) },
   {
     // WP08: catch-all not-found route (FR-011).
     path: '/:pathMatch(.*)*',
@@ -188,7 +215,7 @@ window.addEventListener('unhandledrejection', (ev) => {
 
 // Fleet capability gating. Every `v-if="signedIn && capability('…')"` in the
 // app reads a module-level snapshot that nothing but this call populates —
-// without it the Sites and Marketplace nav entries, the three Publish-to-team
+// without it the Sites nav entry, the three Publish-to-team
 // buttons, the Cedar team-policy editor and the Sync panel are invisible to
 // every signed-in user, and Settings → Sync tells them to sign in on the same
 // screen where Settings → Account shows them signed in.

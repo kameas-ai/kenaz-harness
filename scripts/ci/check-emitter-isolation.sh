@@ -27,9 +27,18 @@ violations=$(grep -rln 'runtime\.EventsEmit(' \
   --exclude-dir='node_modules' \
   . 2>/dev/null || true)
 
+# Discovery floor (Finding #74, CI-gate-hardening, 2026-09-14): a bare
+# "found nobody, clean" here does not distinguish "the invariant holds"
+# from "the runtime.EventsEmit( pattern stopped matching anything at
+# all" — and the two known-legitimate callers (emitter.go,
+# stream_broker.go) should ALWAYS be in this set. If they are not, the
+# scan itself is broken, not the invariant.
 if [[ -z "$violations" ]]; then
-  echo "[emitter-isolation] clean — no callers of runtime.EventsEmit found."
-  exit 0
+  echo "[emitter-isolation] FAIL: found zero callers of runtime.EventsEmit anywhere under core/ —" >&2
+  echo "[emitter-isolation] not even ${ALLOWED[0]} or ${ALLOWED[1]}, both of which are known, live" >&2
+  echo "[emitter-isolation] callers. This is almost certainly a broken grep pattern (a rename of" >&2
+  echo "[emitter-isolation] EventsEmit, a call-syntax change), not an emitter-free codebase." >&2
+  exit 1
 fi
 
 fail=0

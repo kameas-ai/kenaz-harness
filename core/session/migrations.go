@@ -143,14 +143,38 @@ const sqlInitSchema = `
 // flush durability seam out of session_messages, closing the P0 where
 // a healthy turn wrote up to six copies of its own answer into the
 // transcript (chat-turn-integrity-01PMZ606 WP02 — see
-// migrations_stream_checkpoints.go). 0337 is reserved for the same
-// mission's repair migration (WP05); 0338-0340 belong to
+// migrations_stream_checkpoints.go). 0337 is the same mission's repair
+// migration (WP05): a bounded, per-session DELETE against
+// session_messages rows already polluted by that P0 on installs that
+// upgraded before 0336 landed, gated on the three-condition
+// discriminator in spec.md §5.3, not on streaming_failure_kind alone
+// (owner ruling on E-002, 2026-08-30: REPAIR — see
+// migrations_checkpoint_repair.go). 0338-0340 belong to
 // model-scheduled-jobs-01PMSJ01 — see docs/v0.65.0-merge-order.md §4.
 // 0340 adds created_by and tool_allowlist to scheduled_chat_runs so a
 // model-created schedule is distinguishable from a user-created one at
 // Cedar policy-evaluation time (model-scheduled-jobs-01PMSJ01 WP09 — see
-// migrations_scheduled_chat_runs_provenance.go). 0338/0339 are reserved
-// for this mission's WP06/WP08 and were not registered as of WP09.
+// migrations_scheduled_chat_runs_provenance.go). 0338 and 0339 — reserved
+// but NOT registered as of WP09 — are registered here, BELOW the
+// already-applied 0340, by WP06 (0338, blocked_permission_requests — see
+// migrations_blocked_permission_requests.go) and WP08 (0339, one-shot
+// trigger_kind/run_at columns — see
+// migrations_scheduled_chat_runs_trigger.go). Both files' doc comments
+// argue in full why registering a number below an already-applied one is
+// safe on THIS runner (set-membership Pending(), per-mission
+// VerifyLedger contiguity) rather than the v0.63.0 max-based bug; both
+// are proven against a v0.78.1 snapshot that already carries 0340 in its
+// ledger, not merely argued.
+// 0341 is chat-single-writer-01DOGF0G's destructive cleanup of doubled
+// user turns and kind-less assistant twins (dogfood F12 — see
+// migrations_dedupe_user_turns.go); 0342 is
+// agentgraph-settings-linkage-01DOGF0D's session_turn_runs (see
+// migrations_session_turn_runs.go; artifacts-as-units-01DOGF0C landed
+// in the units block as units/1104 instead). 0343 is the per-run
+// resolved graph spec, agent_graph_run_specs (see
+// migrations_agent_graph_run_specs.go). 0344 adds each chat run's
+// terminal outcome (delivered / failure class) to session_turn_runs
+// (undelivered-message-retry — see migrations_turn_run_outcome.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -219,7 +243,17 @@ func Migrations() []migrations.Migration {
 		migration0334(),
 		migration0335(),
 		migration0336(),
+		migration0337(),
+		migration0338(),
+		migration0339(),
 		migration0340(),
+		migration0341(),
+		migration0342(),
+		migration0343(),
+		migration0344(),
+		migration0345(),
+		migration0346(),
+		migration0347(),
 	}
 }
 

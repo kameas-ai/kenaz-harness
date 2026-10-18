@@ -85,7 +85,7 @@ func TestChatRunner_ToolSchemasReachEnv(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "what's the weather"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("what's the weather")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	waitForClosed(t, broker)
@@ -203,7 +203,7 @@ func TestChatGraph_ToolSchemas_BouncesMissingRequiredArg(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "weather in london"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("weather in london")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)

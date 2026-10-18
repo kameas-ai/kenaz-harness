@@ -366,4 +366,59 @@ describe('RunsHistoryTab', () => {
       w.find('[data-testid="runs-history-steps-empty-run-nosteps"]').exists(),
     ).toBe(true);
   });
+
+  // ── UNIT-11 (automation-actually-runs-01PMZ404): focusRunId deep-link ──
+
+  it('UNIT-11: focusRunId present at mount expands that run', async () => {
+    ingest({
+      runId: 'run-focus-a',
+      workflowId: 'wf',
+      workflowName: 'Focus target',
+      phase: 'run_completed',
+      ts: T0,
+    });
+    ingest({
+      runId: 'run-focus-b',
+      workflowId: 'wf',
+      workflowName: 'Not the target',
+      phase: 'run_completed',
+      ts: T1,
+    });
+
+    const w = mount(RunsHistoryTab, {
+      props: { client: fakeClient(), focusRunId: 'run-focus-a' },
+    });
+    await flushPromises();
+    await nextTick();
+
+    expect(w.find('[data-testid="runs-history-steps-run-focus-a"]').exists()).toBe(true);
+    expect(w.find('[data-testid="runs-history-steps-run-focus-b"]').exists()).toBe(false);
+  });
+
+  it('UNIT-11: focusRunId changing AFTER mount expands the new run', async () => {
+    ingest({
+      runId: 'run-late-a',
+      workflowId: 'wf',
+      workflowName: 'First target',
+      phase: 'run_completed',
+      ts: T0,
+    });
+    ingest({
+      runId: 'run-late-b',
+      workflowId: 'wf',
+      workflowName: 'Second target',
+      phase: 'run_completed',
+      ts: T1,
+    });
+
+    const w = await mountTab();
+    expect(w.find('[data-testid="runs-history-steps-run-late-a"]').exists()).toBe(false);
+    expect(w.find('[data-testid="runs-history-steps-run-late-b"]').exists()).toBe(false);
+
+    await w.setProps({ focusRunId: 'run-late-b' });
+    await nextTick();
+
+    expect(w.find('[data-testid="runs-history-steps-run-late-b"]').exists()).toBe(true);
+    expect(w.find('[data-testid="runs-history-steps-run-late-a"]').exists()).toBe(false);
+  });
 });

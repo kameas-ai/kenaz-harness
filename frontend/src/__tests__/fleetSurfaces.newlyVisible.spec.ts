@@ -7,8 +7,10 @@
  *
  *   - Sites nav / SitesView          → shell/__tests__/LeftRail.sites-nav.test.ts
  *                                      + views/sites/__tests__/SitesView.test.ts
- *   - Marketplace nav / view         → LeftRail.marketplace-nav.test.ts
- *                                      + views/marketplace/__tests__/MarketplaceView.spec.ts
+ *   - Marketplace nav / view         → retired (install-framework-01DOGF0B
+ *                                      Phase 4): the catalog browse is in the
+ *                                      Capabilities surface,
+ *                                      views/capabilities/__tests__/CapabilitySurface.catalog.test.ts
  *   - SlashCommands publish          → views/settings/__tests__/SlashCommandsView.spec.ts
  *   - Cedar team-policy publish      → views/policy/__tests__/CedarEditor.publish.spec.ts
  *   - Sync panel                     → views/settings/__tests__/SyncPanel.spec.ts

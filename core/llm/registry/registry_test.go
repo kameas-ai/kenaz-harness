@@ -3,6 +3,9 @@ package registry
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -602,6 +605,126 @@ func TestRegistry_AuthFailureDecoratedAsErrProviderAuthFailed(t *testing.T) {
 	}
 	if authBare.Status != 401 {
 		t.Errorf("ErrAuth.Status = %d, want 401", authBare.Status)
+	}
+}
+
+// paymentFailAdapter returns *ErrPaymentRequired on every Stream call,
+// classified from a REAL HTTP 402 response (not hand-constructed) — an
+// httptest server stands in for the provider and the adapter runs the
+// response through llm.ClassifyStatus exactly as core/llm/anthropic,
+// core/llm/openai, etc. do, so this exercises the same classification
+// path the mission fixed rather than bypassing it.
+type paymentFailAdapter struct {
+	kind string
+	srv  *httptest.Server
+	body string
+}
+
+func (a *paymentFailAdapter) Kind() string { return a.kind }
+func (a *paymentFailAdapter) Capabilities(_ string) llm.CapabilityDescriptor {
+	return llm.CapabilityDescriptor{Provider: a.kind}
+}
+func (a *paymentFailAdapter) Stream(_ context.Context, _ llm.GenerationRequest, _ llm.ProviderProfile, _ []byte) (llm.Stream, error) {
+	resp, err := http.Post(a.srv.URL, "application/json", strings.NewReader("{}"))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return nil, llm.ClassifyStatus(resp.StatusCode, respBody)
+}
+
+// TestRegistry_PaymentRequiredDecoratedAsErrProviderPaymentRequired
+// mirrors TestRegistry_AuthFailureDecoratedAsErrProviderAuthFailed for
+// the 402 sibling added by the provider-billing-failure mission:
+//   - An adapter returning a REAL-httptest-classified *ErrPaymentRequired
+//     causes Stream to return an error matchable by
+//     errors.As(err, &*ErrProviderPaymentRequired) AND by
+//     errors.As(err, &*ErrPaymentRequired) via the Unwrap chain.
+//   - ErrProviderPaymentRequired.{Provider,ProfileID} are populated so
+//     Friendly() can name which configured provider is out of credit.
+//   - The decorated error is NOT retryable (retrying cannot conjure
+//     credits) — the adapter is called exactly once.
+func TestRegistry_PaymentRequiredDecoratedAsErrProviderPaymentRequired(t *testing.T) {
+	const key = "TEST_REG_PAYMENT_FAIL_KEY"
+	os.Setenv(key, "dummy")
+	defer os.Unsetenv(key)
+
+	const providerBody = `{"type":"error","error":{"type":"invalid_request_error","message":"This request's maximum cost exceeds your available credits. Add credits, or lower max_tokens or prompt size."}}`
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = io.WriteString(w, providerBody)
+	}))
+	defer srv.Close()
+
+	r, _ := newReg(t)
+	r.resolver = credref.New(secrets.NewMemoryBackend())
+	r.RegisterAdapter(&paymentFailAdapter{kind: "anthropic", srv: srv})
+	prof := llm.ProviderProfile{
+		ID: "payment-fail", Kind: "anthropic", Model: "claude-sonnet-4-7",
+		Cred: llm.CredentialReference{Kind: "env", Locator: key},
+	}
+	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := r.Stream(context.Background(), llm.GenerationRequest{ProfileID: "payment-fail"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Primary assertion: registry-level decorated type.
+	var paymentFailed *llm.ErrProviderPaymentRequired
+	if !errors.As(err, &paymentFailed) {
+		t.Fatalf("expected *ErrProviderPaymentRequired in chain, got %T: %v", err, err)
+	}
+	if paymentFailed.Provider != "anthropic" {
+		t.Errorf("Provider = %q, want %q", paymentFailed.Provider, "anthropic")
+	}
+	if paymentFailed.ProfileID != "payment-fail" {
+		t.Errorf("ProfileID = %q, want %q", paymentFailed.ProfileID, "payment-fail")
+	}
+	if !strings.Contains(paymentFailed.Reason, "maximum cost exceeds") {
+		t.Errorf("Reason = %q, want the provider's own message", paymentFailed.Reason)
+	}
+
+	// Secondary assertion: raw *ErrPaymentRequired still reachable via Unwrap.
+	var paymentBare *llm.ErrPaymentRequired
+	if !errors.As(err, &paymentBare) {
+		t.Fatalf("expected *ErrPaymentRequired via Unwrap chain, got %T: %v", err, err)
+	}
+	if paymentBare.Status != 402 {
+		t.Errorf("ErrPaymentRequired.Status = %d, want 402", paymentBare.Status)
+	}
+
+	// Friendly() names the provider/profile and does not invent an
+	// in-app remedy — it repeats the provider's own instructions.
+	friendly := paymentFailed.Friendly()
+	if !strings.Contains(friendly, "anthropic") || !strings.Contains(friendly, "payment-fail") {
+		t.Errorf("Friendly() = %q, want it to name the provider and profile", friendly)
+	}
+	if !strings.Contains(friendly, "Add credits") {
+		t.Errorf("Friendly() = %q, want the provider's own remedy text", friendly)
+	}
+
+	// Not retryable: the adapter must have been called exactly once —
+	// retrying an insufficient-credits rejection cannot succeed, so the
+	// retry middleware must neither retry it nor burn the retry budget.
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("adapter Stream call count = %d, want exactly 1 (no retry on 402)", got)
+	}
+	if llm.IsTransient(err) {
+		t.Errorf("decorated 402 must not classify as transient")
+	}
+	var budgetExhausted *llm.ErrRetryBudgetExhausted
+	if errors.As(err, &budgetExhausted) {
+		t.Errorf("402 must propagate directly, not exhaust the retry budget: %v", err)
 	}
 }
 

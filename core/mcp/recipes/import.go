@@ -2,19 +2,36 @@
 //
 // ImportClaudeDesktop translates a pasted Claude Desktop / Cursor
 // `mcpServers` JSON config into harness-shaped Recipe entries. The
-// translator handles the two real-world shapes:
+// translator handles the real-world shapes:
 //
 //   - "Old style" stdio entries — `{ "mcpServers": { "<name>":
 //     { "command": "...", "args": [...], "env": {...} } } }` — translate
 //     directly to stdio recipes the harness can spawn today.
-//   - "New `type` style" entries — `{ "type": "http" | "sse", "url": ... }`
-//     — flagged unsupported with a one-line reason because the Recipe
-//     struct does not yet carry URL/HeadersTemplate/PostURL fields. Those
-//     land in WP03 (HTTP) and WP04 (SSE).
+//   - "New `type` style" HTTP entries — `{ "type": "http", "url": ...,
+//     "headers": {...} }` — translate to a Recipe with
+//     Transport="http", URL, and HeadersTemplate. The MCP HTTP
+//     transport (core/mcp/transport/http) is live and is what the
+//     majority of the shipped catalog already speaks.
+//   - "New `type` style" SSE entries — `{ "type": "sse", "url": ...,
+//     "post_url"|"postUrl": ... }` — translate to a Recipe with
+//     Transport="sse", URL, HeadersTemplate, and PostURL. The harness's
+//     SSE transport (core/mcp/transport/sse) requires a static
+//     client->server POST endpoint (it does not perform the classic
+//     SSE "endpoint" discovery event some servers rely on), so an SSE
+//     entry with no post_url/postUrl field is reported malformed with
+//     a reason naming that specific gap — not a categorical "SSE is
+//     unsupported" refusal, because it is not.
 //
 // Entries with unrecognised auth methods (oauth2, custom auth schemes,
-// etc.) are flagged unsupported with a one-line reason. Malformed
-// entries surface with parser-level error refs.
+// etc.) and entries whose `type` names a transport the harness does not
+// speak at all are flagged unsupported with a one-line reason describing
+// the actual limitation. No refusal reason names a work package — a
+// note-to-self that outlives its context becomes a claim to users; see
+// paste-import-accepts-what-we-support-01PMZG16 for the finding this
+// fixed (two refusal arms cited already-shipped work packages as reasons
+// two of the three real-world entry shapes were unsupported, when both
+// were fully implemented). Malformed entries surface with parser-level
+// error refs.
 //
 // Output: TranslationReport with one ImportEntry per `mcpServers`
 // member. Callers (the RPC wrapper in `core/rpc/views/mcp/import.go`)
@@ -22,10 +39,12 @@
 // to <DataDir>/mcp/recipes/_imports/<id>.yaml, and preserve each
 // entry's original JSON at <DataDir>/mcp/recipes/_imports/<id>.json.
 //
-// Spec mapping: WP08 of mission mcp-server-install-01KQ8TDP. See
-// FR-004 (translator), NFR-003 (64 KiB payload cap), risk register
-// row "Clipboard import accepts a credential-dump JSON pasted by
-// mistake" (cap + missing-mcpServers reject).
+// Spec mapping: WP08 of mission mcp-server-install-01KQ8TDP (original
+// translator); paste-import-accepts-what-we-support-01PMZG16 (HTTP/SSE
+// translation, this file's WP03). See FR-004 (translator), NFR-003
+// (64 KiB payload cap), risk register row "Clipboard import accepts a
+// credential-dump JSON pasted by mistake" (cap + missing-mcpServers
+// reject).
 package recipes
 
 import (
@@ -56,8 +75,11 @@ const (
 	ImportStatusKept = "kept"
 	// ImportStatusUnsupported means the entry parsed but the harness
 	// cannot adopt it today. Reason is populated with a one-line
-	// human-readable explanation (referencing the upstream WP that
-	// would unblock it, when applicable).
+	// human-readable explanation of the actual limitation (e.g. an
+	// unrecognised transport or auth method). Reason must never cite a
+	// work package — see this file's package doc comment for why: a
+	// note-to-self that outlives its context becomes a false claim to
+	// users the moment the cited work ships.
 	ImportStatusUnsupported = "unsupported"
 	// ImportStatusMalformed means the entry's JSON is structurally
 	// invalid for the translator (missing required fields, wrong
@@ -213,39 +235,41 @@ func translateOne(name string, raw json.RawMessage, existingIDs map[string]bool)
 	}
 
 	// Dispatch by transport `type`.
-	transport := stringField(probe, "type")
-	switch strings.ToLower(strings.TrimSpace(transport)) {
+	transportType := stringField(probe, "type")
+	switch strings.ToLower(strings.TrimSpace(transportType)) {
 	case "", "stdio":
-		return finishEntry(entry, name, translateStdio(name, raw, probe), existingIDs)
+		recipe, err := translateStdio(name, raw, probe)
+		return finishEntry(entry, name, recipe, err, existingIDs)
 	case "http":
-		entry.ID = sanitiseRecipeID(name)
-		entry.Status = ImportStatusUnsupported
-		entry.Reason = "HTTP transport not yet available (mission WP03)"
-		return entry
+		recipe, err := translateRemote(name, probe, TransportHTTP)
+		return finishEntry(entry, name, recipe, err, existingIDs)
 	case "sse":
-		entry.ID = sanitiseRecipeID(name)
-		entry.Status = ImportStatusUnsupported
-		entry.Reason = "SSE transport not yet available (mission WP04)"
-		return entry
+		recipe, err := translateRemote(name, probe, TransportSSE)
+		return finishEntry(entry, name, recipe, err, existingIDs)
 	default:
 		entry.ID = sanitiseRecipeID(name)
 		entry.Status = ImportStatusUnsupported
-		entry.Reason = fmt.Sprintf("unknown transport type %q", transport)
+		entry.Reason = fmt.Sprintf("unknown transport type %q", transportType)
 		return entry
 	}
 }
 
-// finishEntry stamps Status / Reason / Recipe on entry based on the
-// translateStdio result and runs the collision check.
-func finishEntry(entry ImportEntry, name string, result stdioResult, existingIDs map[string]bool) ImportEntry {
-	if result.err != nil {
+// finishEntry stamps Status / Reason / Recipe on entry based on a
+// translator's (Recipe, error) result and runs the collision check.
+// err != nil always means the entry is malformed — both translateStdio
+// and translateRemote only return an error for a per-entry problem
+// (missing/malformed field, failed Recipe.Validate), never for a
+// categorical "this transport isn't supported" refusal; that case is
+// handled by translateOne's default arm before either translator runs.
+func finishEntry(entry ImportEntry, name string, recipe Recipe, err error, existingIDs map[string]bool) ImportEntry {
+	if err != nil {
 		entry.ID = sanitiseRecipeID(name)
 		entry.Status = ImportStatusMalformed
-		entry.Reason = result.err.Error()
+		entry.Reason = err.Error()
 		return entry
 	}
-	entry.ID = result.recipe.ID
-	entry.Recipe = result.recipe
+	entry.ID = recipe.ID
+	entry.Recipe = recipe
 	if existingIDs != nil && existingIDs[entry.ID] {
 		entry.Status = ImportStatusCollisionWarning
 		entry.Reason = fmt.Sprintf("recipe id %q collides with an existing recipe; saving will shadow it", entry.ID)
@@ -253,12 +277,6 @@ func finishEntry(entry ImportEntry, name string, result stdioResult, existingIDs
 	}
 	entry.Status = ImportStatusKept
 	return entry
-}
-
-// stdioResult is the internal return shape of translateStdio.
-type stdioResult struct {
-	recipe Recipe
-	err    error
 }
 
 // translateStdio handles the old-shape stdio entry:
@@ -269,36 +287,36 @@ type stdioResult struct {
 // into Recipe.EnvKeys with Required=true (Claude Desktop env entries
 // are always required), and sets Capabilities.Tools=true (the safe
 // default — the harness re-negotiates capabilities at handshake).
-func translateStdio(name string, _ json.RawMessage, probe map[string]json.RawMessage) stdioResult {
+func translateStdio(name string, _ json.RawMessage, probe map[string]json.RawMessage) (Recipe, error) {
 	id := sanitiseRecipeID(name)
 	if err := ValidateRecipeID(id); err != nil {
-		return stdioResult{err: fmt.Errorf("entry %q: cannot derive valid recipe id from name (got %q): %w", name, id, err)}
+		return Recipe{}, fmt.Errorf("entry %q: cannot derive valid recipe id from name (got %q): %w", name, id, err)
 	}
 
 	cmdRaw, hasCmd := probe["command"]
 	if !hasCmd {
-		return stdioResult{err: fmt.Errorf("entry %q: missing required field \"command\"", name)}
+		return Recipe{}, fmt.Errorf("entry %q: missing required field \"command\"", name)
 	}
 	var commandStr string
 	if err := json.Unmarshal(cmdRaw, &commandStr); err != nil {
-		return stdioResult{err: fmt.Errorf("entry %q: \"command\" must be a string: %v", name, err)}
+		return Recipe{}, fmt.Errorf("entry %q: \"command\" must be a string: %v", name, err)
 	}
 	commandStr = strings.TrimSpace(commandStr)
 	if commandStr == "" {
-		return stdioResult{err: fmt.Errorf("entry %q: \"command\" is empty", name)}
+		return Recipe{}, fmt.Errorf("entry %q: \"command\" is empty", name)
 	}
 
 	var args []string
 	if argsRaw, ok := probe["args"]; ok {
 		if err := json.Unmarshal(argsRaw, &args); err != nil {
-			return stdioResult{err: fmt.Errorf("entry %q: \"args\" must be an array of strings: %v", name, err)}
+			return Recipe{}, fmt.Errorf("entry %q: \"args\" must be an array of strings: %v", name, err)
 		}
 	}
 
 	var envMap map[string]string
 	if envRaw, ok := probe["env"]; ok {
 		if err := json.Unmarshal(envRaw, &envMap); err != nil {
-			return stdioResult{err: fmt.Errorf("entry %q: \"env\" must be a string→string map: %v", name, err)}
+			return Recipe{}, fmt.Errorf("entry %q: \"env\" must be a string→string map: %v", name, err)
 		}
 	}
 
@@ -319,7 +337,7 @@ func translateStdio(name string, _ json.RawMessage, probe map[string]json.RawMes
 	sort.Strings(envNames)
 	for _, k := range envNames {
 		if k == "" {
-			return stdioResult{err: fmt.Errorf("entry %q: env contains empty key", name)}
+			return Recipe{}, fmt.Errorf("entry %q: env contains empty key", name)
 		}
 		envKeys = append(envKeys, EnvKey{
 			Name:     k,
@@ -342,9 +360,86 @@ func translateStdio(name string, _ json.RawMessage, probe map[string]json.RawMes
 		// the package defaults (5s init, 30s ping) at spawn.
 	}
 	if err := r.Validate(); err != nil {
-		return stdioResult{err: fmt.Errorf("entry %q: validation failed: %w", name, err)}
+		return Recipe{}, fmt.Errorf("entry %q: validation failed: %w", name, err)
 	}
-	return stdioResult{recipe: r}
+	return r, nil
+}
+
+// translateRemote handles the new-`type`-style HTTP and SSE entries:
+//
+//	{ "type": "http", "url": "...", "headers": {...} }
+//	{ "type": "sse",  "url": "...", "headers": {...},
+//	  "post_url" | "postUrl": "..." }
+//
+// The translator preserves url/headers verbatim into Recipe.URL /
+// Recipe.HeadersTemplate — including any ${VAR} tokens a hand-authored
+// header value carries, which the transport substitutes at
+// connection-open time, exactly like a shipped-catalog recipe.
+// (*Recipe).Validate (recipes.go, WP01 of mcp-server-install-01KQ8TDP)
+// is the single source of truth for URL/PostURL invariants — scheme,
+// non-empty host, no fragment, no userinfo; this function does not
+// duplicate those checks, it only shapes the pasted fields into a
+// Recipe and lets Validate reject what it would reject for a
+// hand-authored one.
+//
+// SSE additionally requires a client->server POST endpoint. The
+// harness's SSE transport (core/mcp/transport/sse) takes that
+// statically from Recipe.PostURL — it does not implement the classic
+// SSE-transport "endpoint" discovery event some servers emit on the
+// stream to announce it at runtime. A pasted Claude Desktop / Cursor
+// `type: sse` entry commonly carries only `url`, because that
+// discovery model is what many real servers rely on instead. Rather
+// than translate the "unsupported" refusal from "SSE" (false — see
+// this package's doc comment) to "the pasted entry left out a field
+// this harness needs" (a much narrower, honest claim), an entry missing
+// every recognised post-URL field name is reported malformed with a
+// reason that says exactly that.
+func translateRemote(name string, probe map[string]json.RawMessage, transportKind string) (Recipe, error) {
+	id := sanitiseRecipeID(name)
+	if err := ValidateRecipeID(id); err != nil {
+		return Recipe{}, fmt.Errorf("entry %q: cannot derive valid recipe id from name (got %q): %w", name, id, err)
+	}
+
+	urlStr := strings.TrimSpace(stringField(probe, "url"))
+	if urlStr == "" {
+		return Recipe{}, fmt.Errorf("entry %q: missing required field \"url\"", name)
+	}
+
+	var headers map[string]string
+	if headersRaw, ok := probe["headers"]; ok {
+		if err := json.Unmarshal(headersRaw, &headers); err != nil {
+			return Recipe{}, fmt.Errorf("entry %q: \"headers\" must be a string→string map: %v", name, err)
+		}
+	}
+
+	r := Recipe{
+		ID:              id,
+		DisplayName:     deriveDisplayName(name),
+		Description:     fmt.Sprintf("Imported from clipboard (originally %q).", name),
+		Category:        "imported",
+		Transport:       transportKind,
+		URL:             urlStr,
+		HeadersTemplate: headers,
+		Capabilities: Capabilities{
+			Tools: true,
+		},
+	}
+
+	if transportKind == TransportSSE {
+		postURL := strings.TrimSpace(firstStringField(probe, "post_url", "postUrl", "message_url", "messageUrl"))
+		if postURL == "" {
+			return Recipe{}, fmt.Errorf(
+				"entry %q: sse transport requires a %q (or %q) field naming the client-to-server POST endpoint; "+
+					"this harness reads it statically and does not perform SSE \"endpoint\"-event auto-discovery",
+				name, "post_url", "postUrl")
+		}
+		r.PostURL = postURL
+	}
+
+	if err := r.Validate(); err != nil {
+		return Recipe{}, fmt.Errorf("entry %q: validation failed: %w", name, err)
+	}
+	return r, nil
 }
 
 // detectUnsupportedAuth inspects probe for an "auth" / "authentication"
@@ -402,6 +497,19 @@ func stringField(probe map[string]json.RawMessage, key string) string {
 		return ""
 	}
 	return s
+}
+
+// firstStringField returns the first non-empty string field found among
+// keys, checked in order. Used where a pasted config might spell the
+// same concept under one of several synonymous field names (e.g. an
+// SSE post endpoint as "post_url" or "postUrl").
+func firstStringField(probe map[string]json.RawMessage, keys ...string) string {
+	for _, k := range keys {
+		if v := stringField(probe, k); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // recipeIDSanitiser matches every char that is NOT [a-z0-9-]. Anything

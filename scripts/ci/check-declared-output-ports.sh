@@ -157,5 +157,20 @@ if [[ $fail -ne 0 ]]; then
   exit 2
 fi
 
+# Discovery floor (Finding #74, CI-gate-hardening, 2026-09-14): `checked`
+# was declared and printed but never asserted >0. If every manifest in
+# MANIFEST_DIR lost its `executor:` field, or the outputs: block's
+# indentation convention changed, the loop above silently visits zero
+# ports and this gate reports "clean — 0 ports checked" — indistinguishable
+# from a healthy tree. This repo is known to ship dozens of concrete node
+# kinds with declared output ports (approval, tool_dispatch, etc.).
+if [[ "$checked" -eq 0 ]]; then
+  echo "[declared-output-ports] FAIL: checked zero output ports across every manifest under ${MANIFEST_DIR}." >&2
+  echo "[declared-output-ports] This is almost certainly a broken executor:/outputs: extraction (a" >&2
+  echo "[declared-output-ports] changed YAML indentation convention, a renamed field), not a" >&2
+  echo "[declared-output-ports] repository where no concrete node kind declares an output port." >&2
+  exit 1
+fi
+
 echo "[declared-output-ports] clean — every declared output port on a concrete kind has a writer or an allowlist entry (${checked} ports checked)."
 exit 0

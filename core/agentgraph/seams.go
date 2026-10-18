@@ -334,6 +334,12 @@ type ToolCall struct {
 type ToolResult struct {
 	Content string
 	IsError bool
+	// Outcome optionally states the call's result class more precisely
+	// than IsError can (a permission deny vs a tool failure). The zero
+	// value means "derive from IsError" — every registry that predates
+	// it is unaffected. omitempty keeps a serialised result byte-for-byte
+	// identical when it is unset. ml-producer-01MLPRD01 WP02.
+	Outcome ToolOutcome `json:",omitempty"`
 }
 
 // ToolRegistry is the agentgraph-side seam onto MCP tool dispatch.
@@ -651,6 +657,43 @@ type PolicyGate interface {
 	CheckTool(ctx context.Context, toolName string) error
 }
 
+// FileAccessGate is the user-facing filesystem permission step the
+// read_file / write_file executors consult AFTER every Cedar check on
+// the PolicyGate has passed (graph-fs-gate-01GFSG01 WP02, FR-1/FR-2,
+// owner ruling 2026-10-03: "route graph file nodes through fs.Gate").
+//
+// It is an OPTIONAL extension of PolicyGate, discovered by type
+// assertion on env.Policy, so every existing PolicyGate fake keeps
+// compiling and keeps its behaviour. Production binds it to the SAME
+// core/tools/fs.Gate instance the fs builtin tools use — so a path the
+// user confirmed for kenaz__write_file is honoured here too, an
+// attended run prompts through the same modal, and an unattended run
+// (runposture.Unattended) resolves NotApplicable to an immediate deny
+// via the gate's existing prompter. Before this seam, a graph
+// write_file node consulted only the Cedar file_write action, which
+// the embedded default bundle permits for every resource: an
+// unattended graph run could write any path with no prompt and no
+// confirmed-roots check.
+//
+// A non-nil error denies; the executor returns it unchanged.
+type FileAccessGate interface {
+	AuthorizeFileRead(ctx context.Context, path string) error
+	AuthorizeFileWrite(ctx context.Context, path string) error
+}
+
+// authorizeFileAccess runs the optional FileAccessGate step for p, if p
+// implements it. write selects the write arm.
+func authorizeFileAccess(ctx context.Context, p PolicyGate, write bool, path string) error {
+	fg, ok := p.(FileAccessGate)
+	if !ok {
+		return nil
+	}
+	if write {
+		return fg.AuthorizeFileWrite(ctx, path)
+	}
+	return fg.AuthorizeFileRead(ctx, path)
+}
+
 // ---- Trace ----
 
 // TraceSink is a thin OTel-shaped sink. The kernel calls Span on every
@@ -809,8 +852,15 @@ const (
 	// request when the prepared input would exceed the token budget
 	// threshold (FR-041).
 	CompactionSitePreCall CompactionSite = "pre_call"
-	// CompactionSitePostTool fires after a ToolNode returns when the
-	// result payload exceeds tool_result_max_bytes (FR-041).
+	// CompactionSitePostTool fires after a ToolNode returns, gated by
+	// the pre_call site's token-watermark verdict
+	// (Env.automaticCompactionCrossed) — NOT by result byte size.
+	// CK-04/CK-05/CK-06 (chat-turn-integrity-01PMZ606 WP13): this used
+	// to claim firing was gated by tool_result_max_bytes;
+	// SiteConfig.ToolResultMaxBytes is round-tripped through Settings
+	// but absent from CompactOpts, so no strategy dispatch can ever
+	// read it — see that field's doc comment in
+	// core/agentgraph/compaction/config.go for the justify() block.
 	CompactionSitePostTool CompactionSite = "post_tool"
 	// CompactionSiteManual fires from the user-facing manual trigger.
 	CompactionSiteManual CompactionSite = "manual"
@@ -828,6 +878,16 @@ type CompactionInput struct {
 	// SessionID + ProjectID drive cascading-config resolution.
 	SessionID string
 	ProjectID string
+	// Strategy, when non-empty, forces the compactor to dispatch this
+	// specific strategy regardless of the resolved cascading config —
+	// mirrors compaction.CompactRequest.Override, the actual
+	// dispatch-selection field on the other side of this seam. Empty
+	// means "use whatever the cascading config resolves to". A graph
+	// author's `compact` node `strategy` attr is the production source
+	// of this value (CHAT-07): before this field existed the attr was
+	// read only into event-payload telemetry, so the event could report
+	// a strategy that never actually ran.
+	Strategy string
 	// SystemPrompt is preserved untouched across compaction.
 	SystemPrompt string
 	// Messages is the slice the compactor will shrink. The kernel
@@ -855,6 +915,15 @@ type CompactionOutput struct {
 	TokensAfter int
 	Skipped     bool
 	Reason      string
+	// Strategy reports the strategy the compactor actually dispatched
+	// (empty when Skipped, since nothing ran). This is the resolved
+	// strategy — Override if the caller set one, otherwise the
+	// cascading-config strategy — never the caller's unresolved intent.
+	// Callers that report "what ran" (e.g. EventCompactionApplied) must
+	// read this field rather than their own request attr: reporting the
+	// attr instead is the CHAT-07 defect (the event describes a
+	// strategy that never dispatched).
+	Strategy string
 }
 
 // Compactor is the kernel-side seam for the configurable compaction

@@ -18,6 +18,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { materializeErrorMessage } from '@/lib/errors';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type { GraphSpec, GraphValidationResult } from '@/lib/types';
@@ -97,8 +98,9 @@ const dirty = computed(() => yaml.value !== persistedYAML.value);
 const readOnly = computed(() => scope.value !== 'user');
 const isMaterialized = computed(() => scope.value === 'materialized');
 /**
- * A materialized run whose resolved spec was no longer available is
- * projected against the library file instead, and the backend stamps
+ * A materialized run whose resolved spec was never recorded (runs before
+ * per-run spec recording, or a spec refused for size) is reconstructed from the library file
+ * instead, and the backend stamps
  * `spec_provenance: library_fallback` on the graph
  * (agentgraph-total-convergence-01PMGX01 WP12, review F2). The topology
  * shown may then differ from the topology that ran, so it is badged
@@ -358,7 +360,7 @@ async function load() {
       editingId.value = spec.id;
       markClean();
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = materializeErrorMessage(err);
     }
     return;
   }
@@ -611,10 +613,12 @@ defineExpose({
         data-testid="editor-materialized-degraded"
         role="status"
       >
-        Degraded projection — the resolved spec this run executed was no longer
-        available, so it was projected against the library graph instead.
-        Per-run dial overrides and any gate rewrite are unrecoverable: the
-        topology shown may differ from the one that ran.
+        Reconstructed from the library graph — this run's exact spec was never
+        recorded (the run predates spec recording, or its spec exceeded the
+        size bound). The graph shown is the library graph as it is now.
+        Degraded projection: per-run dial overrides, any gate rewrite and any
+        edit made since the run are unrecoverable, so the topology shown may
+        differ from the one that ran.
       </div>
       <div
         v-if="isUnreviewed"

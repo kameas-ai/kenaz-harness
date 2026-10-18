@@ -310,6 +310,16 @@ func pairIntegritySweep(msgs []coreag.Message) []coreag.Message {
 		if m.Role == "tool" && m.ToolCallID != "" && !complete[m.ToolCallID] {
 			continue
 		}
+		// A tool message with NO id can never pair with anything, and
+		// KernelMessagesToWire would ship it as a tool_result with an
+		// empty tool_use_id — a provider 400. Branches forked before the
+		// faithful replay (session.Manager.ReplayTranscript, 2026-10-05)
+		// hold exactly such rows on disk: the old Role+Content-only copy
+		// demoted every tool move to an id-less classic role:"tool" row.
+		// Dropping them here repairs those existing branches at read time.
+		if m.Role == "tool" && m.ToolCallID == "" {
+			continue
+		}
 		if len(m.ToolCalls) > 0 {
 			kept := make([]coreag.ToolCallRequest, 0, len(m.ToolCalls))
 			for _, tc := range m.ToolCalls {

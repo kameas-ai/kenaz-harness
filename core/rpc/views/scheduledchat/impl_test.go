@@ -226,6 +226,100 @@ func TestCreateRequiresCron(t *testing.T) {
 	}
 }
 
+// TestCreateOnceRequiresRunAt is FR-006's validation half: a
+// triggerKind='once' Create with no runAt is rejected, mirroring
+// TestCreateRequiresCron's shape for the pre-existing 'cron' kind.
+func TestCreateOnceRequiresRunAt(t *testing.T) {
+	api := scheduledchat.New(scheduledchat.Config{Store: newFakeStore()})
+	_, err := api.Create(context.Background(), scheduledchat.CreateInput{
+		Name:        "X",
+		TriggerKind: "once",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing runAt on a 'once' trigger")
+	}
+	if !errors.Is(err, scheduledchat.ErrInvalidInput) {
+		t.Errorf("want ErrInvalidInput, got %v", err)
+	}
+}
+
+// TestCreateOnceIgnoresEmptyCron: FR-006's whole point is that a one-shot
+// schedule must not require the caller to fabricate a cron expression.
+// *Fails if:* the cron-required validation were applied unconditionally
+// instead of only for triggerKind=="cron".
+func TestCreateOnceIgnoresEmptyCron(t *testing.T) {
+	api := scheduledchat.New(scheduledchat.Config{Store: newFakeStore()})
+	runAt := time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339)
+	entry, err := api.Create(context.Background(), scheduledchat.CreateInput{
+		Name:        "Run once",
+		TriggerKind: "once",
+		RunAt:       runAt,
+		Enabled:     true,
+		// Cron deliberately left empty.
+	})
+	if err != nil {
+		t.Fatalf("Create with empty cron on a 'once' trigger: %v", err)
+	}
+	if entry.TriggerKind != "once" {
+		t.Errorf("TriggerKind=%q, want once", entry.TriggerKind)
+	}
+	if entry.RunAt == "" {
+		t.Error("RunAt was not persisted/echoed back")
+	}
+}
+
+// TestCreateOnceRejectsUnparseableRunAt: a malformed RunAt string is
+// ErrInvalidInput, not a silently-zeroed time.Time (which would arm a
+// one-shot timer for the Unix epoch, firing immediately and unexpectedly
+// — a "the app used to work, then a bad string quietly changed its
+// behaviour" defect).
+func TestCreateOnceRejectsUnparseableRunAt(t *testing.T) {
+	api := scheduledchat.New(scheduledchat.Config{Store: newFakeStore()})
+	_, err := api.Create(context.Background(), scheduledchat.CreateInput{
+		Name:        "X",
+		TriggerKind: "once",
+		RunAt:       "not-a-timestamp",
+	})
+	if !errors.Is(err, scheduledchat.ErrInvalidInput) {
+		t.Errorf("want ErrInvalidInput for an unparseable runAt, got %v", err)
+	}
+}
+
+// TestCreateRejectsUnknownTriggerKind: FR-006 defines exactly two legal
+// values. A third value must not silently fall through to either branch's
+// validation.
+func TestCreateRejectsUnknownTriggerKind(t *testing.T) {
+	api := scheduledchat.New(scheduledchat.Config{Store: newFakeStore()})
+	_, err := api.Create(context.Background(), scheduledchat.CreateInput{
+		Name:        "X",
+		Cron:        "0 9 * * *",
+		TriggerKind: "hourly", // not a legal value
+	})
+	if !errors.Is(err, scheduledchat.ErrInvalidInput) {
+		t.Errorf("want ErrInvalidInput for an unrecognised triggerKind, got %v", err)
+	}
+}
+
+// TestCreateDefaultTriggerKindIsCron: an omitted triggerKind (every
+// caller written before WP08) must resolve to "cron" and keep requiring
+// a cron expression — the backward-compatibility half of FR-006.
+func TestCreateDefaultTriggerKindIsCron(t *testing.T) {
+	api := scheduledchat.New(scheduledchat.Config{Store: newFakeStore()})
+	entry, err := api.Create(context.Background(), scheduledchat.CreateInput{
+		Name: "Legacy caller",
+		Cron: "0 9 * * *",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if entry.TriggerKind != "cron" {
+		t.Errorf("TriggerKind=%q, want cron (the default)", entry.TriggerKind)
+	}
+	if entry.RunAt != "" {
+		t.Errorf("RunAt=%q, want empty for a cron trigger", entry.RunAt)
+	}
+}
+
 func TestUpdate(t *testing.T) {
 	store := newFakeStore()
 	api := scheduledchat.New(scheduledchat.Config{Store: store})

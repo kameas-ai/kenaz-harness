@@ -177,6 +177,15 @@ func (s *memStore) Delete(_ context.Context, id string) (string, error) {
 		return "", ErrArtifactNotFound
 	}
 	delete(s.rows, id)
+	// Drop the artifact's revisions too, matching both SQL stores (the
+	// legacy FK cascade; the units store's explicit child delete).
+	kept := s.versions[:0]
+	for _, v := range s.versions {
+		if v.ArtifactID != id {
+			kept = append(kept, v)
+		}
+	}
+	s.versions = kept
 	return a.ContentHash, nil
 }
 

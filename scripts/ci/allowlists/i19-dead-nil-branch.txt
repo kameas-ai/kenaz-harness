@@ -1,0 +1,30 @@
+# I19 — statically-dead-nil-branch class.
+#
+# Enforced by scripts/ci/check-dead-nil-branch.sh /
+# scripts/ci/cmd/checkdeadnilbranch. A zero-value `var x T` declaration
+# immediately followed, in the SAME lexical block, by `if x != nil { ...
+# }` with no assignment to x anywhere in between — x is provably nil at
+# the check, so the if-block is unreachable. Shipped in production as
+# core/rpc/builtins_wiring.go's `var subagentSeam agentgraph.BranchSeam
+# // nil — no child-run spawner yet` beside its own `if subagentSeam !=
+# nil`, which hid the entire kenaz__subagent_dispatch registration block
+# (UNIT-6 of subagent-control-and-background-tasks-01PMZB11 fixed that
+# one instance). See that tool's header for the exact check and its
+# false-positive history.
+#
+# Empty as of this gate's introduction (UNIT-12, 2026-09-12) — the one
+# known instance was already fixed by UNIT-6 before this gate was
+# written, and the scan found zero others under core/+cmd/.
+#
+# Format (Finding #92, CI-gate-hardening, 2026-09-14 — designed keyed
+# from the start; this gate postdates the finding, so it never shipped
+# the file:line-keyed form the other allowlists had to migrate away
+# from): one FULLY-QUALIFIED KEY per entry —
+# `<enclosing-func-qualified-name>#<varName>` (see
+# check-dead-nil-branch.sh's own header for the rare `#N` disambiguating
+# suffix) — followed by an auto-generated `# at file:line: description`
+# locator comment (copy it verbatim from the gate's FAIL output; never
+# compared, only read by humans) and then a `#` comment carrying the
+# DATE, the BLOCKER, and the change that will delete the line. Allowlists
+# shrink monotonically; a line whose KEY no longer corresponds to a live
+# violation is STALE and fails the gate.

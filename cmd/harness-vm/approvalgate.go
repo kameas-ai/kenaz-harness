@@ -11,11 +11,18 @@
 // and it binds an approval to the task_id that :7881 speaks.
 //
 // PAUSE IS NOT `paused`. Approval-pause is engine-internal, not durable, and
-// not addressable — there is no id an operator can pause or resume against. It
-// surfaces as `waiting_for_input` on kenaz.agent.run, which goes live with this
-// change. RUN-DEBT-1's `paused` stays reserved and no pause/resume verb is
-// added to any wire; conflating the two would put a Resume button in front of
-// a state that has no resume.
+// not addressable — there is no id an operator can pause or resume against.
+// It WOULD surface as `waiting_for_input` on kenaz.agent.run if runStatus
+// below were ever read by a production call site — today it is not
+// (runStatus has zero non-test callers; dated justification in
+// docs/unwired-ledger.md, mission vm-execution-surface-truth-01PMZD14 HV-05).
+// This file's change does not make that status "go live": the host already
+// derives the same value independently from the task.approval_requested /
+// task.approval_resolved event pair (see runStatus's own doc comment below
+// and contracts/vm-rpc.md's "Run status is DERIVED, not a wire field").
+// RUN-DEBT-1's `paused` stays reserved and no pause/resume verb is added to
+// any wire; conflating the two would put a Resume button in front of a state
+// that has no resume.
 package main
 
 import (

@@ -125,7 +125,7 @@ func TestCedarSessionKindResolver_ChatReadNotDenied(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	res, err := r.Resolve(ctx, rec.ID, "harness-self", "harness_read_get_status")
+	res, err := r.Resolve(ctx, rec.ID, "harness-self", "harness_read_list_providers")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}

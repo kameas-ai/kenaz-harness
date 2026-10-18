@@ -126,8 +126,9 @@ function onTokensInput(evt: Event): void {
         Long-session nudge — token threshold
       </h2>
       <p class="mt-1 font-ui text-[11px] text-ink-muted">
-        Cumulative prompt-token count after which the nudge banner appears, regardless of
-        turn count. Default {{ DEFAULT_NUDGE_TOKENS.toLocaleString() }}. Set to 0 to use the default.
+        Conversation-history tokens (the history part of the last request, not the
+        system prompt or tool definitions) after which the nudge banner appears,
+        regardless of turn count. Default {{ DEFAULT_NUDGE_TOKENS.toLocaleString() }}. Set to 0 to use the default.
       </p>
       <div class="mt-2">
         <input

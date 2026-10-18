@@ -1,6 +1,9 @@
 <script setup lang="ts">
 /**
- * ArtifactsView — global /artifacts surface (FR-009/FR-013).
+ * ArtifactsView — the Library's Captured view (/library/captured; the old
+ * /artifacts path redirects there — artifacts-as-units-01DOGF0C WP06).
+ * Rendered inside LibraryView with `embedded` (the Library owns the page
+ * head) and the shared title `query`.
  *
  * Lists every artifact across every session/project, with filter pills:
  *   - Scope:  All / Session / Project.
@@ -20,6 +23,7 @@ import ArtifactPreview from './ArtifactPreview.vue';
 import { useArtifacts, useHarnessClient } from '@/lib/useHarnessAPI';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
+import { filterByTitle } from '@/views/library/titleFilter';
 import type {
   Artifact,
   ArtifactFilter,
@@ -28,15 +32,26 @@ import type {
   ArtifactWithBytes,
 } from '@/lib/types';
 
+const props = defineProps<{
+  /** Hosted inside LibraryView: the Library renders the page head. */
+  embedded?: boolean;
+  /** Shared Library title search (case-insensitive substring). */
+  query?: string;
+}>();
+
 type ScopePill = 'all' | ArtifactScope;
 type SourcePill = 'all' | ArtifactSource;
 
-const SCOPES: readonly ScopePill[] = ['all', 'session', 'project'];
+// 'global' and 'model_output' are values the store already returns (global
+// scope since 01NCTXU01; model images since multimodal-io-extended) — the
+// pills now offer them so a Captured filter can reach every row it lists.
+const SCOPES: readonly ScopePill[] = ['all', 'session', 'project', 'global'];
 const SOURCES: readonly SourcePill[] = [
   'all',
   'code_block',
   'tool_output',
   'user_pin',
+  'model_output',
 ];
 const MIME_PREFIXES: readonly { value: string; label: string }[] = [
   { value: '', label: 'All' },
@@ -108,7 +123,7 @@ function toggleSort(next: SortKey) {
 const sortedList = computed<readonly Artifact[]>(() => {
   const dir = sortDir.value === 'asc' ? 1 : -1;
   const key = sortKey.value;
-  return [...list.value].sort((a, b) => {
+  return filterByTitle(list.value, props.query).sort((a, b) => {
     const av = (a[key] ?? '') as string | number;
     const bv = (b[key] ?? '') as string | number;
     if (typeof av === 'number' && typeof bv === 'number') {
@@ -185,6 +200,7 @@ onMounted(() => {
     data-testid="artifacts-view"
   >
     <CanvasHead
+      v-if="!props.embedded"
       number="09"
       section="ARTIFACTS"
       title="Artifacts"
@@ -348,7 +364,7 @@ onMounted(() => {
         class="font-ui text-xs text-ink-muted"
         data-testid="artifacts-empty"
       >
-        No artifacts match these filters.
+        {{ props.query && props.query.trim() ? `No artifacts match these filters and “${props.query.trim()}”.` : 'No artifacts match these filters.' }}
       </p>
     </div>
 

@@ -54,6 +54,11 @@ type UnitStore interface {
 	GetSyncState(ctx context.Context, unitID string) (units.SyncState, error)
 	GetSyncStateByNodeID(ctx context.Context, nodeID string) (units.SyncState, error)
 	UpsertSyncState(ctx context.Context, st units.SyncState) (units.SyncState, error)
+	// CreateWithSyncState / UpdateWithSyncState write a pulled unit and its
+	// sync baseline in ONE storage transaction (units-debt-01UNITD01 FR-4):
+	// the pull path never leaves a unit without its baseline.
+	CreateWithSyncState(ctx context.Context, u units.Unit, st units.SyncState) (units.Unit, units.SyncState, error)
+	UpdateWithSyncState(ctx context.Context, id string, baseVersion int, body string, metadata json.RawMessage, st units.SyncState) (units.Unit, units.SyncState, error)
 }
 
 // UnitConflict records a pull-time divergence: the server advanced a unit
@@ -78,6 +83,9 @@ type UnitSyncer struct {
 	mapper  *UnitMapper
 	caps    *CapabilityPoller
 	dataDir string
+	// ids derives wire UUIDs for units that have never synced (WP01,
+	// wire_id.go). Immutable after construction.
+	ids *WireIDs
 
 	mu          sync.RWMutex
 	cursor      string
@@ -87,9 +95,33 @@ type UnitSyncer struct {
 	pushCount   int
 	pullCount   int
 	conflicts   []UnitConflict
+	// skippedUnknownKinds counts pulled nodes that are not Unit-lane kinds
+	// (WP03: skip and count — never abort the cursor). skippedInvalid
+	// counts unit-lane nodes the local store refused as invalid (unknown
+	// scope / classification / load policy). Both cumulative.
+	skippedUnknownKinds int
+	skippedInvalid      int
+	// pushRefused counts dirty units refused BEFORE the wire (non-pushable
+	// kind, capability word in metadata); they stay dirty.
+	pushRefused int
+	// pushHeldLoadAlways counts load_policy=always units held back because
+	// the identity's roles are unknown (review F9); they stay dirty.
+	pushHeldLoadAlways int
 
 	stopCh chan struct{}
 	once   sync.Once
+
+	// lanes receives the read-down poll's health (fleet-session-truth-
+	// 01DOGF0A FR-6). Set via SetLanes before StartPoller; nil = unreported.
+	lanes *SyncLanes
+}
+
+// SetLanes wires the shared lane board the poll reports into. Call before
+// StartPoller.
+func (s *UnitSyncer) SetLanes(l *SyncLanes) {
+	s.mu.Lock()
+	s.lanes = l
+	s.mu.Unlock()
 }
 
 // NewUnitSyncer constructs a UnitSyncer. The syncer does not poll until
@@ -102,6 +134,7 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 		mapper:  mapper,
 		caps:    caps,
 		dataDir: dataDir,
+		ids:     NewWireIDs(dataDir),
 		stopCh:  make(chan struct{}),
 	}
 	if c, err := loadUnitCursor(dataDir); err == nil {
@@ -121,6 +154,15 @@ func (s *UnitSyncer) canSync() error {
 	}
 	cur := s.caps.Current()
 	return cur.Require(CapSharedTeamGraph)
+}
+
+// orgPausedNow reports a staff pause hold from the capability snapshot or
+// the client's last org_paused refusal.
+func (s *UnitSyncer) orgPausedNow() bool {
+	if s.caps != nil && s.caps.Current().Paused {
+		return true
+	}
+	return s.client != nil && s.client.OrgPause().Paused
 }
 
 // ── Push-up ─────────────────────────────────────────────────────────────────
@@ -163,23 +205,85 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 	if err != nil {
 		return 0, fmt.Errorf("fleet: unit push: list dirty: %w", err)
 	}
+	return s.pushUnits(ctx, class, dirty)
+}
+
+// PushUnit pushes ONE team/org unit now (dirty or not) — the "ensure the
+// node exists on fleet" step before a merge request (review F2). Returns
+// the unit's wire node id. Personal units are refused.
+func (s *UnitSyncer) PushUnit(ctx context.Context, unitID string) (string, error) {
+	if err := s.canSync(); err != nil {
+		return "", err
+	}
+	u, err := s.store.Get(ctx, unitID)
+	if err != nil {
+		return "", fmt.Errorf("fleet: push unit: %w", err)
+	}
+	if _, ok := ClassificationForUnit(u.Classification); !ok {
+		return "", ErrPersonalLayerNotSyncable
+	}
+	n, err := s.pushUnits(ctx, u.Classification, []units.Unit{u})
+	if err != nil {
+		return "", err
+	}
+	if n == 0 {
+		if st, gerr := s.store.GetSyncState(ctx, u.ID); gerr != nil || st.SyncedLocalVersion != u.Version {
+			return "", fmt.Errorf("fleet: push unit %s: not accepted by fleet (refused locally, conflicted or rejected)", u.ID)
+		}
+	}
+	return s.WireNodeID(ctx, u.ID), nil
+}
+
+// pushUnits pushes the given units of one classification in a single
+// two-phase (nodes then edges) request. Edges are included only when BOTH
+// endpoints are in this push or already on fleet (a synced sidecar) — an
+// edge to a personal / never-pushed unit would 400 the whole batch
+// (missing_node_reference).
+func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, dirty []units.Unit) (int, error) {
 	if len(dirty) == 0 {
 		return 0, nil
 	}
 
 	nodes := make([]contextNodeInput, 0, len(dirty))
 	pushed := make([]units.Unit, 0, len(dirty))
+	// wireOf maps a pushed unit id to the wire UUID it was sent as, so the
+	// response's conflicts / rejections (keyed by wire id) and the sidecar
+	// write resolve back to the local unit.
+	wireOf := make(map[string]string, len(dirty))
 	seenEdge := map[string]bool{}
 	edges := make([]contextEdgeInput, 0)
+	type edgeCand struct {
+		wire     contextEdgeInput
+		from, to string
+	}
+	var candidates []edgeCand
 
 	for _, u := range dirty {
 		node, ok, err := s.mapper.MapUnitToNode(u)
+		if errors.Is(err, ErrLoadPolicyRolesUnknown) {
+			logging.L().Warn("fleet.unit.push.held_load_always", "unit_id", u.ID)
+			s.mu.Lock()
+			s.pushHeldLoadAlways++
+			s.mu.Unlock()
+			continue
+		}
+		if errors.Is(err, ErrUnitKindNotPushable) || errors.Is(err, ErrKindNotKnowledge) {
+			// Refused before the wire (fleet would 400 the WHOLE batch):
+			// skip this unit, keep it dirty, keep pushing the rest.
+			logging.L().Warn("fleet.unit.push.refused_locally", "unit_id", u.ID, "err", err.Error())
+			s.mu.Lock()
+			s.pushRefused++
+			s.mu.Unlock()
+			continue
+		}
 		if err != nil {
 			return 0, fmt.Errorf("fleet: unit push: map %s: %w", u.ID, err)
 		}
 		if !ok {
 			continue // personal — defensively skipped (ListDirty already filters)
 		}
+		node.ID = s.WireNodeID(ctx, u.ID)
+		wireOf[u.ID] = node.ID
 		nodes = append(nodes, node)
 		pushed = append(pushed, u)
 
@@ -196,12 +300,27 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 			if !ok {
 				continue
 			}
+			wire.ID = s.ids.For(WireLaneUnitEdge, e.ID)
+			wire.FromNodeID = s.WireNodeID(ctx, e.FromID)
+			wire.ToNodeID = s.WireNodeID(ctx, e.ToID)
 			seenEdge[e.ID] = true
-			edges = append(edges, wire)
+			candidates = append(candidates, edgeCand{wire: wire, from: e.FromID, to: e.ToID})
 		}
 	}
 	if len(nodes) == 0 {
 		return 0, nil
+	}
+	onFleet := func(unitID string) bool {
+		if _, ok := wireOf[unitID]; ok {
+			return true
+		}
+		st, err := s.store.GetSyncState(ctx, unitID)
+		return err == nil && IsWireUUID(st.NodeID)
+	}
+	for _, c := range candidates {
+		if onFleet(c.from) && onFleet(c.to) {
+			edges = append(edges, c.wire)
+		}
 	}
 
 	req := contextPushRequest{Nodes: nodes, Edges: edges}
@@ -211,11 +330,12 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 	}
 	defer drain(resp)
 
-	if resp.StatusCode == http.StatusForbidden {
-		return 0, fmt.Errorf("%w: server refused unit push", ErrCapabilityNotInTier)
-	}
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("fleet: unit push status %d", resp.StatusCode)
+		// Map by the envelope's code (not_team_member,
+		// load_policy_requires_admin, capability_not_in_tier, lint_blocked,
+		// …) — not every 403 is a tier problem (context_push_errors.go).
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		return 0, parseContextPushError("unit push", resp.StatusCode, errBody)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -227,10 +347,20 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 		return 0, fmt.Errorf("fleet: unit push parse: %w", err)
 	}
 
-	// Index conflicts so we don't advance the sidecar for conflicted nodes.
+	// Index conflicts AND per-item rejections (kenaz-fleet PR #173) so we
+	// don't advance the sidecar for either: a rejected unit was not stored
+	// server-side and must stay dirty.
 	conflicted := map[string]bool{}
 	for _, c := range result.Conflicts {
 		conflicted[c.NodeID] = true
+	}
+	for _, r := range result.Rejected {
+		if r.Kind == "node" {
+			conflicted[r.ID] = true
+		}
+	}
+	if len(result.Rejected) > 0 {
+		logging.L().Warn("fleet.unit.push.rejected", "rejected_count", len(result.Rejected))
 	}
 
 	classStr := ""
@@ -239,8 +369,8 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 	}
 	now := time.Now().UTC()
 	for _, u := range pushed {
-		if conflicted[u.ID] {
-			continue // server rejected this version — leave sidecar untouched
+		if conflicted[wireOf[u.ID]] {
+			continue // conflicted or rejected — leave sidecar untouched (stays dirty)
 		}
 		// After a successful push-ack both baselines advance to the pushed
 		// unit's local version. The server echoes back the same version we
@@ -248,7 +378,7 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 		// = u.Version immediately after a push.
 		if _, err := s.store.UpsertSyncState(ctx, units.SyncState{
 			UnitID:              u.ID,
-			NodeID:              u.ID, // harness reuses unit id as node id on push
+			NodeID:              wireOf[u.ID], // the wire UUID (WP01) — pull resolves it back via GetSyncStateByNodeID
 			SyncedServerVersion: u.Version,
 			SyncedLocalVersion:  u.Version,
 			Classification:      classStr,
@@ -258,6 +388,25 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 		}
 	}
 	return result.AcceptedNodes, nil
+}
+
+// WireNodeID resolves the fleet node UUID for a local unit id (WP01). A unit
+// that has synced before keeps the NodeID its sidecar recorded — for a
+// pulled unit that is the server's id, for a pushed one the id it was pushed
+// under — so the mapping is durable in the units store, not just derivable.
+// A never-synced unit (or a legacy sidecar row whose NodeID is the raw ULID
+// from before UUIDs, which fleet never accepted) gets the deterministic
+// per-install UUIDv5 (wire_id.go).
+func (s *UnitSyncer) WireNodeID(ctx context.Context, unitID string) string {
+	if unitID == "" {
+		return ""
+	}
+	if s.store != nil {
+		if st, err := s.store.GetSyncState(ctx, unitID); err == nil && IsWireUUID(st.NodeID) {
+			return st.NodeID
+		}
+	}
+	return s.ids.For(WireLaneUnit, unitID)
 }
 
 // ── Pull-down (read-down-auto) ───────────────────────────────────────────────
@@ -282,10 +431,8 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	cursor := s.cursor
 	s.mu.RUnlock()
 
-	urlPath := "/api/v1/context/pull"
-	if cursor != "" {
-		urlPath += "?since=" + cursor
-	}
+	// The Unit lane pulls only unit kinds (WP03 lane split by kind).
+	urlPath := lanePullPath(unitLaneKinds, cursor)
 
 	resp, err := s.client.Get(ctx, urlPath)
 	if err != nil {
@@ -320,9 +467,29 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	}
 
 	applied := 0
+	skippedKinds, skippedInvalid := 0, 0
 	for _, n := range pullResp.Nodes {
+		// Another lane's node — a Curated "guidance", a bootstrap
+		// "project", or a kind this build has never heard of (a server that
+		// ignores ?kind= sends them all). Skip and count: before WP03 one
+		// such node made applyPulledNode fail and PullDown return BEFORE the
+		// cursor advanced, stalling the lane on that page forever (§0-E).
+		if !unitLaneAccepts(n) {
+			skippedKinds++
+			continue
+		}
 		ok, err := s.applyPulledNode(ctx, n)
 		if err != nil {
+			if isUnitValidationErr(err) {
+				// The node itself is invalid for the local store (unknown
+				// scope / classification / load policy): a permanent
+				// property of the node, so retrying cannot help. Skip it.
+				logging.L().Warn("fleet.unit.pull.skipped_invalid", "node_id", n.ID, "err", err.Error())
+				skippedInvalid++
+				continue
+			}
+			// A storage failure is transient: abort before the cursor
+			// advances so the page is retried.
 			return applied, err
 		}
 		if ok {
@@ -331,6 +498,8 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	}
 
 	s.mu.Lock()
+	s.skippedUnknownKinds += skippedKinds
+	s.skippedInvalid += skippedInvalid
 	if pullResp.Cursor != "" {
 		s.cursor = pullResp.Cursor
 		if s.dataDir != "" {
@@ -345,6 +514,13 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	s.mu.Unlock()
 
 	return applied, nil
+}
+
+// isUnitValidationErr reports whether err is the local store refusing a node
+// as invalid (a permanent property of the node, not a transient failure).
+func isUnitValidationErr(err error) bool {
+	return errors.Is(err, units.ErrUnsupportedKind) || errors.Is(err, units.ErrUnsupportedScope) ||
+		errors.Is(err, units.ErrUnsupportedClassification) || errors.Is(err, units.ErrUnsupportedLoadPolicy)
 }
 
 // applyPulledNode maps one pulled node into the local store and returns
@@ -385,25 +561,22 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 
 	st, err := s.store.GetSyncStateByNodeID(ctx, n.ID)
 	if errors.Is(err, units.ErrSyncStateNotFound) {
-		// First sight of this server node → create a fresh local read layer.
-		created, cerr := s.store.Create(ctx, mapped)
-		if cerr != nil {
-			return false, fmt.Errorf("fleet: unit pull: create %s: %w", n.ID, cerr)
-		}
-		// Record BOTH baselines so the first subsequent delta compares in the
-		// correct counter spaces. SyncedServerVersion = server's version at
-		// creation; SyncedLocalVersion = the local unit's Version after Create
-		// (always 0 since Create forces Version=0, but using created.Version
-		// is self-documenting and safe against future Create changes).
-		if _, serr := s.store.UpsertSyncState(ctx, units.SyncState{
-			UnitID:              created.ID,
+		// First sight of this server node → create a fresh local read layer
+		// AND record BOTH baselines, in one storage transaction
+		// (units-debt-01UNITD01 FR-4, C-review D-1). Two separate writes
+		// could leave a unit with no sidecar row: the next PushDirty would
+		// read it as never-synced and push it back as locally-new, and the
+		// next pull could not resolve this node id to it and would try to
+		// create it again. SyncedServerVersion = server's version at
+		// creation; SyncedLocalVersion is set by the store to the created
+		// unit's Version (always 0 — Create forces Version=0).
+		if _, _, cerr := s.store.CreateWithSyncState(ctx, mapped, units.SyncState{
 			NodeID:              n.ID,
 			SyncedServerVersion: n.Version,
-			SyncedLocalVersion:  created.Version,
 			Classification:      string(n.Classification),
 			LastSynced:          time.Now().UTC(),
-		}); serr != nil {
-			return false, fmt.Errorf("fleet: unit pull: sidecar create %s: %w", n.ID, serr)
+		}); cerr != nil {
+			return false, fmt.Errorf("fleet: unit pull: create %s: %w", n.ID, cerr)
 		}
 		return true, nil
 	}
@@ -444,23 +617,39 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 	}
 
 	// Clean fast-forward: server advanced, local is unchanged since last sync.
-	// Apply the server body and advance BOTH baselines.
-	if _, err := s.store.Update(ctx, local.ID, mapped.Body, mapped.Metadata); err != nil {
-		return false, fmt.Errorf("fleet: unit pull: update %s: %w", local.ID, err)
-	}
-	updated, err := s.store.Get(ctx, local.ID)
-	if err != nil {
-		return false, err
-	}
-	if _, err := s.store.UpsertSyncState(ctx, units.SyncState{
-		UnitID:              local.ID,
+	// Apply the server body and advance BOTH baselines in one storage
+	// transaction (units-debt-01UNITD01 FR-4). Split, a failure after the
+	// update left the local Version ahead of SyncedLocalVersion: the next
+	// pull read the server's own body as an un-synced local edit and
+	// surfaced a conflict of the unit against itself. The store sets
+	// SyncedLocalVersion to the unit's Version after the bump.
+	//
+	// local.Version is passed as the base and re-checked inside the write
+	// transaction: a local edit that lands after the Get above makes the
+	// fast-forward NOT clean, and it takes the same path as any other
+	// both-sides-moved case — surfaced as a conflict, local body kept,
+	// sidecar not advanced.
+	if _, _, err := s.store.UpdateWithSyncState(ctx, local.ID, local.Version, mapped.Body, mapped.Metadata, units.SyncState{
 		NodeID:              n.ID,
-		SyncedServerVersion: n.Version,       // server counter at this pull
-		SyncedLocalVersion:  updated.Version, // local counter after the fast-forward apply
+		SyncedServerVersion: n.Version, // server counter at this pull
 		Classification:      string(n.Classification),
 		LastSynced:          time.Now().UTC(),
 	}); err != nil {
-		return false, fmt.Errorf("fleet: unit pull: sidecar update %s: %w", local.ID, err)
+		if errors.Is(err, units.ErrVersionConflict) {
+			latest := local.Version + 1 // at least one local edit raced in
+			if cur, gerr := s.store.Get(ctx, local.ID); gerr == nil {
+				latest = cur.Version
+			}
+			s.recordConflict(UnitConflict{
+				UnitID:        local.ID,
+				NodeID:        n.ID,
+				LocalVersion:  latest,
+				SyncedVersion: st.SyncedServerVersion,
+				ServerVersion: n.Version,
+			})
+			return false, nil
+		}
+		return false, fmt.Errorf("fleet: unit pull: update %s: %w", local.ID, err)
 	}
 	return true, nil
 }
@@ -484,6 +673,17 @@ const (
 	unitPollBackoff1     = 300 * time.Second
 	unitPollBackoff2     = 1800 * time.Second
 	unitPollMaxErrors    = 2
+
+	// unitPollWarnThreshold is the consecutive-failure count at which a
+	// failing poll becomes a WARN and a degraded unit-poll lane
+	// (fleet-session-truth-01DOGF0A, dogfood B3b). Below it a failure is
+	// Debug: the counter is reset by the next SUCCESSFUL PullDown (any nil
+	// return — including the no-op returns for signed-out / unentitled /
+	// 403), so isolated failures between successes are transient by
+	// construction. Three in a row is also where the poll has already
+	// backed off to unitPollBackoff1 — i.e. read-down has been failing for
+	// several minutes, which is when "not syncing" stops being noise.
+	unitPollWarnThreshold = 3
 )
 
 // StartPoller begins a background read-down-auto loop that periodically
@@ -517,12 +717,13 @@ func (s *UnitSyncer) pollLoop(ctx context.Context) {
 		case <-s.stopCh:
 			return
 		case <-timer.C:
-			if _, err := s.PullDown(ctx); err != nil {
+			_, err := s.PullDown(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					// Shutdown, not a failure.
+					return
+				}
 				consecutiveErrors++
-				logging.L().Warn("fleet.unit.poll.pull_failed",
-					"err", err.Error(),
-					"consecutive", consecutiveErrors,
-				)
 			} else {
 				consecutiveErrors = 0
 			}
@@ -535,9 +736,50 @@ func (s *UnitSyncer) pollLoop(ctx context.Context) {
 			default:
 				interval = unitPollBaseInterval
 			}
+			s.reportPoll(err, consecutiveErrors, time.Now().Add(interval))
 			timer.Reset(interval)
 		}
 	}
+}
+
+// reportPoll logs and reports one poll outcome. Split out of pollLoop so
+// the threshold is testable without a ticker.
+func (s *UnitSyncer) reportPoll(err error, consecutive int, nextRetry time.Time) {
+	s.mu.RLock()
+	lanes := s.lanes
+	s.mu.RUnlock()
+	if IsOrgPaused(err) || (err == nil && s.orgPausedNow()) {
+		// A staff pause hold (kenaz-fleet #206): not a server error and not
+		// "ok" — the lane is off with the honest reason. Transient: the
+		// loop keeps its cadence and resumes on its own when the pause
+		// lifts (canSync passes again).
+		lanes.RecordOff(LaneUnitPoll, ReasonOrgPaused)
+		return
+	}
+	if err == nil {
+		lanes.RecordSuccess(LaneUnitPoll)
+		return
+	}
+	if consecutive < unitPollWarnThreshold {
+		logging.L().Debug("fleet.unit.poll.pull_failed",
+			"err", err.Error(), "consecutive", consecutive)
+		return
+	}
+	if consecutive == unitPollWarnThreshold {
+		// Once per threshold crossing (review F8); the lane carries the
+		// running count from here on.
+		logging.L().Warn("fleet.unit.poll.pull_failed",
+			"err", err.Error(), "consecutive", consecutive)
+	} else {
+		logging.L().Debug("fleet.unit.poll.pull_failed",
+			"err", err.Error(), "consecutive", consecutive)
+	}
+	reason := "server_error"
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrFleetUnreachable) {
+		reason = "network"
+	}
+	lanes.RecordFailure(LaneUnitPoll, reason, err, consecutive, nextRetry)
 }
 
 // ── Snapshot / status ────────────────────────────────────────────────────────
@@ -574,6 +816,13 @@ type UnitSyncStatus struct {
 	PushCount     int       `json:"push_count"`
 	PullCount     int       `json:"pull_count"`
 	ConflictCount int       `json:"conflict_count"`
+	// SkippedUnknownKinds / SkippedInvalid / PushRefused — WP03 counters
+	// (see the UnitSyncer fields).
+	SkippedUnknownKinds int `json:"skipped_unknown_kinds"`
+	SkippedInvalid      int `json:"skipped_invalid"`
+	PushRefused         int `json:"push_refused"`
+	PushHeldLoadAlways  int `json:"push_held_load_always"`
+	StrippedUnitKeys    int `json:"stripped_unit_keys"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -588,6 +837,12 @@ func (s *UnitSyncer) Status() UnitSyncStatus {
 		PushCount:     s.pushCount,
 		PullCount:     s.pullCount,
 		ConflictCount: len(s.conflicts),
+
+		SkippedUnknownKinds: s.skippedUnknownKinds,
+		SkippedInvalid:      s.skippedInvalid,
+		PushRefused:         s.pushRefused,
+		PushHeldLoadAlways:  s.pushHeldLoadAlways,
+		StrippedUnitKeys:    int(s.mapper.StrippedUnitKeys()),
 	}
 }
 

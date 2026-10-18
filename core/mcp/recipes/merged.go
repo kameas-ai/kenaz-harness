@@ -57,6 +57,14 @@ type MergedCatalog struct {
 	shipped  SourceFn
 	registry SourceFn
 	user     SourceFn
+	// org is the org-provisioned recipe overlay (fleet-org-config-
+	// inheritance-01NORGX01 WP02). Unlike shipped/registry/user it is not a
+	// pull-based SourceFn: ApplyProvisionedMCP computes the full overlay
+	// once per bundle apply and installs the snapshot via SetOrgRecipes, so
+	// a plain field (guarded by mu, same as the other sources) is simpler
+	// than a closure over mutable state. nil/empty means "no org overlay" —
+	// the common case for OSS / non-fleet users.
+	org []Recipe
 }
 
 // NewMergedCatalog constructs a MergedCatalog from three sources.
@@ -91,6 +99,29 @@ func (m *MergedCatalog) SetRegistrySource(src SourceFn) {
 	m.mu.Unlock()
 }
 
+// SetOrgRecipes installs recipes as the org-provisioned overlay
+// (fleet-org-config-inheritance-01NORGX01 WP02). Called by
+// recipes.ApplyProvisionedMCP every time a fleet bundle carrying a
+// provisioned_mcp section (or, once fleet-generic-sync-framework-
+// 01NSYNC02's org_config wire shape is live, an org_config["mcp_recipes"]
+// entry) is applied. Passing nil or an empty slice clears the overlay —
+// the caller wires this into fleet sign-out / StopFleetBackground so
+// removing fleet reverts every org-provisioned recipe to whatever
+// shipped/registry/user would otherwise resolve, per spec's "removing
+// fleet cleanly reverts to local-only" requirement.
+//
+// The slice is defensively copied so a caller's later mutation of the
+// backing array can't retroactively change what's already installed.
+func (m *MergedCatalog) SetOrgRecipes(recipes []Recipe) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(recipes) == 0 {
+		m.org = nil
+		return
+	}
+	m.org = append([]Recipe(nil), recipes...)
+}
+
 // Recipes returns the merged, deduplicated, source-tagged slice in
 // stable order: shipped first (declaration order), then registry
 // entries that don't collide with shipped, then user/imported
@@ -107,6 +138,7 @@ func (m *MergedCatalog) Recipes() []Recipe {
 	shippedSrc := m.shipped
 	registrySrc := m.registry
 	userSrc := m.user
+	org := append([]Recipe(nil), m.org...)
 	m.mu.RUnlock()
 
 	shipped := callSource(shippedSrc)
@@ -118,8 +150,8 @@ func (m *MergedCatalog) Recipes() []Recipe {
 	// (idSet) tracks ids we've already placed so a registry entry
 	// that doesn't shadow shipped lands at the tail rather than
 	// re-using a shipped slot.
-	out := make([]Recipe, 0, len(shipped)+len(registry)+len(user))
-	idx := make(map[string]int, len(shipped)+len(registry)+len(user))
+	out := make([]Recipe, 0, len(shipped)+len(registry)+len(user)+len(org))
+	idx := make(map[string]int, len(shipped)+len(registry)+len(user)+len(org))
 
 	for _, r := range shipped {
 		if r.Source == "" {
@@ -146,6 +178,25 @@ func (m *MergedCatalog) Recipes() []Recipe {
 	for _, r := range user {
 		if r.Source == "" {
 			r.Source = SourceUser
+		}
+		if i, ok := idx[r.ID]; ok {
+			out[i] = r
+			continue
+		}
+		idx[r.ID] = len(out)
+		out = append(out, r)
+	}
+	// Org layer: highest precedence (ConflictPolicyOrgWinsReadonly,
+	// fleet-org-config-inheritance-01NORGX01 spec §2 rule 3). Processed
+	// last so it always shadows shipped/registry/user in the merged view,
+	// exactly like the replace-in-place shadowing above — the lower-tier
+	// entry's underlying source (a UserStore file, the shipped catalog)
+	// is untouched; only this merged snapshot's slot is replaced. A
+	// member's own recipe of the same ID is never deleted, matching
+	// mandated_skills' precedent (FR-301) and this mission's FR-006.
+	for _, r := range org {
+		if r.Source == "" {
+			r.Source = SourceOrg
 		}
 		if i, ok := idx[r.ID]; ok {
 			out[i] = r

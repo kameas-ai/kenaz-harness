@@ -97,6 +97,28 @@ func (m RawMessage) IsResponse() bool { return m.ID != nil && m.Method == "" }
 // method both set). Server-initiated requests look like this.
 func (m RawMessage) IsRequest() bool { return m.ID != nil && m.Method != "" }
 
+// MatchesID reports whether this envelope's id decodes to want. Used
+// by the http and sse transports' dispatch and health-probe call
+// sites to detect a stale response — the inbound queue is shared by
+// every Send/Recv pair on a connection, and a Send whose caller gave
+// up on ctx.Done() before Recv observed the reply leaves that reply
+// to be picked up by whichever NEXT caller happens to call Recv, with
+// no other signal that it belongs to someone else (finding #106,
+// connector-lifecycle-truth-01PMZ303). A nil id, or an id that fails
+// to decode as int64, never matches — the safe default, since a false
+// negative just costs a retry/probe-failure while a false positive
+// would deliver the wrong payload to the wrong caller.
+func (m RawMessage) MatchesID(want int64) bool {
+	if m.ID == nil {
+		return false
+	}
+	var got int64
+	if err := json.Unmarshal(*m.ID, &got); err != nil {
+		return false
+	}
+	return got == want
+}
+
 // RPCError is the JSON-RPC 2.0 error object embedded in failure
 // responses.
 type RPCError struct {

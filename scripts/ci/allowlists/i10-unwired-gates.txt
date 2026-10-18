@@ -266,8 +266,10 @@ github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckRecipeAdd
 #   AnchorStore (UNIT-3) for core/trust's signature verification. That
 #   AnchorStore is a pubkey source with rotation and revocation already
 #   written against it — exactly what C-2 says is missing for the
-#   fleet catalog/skill install path (core/rpc/api.go's
-#   PubKeyBase64: "" placeholder). core/fleet.VerifySignature remains
+#   fleet catalog/skill install path (since install-framework-01DOGF0B
+#   WP05, 2026-10-05: the single installSignatureVerifier in
+#   core/rpc/install_wiring.go, reading catalogview.API.PubKey — the
+#   former api.go PubKeyBase64: "" placeholder). core/fleet.VerifySignature remains
 #   the verify-math primitive nearest to that path if it is ever wired
 #   to consume an anchor. It is NOT a duplicate of core/trust's
 #   9-step pipeline (no envelope, no anchor lookup, no revocation, no

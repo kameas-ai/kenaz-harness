@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
@@ -20,6 +21,16 @@ type Impl struct {
 	Project  ProjectSyncBackend
 	Handoff  HandoffBackend
 	Recovery RecoveryBackend
+
+	// SessionEvents loads the local session Handoff_Share sends
+	// (device-keys-handoff-01DEVKH01 WP04 — closes unwired-ledger
+	// 2026-10-06 item 1, which hardcoded nil events). nil → Handoff_Share
+	// refuses rather than posting an empty handoff.
+	SessionEvents SessionEventLoader
+
+	// Accepted persists accepted handoffs as local sessions (WP05). nil →
+	// Handoff_Accept refuses rather than decrypting into nowhere.
+	Accepted AcceptedSessionStore
 
 	// Gate is the Cedar policy gate consulted before the two DESTRUCTIVE
 	// ContextSync operations — SessionSync_DeleteRemote and
@@ -103,7 +114,7 @@ func (im *Impl) ProjectSync_Toggle(ctx context.Context, projectID string, enable
 	if enable {
 		// Use default artifact class options; callers may update via
 		// ProjectSync_SetArtifactClass after enabling.
-		defaultOpts := ProjectSyncOpts{Notes: true, Binaries: false, Memory: true}
+		defaultOpts := ProjectSyncOpts{Notes: true, Binaries: false}
 		if err := im.Project.EnableSync(ctx, projectID, nil, defaultOpts); err != nil {
 			return ProjectSyncStatus{}, fmt.Errorf("contextsync: project enable: %w", err)
 		}
@@ -173,17 +184,48 @@ func (im *Impl) Handoff_ListTeam(ctx context.Context) ([]TeamMemberView, error) 
 	return out, nil
 }
 
-// Handoff_Share re-encrypts a session and routes it to the recipient's inbox.
-// Plain events are loaded by the backend; no content crosses the RPC boundary.
+// ErrHandoffNothingToShare is returned by Handoff_Share for a session with
+// no messages — before any network call (fleet would 422 handoff_empty).
+var ErrHandoffNothingToShare = errors.New("This session has no messages to share yet.")
+
+// ErrHandoffLoaderUnavailable means the local session loader is not wired.
+var ErrHandoffLoaderUnavailable = errors.New("contextsync: session loader not wired — cannot share")
+
+// Handoff_Share loads the session's full transcript from the local store
+// as self-contained events, and hands them to the backend, which encrypts
+// them and routes them to the recipient's inbox. Only opaque ids cross the
+// RPC boundary. Errors from the backend are returned UNWRAPPED: their text
+// is the human copy the share dialog shows.
 func (im *Impl) Handoff_Share(ctx context.Context, sessionID, recipientUserID string) error {
 	if im.Handoff == nil {
 		return ErrContextSyncUnavailable
 	}
-	// Pass an empty slice — the backend loads events from the encrypted
-	// fleet stream via Resume in a future enhancement. For v0.21.0 the
-	// caller is responsible for providing events through the chassis path.
-	// The RPC binding intentionally accepts only opaque IDs.
-	return im.Handoff.ShareSession(ctx, sessionID, recipientUserID, nil)
+	if im.SessionEvents == nil {
+		return ErrHandoffLoaderUnavailable
+	}
+	events, err := im.SessionEvents.LoadSessionEvents(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("contextsync: load session for sharing: %w", err)
+	}
+	if len(events) == 0 {
+		return ErrHandoffNothingToShare
+	}
+	return im.Handoff.ShareSession(ctx, sessionID, recipientUserID, events)
+}
+
+// Handoff_RecipientDevices lists a teammate's receiving devices.
+func (im *Impl) Handoff_RecipientDevices(ctx context.Context, recipientUserID string) ([]RecipientDeviceView, error) {
+	if im.Handoff == nil {
+		return nil, ErrContextSyncUnavailable
+	}
+	devs, err := im.Handoff.RecipientDevices(ctx, recipientUserID)
+	if err != nil {
+		return nil, err
+	}
+	if devs == nil {
+		devs = []RecipientDeviceView{}
+	}
+	return devs, nil
 }
 
 // Handoff_Inbox returns the current fleet handoff inbox.
@@ -203,28 +245,75 @@ func (im *Impl) Handoff_Inbox(ctx context.Context) ([]InboxItemView, error) {
 			SenderUserID: it.SenderUserID,
 			SenderEmail:  it.SenderEmail,
 			ReceivedAt:   it.ReceivedAt,
+
+			Undecryptable: it.Undecryptable,
 		})
 	}
 	return out, nil
 }
 
-// Handoff_Accept decrypts the inbox item. Returns a view with the event count;
-// no content crosses the RPC boundary.
+// ErrHandoffAcceptUnavailable means the local accepted-session store is
+// not wired, so an accept would have nowhere to persist.
+var ErrHandoffAcceptUnavailable = errors.New("contextsync: accepted-session store not wired — cannot accept")
+
+// Handoff_Accept decrypts the inbox item with this device's key, persists
+// it as a NEW local session with provenance (sender, inbox item id), audits
+// the inbound share, then deletes the fleet copy (OQ-1, owner-ruled: one
+// accept per user — the item leaves the user's other devices too). A
+// second accept of the same item returns the existing local session with
+// no fetch; if the earlier fleet DELETE had failed, it is retried then.
+// No content crosses the RPC boundary. Backend errors are returned
+// unwrapped: their text is the human copy the inbox shows.
 func (im *Impl) Handoff_Accept(ctx context.Context, inboxItemID string) (AcceptedSessionView, error) {
 	if im.Handoff == nil {
 		return AcceptedSessionView{}, ErrContextSyncUnavailable
 	}
-	records, err := im.Handoff.AcceptShare(ctx, inboxItemID)
-	if err != nil {
-		return AcceptedSessionView{}, fmt.Errorf("contextsync: accept share: %w", err)
+	if im.Accepted == nil {
+		return AcceptedSessionView{}, ErrHandoffAcceptUnavailable
 	}
-	// LocalSessionID is empty in v0.21.0 — a future WP wires session
-	// persistence so the caller gets a real ID. For now the event count
-	// tells the UI the operation succeeded.
-	return AcceptedSessionView{
-		LocalSessionID: "",
-		EventCount:     len(records),
-	}, nil
+	if prev, ok := im.Accepted.Lookup(ctx, inboxItemID); ok {
+		im.deleteFleetCopy(ctx, inboxItemID)
+		prev.AlreadyAccepted = true
+		return prev, nil
+	}
+	rec, err := im.Handoff.AcceptShare(ctx, inboxItemID)
+	if err != nil {
+		return AcceptedSessionView{}, err
+	}
+	view, err := im.Accepted.Persist(ctx, rec)
+	if err != nil {
+		return AcceptedSessionView{}, fmt.Errorf("contextsync: save shared session: %w", err)
+	}
+	if !view.AlreadyAccepted {
+		im.Handoff.RecordAccepted(ctx, rec, view.LocalSessionID)
+	}
+	im.deleteFleetCopy(ctx, inboxItemID)
+	return view, nil
+}
+
+// deleteFleetCopy removes the fleet copy of an accepted (persisted) item
+// unless that already succeeded. Best-effort: the local copy is
+// authoritative, the item expires in 7 days regardless, and the next
+// re-open retries a failed delete.
+func (im *Impl) deleteFleetCopy(ctx context.Context, inboxItemID string) {
+	if im.Accepted.FleetCopyDeleted(ctx, inboxItemID) {
+		return
+	}
+	if err := im.Handoff.DeleteShare(ctx, inboxItemID); err != nil {
+		logging.L().Warn("contextsync.handoff.delete_after_accept_failed", "err", err.Error())
+		return
+	}
+	if err := im.Accepted.MarkFleetCopyDeleted(ctx, inboxItemID); err != nil {
+		logging.L().Warn("contextsync.handoff.mark_deleted_failed", "err", err.Error())
+	}
+}
+
+// Handoff_Delete dismisses an inbox item without accepting it.
+func (im *Impl) Handoff_Delete(ctx context.Context, inboxItemID string) error {
+	if im.Handoff == nil {
+		return ErrContextSyncUnavailable
+	}
+	return im.Handoff.DeleteShare(ctx, inboxItemID)
 }
 
 // ── Recovery ──────────────────────────────────────────────────────────────────
@@ -257,9 +346,9 @@ func (im *Impl) ContextSync_ApplyRecoveryCode(_ context.Context, code string) er
 // ── conversion helpers ────────────────────────────────────────────────────────
 
 func optsToView(o ProjectSyncOpts) ArtifactClassOptionsView {
-	return ArtifactClassOptionsView{Notes: o.Notes, Binaries: o.Binaries, Memory: o.Memory}
+	return ArtifactClassOptionsView{Notes: o.Notes, Binaries: o.Binaries}
 }
 
 func viewToOpts(v ArtifactClassOptionsView) ProjectSyncOpts {
-	return ProjectSyncOpts{Notes: v.Notes, Binaries: v.Binaries, Memory: v.Memory}
+	return ProjectSyncOpts{Notes: v.Notes, Binaries: v.Binaries}
 }

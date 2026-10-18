@@ -44,6 +44,10 @@ function branchesSeed(overrides: Partial<HarnessClient['branches']> = {}): Parti
       commitReintegration: vi.fn().mockResolvedValue(undefined),
       setAdvisorDismissed: vi.fn(),
       listWithBranchTree: vi.fn(),
+      abortSubagent: vi.fn(),
+      steerSubagent: vi.fn(),
+      pauseSubagent: vi.fn(),
+      resumeSubagent: vi.fn(),
       ...overrides,
     },
   };

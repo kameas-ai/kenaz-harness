@@ -57,6 +57,52 @@ var ErrPaused = errors.New("agentgraph: run paused")
 // ErrBudgetExceeded is returned when a per-run budget cap fires.
 var ErrBudgetExceeded = errors.New("agentgraph: budget exceeded")
 
+// BudgetCapError decorates ErrBudgetExceeded with which cap fired and
+// the limit/usage that tripped it (owner directive 2026-09-09, filed
+// live against the generic "agent reached the per-run budget cap"
+// message: it named neither the cap, the limit, nor a way to raise it).
+//
+// Reason matches checkBudget's cap names ("max_tokens_per_run",
+// "max_llm_calls_per_run", "max_tool_calls_per_run",
+// "max_cost_usd_per_run", "max_wallclock_per_run_seconds",
+// "max_backtracks_per_run").
+//
+// Is(ErrBudgetExceeded) reports true so every existing
+// errors.Is(err, ErrBudgetExceeded) call site keeps matching without
+// change -- callers that only need the sentinel-equality behaviour
+// never have to know this type exists. Callers that want the detail
+// (chat.driveRun's terminal message) use errors.As.
+type BudgetCapError struct {
+	Reason string
+	Limit  float64
+	Used   float64
+}
+
+func (e *BudgetCapError) Error() string {
+	return fmt.Sprintf("agentgraph: budget exceeded (%s: %.0f/%.0f)", e.Reason, e.Used, e.Limit)
+}
+
+// Is reports equality against ErrBudgetExceeded so errors.Is(err,
+// ErrBudgetExceeded) keeps working for every existing call site.
+func (e *BudgetCapError) Is(target error) bool {
+	return target == ErrBudgetExceeded
+}
+
+// TurnPauseGate is consulted by loopExecutor.Execute (exec_control.go)
+// before beginning each Loop-node iteration — see Env.TurnPause's doc
+// for why this is a distinct mechanism from Result.Pause/ErrPaused.
+//
+// subagent-control-and-background-tasks-01PMZB11 UNIT-8, owner ruling
+// E-002.
+type TurnPauseGate interface {
+	// Wait blocks while the run is paused. It returns nil once
+	// unpaused (including immediately, if never paused), or ctx.Err()
+	// if ctx is cancelled/expired while waiting — the path Abort (ctx
+	// cancellation) uses to unblock a paused run instead of leaving it
+	// parked forever.
+	Wait(ctx context.Context) error
+}
+
 // ErrNotImplemented marks executors that exist only as stubs in this
 // bundle (Fork/Merge real impl lands in Bundle B; Corpus real impl in
 // Bundle C). Tests rely on the sentinel to assert the kernel surfaced
@@ -168,6 +214,13 @@ type Env struct {
 	SessionID string
 	// ProjectID is the optional project the session belongs to.
 	ProjectID string
+	// TurnSpanID is the id of the user message that opened the chat
+	// turn this run executes, when the run IS a chat turn
+	// (agentgraph-settings-linkage-01DOGF0D WP03). Recorded on the
+	// run_start event so the log is self-describing: a run can be traced
+	// back to its turn without the session_turn_runs side table. Empty
+	// for runs that are not chat turns.
+	TurnSpanID string
 
 	// Graph is the spec being executed. Read-only; nodes look up their
 	// peers (e.g. Loop bodies) by ID.
@@ -271,9 +324,29 @@ type Env struct {
 	// existing memory-write hooks still fire through Hooks.
 	LifecycleHooks LifecycleHookRunner
 
+	// ToolUsage is told about every completed tool invocation — name,
+	// latency, success, nothing else. It is the usage-telemetry seam; the
+	// kernel knows nothing about what consumes it (in production, fleet's
+	// consent-gated ConversationTracker via core/rpc). nil disables it.
+	// Called from toolPostDispatch, the single tool-invocation path, so a
+	// `tool` node and a model-emitted `tool_dispatch` batch are counted
+	// identically.
+	ToolUsage ToolUsageObserver
+
+	// ToolCalls is told about EVERY exit of a model-emitted tool call in
+	// tool_dispatch — rejected, denied, cancelled or completed — with a
+	// typed outcome, the raw arguments and the pre-cap result
+	// (ml-producer-01MLPRD01 WP02; see ToolCallObserver). Independent of
+	// ToolUsage, whose behaviour is unchanged. nil disables it.
+	ToolCalls ToolCallObserver
+
 	// PendingContext receives additional system-context injected by hooks
-	// (e.g. additional_context from pre_tool_use). Nil drops the context
-	// (it is still logged but not forwarded to the next LLM turn).
+	// (additional_context from pre_tool_use / post_tool_use). Nil drops
+	// the context with an "agentgraph.hook_context.dropped" log line.
+	// Production: the chat runner sets its per-session queue on every
+	// chat run (core/rpc/views/agentgraph/chat/pending_context.go), and
+	// its LLMProviderAdapter drains it into the next model call's system
+	// prompt. Library-graph runs outside the chat runner leave it nil.
 	PendingContext PendingContextAppender
 
 	// Compactor is the optional compaction pipeline (Bundle D). The
@@ -444,6 +517,30 @@ type Env struct {
 	// core/agentgraph never imports the autonomy domain and any
 	// Kernel.Run caller can set it.
 	AskPolicy AskPolicy
+
+	// TurnPause is consulted by loopExecutor.Execute (exec_control.go)
+	// at the top of every Loop-node iteration — i.e. before beginning a
+	// new "turn" (applyMaxTurnsDial in core/rpc/views/agentgraph/chat
+	// aliases the Loop node's MaxIterations as the max-turns dial, so
+	// one iteration IS one turn). nil means "never pauses" — the
+	// default for every Kernel.Run caller except a dispatched
+	// background sub-agent run (subagent-control-and-background-tasks-
+	// 01PMZB11 UNIT-8, owner ruling E-002).
+	//
+	// Deliberately NOT the same mechanism as Result.Pause / ErrPaused
+	// (the Ask-node checkpoint-and-resume primitive used by ask_user /
+	// approval / escalation-ladder nodes, kernel.go). That mechanism
+	// terminates the run and persists a resumable checkpoint for a
+	// human to answer later. TurnPause is a live, in-process WAIT: the
+	// goroutine already driving this run blocks at the iteration
+	// boundary and simply proceeds once unpaused — "Resume clears the
+	// pause so turns begin again" (spec.md §13 E-002) requires exactly
+	// this, not a re-dispatch from a stored checkpoint. It does not
+	// interrupt whatever turn is already in flight — "mid-turn cost is
+	// not bounded by Pause" (E-002); that is what Abort (PR #331) is
+	// for, via ctx cancellation, which also unblocks a paused Wait (see
+	// TurnPauseGate's doc).
+	TurnPause TurnPauseGate
 
 	// registry is the executor lookup table the control executors
 	// (Loop, Retry, Parallel) use to dispatch into peer nodes. The

@@ -9,6 +9,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // fakeToolDispatcher captures dispatch calls for assertions.
@@ -325,5 +326,44 @@ func TestDispatch_KindTool_NilDispatcher_ReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "kenaz__bash") {
 		t.Errorf("err = %v, want it to name the tool %q", err, "kenaz__bash")
+	}
+}
+
+// TestDispatch_KindTool_SessionContextCannotOverrideCtxSession
+// (model-harness-toolset-01MHTS001 WP02 security review, H1): when ctx
+// already carries the session a call runs in, a DIFFERENT
+// SessionContext.SessionID must not replace it on the tool dispatch ctx —
+// that override let a forged id escape per-session permission resolution.
+// The call is refused and nothing dispatches.
+func TestDispatch_KindTool_SessionContextCannotOverrideCtxSession(t *testing.T) {
+	t.Parallel()
+	db, dir := openDispatchDB(t)
+	store := slashcmd.NewStore(db, dir)
+	ctx := context.Background()
+	if err := store.SaveUser(ctx, slashcmd.UserCommand{
+		Name: "probe", Scope: slashcmd.ScopeGlobal, Kind: slashcmd.KindTool,
+		Description: "probe", Tool: "kenaz__sleep", ToolArgsTemplate: "x",
+	}); err != nil {
+		t.Fatalf("SaveUser: %v", err)
+	}
+	fakeTool := &fakeToolDispatcher{output: "ran"}
+	d := slashcmd.NewDispatch(store, fakeTool)
+
+	real := toolloop.WithSessionID(ctx, "real-session")
+	if _, err := d.Run(real, "probe", nil, slashcmd.SessionContext{SessionID: "forged-session"}); !errors.Is(err, toolloop.ErrSessionIDMismatch) {
+		t.Fatalf("mismatched session not refused: %v", err)
+	}
+	if len(fakeTool.calls) != 0 {
+		t.Fatalf("tool dispatched despite mismatch: %+v", fakeTool.calls)
+	}
+	// Same id, or the human path (empty ctx), still dispatches.
+	if _, err := d.Run(real, "probe", nil, slashcmd.SessionContext{SessionID: "real-session"}); err != nil {
+		t.Fatalf("matching session refused: %v", err)
+	}
+	if _, err := d.Run(ctx, "probe", nil, slashcmd.SessionContext{SessionID: "human-session"}); err != nil {
+		t.Fatalf("human path (empty ctx) refused: %v", err)
+	}
+	if len(fakeTool.calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(fakeTool.calls))
 	}
 }

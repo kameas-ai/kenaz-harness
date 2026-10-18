@@ -534,15 +534,17 @@ func TestSlashToolDispatcher_ArgsRoundTrip_FromModelEntryPoint(t *testing.T) {
 
 	skillTool := coreskill.New(coreskill.Options{Dispatch: dispatch})
 	input, err := json.Marshal(map[string]any{
-		"name":       "deploy",
-		"args":       map[string]string{"env": "staging", "count": "3"},
-		"session_id": "sess-args",
+		"name": "deploy",
+		"args": map[string]string{"env": "staging", "count": "3"},
+		// No session_id argument: the skill tool refuses one (security
+		// review H1) and takes the session from ctx, as the kernel tool
+		// adapter stamps it.
 	})
 	if err != nil {
 		t.Fatalf("marshal input: %v", err)
 	}
 
-	out, callErr := skillTool.Call(ctx, input)
+	out, callErr := skillTool.Call(toolloop.WithSessionID(ctx, "sess-args"), input)
 	if callErr != nil {
 		t.Fatalf("skillTool.Call: %v", callErr)
 	}

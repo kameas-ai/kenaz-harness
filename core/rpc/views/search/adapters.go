@@ -26,8 +26,10 @@ type corpusAdapter interface {
 
 // ─── artifacts adapter ────────────────────────────────────────────────────────
 
-// artifactsSearcher queries the artifacts table for rows where title
-// contains q (case-insensitive). Returns SearchHit{Corpus: "artifacts"} per row.
+// artifactsSearcher queries artifact units (units.kind='artifact', since
+// migration units/1104-artifacts-to-units — artifacts-as-units-01DOGF0C)
+// for rows whose title or MIME type contains q (case-insensitive).
+// Returns SearchHit{Corpus: "artifacts"} per row.
 type artifactsSearcher struct {
 	db *sql.DB
 }
@@ -38,10 +40,14 @@ func (a *artifactsSearcher) search(ctx context.Context, q string, limit int) ([]
 	}
 	like := "%" + q + "%"
 	const sqlQ = `
-SELECT id, title, mime_type, COALESCE(session_id, ''),
-       COALESCE(project_id, ''), created_at
-  FROM artifacts
- WHERE title LIKE ? OR mime_type LIKE ?
+SELECT id, title,
+       COALESCE(json_extract(metadata, '$.mime_type'), ''),
+       COALESCE(json_extract(metadata, '$.session_id'), ''),
+       COALESCE(json_extract(metadata, '$.project_id'), ''),
+       created_at
+  FROM units
+ WHERE kind = 'artifact'
+   AND (title LIKE ? OR json_extract(metadata, '$.mime_type') LIKE ?)
  ORDER BY created_at DESC
  LIMIT ?`
 	rows, err := a.db.QueryContext(ctx, sqlQ, like, like, limit)

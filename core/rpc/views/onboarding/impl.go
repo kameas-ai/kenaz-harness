@@ -144,6 +144,20 @@ type Config struct {
 	// Ignored when FSM is non-nil (callers that supply their own FSM are
 	// responsible for passing a signer to it directly).
 	Signer coreonboarding.AccountSigner
+	// Tester drives the connection test on EventSubmitKey (finding #107).
+	// When nil, cfg.FSM (built by New below) gets a nil LLMTester, which
+	// means the FSM's TestProvider guard is never entered and every key —
+	// garbage or real — reports success. This was the production bug: the
+	// default FSM was always built with a nil tester because this field did
+	// not exist. Ignored when FSM is non-nil (callers that supply their own
+	// FSM are responsible for passing a tester to it directly).
+	Tester coreonboarding.LLMTester
+	// ProviderStore persists a key once Tester confirms it works (finding
+	// #107). When nil, cfg.FSM gets a nil ProviderStorer, which means a
+	// successfully-tested key is discarded instead of becoming a usable
+	// provider — the second half of finding #107 ("the key is discarded").
+	// Ignored when FSM is non-nil, same caveat as Tester above.
+	ProviderStore coreonboarding.ProviderStorer
 	// DataDir is forwarded to harnessmcp.LoadStarters so user-overridden
 	// starter prompts are picked up.
 	DataDir string
@@ -186,14 +200,18 @@ type API struct {
 // passes the full set.
 //
 // When cfg.FSM is nil, New builds a default FSM:
-//   - with no LLM tester (test-connection always passes — callers that need
-//     a real tester supply their own FSM via cfg.FSM)
+//   - with cfg.Tester when non-nil, so EventSubmitKey actually tests the
+//     key against the real provider; when nil test-connection always
+//     passes (test/demo default — see coreonboarding.LLMTester's doc).
 //   - with no session-kind transitioner (skipped on terminal state)
 //   - with cfg.Signer when non-nil, so EventSignIn triggers the owned-login
 //     flow; when nil EventSignIn degrades gracefully (OSS-standalone invariant).
+//   - with cfg.ProviderStore when non-nil, so a successfully-tested key is
+//     actually persisted (finding #107); when nil the key is discarded
+//     after test, same test/demo default as Tester above.
 func New(cfg Config) *API {
 	if cfg.FSM == nil {
-		cfg.FSM = coreonboarding.NewFull(nil, nil, cfg.Signer)
+		cfg.FSM = coreonboarding.NewFull(cfg.Tester, nil, cfg.Signer, cfg.ProviderStore)
 	}
 	return &API{
 		cfg:      cfg,
@@ -211,12 +229,17 @@ var ErrNotConfigured = errors.New("onboarding: host dependency not configured")
 // State implements OnboardingAPI.
 func (a *API) State(ctx context.Context) (OnboardingState, error) {
 	out := OnboardingState{}
+	// firstRunRaw is FirstRunChecker's independent signal (provider
+	// count only — see onboardingFirstRunAdapter in
+	// core/rpc/onboarding_wiring.go). It says nothing about whether the
+	// user has already dismissed the dialog.
+	var firstRunRaw bool
 	if a.cfg.FirstRun != nil {
 		fr, err := a.cfg.FirstRun.IsFirstRun(ctx)
 		if err != nil {
 			return out, err
 		}
-		out.FirstRun = fr
+		firstRunRaw = fr
 	}
 	if a.cfg.Completion != nil {
 		c, err := a.cfg.Completion.IsCompleted(ctx)
@@ -225,6 +248,17 @@ func (a *API) State(ctx context.Context) (OnboardingState, error) {
 		}
 		out.Completed = c
 	}
+	// trust-surfaces-that-fire-01PMZ202 WP25 (SD-02): OnboardingState.FirstRun's
+	// own doc comment has always promised "no provider configured AND the
+	// user has never dismissed" — but until this fix the field mirrored
+	// firstRunRaw alone, so a user who explicitly dismissed onboarding
+	// (Completed=true) with zero providers still configured (e.g. they hit
+	// "Skip") saw the dialog reopen on every cold start forever, because
+	// App.vue's boot check (`if (state.firstRun) onboardingOpen.value = true`)
+	// trusted this field's contract at face value. AND-ing with !Completed
+	// here is the fix, not a frontend change, so every FirstRun consumer
+	// (not just App.vue) gets the corrected semantics.
+	out.FirstRun = firstRunRaw && !out.Completed
 	if a.cfg.SettingsDial != nil {
 		dis, err := a.cfg.SettingsDial.IsHarnessSelfMCPDisabled(ctx)
 		if err != nil {

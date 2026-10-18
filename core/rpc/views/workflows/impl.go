@@ -2,7 +2,9 @@
 package workflows
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -177,12 +179,23 @@ type Config struct {
 	// WorkflowCatalog is the browsable catalog backend (WP03). nil
 	// causes Catalog_* methods to return ErrCatalogUnavailable.
 	WorkflowCatalog wfcatalog.Catalog
+	// Provenance records where each framework-installed workflow came from
+	// (install-framework-01DOGF0B WP05 review H1/H2/H4) — the SAME store
+	// the workflow catalog writes template installs to. InstallDocument
+	// reads it to refuse collisions; Delete clears a deleted workflow's
+	// record. nil: every existing row is a collision for InstallDocument
+	// (no record can prove ownership — fail closed).
+	Provenance corewf.ProvenanceStore
 }
 
 // API is the concrete WorkflowsAPI.
 type API struct {
-	cfg  Config
-	mu   sync.RWMutex
+	cfg Config
+	// installMu serialises InstallDocument's resolve → ownership check →
+	// save → provenance write, so two concurrent installs of the same id
+	// cannot both pass as "create" (re-review low 2).
+	installMu sync.Mutex
+	mu        sync.RWMutex
 	byID map[string]corewf.Workflow
 	// source tracks per-id provenance ("builtin" | "user") so List
 	// surfaces the right tag in the catalog after a Save round-trip.
@@ -229,10 +242,13 @@ func New(cfg Config) *API {
 				"error", err.Error(),
 			)
 		} else {
+			// A persisted row wins over the builtin of the same id: it is
+			// the user's installed (and possibly edited) copy. Before
+			// install-framework-01DOGF0B WP05 the builtin shadowed it on
+			// every restart — a template installed from the catalog read
+			// back as "builtin" (not installed) after the next launch, and
+			// edits to it were silently replaced by the shipped version.
 			for _, s := range summaries {
-				if _, ok := a.byID[s.ID]; ok {
-					continue
-				}
 				w, err := cfg.Store.Load(context.Background(), s.ID)
 				if err != nil {
 					slog.Warn("workflows: failed to load persisted workflow",
@@ -269,6 +285,7 @@ func (a *API) List(_ context.Context) ([]Summary, error) {
 			Version:     w.Version,
 			StepCount:   len(w.Steps),
 			Source:      src,
+			OrgManaged:  a.isOrgMandated(w.ID),
 		})
 	}
 	return out, nil
@@ -507,6 +524,12 @@ func (a *API) Save(ctx context.Context, in SaveInput) (SaveOutput, error) {
 	default:
 		return SaveOutput{}, ErrInvalidSaveInput
 	}
+	// An org-mandated workflow is the org's content (skill-library
+	// 01SKLIB01, ledger 2026-10-06 item 4): the next bundle would silently
+	// overwrite an edit anyway, so refuse it here instead of losing it.
+	if a.isOrgMandated(w.ID) {
+		return SaveOutput{}, fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, w.ID)
+	}
 	// Cedar gate. Strict mode + shell-bearing workflows → deny here.
 	if _, gerr := cedar.GateWorkflowSave(ctx, a.cfg.Cedar, w.ID, a.cedarMode(), corewf.CollectStepKinds(w)); gerr != nil {
 		return SaveOutput{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
@@ -541,6 +564,37 @@ func (a *API) Delete(ctx context.Context, id string) error {
 	if a.cfg.Store == nil {
 		return ErrStorageUnavailable
 	}
+	// Review F7: an org-mandated workflow is not the user's to delete —
+	// the org's next bundle (withdrawing the mandate) removes it. Mirrors
+	// slashcmd.ErrSkillOrgManaged for mandated skills.
+	if a.isOrgMandated(id) {
+		return fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, id)
+	}
+	return a.deleteWorkflow(ctx, id)
+}
+
+// ErrWorkflowOrgManaged: the workflow is required by the user's org
+// (installed from the bundle's mandated_items). It cannot be deleted,
+// edited, rescheduled or unscheduled here — the org's bundle owns it
+// (review F7; skill-library-01SKLIB01 extended the guard from delete to
+// save + schedule, ledger 2026-10-06 conformance residual item 4).
+var ErrWorkflowOrgManaged = errors.New("workflows: this workflow is required by your org and is managed by its config, so it cannot be changed here")
+
+// isOrgMandated reports whether id's install provenance is an org mandate.
+// An unreadable provenance file reads as "not mandated" here, matching
+// Delete's existing posture (the collision checks fail closed on their own).
+func (a *API) isOrgMandated(id string) bool {
+	if a == nil || a.cfg.Provenance == nil || id == "" {
+		return false
+	}
+	p, ok, err := a.cfg.Provenance.Get(id)
+	return err == nil && ok && p.Source == corewf.ProvenanceMandated
+}
+
+// deleteWorkflow is Delete without the org-managed guard — the mandate
+// reconciliation path (RemoveMandatedDocument) is the one caller allowed
+// to remove a mandated workflow.
+func (a *API) deleteWorkflow(ctx context.Context, id string) error {
 	// Probe the store first so the user-facing surface returns a typed
 	// not-found rather than a silent ok. The storage Delete is idempotent
 	// on missing rows, which is the wrong contract for the RPC.
@@ -555,6 +609,11 @@ func (a *API) Delete(ctx context.Context, id string) error {
 	}
 	if err := a.cfg.Store.Delete(ctx, id); err != nil {
 		return err
+	}
+	if a.cfg.Provenance != nil {
+		// A deleted workflow's install record goes with it, so a later
+		// workflow reusing the id is never mistaken for the old install.
+		_ = a.cfg.Provenance.Remove(id)
 	}
 	a.mu.Lock()
 	delete(a.byID, id)
@@ -602,6 +661,9 @@ func (a *API) ScheduleSet(ctx context.Context, in ScheduleSetInput) error {
 	if a.scheduler == nil {
 		return ErrSchedulerUnavailable
 	}
+	if a.isOrgMandated(in.WorkflowID) {
+		return fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, in.WorkflowID)
+	}
 	return a.scheduler.Register(ctx, in.WorkflowID, in.Cron, in.Timezone)
 }
 
@@ -612,6 +674,9 @@ func (a *API) ScheduleClear(ctx context.Context, workflowID string) error {
 	}
 	if a.scheduler == nil {
 		return ErrSchedulerUnavailable
+	}
+	if a.isOrgMandated(workflowID) {
+		return fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, workflowID)
 	}
 	return a.scheduler.Unregister(ctx, workflowID)
 }
@@ -780,6 +845,504 @@ func (a *API) Catalog_Install(ctx context.Context, id string) (CatalogInstallRes
 		Scheduled:          ref.Scheduled,
 		MissingCredentials: ref.MissingCredentials,
 	}, nil
+}
+
+// ErrWorkflowPayloadMalformed is returned by InstallDocument when a fleet
+// workflow payload is not a workflow document (install-framework-01DOGF0B
+// FR-2: an opaque payload is a named install error, never a silent
+// success).
+var ErrWorkflowPayloadMalformed = errors.New("workflows: payload is not a workflow document")
+
+// ErrWorkflowIDMismatch is returned when a fleet workflow payload's id is not
+// the id its catalog item advertised (FR-2: a workflow item's slug is the
+// workflow id). Nothing is written.
+var ErrWorkflowIDMismatch = errors.New("workflows: the payload's workflow id does not match the catalog item's slug")
+
+// ErrWorkflowIDCollision is returned when a fleet workflow payload's id is
+// already taken by something this catalog item does not own — a shipped
+// template, a workflow the user authored, or another catalog item's
+// workflow. Nothing is written and nothing is deleted
+// (install-framework-01DOGF0B WP05 review H1/H2).
+var ErrWorkflowIDCollision = errors.New("workflows: the workflow id is already in use by something this catalog item does not own")
+
+// DocumentOrigin names the fleet catalog item a workflow document came from.
+type DocumentOrigin struct {
+	CatalogID string
+	// Slug is the workflow id the catalog item advertised.
+	Slug    string
+	Version string
+	// Mandated marks an org-mandated install (bundle mandated_items, WP02):
+	// provenance is recorded as corewf.ProvenanceMandated. A mandated item
+	// arrives inside the SIGNED bundle with no separately advertised slug,
+	// so an empty Slug means "the document's own id".
+	Mandated bool
+}
+
+// InstallDocument installs a workflow delivered as a document — the fleet
+// catalog's workflow payload (install-framework-01DOGF0B WP05, FR-2) —
+// through the same consumer path a catalog builtin takes: Cedar save gate,
+// Store.Save, the in-memory catalog Workflows_List reads, the save audit,
+// and a cron arm when the document carries schedule + timezone.
+//
+// Accepted formats (FR-2 workflow format): a YAML document in the corewf
+// schema (yaml tags — what ExportYAML writes), or a JSON object in the
+// corewf json-tag shape (what the Workflows › Publish dialog sends today).
+//
+// Ownership (review H1/H2): the document's id must equal origin.Slug
+// (ErrWorkflowIDMismatch), and it may only CREATE a new workflow id or
+// UPDATE a row whose recorded provenance is this same catalog item. A
+// shipped template's id, a user-authored workflow, or another catalog
+// item's workflow is refused with ErrWorkflowIDCollision before anything is
+// written. The only cleanup path deletes a row this call created.
+func (a *API) InstallDocument(ctx context.Context, payload []byte, origin DocumentOrigin) (CatalogInstallResult, error) {
+	if a == nil || a.cfg.Disabled {
+		return CatalogInstallResult{}, ErrFeatureDisabled
+	}
+	if a.cfg.Store == nil {
+		return CatalogInstallResult{}, ErrStorageUnavailable
+	}
+	if origin.CatalogID == "" || (origin.Slug == "" && !origin.Mandated) {
+		return CatalogInstallResult{}, fmt.Errorf("workflows: install document: the catalog item and its advertised id are required")
+	}
+	w, err := decodeWorkflowDocument(payload)
+	if err != nil {
+		return CatalogInstallResult{}, err
+	}
+	if origin.Mandated && origin.Slug == "" {
+		origin.Slug = w.ID
+	}
+	a.installMu.Lock()
+	defer a.installMu.Unlock()
+	if w.ID != origin.Slug {
+		return CatalogInstallResult{}, fmt.Errorf("%w: catalog %q advertises %q, payload is %q", ErrWorkflowIDMismatch, origin.CatalogID, origin.Slug, w.ID)
+	}
+	if a.isShippedTemplate(ctx, w.ID) {
+		return CatalogInstallResult{}, fmt.Errorf("%w: %q is a shipped template", ErrWorkflowIDCollision, w.ID)
+	}
+	created := false
+	if _, lerr := a.cfg.Store.Load(ctx, w.ID); lerr != nil {
+		if !errors.Is(lerr, corewf.ErrWorkflowNotFound) {
+			return CatalogInstallResult{}, lerr
+		}
+		created = true
+	} else if !origin.Mandated && a.isOrgMandated(w.ID) {
+		// A user catalog (re)install must never relabel the org's mandated
+		// copy as the user's own — that would end the org's protection.
+		return CatalogInstallResult{}, fmt.Errorf("%w: %q", ErrWorkflowOrgManaged, w.ID)
+	} else if origin.Mandated {
+		if err := a.mandateMayTakeOver(w.ID); err != nil {
+			return CatalogInstallResult{}, err
+		}
+	} else if err := a.ownedByCatalogItem(w.ID, origin.CatalogID); err != nil {
+		return CatalogInstallResult{}, err
+	}
+	if _, gerr := cedar.GateWorkflowSave(ctx, a.cfg.Cedar, w.ID, a.cedarMode(), corewf.CollectStepKinds(w)); gerr != nil {
+		return CatalogInstallResult{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	// An update of this item's own earlier install keeps the user's
+	// schedule state (rescheduled or cleared), exactly like
+	// Catalog_Update (re-review low 4); only a new install arms the
+	// document's own schedule.
+	var prior *wfsched.ScheduleEntry
+	if !created && a.scheduler != nil {
+		entries, serr := a.scheduler.List(ctx)
+		if serr != nil {
+			return CatalogInstallResult{}, serr
+		}
+		for i := range entries {
+			if entries[i].WorkflowID == w.ID {
+				prior = &entries[i]
+				break
+			}
+		}
+	}
+	saved, err := a.cfg.Store.Save(ctx, w)
+	if err != nil {
+		return CatalogInstallResult{}, err
+	}
+	if a.cfg.Provenance != nil {
+		if perr := a.cfg.Provenance.Put(corewf.InstallProvenance{
+			WorkflowID: saved.ID, Source: documentProvenanceSource(origin),
+			CatalogID: origin.CatalogID, Slug: origin.Slug, Version: origin.Version,
+		}); perr != nil {
+			if created {
+				// Only a row this call created may be removed.
+				_ = a.cfg.Store.Delete(ctx, saved.ID)
+			}
+			return CatalogInstallResult{}, fmt.Errorf("workflows: install document: record provenance: %w", perr)
+		}
+	}
+	a.mu.Lock()
+	a.byID[saved.ID] = saved
+	a.source[saved.ID] = "user"
+	a.mu.Unlock()
+	corewf.EmitSaved(ctx, a.cfg.Audit, saved)
+	res := CatalogInstallResult{WorkflowID: saved.ID}
+	switch {
+	case a.scheduler == nil:
+	case !created && prior != nil:
+		if err := a.scheduler.Register(ctx, saved.ID, prior.Cron, prior.Timezone); err == nil {
+			res.Scheduled = true
+		}
+	case !created:
+		// The user cleared it (or it never had one): leave it cleared.
+	case saved.Schedule != "":
+		if err := a.scheduler.Register(ctx, saved.ID, saved.Schedule, saved.Timezone); err == nil {
+			res.Scheduled = true
+		}
+	}
+	return res, nil
+}
+
+// ownedByCatalogItem reports (as a nil error) whether the existing row id
+// was installed from catalogID; anything else is ErrWorkflowIDCollision.
+func (a *API) ownedByCatalogItem(id, catalogID string) error {
+	if a.cfg.Provenance == nil {
+		return fmt.Errorf("%w: %q exists and no install provenance is recorded", ErrWorkflowIDCollision, id)
+	}
+	p, ok, err := a.cfg.Provenance.Get(id)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !ok:
+		return fmt.Errorf("%w: %q is a workflow you created", ErrWorkflowIDCollision, id)
+	case p.Source != corewf.ProvenanceCatalog && p.Source != corewf.ProvenanceMandated:
+		return fmt.Errorf("%w: %q was installed from a shipped template", ErrWorkflowIDCollision, id)
+	case p.CatalogID != catalogID:
+		return fmt.Errorf("%w: %q was installed from catalog item %q", ErrWorkflowIDCollision, id, p.CatalogID)
+	}
+	return nil
+}
+
+// mandateMayTakeOver reports (as nil) whether an org mandate may install
+// over the existing row id: a row with catalog or mandated provenance of
+// ANY catalog id — every version of an entry has its own catalog id, so a
+// promoted mandate (v1→v2) and a mandate of a version other than the one
+// the user installed both arrive under a different id
+// (skill-library-01SKLIB01 WP04). The user's own catalog copy is
+// snapshotted by InstallMandatedDocument first, and restored on withdrawal.
+// A user-authored workflow (no provenance) or a shipped template's install
+// is still a collision.
+func (a *API) mandateMayTakeOver(id string) error {
+	if a.cfg.Provenance == nil {
+		return fmt.Errorf("%w: %q exists and no install provenance is recorded", ErrWorkflowIDCollision, id)
+	}
+	p, ok, err := a.cfg.Provenance.Get(id)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !ok:
+		return fmt.Errorf("%w: %q is a workflow you created", ErrWorkflowIDCollision, id)
+	case p.Source != corewf.ProvenanceCatalog && p.Source != corewf.ProvenanceMandated:
+		return fmt.Errorf("%w: %q was installed from a shipped template", ErrWorkflowIDCollision, id)
+	}
+	return nil
+}
+
+// documentProvenanceSource is the provenance a document install records.
+func documentProvenanceSource(o DocumentOrigin) string {
+	if o.Mandated {
+		return corewf.ProvenanceMandated
+	}
+	return corewf.ProvenanceCatalog
+}
+
+// mandatedPriorWorkflow is the user's own catalog copy of a workflow at the
+// moment an org mandate took it over — its stored document (with any edits
+// the user made) and its install provenance. Opaque to core/fleet, which
+// persists it in mandated_applied.json and hands it back on withdrawal
+// (ledger 2026-10-06 R2: withdrawal used to hand back the MANDATED content
+// relabelled as a catalog install, not the user's version).
+type mandatedPriorWorkflow struct {
+	Provenance corewf.InstallProvenance `json:"provenance"`
+	Document   string                   `json:"document"`
+}
+
+// InstallMandatedDocument installs an org-mandated workflow document
+// (bundle mandated_items, WP02). When the mandate takes over the user's OWN
+// catalog install of the workflow id (review F6), it returns a snapshot of
+// that copy (prior) for RemoveMandatedDocument to restore on withdrawal.
+// prior is nil for a fresh install and for an update of a mandated copy
+// (the applier carries the earlier mandate's snapshot forward).
+func (a *API) InstallMandatedDocument(ctx context.Context, payload []byte, catalogID, version string) (string, json.RawMessage, error) {
+	var prior json.RawMessage
+	if w, err := decodeWorkflowDocument(payload); err == nil && a != nil && a.cfg.Provenance != nil && a.cfg.Store != nil {
+		if p, ok, perr := a.cfg.Provenance.Get(w.ID); perr == nil && ok && p.Source == corewf.ProvenanceCatalog {
+			cur, lerr := a.cfg.Store.Load(ctx, w.ID)
+			if lerr != nil {
+				return "", nil, fmt.Errorf("workflows: snapshot the copy the mandate replaces: %w", lerr)
+			}
+			doc := cur.YAMLSource()
+			if doc == "" {
+				b, merr := corewf.MarshalYAML(cur)
+				if merr != nil {
+					return "", nil, fmt.Errorf("workflows: snapshot the copy the mandate replaces: %w", merr)
+				}
+				doc = string(b)
+			}
+			raw, merr := json.Marshal(mandatedPriorWorkflow{Provenance: p, Document: doc})
+			if merr != nil {
+				return "", nil, merr
+			}
+			prior = raw
+		}
+	}
+	res, err := a.InstallDocument(ctx, payload, DocumentOrigin{CatalogID: catalogID, Version: version, Mandated: true})
+	if err != nil {
+		return "", nil, err
+	}
+	return res.WorkflowID, prior, nil
+}
+
+// RemoveMandatedDocument ends the org mandate on workflowID — ONLY while its
+// recorded provenance is still the mandate of catalogID (a workflow the user
+// or another install now owns, or one already gone, is left alone).
+//
+// prior (InstallMandatedDocument's snapshot) restores the user's own copy —
+// its document and provenance — in place of the mandated one. A record
+// written by v0.91 has no snapshot, only legacyRestore=true: that path can
+// only relabel the current (mandated) content as a catalog install, which
+// is what it did then. Otherwise the workflow is deleted (schedule
+// disarmed first). The result reports whether the user's copy was handed
+// back — or, when the policy save gate refuses the snapshot (a shell step
+// under strict mode, or a snapshot edited on disk), that the restore was
+// refused: the mandated copy is then DELETED, never left in place and
+// never silently dropped — the caller audits the refusal.
+func (a *API) RemoveMandatedDocument(ctx context.Context, workflowID, catalogID string, prior json.RawMessage, legacyRestore bool) (MandatedRemoval, error) {
+	if a == nil || a.cfg.Disabled {
+		return MandatedRemoval{}, ErrFeatureDisabled
+	}
+	if a.cfg.Provenance == nil {
+		return MandatedRemoval{}, fmt.Errorf("workflows: remove mandated %q: no install provenance store wired", workflowID)
+	}
+	p, ok, err := a.cfg.Provenance.Get(workflowID)
+	if err != nil {
+		return MandatedRemoval{}, err
+	}
+	if !ok || p.Source != corewf.ProvenanceMandated || p.CatalogID != catalogID {
+		return MandatedRemoval{}, nil
+	}
+	var out MandatedRemoval
+	if len(prior) > 0 {
+		refused, err := a.restorePriorWorkflow(ctx, workflowID, prior)
+		if err != nil {
+			return MandatedRemoval{}, err
+		}
+		if refused == "" {
+			return MandatedRemoval{Restored: true}, nil
+		}
+		slog.Warn("workflows.mandated.restore_refused_by_policy", "workflow_id", workflowID, "reason", refused)
+		out.RestoreRefused = refused // fall through: delete the mandated copy
+	} else if legacyRestore {
+		p.Source = corewf.ProvenanceCatalog
+		return MandatedRemoval{Restored: true}, a.cfg.Provenance.Put(p)
+	}
+	if a.scheduler != nil {
+		// Directly, not via ScheduleClear: that public path refuses a
+		// mandated workflow, and this IS the mandate's own removal.
+		_ = a.scheduler.Unregister(ctx, workflowID) // no schedule is not an error here
+	}
+	if err := a.deleteWorkflow(ctx, workflowID); err != nil && !errors.Is(err, corewf.ErrWorkflowNotFound) {
+		return MandatedRemoval{}, err
+	}
+	return out, nil
+}
+
+// MandatedRemoval is RemoveMandatedDocument's outcome.
+type MandatedRemoval struct {
+	Restored       bool
+	RestoreRefused string // the policy gate's reason, when it refused the restore
+}
+
+// restorePriorWorkflow writes the user's snapshotted copy back under id and
+// its original provenance — through the same Cedar save gate any save takes
+// (review F3: a snapshot predating strict mode, or edited inside
+// mandated_applied.json, must not restore ungated). refused is the gate's
+// reason when it denies; nothing is written then. The schedule is left as
+// it is: the mandate kept the user's schedule state throughout.
+func (a *API) restorePriorWorkflow(ctx context.Context, id string, prior json.RawMessage) (refused string, err error) {
+	var snap mandatedPriorWorkflow
+	if err := json.Unmarshal(prior, &snap); err != nil {
+		return "", fmt.Errorf("workflows: restore %q: %w", id, err)
+	}
+	w, err := decodeWorkflowDocument([]byte(snap.Document))
+	if err != nil {
+		return "", fmt.Errorf("workflows: restore %q: %w", id, err)
+	}
+	if w.ID != id {
+		return "", fmt.Errorf("workflows: restore %q: snapshot holds %q", id, w.ID)
+	}
+	// Deliberately the enforce() shape (Deny/Confirm refuse) — PARITY with
+	// the user's own Save and InstallDocument above: a chassis-restored
+	// USER workflow faces exactly the policy the user's Save faces. An
+	// explicit-Allow requirement would make strict-mode withdrawals delete
+	// non-shell user copies, stricter than Save. The gating census's "never
+	// enforce()" rule targets model-initiated/unattended writes, not this.
+	if _, gerr := cedar.GateWorkflowSave(ctx, a.cfg.Cedar, w.ID, a.cedarMode(), corewf.CollectStepKinds(w)); gerr != nil {
+		return gerr.Error(), nil
+	}
+	a.installMu.Lock()
+	defer a.installMu.Unlock()
+	saved, err := a.cfg.Store.Save(ctx, w)
+	if err != nil {
+		return "", fmt.Errorf("workflows: restore %q: %w", id, err)
+	}
+	snap.Provenance.WorkflowID = id
+	if err := a.cfg.Provenance.Put(snap.Provenance); err != nil {
+		return "", fmt.Errorf("workflows: restore %q: record provenance: %w", id, err)
+	}
+	a.mu.Lock()
+	a.byID[saved.ID] = saved
+	a.source[saved.ID] = "user"
+	a.mu.Unlock()
+	corewf.EmitSaved(ctx, a.cfg.Audit, saved)
+	return "", nil
+}
+
+// CatalogInstall is one workflow the USER installed from the fleet catalog
+// (provenance Source=catalog with a recorded catalog id) — the revocation
+// sweep's candidate set (skill-library-01SKLIB01 WP03). Mandated, builtin
+// and user-authored workflows are never listed.
+type CatalogInstall struct {
+	WorkflowID string
+	CatalogID  string
+	Version    string
+}
+
+// CatalogInstalls lists the user's catalog-installed workflows. An
+// unreadable provenance file is an error (never an empty list).
+func (a *API) CatalogInstalls(_ context.Context) ([]CatalogInstall, error) {
+	if a == nil || a.cfg.Disabled {
+		return nil, ErrFeatureDisabled
+	}
+	if a.cfg.Provenance == nil {
+		return nil, nil
+	}
+	recs, err := a.cfg.Provenance.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CatalogInstall, 0, len(recs))
+	for _, r := range recs {
+		if r.Source == corewf.ProvenanceCatalog && r.CatalogID != "" && r.WorkflowID != "" {
+			out = append(out, CatalogInstall{WorkflowID: r.WorkflowID, CatalogID: r.CatalogID, Version: r.Version})
+		}
+	}
+	return out, nil
+}
+
+// RemoveRevokedCatalogDocument removes workflowID because the org revoked
+// the catalog version it was installed from — ONLY while its provenance is
+// still the user's catalog install of catalogID (a mandate, another
+// version, or the user's own workflow now holding the id is left alone:
+// removed=false, nil). The schedule is disarmed first.
+func (a *API) RemoveRevokedCatalogDocument(ctx context.Context, workflowID, catalogID string) (bool, error) {
+	if a == nil || a.cfg.Disabled {
+		return false, ErrFeatureDisabled
+	}
+	if a.cfg.Provenance == nil || catalogID == "" {
+		return false, nil
+	}
+	a.installMu.Lock()
+	defer a.installMu.Unlock()
+	p, ok, err := a.cfg.Provenance.Get(workflowID)
+	if err != nil {
+		return false, err
+	}
+	if !ok || p.Source != corewf.ProvenanceCatalog || p.CatalogID != catalogID {
+		return false, nil
+	}
+	if a.scheduler != nil {
+		_ = a.scheduler.Unregister(ctx, workflowID) // no schedule is not an error here
+	}
+	if err := a.deleteWorkflow(ctx, workflowID); err != nil {
+		if errors.Is(err, corewf.ErrWorkflowNotFound) {
+			_ = a.cfg.Provenance.Remove(workflowID)
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// isShippedTemplate reports whether id is one of the binary's templates.
+func (a *API) isShippedTemplate(ctx context.Context, id string) bool {
+	for _, w := range a.cfg.Catalog {
+		if w.ID == id {
+			return true
+		}
+	}
+	if a.catalog != nil {
+		if _, err := a.catalog.Get(ctx, id); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// Catalog_Update re-installs a shipped template's current (newer) body over
+// an installed copy — review H4 — while keeping the user's schedule state:
+// a schedule the user set (or cleared) survives, instead of being reset to
+// the template's own schedule line. User edits to the installed copy are
+// overwritten; that is what updating a template means.
+func (a *API) Catalog_Update(ctx context.Context, id string) (CatalogInstallResult, error) {
+	var prior *wfsched.ScheduleEntry
+	if a.scheduler != nil {
+		entries, err := a.scheduler.List(ctx)
+		if err != nil {
+			return CatalogInstallResult{}, err
+		}
+		for i := range entries {
+			if entries[i].WorkflowID == id {
+				prior = &entries[i]
+				break
+			}
+		}
+	}
+	res, err := a.Catalog_Install(ctx, id)
+	if err != nil {
+		return CatalogInstallResult{}, err
+	}
+	if a.scheduler != nil {
+		if prior != nil {
+			if err := a.scheduler.Register(ctx, res.WorkflowID, prior.Cron, prior.Timezone); err != nil {
+				return res, fmt.Errorf("workflows: update %s: restore schedule: %w", id, err)
+			}
+			res.Scheduled = true
+		} else {
+			if err := a.scheduler.Unregister(ctx, res.WorkflowID); err != nil {
+				return res, fmt.Errorf("workflows: update %s: keep schedule cleared: %w", id, err)
+			}
+			res.Scheduled = false
+		}
+	}
+	return res, nil
+}
+
+// decodeWorkflowDocument parses a workflow payload (see InstallDocument)
+// and applies the save-time validation.
+func decodeWorkflowDocument(payload []byte) (corewf.Workflow, error) {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return corewf.Workflow{}, fmt.Errorf("%w: empty payload", ErrWorkflowPayloadMalformed)
+	}
+	var (
+		w   corewf.Workflow
+		err error
+	)
+	if trimmed[0] == '{' {
+		if err = json.Unmarshal(trimmed, &w); err != nil {
+			return corewf.Workflow{}, fmt.Errorf("%w: %v", ErrWorkflowPayloadMalformed, err)
+		}
+	} else if w, err = corewf.LoadYAML(trimmed); err != nil {
+		return corewf.Workflow{}, fmt.Errorf("%w: %v", ErrWorkflowPayloadMalformed, err)
+	}
+	if err := corewf.ValidateForSave(w); err != nil {
+		return corewf.Workflow{}, fmt.Errorf("%w: %v", ErrWorkflowPayloadMalformed, err)
+	}
+	return w, nil
 }
 
 // projectCatalogEntry converts a catalog.Entry to the wire CatalogEntry.

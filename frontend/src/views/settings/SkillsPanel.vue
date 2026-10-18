@@ -146,7 +146,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
       data-testid="skills-empty"
     >
       <p class="font-ui text-[12px] text-ink-muted">
-        No fleet skills installed. Browse the Marketplace to install skills.
+        No fleet skills installed. Browse Capabilities (Skills) to install skills.
       </p>
     </div>
 

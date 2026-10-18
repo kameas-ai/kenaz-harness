@@ -60,6 +60,13 @@ func TestAuditRetention_DeleteAfterWindow_AgainstPopulatedUpgradedDatabase(t *te
 	if err != nil {
 		t.Fatalf("pre-Open snapshot: %v", err)
 	}
+	// sessions/0347-tool-exposure adds nullable columns to projects and
+	// sessions; whether this fixture predates it decides the digest skip
+	// in the comparison below.
+	predates0347 := map[string]bool{
+		"projects": !columnExists(t, raw, "projects", "tool_exposure"),
+		"sessions": !columnExists(t, raw, "sessions", "tool_exposure"),
+	}
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}
@@ -208,7 +215,26 @@ func TestAuditRetention_DeleteAfterWindow_AgainstPopulatedUpgradedDatabase(t *te
 			// empty session_id these synthetic rows use) — a normal
 			// side effect of appending, not of the sweep.
 			continue
-		case "scheduled_chat_runs":
+		case "artifacts", "artifact_versions", "units", "unit_versions":
+			// units/1104-artifacts-to-units (artifacts-as-units-01DOGF0C
+			// WP04) runs during this test's Open on the pre-1104 fixture:
+			// it copies the artifact rows into units/unit_versions and
+			// renames the legacy tables to *_legacy. A schema-evolution
+			// side effect of Open, not of the retention sweep — mirrors
+			// upgrade_path_test.go's artifactsToUnitsNote, and the content
+			// of all four is asserted by assertArtifactsMigratedToUnits and
+			// migration_1104_test.go.
+			continue
+		case "scheduled_chat_runs", "scheduled_chat_run_history", "session_messages":
+			// session_messages: sessions/0346 (tool-context-budget-
+			// 01TCBUD01 WP01) ADD COLUMNs cached_tokens +
+			// cache_write_tokens — the same digest-only schema side
+			// effect, row count still checked.
+			//
+			// scheduled_chat_run_history: sessions/0345 (dogfood
+			// 2026-10-08 round 2) ADD COLUMNs model + cost_usd — the same
+			// digest-only schema side effect as 0340 below.
+			//
 			// model-scheduled-jobs-01PMSJ01 WP09's sessions/0340 migration
 			// ADD COLUMNs created_by + tool_allowlist onto this table,
 			// which the v0.65.0 fixture predates — the real Open() path
@@ -238,6 +264,13 @@ func TestAuditRetention_DeleteAfterWindow_AgainstPopulatedUpgradedDatabase(t *te
 		if before.RowCount != after.RowCount {
 			t.Errorf("unrelated table %s row count changed: %d -> %d (retention sweep must not touch it)",
 				table, before.RowCount, after.RowCount)
+		}
+		// projects, sessions: sessions/0347-tool-exposure ADD COLUMNs
+		// (nullable) change every row's digest on a fixture that predates
+		// it — a schema side effect of Open, not of the sweep. Only the
+		// digest is skipped, and only then; the row count above stands.
+		if predates0347[table] {
+			continue
 		}
 		if before.Digest != after.Digest {
 			t.Errorf("unrelated table %s content digest changed (retention sweep must not touch it)", table)

@@ -32,6 +32,10 @@ type geminiPart struct {
 	InlineData       *geminiInlineData   `json:"inlineData,omitempty"`
 	FunctionCall     *geminiFunctionCall `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFuncResponse `json:"functionResponse,omitempty"`
+	// Thought marks this part as a reasoning/thought-summary fragment
+	// rather than answer text (model-settings-reach-the-model-01PMZ101
+	// WP09). Response-side only; the request side never sets it.
+	Thought bool `json:"thought,omitempty"`
 }
 
 // geminiInlineData carries base64-encoded media.
@@ -84,6 +88,11 @@ type geminiGenConfig struct {
 // geminiThinking enables Gemini 2.5 extended-thinking mode.
 type geminiThinking struct {
 	ThinkingBudget int `json:"thinkingBudget"`
+	// IncludeThoughts requests thought-summary parts in the response
+	// stream (model-settings-reach-the-model-01PMZ101 WP09). Without it
+	// the model still spends — and the request still pays for —
+	// ThoughtsTokenCount, but no thought content is ever returned.
+	IncludeThoughts bool `json:"includeThoughts,omitempty"`
 }
 
 // ─── Gemini wire types (response side) ───────────────────────────────────────
@@ -93,6 +102,9 @@ type geminiResponse struct {
 	Candidates    []geminiCandidate `json:"candidates"`
 	UsageMetadata *geminiUsage      `json:"usageMetadata,omitempty"`
 	ModelVersion  string            `json:"modelVersion,omitempty"`
+	// ResponseID is the per-generation id (llm-call-telemetry-01LLMTEL01
+	// WP01: gen_ai.response.id).
+	ResponseID string `json:"responseId,omitempty"`
 }
 
 // geminiCandidate is one generation candidate (we always request 1).
@@ -109,6 +121,9 @@ type geminiUsage struct {
 	TotalTokenCount         int `json:"totalTokenCount"`
 	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
 	ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`
+	// ToolUsePromptTokenCount is the prompt tokens spent on tool-use
+	// results (llm-call-telemetry-01LLMTEL01 WP01 provider extra).
+	ToolUsePromptTokenCount int `json:"toolUsePromptTokenCount,omitempty"`
 }
 
 // ─── Translation: llm → Gemini ───────────────────────────────────────────────
@@ -405,7 +420,7 @@ func buildGenerationConfig(req llm.GenerationRequest, prof llm.ProviderProfile) 
 		if budget <= 0 {
 			budget = 8192 // sensible default
 		}
-		gc.ThinkingConfig = &geminiThinking{ThinkingBudget: budget}
+		gc.ThinkingConfig = &geminiThinking{ThinkingBudget: budget, IncludeThoughts: true}
 		hasAny = true
 	}
 

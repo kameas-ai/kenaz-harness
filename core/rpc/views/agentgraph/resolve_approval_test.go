@@ -326,6 +326,22 @@ func TestResolveApproval_CedarDenyBlocksResolution(t *testing.T) {
 // pre-UNIT-4 behaviour and this test times out waiting for a terminal
 // state rather than failing an assertion — exactly the "must hang or
 // time out, not pass" shape spec.md AC-05 requires of its mutation.
+//
+// Deliberately does NOT route through startPausedApprovalRun, whose
+// helper loop polls GetRunStatus every 10ms waiting to observe
+// RunStatePaused before returning. With a 30ms fail-closed timeout,
+// that poll raced the timer: under CI scheduling/GC pressure the first
+// couple of polls could land after the timeout had already fired and
+// auto-rejected the run straight to Completed, so the loop never
+// observed the transient Paused state and failed with "did not pause;
+// state=\"completed\"" even though the fail-closed path worked
+// correctly (#65). The property this test needs — resolves, fail-
+// closed, within a bounded time — does not require ever witnessing the
+// intermediate Paused state: it is fully captured by "waitForTerminal
+// reaches Completed within its bound" plus the audit-payload shape
+// below (Auto:true, Approved:false, a real reason). Going straight
+// from StartRun to waitForTerminal removes the race instead of hoping
+// the window can't be missed.
 func TestApproval_NoWatcherFailsClosedWithinBoundedTime(t *testing.T) {
 	t.Parallel()
 	audit := &fakeAuditEmitter{}
@@ -338,7 +354,15 @@ func TestApproval_NoWatcherFailsClosedWithinBoundedTime(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	a := graphview.New(mgr)
-	runID, _ := startPausedApprovalRun(t, a)
+	ctx := context.Background()
+	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "resolve_approval_rpc", YAML: resolveApprovalGraphYAML}, "user"); err != nil {
+		t.Fatalf("SaveGraph: %v", err)
+	}
+	resp, err := a.StartRun(ctx, graphview.StartRunRequest{GraphID: "resolve_approval_rpc"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	runID := resp.RunID
 
 	final := waitForTerminal(t, a, runID, 2*time.Second)
 	if final.State != graphview.RunStateCompleted {

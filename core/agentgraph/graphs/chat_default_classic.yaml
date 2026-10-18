@@ -100,7 +100,29 @@ budget:
   # the max-agent-turns dial are the behavioural governors.
   max_llm_calls_per_run: 5000
   max_tool_calls_per_run: 10000
-  max_tokens_per_run: 20000000
+  # max_tokens_per_run is a LAST-RESORT backstop, deliberately sized so it
+  # can never bind before max_llm_calls_per_run does. Raised 20M -> 5B
+  # (2026-09-12) after 20M stopped a live autonomous session roughly 65x
+  # sooner than the call cap: RunCounters.AddLLM sums
+  # Usage.InputTokens + Usage.OutputTokens PER CALL, and because a chat run
+  # spans the WHOLE SESSION (chat_default pauses on AskNode between user
+  # turns and resumes on the next message) every call re-sends the entire
+  # conversation. At a 262k context that is ~262k per call, so 20M was ~76
+  # calls -- minutes of agentic work, not the "hours on end" this block's
+  # own directive above requires. 5B = 5000 calls x a 1M context, i.e. the
+  # call cap binds first at any context size we support.
+  #
+  # Tokens are the WRONG unit for a runaway guard here and this number is
+  # damage control, not a design. The counter sums raw input+output, ignores
+  # Usage.CachedInputRead entirely (so cached re-sent context is charged at
+  # full weight -- and the OpenRouter/OpenAI adapters do not even populate
+  # that field, only Anthropic and Gemini do) and omits
+  # Usage.ReasoningTokens. It is therefore neither what you are billed nor
+  # what the model processed. max_cost_usd_per_run is the correct backstop
+  # -- it is denominated in the thing "runaway" actually means and is
+  # provider-accurate via resp.Cost.Total -- and is currently UNDECLARED,
+  # i.e. disabled. Owner decision pending on the dollar ceiling.
+  max_tokens_per_run: 5000000000
 nodes:
   - id: history_in
     kind: history_read

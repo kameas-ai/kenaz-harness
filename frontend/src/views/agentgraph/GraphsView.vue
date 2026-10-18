@@ -7,7 +7,7 @@
  */
 import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import CanvasHead from '@/shell/CanvasHead.vue';
+import SettingsShell from '@/views/settings/SettingsShell.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
@@ -102,24 +102,29 @@ defineExpose({ refresh });
     feature="Agent graphs"
     reason="Graph authoring and execution run through Graph_* RPCs that are not routed in served mode — porting them would put graph authoring and execution behind the shared workbench token, which the served build's confinement model does not support yet."
   />
-  <div v-else>
-    <CanvasHead
-      number="12"
-      section="GRAPHS"
-      title="Agent graphs"
-      subtitle="Library of compute / control / state graphs the kernel runs against a session. Bundled graphs are read-only; user graphs persist under DataDir."
-    >
-      <template #trailing>
-        <button
-          type="button"
-          class="rounded-sm border border-accent bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-accent"
-          data-testid="graphs-new"
-          @click="newGraph"
-        >
-          New graph
-        </button>
-      </template>
-    </CanvasHead>
+  <!-- agentgraph-settings-linkage-01DOGF0D WP05 (FR-4): the library is a
+       Settings › Authoring panel. It stays its own route (/agentgraph, name
+       `graphs`) and renders the Settings hub shell around itself, like
+       Permissions and Policy, so deep links, the palette action and the
+       editor's back navigation are unchanged. -->
+  <SettingsShell
+    v-else
+    data-testid="graphs-view"
+    number="06"
+    section="SETTINGS"
+    title="Agent graphs"
+    subtitle="Library of compute / control / state graphs the kernel runs against a session. Bundled graphs are read-only; user graphs persist under DataDir. To see what a chat turn actually ran, use “View run graph” under that turn."
+  >
+    <template #head-trailing>
+      <button
+        type="button"
+        class="rounded-sm border border-accent bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-accent"
+        data-testid="graphs-new"
+        @click="newGraph"
+      >
+        New graph
+      </button>
+    </template>
 
     <div class="px-6 py-4 max-w-4xl">
       <div
@@ -240,5 +245,5 @@ defineExpose({ refresh });
         </li>
       </ul>
     </div>
-  </div>
+  </SettingsShell>
 </template>

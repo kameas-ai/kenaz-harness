@@ -71,9 +71,24 @@ var Detections = []Detection{
 
 // DefaultModels is the per-kind model used when no model override is set.
 // Each id matches its provider's capabilities-catalog entry.
+//
+// "anthropic" and "openrouter" carry DIFFERENT strings for the identical
+// underlying model on purpose: Anthropic's own direct API takes a bare id
+// with no vendor prefix and hyphens throughout ("claude-sonnet-4-5" — see
+// core/llm/anthropic/anthropic_test.go's fixture), while OpenRouter's live
+// catalog namespaces by vendor and uses a dot for the point release
+// ("anthropic/claude-sonnet-4.5", confirmed against openrouter.ai's live
+// /api/v1/models on 2026-09-09 — the hyphen form appears nowhere in it).
+// This table previously carried the hyphen form for BOTH kinds
+// (bundled-profile-model-preflight, WP18 /
+// model-settings-reach-the-model-01PMZ101 UNIT-12): the doc comment above
+// calls this the single source of truth for cmd/harness-vm and served-mode
+// default-model resolution, so the same typo that shipped in
+// core/agents/bundled/*.yaml was live here too, on a path the bundled-
+// profile audit doesn't reach.
 var DefaultModels = map[string]string{
 	"anthropic":  "claude-sonnet-4-5",
-	"openrouter": "anthropic/claude-sonnet-4-5",
+	"openrouter": "anthropic/claude-sonnet-4.5",
 	"openai":     "gpt-4o",
 	"gemini":     "gemini-2.5-flash",
 }

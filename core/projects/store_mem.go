@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // memStore is the in-memory Store implementation. Backed by a map
@@ -14,12 +15,14 @@ import (
 type memStore struct {
 	mu       sync.RWMutex
 	projects map[string]Project
+	exposure map[string]toolexposure.Exposure
 }
 
 // NewMemoryStore returns an in-memory Store. Useful for tests.
 func NewMemoryStore() Store {
 	return &memStore{
 		projects: map[string]Project{},
+		exposure: map[string]toolexposure.Exposure{},
 	}
 }
 
@@ -95,6 +98,7 @@ func (s *memStore) Delete(_ context.Context, id string) error {
 		return ErrNotFound
 	}
 	delete(s.projects, id)
+	delete(s.exposure, id)
 	return nil
 }
 
@@ -118,4 +122,27 @@ func (s *memStore) GetAutonomyProfile(_ context.Context, id string) (autonomy.La
 		return autonomy.Layer{}, ErrNotFound
 	}
 	return autonomyLayerFromProject(p), nil
+}
+
+func (s *memStore) SetToolExposure(_ context.Context, id string, e toolexposure.Exposure) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.projects[id]; !ok {
+		return ErrNotFound
+	}
+	if e.IsZero() {
+		delete(s.exposure, id)
+		return nil
+	}
+	s.exposure[id] = e.Clone()
+	return nil
+}
+
+func (s *memStore) GetToolExposure(_ context.Context, id string) (toolexposure.Exposure, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.projects[id]; !ok {
+		return toolexposure.Exposure{}, ErrNotFound
+	}
+	return s.exposure[id].Clone(), nil
 }

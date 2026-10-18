@@ -203,13 +203,39 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		env.Compactor = k.compactor
 	}
 
+	// feat/graph-resolved-spec WP01: persist the exact spec this run
+	// executes — env.Graph as handed to the kernel, i.e. post alias
+	// rewrite, post routing gate, post dial — once per run, BEFORE
+	// run_start, so every run with a run_start has its spec unless the
+	// write was refused (oversized, store error). Insert-once, so the
+	// Resume / redrive re-entry into Run keeps the first row.
+	k.recordRunSpec(env)
+
 	// Run start event.
 	var startBatch EventBatch
-	_ = startBatch.AppendKind(env.RunID, "", EventRunStart, map[string]any{
-		"graph_id":     env.Graph.ID,
-		"entrypoints":  env.Graph.Entrypoints,
+	startPayload := map[string]any{
+		"graph_id":      env.Graph.ID,
+		"entrypoints":   env.Graph.Entrypoints,
 		"max_in_flight": k.maxInFlight,
-	})
+	}
+	// agentgraph-settings-linkage-01DOGF0D WP03: make run_start
+	// self-describing — which session and turn the run belongs to, and
+	// WHICH VERSION of the spec executed (spec_digest). Since
+	// feat/graph-resolved-spec the spec itself is persisted (above); the
+	// digest is the cross-check a reader holds the stored spec to, so a
+	// snapshot row that is not the spec this run started with is refused
+	// rather than served as exact. Empty ids are omitted so a non-chat
+	// run's payload is unchanged apart from the digest.
+	if env.SessionID != "" {
+		startPayload["session_id"] = env.SessionID
+	}
+	if env.TurnSpanID != "" {
+		startPayload["turn_span_id"] = env.TurnSpanID
+	}
+	if d := SpecDigest(*env.Graph); d != "" {
+		startPayload["spec_digest"] = d
+	}
+	_ = startBatch.AppendKind(env.RunID, "", EventRunStart, startPayload)
 	// Emit one kind_alias_resolved event per (old → new) pair seen
 	// during the wire decode of this graph (NFR-003 / WP08). The
 	// once-per-process slog warning fires the first time a process
@@ -642,8 +668,7 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 					maxBT = DefaultMaxBacktracksPerRun
 				}
 				if used > maxBT {
-					k.emitCapHit(env, EventBudgetCapHit, "max_backtracks_per_run", float64(maxBT), float64(used))
-					backtrackErr = ErrBudgetExceeded
+					backtrackErr = k.emitCapHit(env, EventBudgetCapHit, "max_backtracks_per_run", float64(maxBT), float64(used))
 				} else {
 					validBacktrack = true
 					ann := FailureAnnotation{
@@ -1539,42 +1564,48 @@ func (k *Kernel) checkBudget(env *Env) error {
 	}
 	tokens, calls, tools, cost := env.Counters.Snapshot()
 	if env.Budget.MaxTokensPerRun > 0 && tokens > env.Budget.MaxTokensPerRun {
-		k.emitCapHit(env, EventBudgetCapHit, "max_tokens_per_run",
+		return k.emitCapHit(env, EventBudgetCapHit, "max_tokens_per_run",
 			float64(env.Budget.MaxTokensPerRun), float64(tokens))
-		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxLLMCallsPerRun > 0 && calls > env.Budget.MaxLLMCallsPerRun {
-		k.emitCapHit(env, EventBudgetCapHit, "max_llm_calls_per_run",
+		return k.emitCapHit(env, EventBudgetCapHit, "max_llm_calls_per_run",
 			float64(env.Budget.MaxLLMCallsPerRun), float64(calls))
-		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxToolCallsPerRun > 0 && tools > env.Budget.MaxToolCallsPerRun {
-		k.emitCapHit(env, EventBudgetCapHit, "max_tool_calls_per_run",
+		return k.emitCapHit(env, EventBudgetCapHit, "max_tool_calls_per_run",
 			float64(env.Budget.MaxToolCallsPerRun), float64(tools))
-		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxCostUSDPerRun > 0 && cost > env.Budget.MaxCostUSDPerRun {
-		k.emitCapHit(env, EventCostCapHit, "max_cost_usd_per_run",
+		return k.emitCapHit(env, EventCostCapHit, "max_cost_usd_per_run",
 			env.Budget.MaxCostUSDPerRun, cost)
-		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxWallclockPerRunSecs > 0 && env.Counters.WallclockStart > 0 {
 		elapsed := time.Now().UnixNano() - env.Counters.WallclockStart
 		if elapsed > int64(env.Budget.MaxWallclockPerRunSecs)*int64(time.Second) {
-			k.emitCapHit(env, EventBudgetCapHit, "max_wallclock_per_run_seconds",
+			return k.emitCapHit(env, EventBudgetCapHit, "max_wallclock_per_run_seconds",
 				float64(env.Budget.MaxWallclockPerRunSecs), float64(elapsed)/float64(time.Second))
-			return ErrBudgetExceeded
 		}
 	}
 	return nil
 }
 
-// emitCapHit appends a cap-hit event with a PauseMarker. The resume
-// token is the run id + a deterministic suffix per reason — the
-// frontend echoes it back via BumpAndResume so the kernel can
-// match resume-without-bump as a no-op (the marker is still in the
-// log).
-func (k *Kernel) emitCapHit(env *Env, kind EventKind, reason string, limit, used float64) {
+// emitCapHit appends a cap-hit event with a PauseMarker and returns a
+// *BudgetCapError carrying the same reason/limit/used detail, so the
+// caller's `return k.emitCapHit(...)` gives the chat surface enough to
+// build an actionable message (owner directive 2026-09-09) instead of
+// the bare ErrBudgetExceeded sentinel.
+//
+// The resume token is the run id + a deterministic suffix per reason —
+// intended for a future BumpAndResume RPC the frontend would echo it
+// back to so the kernel can match resume-without-bump as a no-op (the
+// marker is still in the log). NOTE: BumpAndResume does not exist yet
+// anywhere in this codebase — PausePending is documented forward to a
+// resume path that has never been built, so ErrBudgetExceeded still
+// terminates the run as a hard backend-error today (chat.driveRun),
+// not a pause. Tracked in docs/unwired-ledger.md rather than fixed
+// here — building the resume RPC is out of scope for wiring the
+// autonomy dial to this cap.
+func (k *Kernel) emitCapHit(env *Env, kind EventKind, reason string, limit, used float64) *BudgetCapError {
 	marker := PauseMarker{
 		Reason:       reason,
 		Limit:        limit,
@@ -1585,6 +1616,7 @@ func (k *Kernel) emitCapHit(env *Env, kind EventKind, reason string, limit, used
 	var b EventBatch
 	_ = b.AppendKind(env.RunID, "", kind, marker)
 	_, _ = k.log.Append(b)
+	return &BudgetCapError{Reason: reason, Limit: limit, Used: used}
 }
 
 // ---- conditional execution: edge liveness ----

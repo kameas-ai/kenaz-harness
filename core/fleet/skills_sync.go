@@ -4,7 +4,9 @@
 // skill apply (push-down) via the existing catalog seam.
 //
 // Fork-removal recipe: delete this file + the Publish button in
-// SlashCommandsView + the "skill" kind in MarketplaceView. The
+// SlashCommandsView + the skill provider of the Capabilities surface
+// (core/rpc/views/capabilities/skill_provider.go; MarketplaceView, the
+// skill kind's old browse, was deleted in install-framework Phase 4). The
 // core/slashcmd/store.go store stays (useful standalone).
 //
 // (fleet-skills-sync-01NDFSEX18 WP03 / WP04 / WP05)
@@ -15,6 +17,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
@@ -22,6 +26,10 @@ import (
 // SkillSyncMaxPayloadBytes is the enforced cap for a single skill payload
 // (NFR-003: ≤ 256KB).
 const SkillSyncMaxPayloadBytes = 256 * 1024
+
+// defaultSkillPublishVersion is the catalog version a skill with no version
+// publishes as.
+const defaultSkillPublishVersion = "1.0.0"
 
 // ── WP03: Publish (push-up) ──────────────────────────────────────────────────
 
@@ -60,6 +68,20 @@ func PublishSkill(
 		return CatalogItem{}, fmt.Errorf("fleet/skills: unknown visibility %q", visibility)
 	}
 
+	// Effective catalog version and slug FIRST, stamped into the skill, THEN
+	// marshal (skill-library-01SKLIB01 WP05, fleet H5; audit §4.1 item 2):
+	// the payload bytes the org reviews (and pins by sha256) must say the
+	// same version — and carry the same trigger — as the catalog row. The
+	// old order marshalled first, so an empty Version published payload
+	// version "" under catalog version "1.0.0".
+	if skill.Version == "" {
+		skill.Version = defaultSkillPublishVersion
+	}
+	if skill.Trigger == "" {
+		skill.Trigger = skill.ID
+	}
+	slug, version := skill.Trigger, skill.Version
+
 	payload, err := json.Marshal(skill)
 	if err != nil {
 		return CatalogItem{}, fmt.Errorf("fleet/skills: marshal skill: %w", err)
@@ -69,63 +91,91 @@ func PublishSkill(
 			ErrCatalogPayloadTooLarge, skill.ID, len(payload), SkillSyncMaxPayloadBytes)
 	}
 
-	slug := skill.Trigger
-	if slug == "" {
-		slug = skill.ID
-	}
-	version := skill.Version
-	if version == "" {
-		version = "1.0.0"
-	}
-
 	return client.Publish(ctx, signer, CatalogKindSkill, slug, version, skill.Description, visibility, payload)
 }
 
 // ── WP04: Install / Uninstall (pull-down) ───────────────────────────────────
 
-// InstallSkill downloads a skill catalog item from fleet, verifies its
-// signature, persists it to the SkillStore, and live-registers it in the
-// Registry.
-//
-// Returns ErrTriggerShadowed (wrapped) when the skill's trigger conflicts
-// with a higher-priority command — the skill is persisted but not dispatched
-// until the conflict resolves.
-func InstallSkill(
-	ctx context.Context,
-	client *Client,
-	store *slashcmd.SkillStore,
-	registry *slashcmd.Registry,
-	pubKeyBase64 string,
-	catalogID, version string,
-) error {
-	if client == nil || client.isNop {
-		return ErrFleetDisabled
-	}
+// ErrCatalogPayloadMalformed is returned when a fetched catalog payload is
+// not the format its kind requires (install-framework-01DOGF0B FR-2:
+// "Unknown/opaque payload → install fails with a named error, never a
+// silent success").
+var ErrCatalogPayloadMalformed = errors.New("fleet/catalog: payload is not in the format its kind requires")
 
-	// Fetch the signed payload via the existing catalog install path.
-	// We use the low-level fetch so we can decode the skill JSON; the
-	// Install method would just write the bytes to disk which we don't want.
-	path := fmt.Sprintf("/api/v1/catalog/%s@%s", catalogID, version)
+// FetchCatalogItem fetches the full signed item — payload and detached
+// signature — for catalogID@version (GET /api/v1/catalog/{id}@{ver}). It
+// installs nothing: install-framework-01DOGF0B's providers fetch here in
+// Provider.Verify, the framework verifies the bytes once
+// (CatalogSignatureVerdict), and Provider.Install consumes the same bytes.
+//
+// A revoked version (fleet S3: 410 with code "item_revoked", for callers
+// without catalog:manage) is ErrCatalogItemRevoked — a named, terminal
+// error, never an opaque "status 410" (skill-library-01SKLIB01 WP01). Any
+// other non-200 is a *CatalogStatusError.
+func FetchCatalogItem(ctx context.Context, client *Client, catalogID, version string) (CatalogItem, error) {
+	if client == nil || client.isNop {
+		return CatalogItem{}, ErrFleetDisabled
+	}
+	path := fmt.Sprintf("/api/v1/catalog/%s@%s", url.PathEscape(catalogID), url.PathEscape(version))
 	resp, err := client.Get(ctx, path)
 	if err != nil {
-		return fmt.Errorf("fleet/skills: install fetch: %w", err)
+		return CatalogItem{}, fmt.Errorf("fleet/catalog: fetch: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-
+	if resp.StatusCode != http.StatusOK {
+		se := newCatalogStatusError(fmt.Sprintf("fetch %s@%s", catalogID, version), resp)
+		if se.Status == http.StatusGone && se.Code == catalogCodeItemRevoked {
+			return CatalogItem{}, fmt.Errorf("%w (%s@%s)", ErrCatalogItemRevoked, catalogID, version)
+		}
+		return CatalogItem{}, se
+	}
 	var item CatalogItem
 	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {
-		return fmt.Errorf("fleet/skills: install decode: %w", err)
+		return CatalogItem{}, fmt.Errorf("fleet/catalog: fetch decode: %w", err)
 	}
+	return item, nil
+}
 
-	// Verify signature.
-	if err := verifyCatalogSignature(pubKeyBase64, item.PayloadBytes, item.Signature); err != nil {
-		return fmt.Errorf("fleet/skills: install verify: %w", err)
+// CatalogSignatureVerdict is the fleet half of install-framework-01DOGF0B's
+// single SignatureVerifier hook, for every install kind.
+//
+// Signing design (confirmed by the kenaz-fleet owner, 2026-10-05; register
+// C-2): there is NO per-org or per-device catalog key, and there never will
+// be. Org-MANDATED items ship inside the ed25519-signed config bundle,
+// verified against the build-time-pinned fleet key (config_pull.go
+// VerifyWithKeySet → MandatedApplier.Apply). Non-mandated catalog installs
+// carry no fleet signature today. A possible future design signs item
+// payloads with the bundle key (fleet owner decision pending); pubKeyBase64
+// is the seam that would carry it. With no key it reports verified=false and
+// the C-2 reason (the install proceeds, recorded as unverified on the
+// capability:installed event); with a key, a mismatch is an error and the
+// install is refused.
+func CatalogSignatureVerdict(pubKeyBase64 string, payload []byte, sigBase64 string) (verified bool, reason string, err error) {
+	if pubKeyBase64 == "" {
+		return false, "not signature-verified: fleet signs only the org config bundle; catalog installs carry no fleet signature (register C-2)", verifyCatalogSignature("", payload, sigBase64)
 	}
+	if err := verifyCatalogSignature(pubKeyBase64, payload, sigBase64); err != nil {
+		return false, "", err
+	}
+	return true, "", nil
+}
 
-	// Decode the skill from the opaque payload.
+// InstallSkillPayload decodes a skill catalog payload (slashcmd.Skill JSON),
+// stamps its catalog provenance, persists it to the SkillStore and
+// live-registers it in the Registry — the consumer. The payload must
+// already be verified (the install framework's Verify step).
+//
+// Returns ErrCatalogPayloadMalformed when the payload is not a skill, and
+// ErrTriggerShadowed (wrapped) when the skill's trigger conflicts with a
+// higher-priority command — the skill is persisted but not dispatched
+// until the conflict resolves.
+func InstallSkillPayload(store *slashcmd.SkillStore, registry *slashcmd.Registry, catalogID, version string, payload []byte) error {
 	var skill slashcmd.Skill
-	if err := json.Unmarshal(item.PayloadBytes, &skill); err != nil {
-		return fmt.Errorf("fleet/skills: install unmarshal skill: %w", err)
+	if err := json.Unmarshal(payload, &skill); err != nil {
+		return fmt.Errorf("%w: skill %s@%s: %v", ErrCatalogPayloadMalformed, catalogID, version, err)
+	}
+	if skill.ID == "" {
+		return fmt.Errorf("%w: skill %s@%s has no id", ErrCatalogPayloadMalformed, catalogID, version)
 	}
 	// Stamp provenance.
 	skill.CatalogID = catalogID
@@ -139,6 +189,42 @@ func InstallSkill(
 	return nil
 }
 
+// ResolveSkillStoreID maps a caller-supplied identifier to the SkillStore ID.
+//
+// A catalog-installed skill is stored under the ID carried in its payload —
+// for SkillPublish that is the command name, not the catalog_id — while the
+// catalog browse (the Capabilities surface's catalog rows; formerly the
+// Marketplace) only knows the catalog_id. Resolution order (review F3):
+//  1. a stored skill whose CatalogID matches id (and whose Version matches
+//     version, when version is non-empty);
+//  2. any stored skill whose CatalogID matches id;
+//  3. id itself, as an exact store ID;
+//
+// otherwise id unchanged (the caller's not-found error then names what was
+// asked for). CatalogID is matched first so a catalog_id that happens to
+// equal another skill's store ID resolves to the catalog skill, never
+// cross-deletes the other one. install-framework-01DOGF0B WP01.
+func ResolveSkillStoreID(store *slashcmd.SkillStore, id, version string) string {
+	if store == nil || id == "" {
+		return id
+	}
+	if skills, err := store.List(); err == nil {
+		if version != "" {
+			for _, sk := range skills {
+				if sk.CatalogID == id && sk.Version == version {
+					return sk.ID
+				}
+			}
+		}
+		for _, sk := range skills {
+			if sk.CatalogID == id {
+				return sk.ID
+			}
+		}
+	}
+	return id
+}
+
 // UninstallSkill removes the skill from the SkillStore and live-unregisters
 // it from the Registry. Returns ErrSkillNotFound when the skill is not
 // installed (idempotent from the caller's perspective).
@@ -147,50 +233,18 @@ func UninstallSkill(
 	registry *slashcmd.Registry,
 	skillID string,
 ) error {
+	skillID = ResolveSkillStoreID(store, skillID, "")
 	if err := slashcmd.LiveUnregister(store, registry, skillID); err != nil {
 		return fmt.Errorf("fleet/skills: uninstall: %w", err)
 	}
 	return nil
 }
 
-// ── WP05: Push-down (org-mandated skills) ───────────────────────────────────
-
-// ApplyMandatedSkills processes the MandatedSkills section of a config bundle
-// and installs any new/updated skills read-only in the SkillStore.
+// ── Push-down (org-mandated skills) ───────────────────────────────────────
 //
-// Each entry in mandatedSkills is an opaque JSON blob encoding a slashcmd.Skill
-// with Source=SkillSourceMandated. Malformed entries are skipped with an error
-// collected in the returned slice (partial-success pattern matching the rest of
-// the bundle applier).
-//
-// Called by the compositeConfigApplier in settings/fleet.go.
-func ApplyMandatedSkills(
-	store *slashcmd.SkillStore,
-	registry *slashcmd.Registry,
-	mandatedSkills []json.RawMessage,
-) []error {
-	var errs []error
-	for i, raw := range mandatedSkills {
-		var skill slashcmd.Skill
-		if err := json.Unmarshal(raw, &skill); err != nil {
-			errs = append(errs, fmt.Errorf("fleet/skills: mandated[%d] unmarshal: %w", i, err))
-			continue
-		}
-		// Ensure source is mandated regardless of what the server sent.
-		skill.Source = slashcmd.SkillSourceMandated
-		skill.OrgManaged = true
-
-		if err := slashcmd.LiveRegister(store, registry, skill); err != nil {
-			// ErrTriggerShadowed is informational — persist the skill but
-			// don't treat as a hard error so the bundle ACK still advances.
-			if isSkillShadowedErr(err) {
-				continue
-			}
-			errs = append(errs, fmt.Errorf("fleet/skills: mandated[%d] register %q: %w", i, skill.ID, err))
-		}
-	}
-	return errs
-}
+// Mandated skills arrive as kind=skill envelopes in the bundle's
+// mandated_items section and are applied by MandatedApplier (mandated.go),
+// which replaced ApplyMandatedSkills (owner ruling 2026-10-06, WP02).
 
 // isSkillShadowedErr reports whether err wraps ErrTriggerShadowed.
 // LiveRegister wraps the sentinel with %w, so errors.Is traverses the chain.

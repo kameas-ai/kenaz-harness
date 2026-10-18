@@ -46,7 +46,7 @@ jobs:
     # Self-hosted ARM64 per runner-pool policy (CLAUDE.md).
     # The live-tier run needs real provider keys (Actions secrets) but no
     # platform-native toolchain — self-hosted Linux is the right pool.
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4

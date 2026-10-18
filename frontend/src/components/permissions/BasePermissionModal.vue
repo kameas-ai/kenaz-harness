@@ -12,6 +12,26 @@
  *      'resolved' so the parent can pop the queue.
  *   4. Esc key = Deny (via BaseDialog). 5-minute timeout = auto-Deny.
  *
+ * The escape hatch (fix for the backend-restart trap):
+ *   The prompt this modal is answering lives in `cedar.Registry`, an
+ *   in-process, non-persistent map (core/policy/cedar/prompt.go). A
+ *   backend restart, crash, or update-and-relaunch while this modal is
+ *   open wipes that map — the frontend is left holding a request_id the
+ *   backend has never heard of. Every one of the three buttons then
+ *   fails identically with cedar.ErrUnknownRequest
+ *   ("cedar/prompt: unknown request id"), and Esc maps to the same
+ *   decide('deny') call — so without this handling the modal is a
+ *   genuine trap: three buttons and Esc that all fail, no way out.
+ *   `isUnknownRequest` recognises that error class and, instead of
+ *   re-arming the retry timer, emits 'resolved' so the parent drops the
+ *   stale row (closing the modal) and pushes a toast — a surface that
+ *   outlives the modal — telling the user plainly that the request
+ *   expired and nothing was approved. This is also the fail-closed
+ *   case: the vanished registry entry never grants anything, and the
+ *   tool call that raised it belonged to the OLD process — it died with
+ *   the restart, so there is no live turn left hanging behind this
+ *   modal.
+ *
  * Props:
  *   - familyIcon  — emoji or short label (rendered in the eyebrow)
  *   - familyLabel — e.g. "Bash command", "Filesystem", etc.
@@ -36,6 +56,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { PermissionRequest } from '@/lib/types';
 import BaseDialog from '@/components/ui/BaseDialog.vue';
+import { push as pushToast } from '@/composables/useToastQueue';
 
 const props = withDefaults(
   defineProps<{
@@ -61,6 +82,7 @@ const emit = defineEmits<{
 const client = useHarnessClient();
 const submitting = ref(false);
 const lastError = ref<string | null>(null);
+const familyLabelLower = computed(() => props.familyLabel.toLowerCase());
 
 // 5-minute auto-deny timer
 const TIMEOUT_MS = 5 * 60 * 1000;
@@ -96,6 +118,22 @@ onBeforeUnmount(clearTimer);
 
 // Esc = Deny. Delegated to BaseDialog's @close handler (see template).
 
+/**
+ * True when an error means "the registry no longer has this request" —
+ * most commonly a backend restart while the prompt was pending, but
+ * also a late click racing another window's decision. Matched on the
+ * message because the error crosses the Wails / HTTP boundary as a
+ * string in both transports; there is no error code to key on. Mirrors
+ * ConfirmToolModal.vue's `isAlreadyResolved` / AskUserQuestion.vue's
+ * same-named helper — same failure class, same fix shape, applied here
+ * to the family permission modals (Bash / Filesystem / Credential /
+ * Tool) which share this component.
+ */
+function isUnknownRequest(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return msg.includes('unknown request id') || msg.includes('unknown or already-resolved');
+}
+
 async function decide(decision: string) {
   const req = props.request;
   if (!req || submitting.value) return;
@@ -106,6 +144,21 @@ async function decide(decision: string) {
     await client.permissions.resolve(req.request_id, decision);
     emit('resolved', req.request_id, decision);
   } catch (err) {
+    if (isUnknownRequest(err)) {
+      // The pending entry is gone server-side — nothing this modal does
+      // can resolve it, and nothing was ever approved (the registry
+      // never granted access; the tool call that raised the prompt
+      // belonged to the process that no longer exists). Do not leave
+      // the modal on screen retrying the same failing RPC: drop the
+      // stale row so the parent closes the modal, and tell the user
+      // plainly via a toast, which survives the modal's own dismissal.
+      pushToast(
+        `This ${familyLabelLower.value} request expired — the app restarted before you responded. The action was NOT approved.`,
+        { level: 'warn', durationMs: 8000 },
+      );
+      emit('resolved', req.request_id, 'expired');
+      return;
+    }
     lastError.value = err instanceof Error ? err.message : String(err);
     // Re-arm timer after an error so the modal doesn't hang open
     startTimer();

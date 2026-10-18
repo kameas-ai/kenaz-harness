@@ -17,8 +17,14 @@
  * FR-006  Clicking a run opens the per-step breakdown (same inline
  *         transcript the Library tab shows after a run), including
  *         failure reason for failed steps.
+ *
+ * automation-actually-runs-01PMZ404 UNIT-11: focusRunId (forwarded by
+ * WorkflowsView from the `?run=<id>` deep-link) expands and scrolls to
+ * the named run, both when it is present at mount and when it changes
+ * after mount (a click on the sidebar's WorkflowRunsSection while
+ * already on /workflows).
  */
-import { ref } from 'vue';
+import { nextTick, ref, watch } from 'vue';
 import ScheduledInbox from './ScheduledInbox.vue';
 import {
   useWorkflowRunsStore,
@@ -33,17 +39,44 @@ const props = defineProps<{
   client: WorkflowsClient;
   /** Optional chat client forwarded to the Scheduled subsection. */
   chatClient?: ScheduledChatClient;
+  /** UNIT-11: a run id to expand + scroll to, from `?run=<id>`. */
+  focusRunId?: string | null;
 }>();
 
 const store = useWorkflowRunsStore();
 const runs = store.runs;
 
 const expandedRunId = ref<string | null>(null);
+const listEl = ref<HTMLElement | null>(null);
 
 function toggleExpand(run: RunState) {
   expandedRunId.value =
     expandedRunId.value === run.runId ? null : run.runId;
 }
+
+async function focusRun(runId: string | null | undefined) {
+  if (!runId) return;
+  expandedRunId.value = runId;
+  await nextTick();
+  const row = listEl.value?.querySelector(`[data-testid="runs-history-row-${runId}"]`);
+  // happy-dom (vitest) has no layout, so scrollIntoView is absent there
+  // — the expansion above is the part that is actually asserted; the
+  // scroll is a convenience that degrades to nothing (RunView.vue's
+  // scrollToFocused precedent).
+  if (row && typeof (row as HTMLElement).scrollIntoView === 'function') {
+    (row as HTMLElement).scrollIntoView({ block: 'center' });
+  }
+}
+
+// Both orders per AC-012: query present at mount (immediate flush) and
+// navigation to a new run id after mount (watch).
+watch(
+  () => props.focusRunId,
+  (id) => {
+    void focusRun(id);
+  },
+  { immediate: true },
+);
 
 // ── formatting helpers ─────────────────────────────────────────────────
 
@@ -118,7 +151,7 @@ function fmtAbsolute(iso: string): string {
       </div>
 
       <!-- Run list (FR-001, FR-002) -->
-      <ol v-else class="space-y-2" data-testid="runs-history-list">
+      <ol v-else ref="listEl" class="space-y-2" data-testid="runs-history-list">
         <li
           v-for="run in runs"
           :key="run.runId"

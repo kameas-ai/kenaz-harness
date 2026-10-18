@@ -12,6 +12,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // Sentinel errors. Stable typed errors so callers can errors.Is.
@@ -179,6 +180,22 @@ type Store interface {
 	// Returns ErrSessionNotFound when the session does not exist.
 	GetLastUsage(ctx context.Context, id string) (LastUsage, error)
 
+	// SetKnobsDefault persists the session-level RequestKnobs override
+	// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10, migration
+	// sessions/0330-knobs). Passing nil clears any existing override —
+	// SessionTunePanel's "Reset" action round-trips to this. Called by
+	// Sessions_SetKnobsDefault; read back by the chat send path so the
+	// stored default reaches every GenerationRequest the session issues.
+	// Returns ErrSessionNotFound when the session does not exist.
+	SetKnobsDefault(ctx context.Context, id string, k *llm.RequestKnobs) error
+
+	// GetKnobsDefault loads the session-level RequestKnobs override, or
+	// nil (not an error) when none has been set (column is NULL — the
+	// default for every session created before this feature, and for one
+	// that has never opened the tune panel).
+	// Returns ErrSessionNotFound when the session does not exist.
+	GetKnobsDefault(ctx context.Context, id string) (*llm.RequestKnobs, error)
+
 	// UpsertStreamCheckpoint durably persists (or overwrites) the
 	// mid-run checkpoint for one (sessionID, subID) stream subscription
 	// (chat-turn-integrity-01PMZ606 WP02/WP03). Called by the periodic
@@ -202,29 +219,71 @@ type Store interface {
 	// clean-close and error-close call sites can call it
 	// unconditionally.
 	DeleteStreamCheckpoint(ctx context.Context, sessionID, subID string) error
+
+	// RecordTurnRun persists the turn -> run mapping for one chat run
+	// (agentgraph-settings-linkage-01DOGF0D WP03). Keyed by run id;
+	// re-recording the same run id overwrites it (a run is one turn).
+	// Returns ErrSessionNotFound when the session does not exist.
+	RecordTurnRun(ctx context.Context, tr TurnRun) error
+
+	// ListTurnRuns returns every recorded turn -> run mapping for a
+	// session, oldest first. Empty (not an error) for a session with no
+	// recorded runs — every turn before migration 0342 is in that state.
+	ListTurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error)
+
+	// RecordTurnRunOutcome stamps the terminal outcome onto an already-
+	// recorded run (migration 0344). Updating a run id that was never
+	// recorded is a no-op, not an error: the turn -> run link is
+	// best-effort observability, so a run whose RecordTurnRun failed has
+	// no row to annotate and the outcome is simply not kept.
+	RecordTurnRunOutcome(ctx context.Context, sessionID, runID string, o TurnRunOutcome) error
+
+	// SetToolExposure persists the session's tool-exposure override layer
+	// (sessions.tool_exposure, migration sessions/0347-tool-exposure). A
+	// zero Exposure clears it (NULL). Callers validate (Manager does).
+	// Returns ErrSessionNotFound when the session does not exist.
+	SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error
+	// SetToolActivations replaces the session's activated tool set
+	// (sessions.tool_activations). An empty set clears it (NULL).
+	// Callers validate (Manager does).
+	// Returns ErrSessionNotFound when the session does not exist.
+	SetToolActivations(ctx context.Context, id string, as []toolexposure.Activation) error
+	// ToolExposureState loads the session's project, override layer and
+	// activated set in one read; the zero layer and nil activations (not
+	// errors) when none are set.
+	// Returns ErrSessionNotFound when the session does not exist.
+	ToolExposureState(ctx context.Context, id string) (toolexposure.SessionState, error)
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
 // guarded by a single RWMutex; appropriate for test scale and as the
 // boot fallback before the SQL store is wired.
 type memStore struct {
-	mu          sync.RWMutex
-	records     map[string]Record
-	messages    map[string][]Message         // session_id -> ordered messages
-	seqByID     map[string]int64             // session_id -> next sequence
-	lastUsage   map[string]*LastUsage        // session_id -> last usage snapshot
-	checkpoints map[string]*StreamCheckpoint // "sessionID\x00subID" -> checkpoint
+	mu           sync.RWMutex
+	records      map[string]Record
+	messages     map[string][]Message         // session_id -> ordered messages
+	seqByID      map[string]int64             // session_id -> next sequence
+	lastUsage    map[string]*LastUsage        // session_id -> last usage snapshot
+	knobsDefault map[string]*llm.RequestKnobs // session_id -> knobs_default override
+	checkpoints  map[string]*StreamCheckpoint // "sessionID\x00subID" -> checkpoint
+	turnRuns     map[string]TurnRun           // run_id -> mapping
+	toolExposure map[string]toolexposure.Exposure
+	toolActs     map[string][]toolexposure.Activation
 }
 
 // NewMemoryStore returns an in-memory Store. Useful for tests and as
 // the manager's default before storage-foundations wires a real DB.
 func NewMemoryStore() Store {
 	return &memStore{
-		records:     map[string]Record{},
-		messages:    map[string][]Message{},
-		seqByID:     map[string]int64{},
-		lastUsage:   map[string]*LastUsage{},
-		checkpoints: map[string]*StreamCheckpoint{},
+		records:      map[string]Record{},
+		messages:     map[string][]Message{},
+		seqByID:      map[string]int64{},
+		lastUsage:    map[string]*LastUsage{},
+		knobsDefault: map[string]*llm.RequestKnobs{},
+		checkpoints:  map[string]*StreamCheckpoint{},
+		turnRuns:     map[string]TurnRun{},
+		toolExposure: map[string]toolexposure.Exposure{},
+		toolActs:     map[string][]toolexposure.Activation{},
 	}
 }
 
@@ -422,6 +481,15 @@ func (s *memStore) Delete(_ context.Context, id string) error {
 	delete(s.records, id)
 	delete(s.messages, id)
 	delete(s.seqByID, id)
+	delete(s.toolExposure, id)
+	delete(s.toolActs, id)
+	// Mirror the SQL store's ON DELETE CASCADE on session_turn_runs
+	// (migration 0342): a deleted session's turn -> run links go with it.
+	for runID, tr := range s.turnRuns {
+		if tr.SessionID == id {
+			delete(s.turnRuns, runID)
+		}
+	}
 	return nil
 }
 
@@ -460,6 +528,34 @@ func (s *memStore) GetLastUsage(_ context.Context, id string) (LastUsage, error)
 	return LastUsage{}, nil
 }
 
+func (s *memStore) SetKnobsDefault(_ context.Context, id string, k *llm.RequestKnobs) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[id]; !ok {
+		return ErrSessionNotFound
+	}
+	if k == nil {
+		delete(s.knobsDefault, id)
+		return nil
+	}
+	dup := *k
+	s.knobsDefault[id] = &dup
+	return nil
+}
+
+func (s *memStore) GetKnobsDefault(_ context.Context, id string) (*llm.RequestKnobs, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.records[id]; !ok {
+		return nil, ErrSessionNotFound
+	}
+	if k, ok := s.knobsDefault[id]; ok {
+		dup := *k
+		return &dup, nil
+	}
+	return nil, nil
+}
+
 func (s *memStore) UpsertStreamCheckpoint(_ context.Context, sessionID, subID, text string, hasTool bool, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -488,6 +584,59 @@ func (s *memStore) DeleteStreamCheckpoint(_ context.Context, sessionID, subID st
 	defer s.mu.Unlock()
 	delete(s.checkpoints, checkpointKey(sessionID, subID))
 	return nil
+}
+
+func (s *memStore) RecordTurnRun(_ context.Context, tr TurnRun) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[tr.SessionID]; !ok {
+		return ErrSessionNotFound
+	}
+	s.turnRuns[tr.RunID] = tr
+	return nil
+}
+
+func (s *memStore) RecordTurnRunOutcome(_ context.Context, sessionID, runID string, o TurnRunOutcome) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tr, ok := s.turnRuns[runID]
+	if !ok || tr.SessionID != sessionID {
+		return nil
+	}
+	tr.Outcome = o
+	s.turnRuns[runID] = tr
+	return nil
+}
+
+// CountTurnRuns counts a session's recorded turn runs.
+func (s *memStore) CountTurnRuns(_ context.Context, sessionID string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, tr := range s.turnRuns {
+		if tr.SessionID == sessionID {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s *memStore) ListTurnRuns(_ context.Context, sessionID string) ([]TurnRun, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]TurnRun, 0)
+	for _, tr := range s.turnRuns {
+		if tr.SessionID == sessionID {
+			out = append(out, tr)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].RunID < out[j].RunID
+	})
+	return out, nil
 }
 
 func (s *memStore) Reorder(_ context.Context, ids []string, now time.Time) error {
@@ -1137,6 +1286,48 @@ func (s *sqlStore) GetLastUsage(ctx context.Context, id string) (LastUsage, erro
 	return unmarshalLastUsage(*raw)
 }
 
+// SetKnobsDefault persists the session-level RequestKnobs override onto the
+// sessions.knobs_default column (migration sessions/0330-knobs). Passing a
+// nil k writes SQL NULL, clearing any existing override — mirrors
+// SessionTunePanel's "Reset" round-trip.
+func (s *sqlStore) SetKnobsDefault(ctx context.Context, id string, k *llm.RequestKnobs) error {
+	var raw *string
+	if k != nil {
+		encoded, err := marshalKnobsDefault(k)
+		if err != nil {
+			return fmt.Errorf("session: marshal knobs_default: %w", err)
+		}
+		raw = &encoded
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET knobs_default = ? WHERE id = ?", raw, id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+// GetKnobsDefault loads the session-level RequestKnobs override. Returns
+// nil (not an error) when the column is NULL — no override has ever been
+// saved for this session.
+func (s *sqlStore) GetKnobsDefault(ctx context.Context, id string) (*llm.RequestKnobs, error) {
+	row := s.db.Reader().QueryRow(ctx,
+		"SELECT knobs_default FROM sessions WHERE id = ?", id)
+	var raw *string
+	if err := row.Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrSessionNotFound
+		}
+		return nil, err
+	}
+	if raw == nil || *raw == "" {
+		return nil, nil
+	}
+	return unmarshalKnobsDefault(*raw)
+}
+
 // UpsertStreamCheckpoint durably persists (or overwrites) the mid-run
 // checkpoint for one (sessionID, subID) stream subscription
 // (chat-turn-integrity-01PMZ606 WP02/WP03, migration
@@ -1189,6 +1380,107 @@ func (s *sqlStore) GetStreamCheckpoint(ctx context.Context, sessionID, subID str
 		HasTool:   hasToolArg != 0,
 		UpdatedAt: time.Unix(0, updatedNS),
 	}, true, nil
+}
+
+// RecordTurnRun persists one chat turn -> run mapping
+// (agentgraph-settings-linkage-01DOGF0D WP03, migration
+// sessions/0342-session-turn-runs). Keyed by run_id: re-recording a run
+// overwrites it. The session must exist — the FK would reject an orphan
+// anyway; checking first turns that into ErrSessionNotFound instead of
+// an opaque constraint error.
+func (s *sqlStore) RecordTurnRun(ctx context.Context, tr TurnRun) error {
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		var one int
+		if err := tx.QueryRow(ctx, "SELECT 1 FROM sessions WHERE id = ?", tr.SessionID).Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSessionNotFound
+			}
+			return err
+		}
+		_, err := tx.Exec(ctx, `
+            INSERT INTO session_turn_runs (run_id, session_id, turn_span_id, graph_id, spec_digest, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (run_id) DO UPDATE SET
+                session_id = excluded.session_id,
+                turn_span_id = excluded.turn_span_id,
+                graph_id = excluded.graph_id,
+                spec_digest = excluded.spec_digest,
+                created_at = excluded.created_at
+        `, tr.RunID, tr.SessionID, tr.TurnSpanID, tr.GraphID, tr.SpecDigest, tr.CreatedAt.UnixNano())
+		return err
+	})
+}
+
+// CountTurnRuns counts a session's recorded turn runs.
+func (s *sqlStore) CountTurnRuns(ctx context.Context, sessionID string) (int, error) {
+	var n int
+	err := s.db.Reader().QueryRow(ctx,
+		"SELECT COUNT(*) FROM session_turn_runs WHERE session_id = ?", sessionID).Scan(&n)
+	return n, err
+}
+
+// ListTurnRuns returns a session's recorded turn -> run mappings, oldest
+// first. A session whose turns all predate migration 0342 returns an
+// empty slice.
+func (s *sqlStore) ListTurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error) {
+	rows, err := s.db.Reader().Query(ctx, `
+        SELECT run_id, turn_span_id, graph_id, spec_digest, created_at,
+               outcome, delivered, failure_class, failure_code, failure_status,
+               failure_provider, failure_summary, failure_message, finished_at
+        FROM session_turn_runs
+        WHERE session_id = ?
+        ORDER BY created_at ASC, run_id ASC
+    `, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]TurnRun, 0)
+	for rows.Next() {
+		var (
+			tr         TurnRun
+			createdNS  int64
+			delivered  sql.NullInt64
+			finishedNS sql.NullInt64
+		)
+		if err := rows.Scan(&tr.RunID, &tr.TurnSpanID, &tr.GraphID, &tr.SpecDigest, &createdNS,
+			&tr.Outcome.Outcome, &delivered, &tr.Outcome.FailureClass, &tr.Outcome.FailureCode,
+			&tr.Outcome.FailureStatus, &tr.Outcome.FailureProvider, &tr.Outcome.FailureSummary,
+			&tr.Outcome.FailureMessage, &finishedNS); err != nil {
+			return nil, err
+		}
+		tr.SessionID = sessionID
+		tr.CreatedAt = time.Unix(0, createdNS)
+		tr.Outcome.Delivered = delivered.Valid && delivered.Int64 != 0
+		if finishedNS.Valid {
+			tr.Outcome.FinishedAt = time.Unix(0, finishedNS.Int64)
+		}
+		out = append(out, tr)
+	}
+	return out, rows.Err()
+}
+
+// RecordTurnRunOutcome stamps a run's terminal outcome onto its
+// session_turn_runs row (migration sessions/0344-turn-run-outcome). A
+// plain UPDATE keyed by (run_id, session_id): a run that was never
+// recorded has no row and the call is a no-op — see the Store doc.
+func (s *sqlStore) RecordTurnRunOutcome(ctx context.Context, sessionID, runID string, o TurnRunOutcome) error {
+	delivered := 0
+	if o.Delivered {
+		delivered = 1
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		_, err := tx.Exec(ctx, `
+            UPDATE session_turn_runs SET
+                outcome = ?, delivered = ?, failure_class = ?, failure_code = ?,
+                failure_status = ?, failure_provider = ?, failure_summary = ?,
+                failure_message = ?, finished_at = ?
+            WHERE run_id = ? AND session_id = ?
+        `, o.Outcome, delivered, o.FailureClass, o.FailureCode, o.FailureStatus,
+			o.FailureProvider, o.FailureSummary, o.FailureMessage, o.FinishedAt.UnixNano(),
+			runID, sessionID)
+		return err
+	})
 }
 
 // DeleteStreamCheckpoint removes the checkpoint row for
@@ -1391,7 +1683,8 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
                compacted_into_id, compacted_at, archived_at,
                streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of,
                prompt_tokens, completion_tokens, cost_usd, cost_source,
-               kind, move_index, turn_span_id, model_tool_args
+               kind, move_index, turn_span_id, model_tool_args,
+               cached_tokens
         FROM session_messages
         WHERE session_id = ?
     `
@@ -1427,13 +1720,15 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 			moveIndexCol         sql.NullInt64
 			turnSpanCol          sql.NullString
 			modelToolArgsCol     sql.NullString
+			cachedTokens         sql.NullInt64
 		)
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
 			&m.Content, &toolCalls, &createdAt, &contentJSON,
 			&compactedIntoID, &compactedAt, &archivedAt,
 			&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf,
 			&promptTokens, &completionTokens, &costUSD, &costSource,
-			&moveKindCol, &moveIndexCol, &turnSpanCol, &modelToolArgsCol); err != nil {
+			&moveKindCol, &moveIndexCol, &turnSpanCol, &modelToolArgsCol,
+			&cachedTokens); err != nil {
 			return nil, err
 		}
 		// model-moves-transcript-01PMCH01 WP01 + WP03: rehydrate the move
@@ -1496,6 +1791,10 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 		}
 		if costSource.Valid {
 			m.MessageCostSource = costSource.String
+		}
+		if cachedTokens.Valid {
+			v := int(cachedTokens.Int64)
+			m.CachedTokens = &v
 		}
 		out = append(out, m)
 	}
@@ -1973,4 +2272,24 @@ func unmarshalLastUsage(raw string) (LastUsage, error) {
 		return LastUsage{}, fmt.Errorf("session: unmarshal last_usage_json: %w", err)
 	}
 	return u, nil
+}
+
+// marshalKnobsDefault encodes a session's knobs_default override for
+// storage in the sessions.knobs_default TEXT column.
+func marshalKnobsDefault(k *llm.RequestKnobs) (string, error) {
+	b, err := json.Marshal(k)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// unmarshalKnobsDefault decodes the sessions.knobs_default column back
+// into an llm.RequestKnobs value.
+func unmarshalKnobsDefault(raw string) (*llm.RequestKnobs, error) {
+	var k llm.RequestKnobs
+	if err := json.Unmarshal([]byte(raw), &k); err != nil {
+		return nil, fmt.Errorf("session: unmarshal knobs_default: %w", err)
+	}
+	return &k, nil
 }

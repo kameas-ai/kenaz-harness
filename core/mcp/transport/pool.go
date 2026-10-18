@@ -59,6 +59,26 @@ type PoolOptions struct {
 	// NewTicker is healthPinger's ticker factory. Nil →
 	// NewRealTicker.
 	NewTicker func(d time.Duration) Ticker
+
+	// AutoRestartEnabled is consulted live (once per trip decision,
+	// not cached) before a two-consecutive-ping-failure detection
+	// signals a crash to the restart supervisor. Nil → restart
+	// enabled (matches Settings.MCPAutoRestart's documented
+	// "Default true"). This is the stdio health pinger's read of
+	// core/rpc/views/settings.API.GetMCPAutoRestart — before
+	// connector-lifecycle-truth-01PMZ303 UNIT-9, the setting had a
+	// complete RPC round trip (Settings_{Get,Set}MCPAutoRestart,
+	// persisted, documented "Default: true" in harnessClient.ts) and
+	// zero readers anywhere under core/mcp/: a user who turned it off
+	// still got restarts.
+	//
+	// Deliberately scoped to the ping-failure trip only, not to
+	// reader/writer crash signals (EOF, broken pipe): the setting's
+	// own docstring is "auto-restart after two consecutive ping
+	// failures", and a process that has actually crashed is a
+	// different condition than a slow/unresponsive one the operator
+	// may want to leave alone rather than cycle.
+	AutoRestartEnabled func() bool
 }
 
 // ApplyDefaults fills in zero-value option fields with their

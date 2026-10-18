@@ -23,6 +23,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -228,11 +229,13 @@ type ServerInstance struct {
 	// so Close can wait for them.
 	supervisorWG sync.WaitGroup
 
-	// mu guards negotiated / tools / initialized fields read from
-	// upstream callers (pool.Tools, status snapshots).
+	// mu guards negotiated / tools / resources / prompts / initialized
+	// fields read from upstream callers (pool.Tools, status snapshots).
 	mu          sync.RWMutex
 	negotiated  InitializeResult
 	tools       []coremcp.Tool
+	resources   []transport.ResourceDefinition
+	prompts     []transport.PromptDefinition
 	initialized bool
 
 	// lifecycleMu guards every spawn-mutated field (conn, cmd,
@@ -295,6 +298,12 @@ type instanceOptions struct {
 	// Used by healthPinger; tests can return a manually-driven
 	// ticker to control the cadence deterministically.
 	NewTicker func(d time.Duration) Ticker
+
+	// AutoRestartEnabled is consulted live by healthPinger before a
+	// two-consecutive-ping-failure trip signals a crash. Nil →
+	// enabled (see transport.PoolOptions.AutoRestartEnabled, which
+	// this mirrors — connector-lifecycle-truth-01PMZ303 UNIT-9).
+	AutoRestartEnabled func() bool
 }
 
 // defaultInstanceOptions returns options wired to wallclock time.
@@ -562,6 +571,26 @@ func (s *ServerInstance) doInitialize(ctx context.Context, timeout time.Duration
 			s.logger.Warn("stdio.initial_tools_list", "err", err.Error())
 		}
 	}
+	// connector-lifecycle-truth-01PMZ303 UNIT-10 (FR-006): mirror the
+	// tools/list eager-fetch for resources/prompts, gated on the
+	// negotiated capability exactly like tools above. Before this,
+	// RecipeStatus.ResourceCount/PromptCount were hardcoded 0 for every
+	// installed server regardless of what it actually advertised — a
+	// measurement the UI rendered as if a check had run.
+	if result.Capabilities.Resources != nil {
+		resCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		if err := s.refreshResources(resCtx); err != nil {
+			s.logger.Warn("stdio.initial_resources_list", "err", err.Error())
+		}
+	}
+	if result.Capabilities.Prompts != nil {
+		promptCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		if err := s.refreshPrompts(promptCtx); err != nil {
+			s.logger.Warn("stdio.initial_prompts_list", "err", err.Error())
+		}
+	}
 	return nil
 }
 
@@ -599,6 +628,61 @@ func (s *ServerInstance) Tools() []coremcp.Tool {
 	out := make([]coremcp.Tool, len(s.tools))
 	copy(out, s.tools)
 	return out
+}
+
+// refreshResources issues resources/list and caches the result.
+// connector-lifecycle-truth-01PMZ303 UNIT-10: mirrors refreshTools —
+// only called when the server negotiated the resources capability.
+func (s *ServerInstance) refreshResources(ctx context.Context) error {
+	resp, err := s.callRaw(ctx, MethodResourcesList, nil)
+	if err != nil {
+		return err
+	}
+	var result ResourcesListResult
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return fmt.Errorf("stdio: decode resources/list: %w", err)
+	}
+	s.mu.Lock()
+	s.resources = result.Resources
+	s.mu.Unlock()
+	return nil
+}
+
+// ResourceCount returns the cached resources/list count. Zero before
+// the handshake completes or when the server does not advertise the
+// resources capability — the caller (RecipeStatus) is responsible for
+// distinguishing "not yet fetched" from "genuinely zero" if it needs
+// to; today both render as 0, which is honest (the field is absent
+// from the count of things this server has ever reported).
+func (s *ServerInstance) ResourceCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.resources)
+}
+
+// refreshPrompts issues prompts/list and caches the result. Mirrors
+// refreshResources.
+func (s *ServerInstance) refreshPrompts(ctx context.Context) error {
+	resp, err := s.callRaw(ctx, MethodPromptsList, nil)
+	if err != nil {
+		return err
+	}
+	var result PromptsListResult
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return fmt.Errorf("stdio: decode prompts/list: %w", err)
+	}
+	s.mu.Lock()
+	s.prompts = result.Prompts
+	s.mu.Unlock()
+	return nil
+}
+
+// PromptCount returns the cached prompts/list count. See ResourceCount's
+// doc for the "not fetched" vs. "genuinely zero" note.
+func (s *ServerInstance) PromptCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.prompts)
 }
 
 // CallTool issues tools/call and returns the raw result envelope
@@ -863,6 +947,20 @@ func (s *ServerInstance) handleNotification(msg RawMessage) {
 		go func() {
 			if err := s.refreshTools(context.Background()); err != nil {
 				s.logger.Warn("stdio.tools_refresh", "err", err.Error())
+			}
+		}()
+	case NotificationResourcesListChanged:
+		// connector-lifecycle-truth-01PMZ303 UNIT-10: mirrors the
+		// tools/list_changed refresh above, for resources.
+		go func() {
+			if err := s.refreshResources(context.Background()); err != nil {
+				s.logger.Warn("stdio.resources_refresh", "err", err.Error())
+			}
+		}()
+	case NotificationPromptsListChanged:
+		go func() {
+			if err := s.refreshPrompts(context.Background()); err != nil {
+				s.logger.Warn("stdio.prompts_refresh", "err", err.Error())
 			}
 		}()
 	case NotificationProgress:
@@ -1147,9 +1245,31 @@ func mergeEnv(extra map[string]string) []string {
 // IsolateEnv is set (spec 091 D6).
 func childEnv(spec SpawnSpec) []string {
 	if spec.IsolateEnv {
-		return isolatedEnv(spec.Env)
+		return withAgentActor(isolatedEnv(spec.Env))
 	}
-	return mergeEnv(spec.Env)
+	return withAgentActor(mergeEnv(spec.Env))
+}
+
+// agentActorEnv marks every MCP stdio child as agent activity so the
+// person-side daemon can skip it (ml-producer-01MLPRD01 WP02, spec §1
+// rule 3). Only KENAZ_ACTOR: the stdio pool is process-global, a server is
+// not per-session, so there is no KENAZ_SESSION to give it (§12 A-4).
+const agentActorEnv = "KENAZ_ACTOR=agent"
+
+// withAgentActor replaces any inherited or spec-supplied KENAZ_ACTOR with
+// the agent marker, on both the isolated and the merged path. An
+// inherited KENAZ_SESSION is dropped too (WP04): the server is not any
+// one session's, and a value leaking in from the harness's own launch
+// environment would attribute the server to a session it is not part of.
+func withAgentActor(env []string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "KENAZ_ACTOR=") || strings.HasPrefix(kv, "KENAZ_SESSION=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, agentActorEnv)
 }
 
 // isolatedBaseEnvKeys is the minimal base a spawned server still needs to

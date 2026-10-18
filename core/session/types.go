@@ -105,6 +105,41 @@ type LastUsage struct {
 	TotalTokens      int     `json:"totalTokens"`
 	CostUSD          float64 `json:"costUsd"`
 	CostSource       string  `json:"costSource"`
+	// Composition is the last call's prompt by part, in tokens. nil on
+	// a snapshot written before the field existed or by a call that was
+	// not measured.
+	Composition *UsageComposition `json:"composition,omitempty"`
+}
+
+// UsageComposition is one model call's prompt by part. Every part but
+// Cached is the harness estimate (tool definitions at 2.5 bytes per token, text at ~4 characters per token); Cached is the
+// provider-reported prompt-cache read.
+type UsageComposition struct {
+	System      int `json:"system"`
+	Tools       int `json:"tools"`
+	History     int `json:"history"`
+	Attachments int `json:"attachments"`
+	Memory      int `json:"memory"`
+	Cached      int `json:"cached"`
+	// ToolsFull is the number of tool definitions the call carried.
+	ToolsFull int `json:"toolsFull"`
+	// ToolsSummary is the number of tools listed only by summary (0 until
+	// summary-tier exposure exists).
+	ToolsSummary int `json:"toolsSummary"`
+	// SchemaBudget is the tool-schema budget the call was fitted to; 0
+	// when none was applied.
+	SchemaBudget int `json:"schemaBudget,omitempty"`
+	// ToolsEvicted is how many loaded tools were left out of the call to
+	// fit SchemaBudget.
+	ToolsEvicted int `json:"toolsEvicted,omitempty"`
+	// PinnedOverBudgetBy is how much of the overage pinned tools account
+	// for, in tokens (at most their total size); > 0 is the composer's
+	// "Pinned tools exceed the schema budget by N tokens" warning.
+	PinnedOverBudgetBy int `json:"pinnedOverBudgetBy,omitempty"`
+	// HotOverBudgetBy is how far the always-sent core tools alone exceed
+	// SchemaBudget, in tokens; > 0 means the model's window is too small
+	// for the core tools.
+	HotOverBudgetBy int `json:"hotOverBudgetBy,omitempty"`
 }
 
 // StreamCheckpoint is a durable mid-run snapshot of one active stream
@@ -121,6 +156,50 @@ type StreamCheckpoint struct {
 	Text      string
 	HasTool   bool
 	UpdatedAt time.Time
+}
+
+// TurnRun links one chat turn to the agent-graph kernel run that
+// executed it (agentgraph-settings-linkage-01DOGF0D WP03, migration
+// sessions/0342-session-turn-runs). TurnSpanID is the id every move of
+// the turn carries; RunID is what /agentgraph/run/:runId resolves.
+// GraphID + SpecDigest record which graph, and which version of it,
+// the run used.
+type TurnRun struct {
+	RunID      string
+	SessionID  string
+	TurnSpanID string
+	GraphID    string
+	SpecDigest string
+	CreatedAt  time.Time
+	// Outcome is the run's terminal outcome (migration 0344); the zero
+	// value — Outcome == "" — means in flight, or a run that predates
+	// the column. See TurnRunOutcome.
+	Outcome TurnRunOutcome
+}
+
+// Turn-run outcome values (migration sessions/0344-turn-run-outcome).
+const (
+	TurnOutcomeCompleted = "completed"
+	TurnOutcomeFailed    = "failed"
+	TurnOutcomeStopped   = "stopped"
+)
+
+// TurnRunOutcome is how one chat run ended (undelivered-message-retry,
+// dogfood 2026-10-07). Delivered answers "did the model accept the
+// request": false on a run that failed before any streamed output — the
+// state the chat surface renders as NOT DELIVERED on the user's message.
+// The Failure* fields are empty unless Outcome == TurnOutcomeFailed;
+// FailureMessage is already sanitized (llm.SanitizeProviderMessage).
+type TurnRunOutcome struct {
+	Outcome         string
+	Delivered       bool
+	FailureClass    string
+	FailureCode     string
+	FailureStatus   int
+	FailureProvider string
+	FailureSummary  string
+	FailureMessage  string
+	FinishedAt      time.Time
 }
 
 // ContextKind values for Record.ContextKind. Validated at the manager
@@ -231,7 +310,10 @@ type Message struct {
 	// NULL on rows that pre-date the migration or had no usage captured.
 	PromptTokens     *int
 	CompletionTokens *int
-	CostUSD          *float64
+	// CachedTokens is the part of PromptTokens the provider served from
+	// its prompt cache (session_messages.cached_tokens, migration 0346).
+	CachedTokens *int
+	CostUSD      *float64
 	// CostSource mirrors the token-cost-telemetry taxonomy:
 	// "provider" | "derived" | "mixed" | "unknown". Empty on rows
 	// with no usage data.

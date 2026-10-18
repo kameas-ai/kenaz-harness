@@ -138,17 +138,11 @@ func (f *fakeFleetConfigServer) ServeHTTP(w http.ResponseWriter, r *http.Request
 	_, _ = w.Write(resp)
 }
 
-// setTestSigningKey sets fleetSigningPublicKeyBytes to the hex of pub and
-// restores the original on test cleanup.
+// setTestSigningKey pins exactly pub (via SetSigningKeyForTesting) and
+// restores the previous pin vars on test cleanup.
 func setTestSigningKey(t *testing.T, pub ed25519.PublicKey) {
 	t.Helper()
-	hexStr := ""
-	for _, by := range []byte(pub) {
-		hexStr += string([]byte{hexEncNibble2(by >> 4), hexEncNibble2(by & 0x0f)})
-	}
-	saved := fleetSigningPublicKeyBytes
-	fleetSigningPublicKeyBytes = hexStr
-	t.Cleanup(func() { fleetSigningPublicKeyBytes = saved })
+	t.Cleanup(SetSigningKeyForTesting(pub))
 }
 
 func newPollerForTest(t *testing.T, srv *httptest.Server, applier ConfigApplier, dataDir string) *ConfigPoller {
@@ -320,6 +314,74 @@ func TestConfigPoller_DiskStatePersists(t *testing.T) {
 	}
 }
 
+// Dogfood 2026-10-08: a bundle restored from disk starts as "cache"; the
+// first 304 (server confirms it is current) must make it "fleet". Before,
+// only a fresh 200 apply set "fleet", so a healthy device showed
+// stale-cache after every relaunch.
+func TestConfigPoller_304AfterRelaunch_SourceBecomesFleet(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	setTestSigningKey(t, pub)
+	b1 := buildAndSignBundle(t, priv, 1)
+	body := bundleToJSON(t, b1)
+	fake := &fakeFleetConfigServer{response: body}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	// A previous run applied bundle 1 with this exact checksum.
+	dataDir := t.TempDir()
+	sum := sha256.Sum256(body)
+	if err := saveBundleState(dataDir, 1, fmt.Sprintf("%x", sum[:])); err != nil {
+		t.Fatalf("saveBundleState: %v", err)
+	}
+	if err := saveBundleApplyMeta(dataDir, bundleApplyMeta{BuildVersion: "v1"}); err != nil {
+		t.Fatalf("saveBundleApplyMeta: %v", err)
+	}
+
+	// Before any revalidation: restored from disk → "cache".
+	applier := &fakeApplier{}
+	p := newPollerForTest(t, srv, applier, dataDir)
+	p.SetBuildVersion("v1")
+	p.client = nil // Start's first poll returns ErrFleetDisabled: no revalidation yet
+	ctx0, cancel0 := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	p.Start(ctx0)
+	if got := p.Status().Source; got != "cache" {
+		t.Errorf("source before revalidation = %q, want cache", got)
+	}
+	cancel0()
+	p.Stop()
+
+	// Relaunch with a reachable server: the 304 confirms the cached bundle.
+	p2 := newPollerForTest(t, srv, applier, dataDir)
+	p2.SetBuildVersion("v1")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	p2.Start(ctx)
+	defer p2.Stop()
+	if !waitUntil(t, 300*time.Millisecond, func() bool { return p2.Status().Source == "fleet" }) {
+		t.Fatalf("source after 304 = %q, want fleet", p2.Status().Source)
+	}
+	if n := len(applier.snapshot()); n != 0 {
+		t.Errorf("a 304 must not re-apply; applied %d times", n)
+	}
+	if st := p2.Status(); st.LastAppliedID != 1 || st.LastError != "" {
+		t.Errorf("status = %+v, want LastAppliedID 1 and no error", st)
+	}
+}
+
+// A 304 with nothing ever applied is not a confirmed bundle.
+func TestConfigPoller_304WithNoBundle_StaysDefaultDeny(t *testing.T) {
+	fake := &fakeFleetConfigServer{} // nil response → always 304
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	p := newPollerForTest(t, srv, &fakeApplier{}, t.TempDir())
+	if err := p.poll(context.Background()); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if got := p.Status().Source; got != "default-deny" {
+		t.Errorf("source = %q, want default-deny", got)
+	}
+}
+
 // waitUntil polls fn every 10ms until it returns true or timeout is reached.
 func waitUntil(t *testing.T, timeout time.Duration, fn func() bool) bool {
 	t.Helper()
@@ -333,9 +395,55 @@ func waitUntil(t *testing.T, timeout time.Duration, fn func() bool) bool {
 	return fn()
 }
 
-func hexEncNibble2(b byte) byte {
-	if b < 10 {
-		return '0' + b
+// refusingApplier reports one refused mandated item per apply.
+type refusingApplier struct{ fakeApplier }
+
+func (r *refusingApplier) ApplyBundleItems(ctx context.Context, b *Bundle) ([]error, []MandatedItemStatus) {
+	errs := r.ApplyBundle(ctx, b)
+	return errs, []MandatedItemStatus{{CatalogID: "11111111-1111-4111-8111-111111111111", Kind: "pack", Status: MandatedStatusRefused}}
+}
+
+// Review F1: after an upgrade (build version change) — or when the last
+// applied bundle had REFUSED items — the stored checksum is cleared and the
+// SAME bundle id applies once more, so a pack-capable build installs a pack
+// it previously refused without waiting for a new bundle. With the same
+// build and no refusals, nothing re-applies.
+func TestConfigPoller_ReapplyAfterBuildChangeOrRefusal(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	setTestSigningKey(t, pub)
+	b1 := buildAndSignBundle(t, priv, 1)
+	fake := &fakeFleetConfigServer{response: bundleToJSON(t, b1)}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	dataDir := t.TempDir()
+
+	run := func(build string, applier ConfigApplier, counter func() int, want int) {
+		t.Helper()
+		p := newPollerForTest(t, srv, applier, dataDir)
+		p.SetBuildVersion(build)
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		defer cancel()
+		p.Start(ctx)
+		time.Sleep(150 * time.Millisecond)
+		p.Stop()
+		if got := counter(); got != want {
+			t.Fatalf("build %q: applied %d times, want %d", build, got, want)
+		}
+		if st := p.Status(); st.LastAppliedID != 1 {
+			t.Fatalf("build %q: LastAppliedID = %d, want 1", build, st.LastAppliedID)
+		}
 	}
-	return 'a' + b - 10
+
+	// v1 applies bundle 1 with a refused pack.
+	a1 := &refusingApplier{}
+	run("v1", a1, func() int { return len(a1.snapshot()) }, 1)
+	// Same build, but the last apply had refusals → re-applied once.
+	a2 := &fakeApplier{}
+	run("v1", a2, func() int { return len(a2.snapshot()) }, 1)
+	// Same build, no refusals → 304, no re-apply.
+	a3 := &fakeApplier{}
+	run("v1", a3, func() int { return len(a3.snapshot()) }, 0)
+	// Upgrade → re-applied once.
+	a4 := &fakeApplier{}
+	run("v2", a4, func() int { return len(a4.snapshot()) }, 1)
 }

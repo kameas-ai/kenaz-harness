@@ -7,6 +7,7 @@ name: Release
 #   Trigger                                 Target env   Notes
 #   ─────────────────────────────────────── ──────────── ────────────────────────
 #   push to main (any non-tag commit)       dev          Rolling "latest" build.
+#   (only when repo var AUTO_RELEASE=true)
 #                                                        Published to
 #                                                        s3://kameas-ai-dev-releases-use2
 #                                                        and served from
@@ -76,13 +77,27 @@ permissions:
   packages: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  # Push-to-main runs that AUTO_RELEASE skips get their own group so a no-op
+  # run can never displace a queued run on main.
+  group: release-${{ github.ref }}${{ (github.event_name == 'push' && github.ref_type != 'tag' && vars.AUTO_RELEASE != 'true') && '-noop' || '' }}
   cancel-in-progress: false
 
 env:
   # Match go.mod (currently 1.25.0). Bumping here when go.mod bumps.
   GO_VERSION: '1.25'
   NODE_VERSION: '20'
+  # Kameas ML engine pin (see the `pin kenaz-ml engine release` step in the
+  # build job). Bumping the engine a harness build installs is a one-line
+  # change here PLUS refreshed fixtures in
+  # core/mlsidecar/testdata/engine-release-<ver>/ —
+  # TestPublishedEngineRelease_MatchesReleaseWorkflowPin fails the PR until
+  # the suite has verified the new release hermetically. The channel base
+  # is the PROD engine channel for every harness env (dev/stage/prod):
+  # kenaz-ml publishes stable X.Y.Z versions only to prod (its dev channel
+  # carries <ver>-dev.<sha7> labels, stage only -rc tags), so a per-env base
+  # would leave dev/stage harness builds with no release to pin.
+  KENAZ_ML_ENGINE_VERSION: '0.1.1'
+  KENAZ_ML_ENGINE_CHANNEL_BASE: 'https://downloads.kameas.ai'
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
@@ -93,10 +108,14 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   resolve-env:
     name: Resolve target environment
+    # Push-to-main (dev) builds are opt-in via the repository variable
+    # AUTO_RELEASE=true; tag pushes, release events and dispatches always run.
+    # Every other job needs this one, so a skip here skips the whole run.
+    if: github.event_name != 'push' || github.ref_type == 'tag' || vars.AUTO_RELEASE == 'true'
     # Trivial bash coordinator — moved off ubuntu-latest to keep release
     # runs entirely on the self-hosted pool except for the Apple/Microsoft
     # platform builds below that genuinely need macos-latest / windows-latest.
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     outputs:
       target_env:         ${{ steps.pick.outputs.target_env }}
       bucket:             ${{ steps.pick.outputs.bucket }}
@@ -108,6 +127,19 @@ jobs:
     steps:
       - id: pick
         shell: bash
+        # IAM role ARNs come from repo Actions variables so the AWS account
+        # IDs are not committed to this public file. The six REQUIRED repo
+        # variables (Settings → Secrets and variables → Actions → Variables):
+        #   DEPLOY_ROLE_ARN_DEV      DEPLOY_ROLE_ARN_STAGE      DEPLOY_ROLE_ARN_PROD
+        #   APPDEPLOY_ROLE_ARN_DEV   APPDEPLOY_ROLE_ARN_STAGE   APPDEPLOY_ROLE_ARN_PROD
+        # No inline fallbacks: an unset variable fails this step loudly.
+        env:
+          DEPLOY_ROLE_ARN_DEV: ${{ vars.DEPLOY_ROLE_ARN_DEV }}
+          DEPLOY_ROLE_ARN_STAGE: ${{ vars.DEPLOY_ROLE_ARN_STAGE }}
+          DEPLOY_ROLE_ARN_PROD: ${{ vars.DEPLOY_ROLE_ARN_PROD }}
+          APPDEPLOY_ROLE_ARN_DEV: ${{ vars.APPDEPLOY_ROLE_ARN_DEV }}
+          APPDEPLOY_ROLE_ARN_STAGE: ${{ vars.APPDEPLOY_ROLE_ARN_STAGE }}
+          APPDEPLOY_ROLE_ARN_PROD: ${{ vars.APPDEPLOY_ROLE_ARN_PROD }}
         run: |
           set -euo pipefail
           REF="${{ github.ref }}"
@@ -132,24 +164,24 @@ jobs:
           case "$TARGET" in
             dev)
               BUCKET="kameas-ai-dev-releases-use2"
-              ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-dev"
-              APPDEPLOY_ROLE_ARN="arn:aws:iam::950858584742:role/AppDeployRole"
+              ROLE_ARN="$DEPLOY_ROLE_ARN_DEV"
+              APPDEPLOY_ROLE_ARN="$APPDEPLOY_ROLE_ARN_DEV"
               CF_DIST_ID="E1PRT6QD4VW589"
               CDN_BASE="https://dev.downloads.kameas.ai"
               GITHUB_ENV_NAME="dev"
               ;;
             stage)
               BUCKET="kameas-ai-stage-releases-use2"
-              ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-stage"
-              APPDEPLOY_ROLE_ARN="arn:aws:iam::543432151057:role/AppDeployRole"
+              ROLE_ARN="$DEPLOY_ROLE_ARN_STAGE"
+              APPDEPLOY_ROLE_ARN="$APPDEPLOY_ROLE_ARN_STAGE"
               CF_DIST_ID="E1N8AI5X4GRPWU"
               CDN_BASE="https://stage.downloads.kameas.ai"
               GITHUB_ENV_NAME="stage"
               ;;
             prod)
               BUCKET="kameas-ai-prod-releases-use2"
-              ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-prod"
-              APPDEPLOY_ROLE_ARN="arn:aws:iam::777000838085:role/AppDeployRole"
+              ROLE_ARN="$DEPLOY_ROLE_ARN_PROD"
+              APPDEPLOY_ROLE_ARN="$APPDEPLOY_ROLE_ARN_PROD"
               CF_DIST_ID="ENWB9Y4KGTPFD"
               CDN_BASE="https://downloads.kameas.ai"
               GITHUB_ENV_NAME="prod"
@@ -159,6 +191,11 @@ jobs:
               exit 1
               ;;
           esac
+
+          if [[ -z "$ROLE_ARN" || -z "$APPDEPLOY_ROLE_ARN" ]]; then
+            echo "::error::Role ARN repo variables for '$TARGET' are unset — set DEPLOY_ROLE_ARN_${TARGET^^} and APPDEPLOY_ROLE_ARN_${TARGET^^} (Settings → Secrets and variables → Actions → Variables)."
+            exit 1
+          fi
 
           echo "target_env=$TARGET"               >> "$GITHUB_OUTPUT"
           echo "bucket=$BUCKET"                   >> "$GITHUB_OUTPUT"
@@ -170,12 +207,90 @@ jobs:
           echo "Resolved: trigger=$EVENT ref=$REF → env=$TARGET bucket=$BUCKET"
 
   # ────────────────────────────────────────────────────────────────────────────
+  # release-event-guard: `release: published` runs only.
+  #
+  # tag-on-merge creates each Release as a DRAFT and the `release` job below
+  # undrafts it with GITHUB_TOKEN (which fires no workflow event). But a human
+  # clicking "Publish release" on that draft in the UI DOES fire
+  # `release: published` — which, unguarded, would start a second full
+  # signed build of a tag whose dispatched build is in flight or done.
+  # Proceed only when the Release has no assets AND no Release run for the
+  # tag is in flight or has succeeded (a dispatch/push run; a release-event
+  # run that succeeded either uploaded assets or was itself a guarded no-op).
+  # Same-tag runs share the `release-<ref>` concurrency group, so this run
+  # queues behind an in-flight build and sees it completed.
+  # Every job needs derive-version, so proceed=false skips the whole run.
+  # Runs (trivially, proceed=true) on every other trigger too, rather than
+  # being skipped: a skipped ancestor would skip build/release/publish-s3
+  # transitively unless every one of them carried a status-function `if:`.
+  # ────────────────────────────────────────────────────────────────────────────
+  release-event-guard:
+    name: Guard release-published trigger
+    needs: [resolve-env]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+          ASSET_NAMES: ${{ join(github.event.release.assets.*.name, ' ') }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != release ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # manifest.json is uploaded last, so its presence means the build
+          # completed; a draft with only some platform assets is rebuilt.
+          if [[ " $ASSET_NAMES " == *" manifest.json "* ]]; then
+            echo "::notice::Release $TAG already has manifest.json — not rebuilding (published from a completed draft)."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # python3, not gh: the ci-fast runner image lacks the gh CLI.
+          VERDICT="$(python3 - <<'PY'
+          import json, os, sys, urllib.request
+          repo, tag, me = os.environ["GITHUB_REPOSITORY"], os.environ["TAG"], int(os.environ["GITHUB_RUN_ID"])
+          api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+          req = urllib.request.Request(
+              f"{api}/repos/{repo}/actions/workflows/release.yml/runs?per_page=100",
+              headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                       "Accept": "application/vnd.github+json"})
+          runs = json.load(urllib.request.urlopen(req, timeout=30))["workflow_runs"]
+          for r in runs:
+              if r["id"] == me or r["head_branch"] != tag:
+                  continue
+              if r["status"] != "completed":
+                  print(f"skip: run {r['id']} ({r['event']}) is {r['status']}"); sys.exit()
+              if r["conclusion"] == "success" and r["event"] != "release":
+                  print(f"skip: run {r['id']} ({r['event']}) already succeeded"); sys.exit()
+          print("proceed")
+          PY
+          )"
+          echo "$VERDICT"
+          if [ "$VERDICT" = proceed ]; then
+            echo "Release $TAG has no assets and no in-flight/succeeded build — building it."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Not rebuilding $TAG — ${VERDICT#skip: }."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ────────────────────────────────────────────────────────────────────────────
   # derive-version: resolves the semver string for this run.
   # ────────────────────────────────────────────────────────────────────────────
   derive-version:
     name: Derive version
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
-    needs: [resolve-env]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
+    needs: [resolve-env, release-event-guard]
+    if: needs.release-event-guard.outputs.proceed == 'true'
     outputs:
       version: ${{ steps.set.outputs.version }}
     steps:
@@ -208,6 +323,19 @@ jobs:
               exit 1
             fi
           fi
+          # A dispatch labels the build with inputs.version but builds
+          # GITHUB_SHA. Dispatched from main (the UI default), that is main's
+          # code shipped under the tag's name. Refuse unless the tag IS the
+          # commit being built — i.e. the run was dispatched with --ref <tag>.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+            git fetch --force --depth=1 origin "refs/tags/${VERSION}:refs/tags/${VERSION}" \
+              || { echo "::error::version '$VERSION' is not a tag on origin"; exit 1; }
+            TAG_SHA="$(git rev-parse "${VERSION}^{commit}")"
+            if [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
+              echo "::error::dispatched at $GITHUB_SHA but $VERSION is $TAG_SHA — re-run with: gh workflow run release.yml --ref $VERSION -f version=$VERSION"
+              exit 1
+            fi
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Resolved version: ${VERSION} (env: ${TARGET_ENV})"
 
@@ -217,7 +345,8 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   build:
     name: Build ${{ matrix.label }}
-    needs: [derive-version]
+    # resolve-env: target_env selects the per-env fleet signing pins below.
+    needs: [resolve-env, derive-version]
     strategy:
       fail-fast: false
       matrix:
@@ -301,7 +430,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -356,6 +485,187 @@ jobs:
           jq --arg v "$NUMERIC" '.info.productVersion = $v' wails.json > "$tmp" && mv "$tmp" wails.json
           echo "wails.json info.productVersion → $NUMERIC"
 
+      # ── Kameas ML engine pin (engine-publication-01ENPUB01 WP-H3) ──────────
+      # ENABLED 2026-10-07. The three dated prerequisites (2026-10-04) are met:
+      #   1. met 2026-10-07: kenaz-ml's publish job uploads to
+      #      kameas-ai-<env>-releases-use2 (gh-deploy-<env> OIDC trust is in
+      #      place); kenaz-ml 0.1.1 is live under
+      #      https://downloads.kameas.ai/kenaz-ml/0.1.1/ (notarized DMGs + raw
+      #      ed25519 .sig files) and listed in kenaz-ml/index.json.
+      #   2. met 2026-10-07 (#388): the real release public key is baked into
+      #      core/mlsidecar/release_signing_key.pub; its KeyID
+      #      56fc99051f4c4f42ec10a8307ff7f772a5e9a880efc43371938a5f3310352512
+      #      equals the index's darwin_arm64.key_id for 0.1.1.
+      #   3. met 2026-10-07: `kenaz-ml-sign verify` accepts the published 0.1.1
+      #      darwin-arm64 .sig under the baked key; the DMG is 189403636 bytes
+      #      (== size_bytes) and hashes to the index sha256; a one-off run of
+      #      the real mlsidecar.Install against the live channel (trust store
+      #      seeded only with the baked anchor) installed it verified=true.
+      #      Evidence: core/mlsidecar/testdata/engine-release-0.1.1/PROVENANCE.md,
+      #      re-checked hermetically by core/mlsidecar/published_release_test.go.
+      # The trust anchor is the .pub FILE only. The -ldflags
+      # releaseSigningPubKeyHex override is deliberately NOT passed to either
+      # wails build: an override this step does not verify against would let
+      # a build trust a key CI never checked the pinned engine under. If an
+      # env-specific key is ever adopted, pass it to BOTH wails build steps
+      # AND verify against it here, in the same change.
+      #
+      # What the step does (darwin/arm64 only — the engine artifact is
+      # darwin-arm64-only, see mlsidecar.PlatformSupport; every other matrix
+      # entry builds with the zero pin and honestly reports the engine as
+      # unavailable): find KENAZ_ML_ENGINE_VERSION (workflow env, top of
+      # file) exactly once in the engine index; assert the index url/sig_url
+      # are the derived channel/artifact names; fail unless the index key_id
+      # is the baked key; verify the published .sig under the baked key
+      # through the harness's own verifier; download the DMG and check its
+      # size + sha256 against the index; THEN regenerate
+      # core/mlsidecar/pinned_release_gen.go with pin-gen and re-run its
+      # drift/contract guard. The regenerated file exists only in this
+      # runner's workspace: the checked-in file stays the zero value, so
+      # local builds, `go generate` and check-codegen (which only covers
+      # core/agentgraph/*_gen.go) never see a pin. Every mismatch exits 1 —
+      # nothing here warns and continues.
+      - name: pin kenaz-ml engine release
+        if: matrix.wails_platform == 'darwin/arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENGINE_VERSION="${KENAZ_ML_ENGINE_VERSION}"
+          INDEX_URL="${KENAZ_ML_ENGINE_CHANNEL_BASE}/kenaz-ml/index.json"
+          CHANNEL_URL="${KENAZ_ML_ENGINE_CHANNEL_BASE}/kenaz-ml/${ENGINE_VERSION}"
+          ARTIFACT="kenaz-ml-${ENGINE_VERSION}-darwin-arm64.dmg"
+          # Transient CDN errors (5xx, resets, short reads) must not zero a
+          # release — this step failing fails the darwin/arm64 leg, which
+          # skips publish-s3 for EVERY platform. --retry-all-errors retries
+          # those; verification below is unchanged and still fail-closed.
+          CURL_RETRY=(--retry 5 --retry-all-errors --retry-delay 3)
+          curl -fsSL "${CURL_RETRY[@]}" "$INDEX_URL" -o "$RUNNER_TEMP/kenaz-ml-index.json"
+          REL="$(jq -c --arg v "$ENGINE_VERSION" '[.releases[] | select(.version == $v)] | select(length == 1) | .[0]' "$RUNNER_TEMP/kenaz-ml-index.json")"
+          test -n "$REL" || { echo "::error::kenaz-ml $ENGINE_VERSION is not listed exactly once in $INDEX_URL"; exit 1; }
+          # jq -e: a missing/null field fails the assignment (and the step).
+          URL="$(jq -er .darwin_arm64.url <<<"$REL")"
+          SIG_URL="$(jq -er .darwin_arm64.sig_url <<<"$REL")"
+          SHA="$(jq -er .darwin_arm64.sha256 <<<"$REL")"
+          SIZE="$(jq -er .darwin_arm64.size_bytes <<<"$REL")"
+          INDEX_KEY_ID="$(jq -er .darwin_arm64.key_id <<<"$REL")"
+          # The pin DERIVES the channel-relative names (the harness fetches
+          # <channel>/<artifact> and <artifact>.sig); the index must agree,
+          # or the harness would fetch paths the publisher never wrote.
+          if [ "$URL" != "${CHANNEL_URL}/${ARTIFACT}" ] || [ "$SIG_URL" != "${URL}.sig" ]; then
+            echo "::error::index url '$URL' / sig_url '$SIG_URL' != derived '${CHANNEL_URL}/${ARTIFACT}' (+.sig) — publisher/pin naming drift"
+            exit 1
+          fi
+          # The published key_id must be the key this build bakes in, or
+          # every install from this build would fail closed (anchor_missing).
+          KEY_FILE=core/mlsidecar/release_signing_key.pub
+          KEY_HEX="$( (grep -vE '^[[:space:]]*(#|$)' "$KEY_FILE" || true) | tr -d '[:space:]')"
+          if ! [[ "$KEY_HEX" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::$KEY_FILE does not hold exactly one 64-hex key line — refusing to pin an engine this build cannot verify"
+            exit 1
+          fi
+          BAKED_KEY_ID="$(printf '%s' "$KEY_HEX" | xxd -r -p | shasum -a 256 | cut -d' ' -f1)"
+          if [ "$INDEX_KEY_ID" != "$BAKED_KEY_ID" ]; then
+            echo "::error::index key_id $INDEX_KEY_ID != baked release key $BAKED_KEY_ID — this build could not verify the engine"
+            exit 1
+          fi
+          # The published signature must verify under the baked key through
+          # the harness's own verifier stack (exit 1 = invalid → step fails).
+          curl -fsSL "${CURL_RETRY[@]}" "$SIG_URL" -o "$RUNNER_TEMP/kenaz-ml.sig"
+          go run ./cmd/kenaz-ml-sign verify \
+            --pubkey "$KEY_FILE" --sig "$RUNNER_TEMP/kenaz-ml.sig" \
+            --version "$ENGINE_VERSION" \
+            --artifact-path "$ARTIFACT" \
+            --sha256 "$SHA"
+          # The signature binds the index's sha256; bind that sha256 (and the
+          # disclosed size) to the bytes the CDN actually serves.
+          # A short body (size != index) is re-fetched, at most 3 attempts in
+          # all; whatever the last attempt got goes through the unchanged
+          # size + sha256 check below, so a persistent mismatch still exits 1.
+          for attempt in 1 2 3; do
+            curl -fsSL "${CURL_RETRY[@]}" "$URL" -o "$RUNNER_TEMP/$ARTIFACT"
+            GOT_SIZE="$(wc -c < "$RUNNER_TEMP/$ARTIFACT" | tr -d '[:space:]')"
+            [ "$GOT_SIZE" = "$SIZE" ] && break
+            echo "::warning::$ARTIFACT download attempt $attempt got $GOT_SIZE bytes, index says $SIZE (attempt $attempt of 3)"
+          done
+          GOT_SHA="sha256:$(shasum -a 256 "$RUNNER_TEMP/$ARTIFACT" | cut -d' ' -f1)"
+          rm -f "$RUNNER_TEMP/$ARTIFACT"
+          if [ "$GOT_SIZE" != "$SIZE" ] || [ "$GOT_SHA" != "$SHA" ]; then
+            echo "::error::served $ARTIFACT is $GOT_SIZE bytes / $GOT_SHA; index says $SIZE bytes / $SHA"
+            exit 1
+          fi
+          go run ./cmd/kenaz-ml-sign pin-gen \
+            --version       "$ENGINE_VERSION" \
+            --channel-url   "$CHANNEL_URL" \
+            --artifact-path "$ARTIFACT" \
+            --sha256        "$SHA" \
+            --size          "$SIZE" \
+            --key-id        "$INDEX_KEY_ID"
+          go test ./core/mlsidecar -count=1 -run 'TestPinnedReleaseGen_NoDrift|TestPublishedEngineRelease_'
+          echo "::notice::pinned kenaz-ml $ENGINE_VERSION ($ARTIFACT, $SIZE bytes, $SHA, key $INDEX_KEY_ID)"
+
+      # ── Fleet config-bundle signing pins (bundle-key-rotation WP03) ──────
+      # The harness pins a SET of ed25519 PUBLIC keys
+      # (core/fleet.fleetSigningPublicKeys: comma-separated, each entry 64
+      # hex chars = the raw 32-byte public key) and routes each bundle's
+      # signed key_id to one of them. Selected per env from repo Actions
+      # VARIABLES — public keys, deliberately variables and not secrets:
+      #   dev → FLEET_SIGNING_PUBKEYS_DEV   stage → FLEET_SIGNING_PUBKEYS_STAGE
+      #   prod → FLEET_SIGNING_PUBKEYS_PROD
+      # During a rotation the variable carries current+next (see
+      # docs/fleet-key-rotation.md). An EMPTY/unset variable does not fail
+      # the build: the binary ships with config distribution disabled (the
+      # pre-existing default) and this step emits a ::warning naming it.
+      # A MALFORMED entry fails the build — the harness would reject the
+      # whole set at runtime anyway, so catch it here.
+      #
+      # DATED (2026-10-06, owner: alec): secrets.FLEET_SIGNING_PUBKEY (the
+      # legacy single-key pin) is merged in as a fallback for ONE release.
+      # Drop it — and core/fleet.fleetSigningPublicKeyBytes — in the first
+      # release after the one that ships the per-env variables.
+      - name: resolve fleet signing pins
+        id: fleet-pins
+        shell: bash
+        env:
+          TARGET_ENV: ${{ needs.resolve-env.outputs.target_env }}
+          PINS_DEV: ${{ vars.FLEET_SIGNING_PUBKEYS_DEV }}
+          PINS_STAGE: ${{ vars.FLEET_SIGNING_PUBKEYS_STAGE }}
+          PINS_PROD: ${{ vars.FLEET_SIGNING_PUBKEYS_PROD }}
+          LEGACY_PIN: ${{ secrets.FLEET_SIGNING_PUBKEY }}
+        run: |
+          set -euo pipefail
+          case "$TARGET_ENV" in
+            dev)   VAR=FLEET_SIGNING_PUBKEYS_DEV;   PINS="$PINS_DEV" ;;
+            stage) VAR=FLEET_SIGNING_PUBKEYS_STAGE; PINS="$PINS_STAGE" ;;
+            prod)  VAR=FLEET_SIGNING_PUBKEYS_PROD;  PINS="$PINS_PROD" ;;
+            *) echo "::error::unknown target env '$TARGET_ENV'"; exit 1 ;;
+          esac
+          # Whitespace is stripped so the value can never split the -ldflags
+          # argument; empty entries are dropped (the harness skips them too).
+          PINS="$(printf '%s' "$PINS" | tr -d '[:space:]')"
+          LEGACY="$(printf '%s' "$LEGACY_PIN" | tr -d '[:space:]')"
+          if [ -n "$LEGACY" ]; then
+            PINS="${PINS:+$PINS,}$LEGACY"
+          fi
+          CLEAN=""
+          ENTRIES=()
+          IFS=',' read -r -a ENTRIES <<< "$PINS"
+          # ${arr[@]+...}: an empty array under `set -u` is an "unbound
+          # variable" on bash 3.2 (macOS runners) — expand only if set.
+          for e in ${ENTRIES[@]+"${ENTRIES[@]}"}; do
+            [ -z "$e" ] && continue
+            if ! [[ "$e" =~ ^[0-9a-fA-F]{64}$ ]]; then
+              echo "::error::$VAR (or the legacy FLEET_SIGNING_PUBKEY secret) holds an entry that is not exactly 64 hex characters (${#e} chars) — the harness would reject the whole pin set"
+              exit 1
+            fi
+            CLEAN="${CLEAN:+$CLEAN,}$e"
+          done
+          if [ -z "$CLEAN" ]; then
+            echo "::warning::$VAR is empty/unset — this $TARGET_ENV build pins no fleet signing key, so fleet config distribution is DISABLED in it"
+          else
+            echo "fleet signing pins for $TARGET_ENV: $(tr ',' '\n' <<< "$CLEAN" | grep -c .) key(s) from $VAR"
+          fi
+          echo "pubkeys=$CLEAN" >> "$GITHUB_OUTPUT"
+
       - name: wails build
         shell: bash
         run: |
@@ -367,7 +677,7 @@ jobs:
           # platforms that don't need one.
           ARGS=(
             -platform "${{ matrix.wails_platform }}"
-            -ldflags "-X main.Version=${VERSION} -X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeyBytes=${{ secrets.FLEET_SIGNING_PUBKEY }}"
+            -ldflags "-X main.Version=${VERSION} -X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeys=${{ steps.fleet-pins.outputs.pubkeys }}"
             -trimpath
           )
           if [ "${{ runner.os }}" = "Linux" ]; then
@@ -483,7 +793,7 @@ jobs:
           set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
           wails build -platform ${{ matrix.wails_platform }} -nsis \
-            -ldflags "-X main.Version=${VERSION} -X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeyBytes=${{ secrets.FLEET_SIGNING_PUBKEY }}" \
+            -ldflags "-X main.Version=${VERSION} -X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeys=${{ steps.fleet-pins.outputs.pubkeys }}" \
             -trimpath
 
       - name: rename NSIS installer for clean asset name (windows-amd64 only)
@@ -537,6 +847,7 @@ jobs:
       # Skips silently when the org secret isn't visible to this repo,
       # so future repos that opt out of signing still build.
       - name: import Apple signing certificate (macos only)
+        id: mac_cert
         if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -565,6 +876,7 @@ jobs:
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
       - name: codesign "Kenaz Harness.app" (macos only)
+        id: mac_sign_app
         if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -582,6 +894,7 @@ jobs:
           codesign -dv --verbose=4 "build/bin/Kenaz Harness.app"
 
       - name: notarize "Kenaz Harness.app" (macos only)
+        id: mac_notarize_app
         if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
@@ -631,6 +944,7 @@ jobs:
           echo "DMG produced: Kenaz-Harness.dmg ($(du -h Kenaz-Harness.dmg | cut -f1))"
 
       - name: codesign + notarize + staple the .dmg (macOS only)
+        id: mac_sign_dmg
         if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
@@ -687,7 +1001,7 @@ jobs:
         id: azure_login
         if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true'
         continue-on-error: true
-        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         with:
@@ -703,6 +1017,7 @@ jobs:
       # continue-on-error, that failure would silently ship UNSIGNED Windows
       # binaries rather than failing loudly. Reference the new name explicitly.
       - name: artifact signing (windows .exe)
+        id: win_sign
         if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true' && steps.azure_login.outcome == 'success'
         continue-on-error: true
         uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
@@ -735,6 +1050,101 @@ jobs:
           echo "::notice::Windows binary not signed — AZURE_CLIENT_ID secret not set."
           echo "Add AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_TRUSTED_SIGNING_ENDPOINT,"
           echo "AZURE_TRUSTED_SIGNING_ACCOUNT, AZURE_TRUSTED_SIGNING_PROFILE to enable."
+
+      # ── Prod signing is FAIL-CLOSED ─────────────────────────────────────
+      # The signing steps above are deliberately lenient (secret-gated skips,
+      # continue-on-error on Azure) so dev/stage and secret-less forks still
+      # build. For prod that leniency meant an unsigned binary could ship
+      # behind a green run. These two steps make a prod build leg fail unless
+      # its artifacts are verifiably signed (+ notarized on macOS): every
+      # signing step must have actually run and succeeded, AND the artifacts
+      # on disk must verify. A failed leg fails `build`, which skips
+      # `release` (the Release stays a draft) and `publish-s3`.
+      # dev/stage keep the lenient behavior (these steps don't run there).
+      - name: assert macOS artifacts signed + notarized (prod only)
+        if: needs.resolve-env.outputs.target_env == 'prod' && runner.os == 'macOS'
+        shell: bash
+        env:
+          CERT_PRESENT: ${{ env.APPLE_CERT_P12_PRESENT }}
+          O_CERT: ${{ steps.mac_cert.outcome }}
+          O_APP_SIGN: ${{ steps.mac_sign_app.outcome }}
+          O_APP_NOTARIZE: ${{ steps.mac_notarize_app.outcome }}
+          O_DMG: ${{ steps.mac_sign_dmg.outcome }}
+        run: |
+          # No pipefail: `… | grep -q` closes the pipe early and SIGPIPEs the
+          # writer, which pipefail would misread as a verification failure.
+          set -u
+          FAIL=0
+          bad() { echo "::error title=Unsigned prod build (${{ matrix.label }})::$*"; FAIL=1; }
+          [ "$CERT_PRESENT" = true ] || bad "APPLE_CERT_P12 is not visible to this repo — prod macOS builds must be signed"
+          [ "$O_CERT" = success ]         || bad "certificate import outcome=$O_CERT"
+          [ "$O_APP_SIGN" = success ]     || bad "app codesign outcome=$O_APP_SIGN"
+          [ "$O_APP_NOTARIZE" = success ] || bad "app notarization outcome=$O_APP_NOTARIZE"
+          [ "$O_DMG" = success ]          || bad ".dmg sign/notarize outcome=$O_DMG"
+
+          APP="build/bin/Kenaz Harness.app"
+          DMG="build/bin/Kenaz-Harness.dmg"
+          TEAM="K54JDRHBA7"
+          if [ -d "$APP" ]; then
+            codesign --verify --deep --strict --verbose=2 "$APP" || bad "codesign --verify failed for $APP"
+            codesign -dv --verbose=4 "$APP" 2>&1 | grep -q "^TeamIdentifier=$TEAM\$" \
+              || bad "$APP is not signed by team $TEAM"
+            spctl -a -vv -t exec "$APP" 2>&1 | tee /dev/stderr | grep -q "source=Notarized Developer ID" \
+              || bad "Gatekeeper does not accept $APP as Notarized Developer ID"
+            xcrun stapler validate "$APP" || bad "no stapled notarization ticket on $APP"
+          else
+            bad "$APP not found"
+          fi
+          if [ -f "$DMG" ]; then
+            codesign --verify --strict --verbose=2 "$DMG" || bad "codesign --verify failed for $DMG"
+            codesign -dv --verbose=4 "$DMG" 2>&1 | grep -q "^TeamIdentifier=$TEAM\$" \
+              || bad "$DMG is not signed by team $TEAM"
+            spctl -a -vv -t open --context context:primary-signature "$DMG" 2>&1 | tee /dev/stderr \
+              | grep -q "source=Notarized Developer ID" \
+              || bad "Gatekeeper does not accept $DMG as Notarized Developer ID"
+            xcrun stapler validate "$DMG" || bad "no stapled notarization ticket on $DMG"
+          else
+            bad "$DMG not found"
+          fi
+          [ "$FAIL" -eq 0 ] || exit 1
+          echo "macOS ${{ matrix.label }}: app + dmg signed by $TEAM, notarized, stapled."
+
+      # Trusted Signing chains to the Microsoft Identity Verification Root CA
+      # 2020, which Windows only fetches lazily (auto root update). Seed it so
+      # a valid signature can't read as UnknownError and fail closed.
+      - name: trust Microsoft Identity Verification root (prod only)
+        if: needs.resolve-env.outputs.target_env == 'prod' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $u = 'https://www.microsoft.com/pkiops/certs/Microsoft%20Identity%20Verification%20Root%20Certificate%20Authority%202020.crt'
+          $f = Join-Path $env:RUNNER_TEMP 'msidroot.crt'
+          Invoke-WebRequest -Uri $u -OutFile $f
+          Import-Certificate -FilePath $f -CertStoreLocation Cert:\LocalMachine\Root | Format-List Subject, Thumbprint
+
+      - name: assert Windows artifacts signed (prod only)
+        if: needs.resolve-env.outputs.target_env == 'prod' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CLIENT_PRESENT: ${{ env.AZURE_CLIENT_ID_PRESENT }}
+          O_LOGIN: ${{ steps.azure_login.outcome }}
+          O_SIGN: ${{ steps.win_sign.outcome }}
+        run: |
+          $fail = $false
+          function Bad($msg) { Write-Output "::error title=Unsigned prod build (${{ matrix.label }})::$msg"; $script:fail = $true }
+          if ($env:CLIENT_PRESENT -ne 'true') { Bad "AZURE_CLIENT_ID is not set — prod Windows builds must be signed" }
+          if ($env:O_LOGIN -ne 'success') { Bad "azure login outcome=$($env:O_LOGIN)" }
+          if ($env:O_SIGN -ne 'success') { Bad "artifact signing outcome=$($env:O_SIGN)" }
+          $exes = @(Get-ChildItem -Path build/bin -Recurse -File -Filter *.exe)
+          if ($exes.Count -eq 0) { Bad "no .exe found under build/bin" }
+          foreach ($f in $exes) {
+            $sig = Get-AuthenticodeSignature -FilePath $f.FullName
+            $subj = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '<none>' }
+            Write-Output ("{0}: {1} ({2})" -f $f.Name, $sig.Status, $subj)
+            if ($sig.Status -ne 'Valid') { Bad "$($f.Name) signature status is $($sig.Status): $($sig.StatusMessage)" }
+            elseif (-not $sig.TimeStamperCertificate) { Bad "$($f.Name) is signed but not timestamped" }
+          }
+          if ($fail) { exit 1 }
+          Write-Output "Windows ${{ matrix.label }}: all $($exes.Count) .exe files carry a valid, timestamped Authenticode signature."
 
       - name: archive (linux/macos)
         if: runner.os != 'Windows'
@@ -811,7 +1221,7 @@ jobs:
           done
 
       - name: upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kenaz-harness-${{ matrix.label }}
           path: dist/
@@ -842,7 +1252,7 @@ jobs:
     # Prod releases only — the image bake pins stable tags; dev/stage
     # channels don't need the asset.
     if: needs.resolve-env.outputs.target_env == 'prod'
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     permissions:
       contents: read
       packages: read
@@ -856,7 +1266,7 @@ jobs:
           # from the tagged tree, not main.
           ref: ${{ needs.derive-version.outputs.version }}
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -881,7 +1291,7 @@ jobs:
           sha256sum kenaz-harness-served-spa.tar.gz > kenaz-harness-served-spa.tar.gz.sha256
           ls -la kenaz-harness-served-spa.tar.gz*
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kenaz-harness-served-spa
           path: |
@@ -906,7 +1316,7 @@ jobs:
     # Prod releases only — same gating as served-spa: the image bake and
     # the kenaz vendoring pin stable tags.
     if: needs.resolve-env.outputs.target_env == 'prod'
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     permissions:
       contents: read
     steps:
@@ -924,7 +1334,7 @@ jobs:
           sha256sum mcp-registry.json > mcp-registry.json.sha256
           ls -la mcp-registry.json*
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kenaz-harness-mcp-registry
           path: |
@@ -938,16 +1348,16 @@ jobs:
     # Only create/update a GitHub Release for prod-bound triggers.
     # dev (main push) and stage (rc tag) publish to S3 only.
     if: needs.resolve-env.outputs.target_env == 'prod'
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     outputs:
       release_tag: ${{ steps.create.outputs.tag }}
-      release_url: ${{ steps.create.outputs.url }}
+      release_url: ${{ steps.publish.outputs.url }}
       asset_manifest: ${{ steps.manifest.outputs.json }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: download all artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist-flat
           pattern: kenaz-harness-*
@@ -988,21 +1398,34 @@ jobs:
           set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
           TAG="$VERSION"
-          # release-please creates the Release before dispatching us, so
-          # `view` should always succeed. If a human runs this via
-          # workflow_dispatch against a tag that has no Release yet, fall
-          # back to creating one. Notes default to release-please's body
-          # when present.
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
+          # tag-on-merge creates the Release as a DRAFT before dispatching
+          # us; the `publish release` step below undrafts it once every
+          # asset + manifest.json is attached. Look it up through the LIST
+          # endpoint: `releases/tags/<tag>` 404s on drafts, and a lookup that
+          # misses a draft would create a second Release for the same tag
+          # (GitHub allows duplicate drafts per tag).
+          RELS="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\") | \"\(.id)\t\(.draft)\"")"
+          N="$(printf '%s' "$RELS" | grep -c . || true)"
+          if [ "$N" -gt 1 ]; then
+            echo "::error::$N Releases exist for $TAG — delete the stray draft(s) and re-run:"
+            echo "$RELS"
+            exit 1
+          fi
+          # No Release yet (a human dispatch against a bare tag): create one,
+          # also as a draft, so a failure below never leaves a published
+          # zero-asset Release behind.
+          if [ "$N" -eq 0 ]; then
             gh release create "$TAG" \
+              --draft \
               --title "$TAG" \
               --notes "Automated release for $TAG." \
               --target "$GITHUB_SHA"
           fi
+          # gh release upload resolves drafts by tag (it falls back to the
+          # draft lookup when releases/tags/<tag> 404s).
           gh release upload "$TAG" dist-flat/* --clobber
-          URL=$(gh release view "$TAG" --json url --jq .url)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       - name: build asset manifest for docs site
         id: manifest
@@ -1013,6 +1436,10 @@ jobs:
         run: |
           # Emit a JSON manifest the docusaurus site consumes.
           # One record per platform with download URL + sha256.
+          # released_at: GITHUB_RUN_STARTED_AT is NOT a GitHub-provided
+          # variable (the field was "" in every published manifest), so stamp
+          # the real build time here.
+          export RELEASED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           python3 - <<'PY' > manifest.json
           import json, os, pathlib, re
           tag = os.environ['TAG']
@@ -1084,7 +1511,7 @@ jobs:
               'version': version,
               'tag': tag,
               'commit': os.environ.get('GITHUB_SHA', ''),
-              'released_at': os.environ.get('GITHUB_RUN_STARTED_AT', ''),
+              'released_at': os.environ['RELEASED_AT'],
               'release_url': f"https://github.com/{repo}/releases/tag/{tag}",
               'assets': assets,
           }
@@ -1097,6 +1524,66 @@ jobs:
           # can fetch it without needing a token.
           gh release upload "${{ steps.create.outputs.tag }}" manifest.json --clobber
 
+      # Draft-until-complete: the Release becomes visible only here, after
+      # every platform asset AND manifest.json are attached. Any earlier
+      # failure leaves an invisible draft that a re-run completes (no more
+      # permanent zero-asset Releases). Undrafting with GITHUB_TOKEN does NOT
+      # fire `release: published`, so this does not re-trigger this workflow.
+      # A Release that is ALREADY published (legacy, or a human published the
+      # draft) is left as-is — its publish state and "latest" flag untouched.
+      - name: publish release (undraft + latest)
+        id: publish
+        env:
+          TAG: ${{ steps.create.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/lib/semver.sh
+          ALL="$RUNNER_TEMP/releases.tsv"
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate \
+            --jq '.[] | "\(.id)\t\(.tag_name)\t\(.draft)\t\(.prerelease)"' > "$ALL"
+          REL="$(awk -F'\t' -v t="$TAG" '$2 == t' "$ALL")"
+          if [ "$(printf '%s' "$REL" | grep -c . || true)" -ne 1 ]; then
+            echo "::error::expected exactly one Release for $TAG, found:"; echo "${REL:-<none>}"
+            exit 1
+          fi
+          ID="$(cut -f1 <<<"$REL")"
+          DRAFT="$(cut -f3 <<<"$REL")"
+
+          # Belt and braces: every artifact this run built, plus the
+          # manifest, must be attached before the Release goes public.
+          gh api "repos/$GITHUB_REPOSITORY/releases/$ID/assets?per_page=100" --paginate \
+            --jq '.[] | select(.state == "uploaded") | .name' | sort > "$RUNNER_TEMP/have.txt"
+          { (cd dist-flat && ls -1); echo manifest.json; } | sort -u > "$RUNNER_TEMP/want.txt"
+          MISSING="$(comm -23 "$RUNNER_TEMP/want.txt" "$RUNNER_TEMP/have.txt")"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Release $TAG is missing assets — leaving it as a draft:"; echo "$MISSING"
+            exit 1
+          fi
+
+          if [ "$DRAFT" = "true" ]; then
+            # "latest" only if no published, non-prerelease Release outranks
+            # this tag — re-running an OLD tag must not steal "latest" (same
+            # rule publish-s3 applies to the CDN pointer).
+            MAKE_LATEST=true
+            while IFS=$'\t' read -r _ t d pre; do
+              [ "$d" = false ] && [ "$pre" = false ] || continue
+              [ "$t" != "$TAG" ] || continue
+              if [ "$(semver_cmp "$t" "$TAG" 2>/dev/null || true)" = 1 ]; then
+                MAKE_LATEST=false
+                echo "Published $t outranks $TAG — not marking latest."
+                break
+              fi
+            done < "$ALL"
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$ID" \
+              -F draft=false -f make_latest="$MAKE_LATEST" >/dev/null
+            echo "Published $TAG (make_latest=$MAKE_LATEST)."
+          else
+            echo "::notice::Release $TAG was already published — publish state and latest flag left unchanged."
+          fi
+          URL="$(gh api "repos/$GITHUB_REPOSITORY/releases/$ID" --jq .html_url)"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
   # ────────────────────────────────────────────────────────────────────────────
   # publish-s3: single parameterized job — publishes artifacts to the S3
   # bucket and CloudFront distribution that correspond to the resolved
@@ -1105,7 +1592,7 @@ jobs:
   #
   # Prod path is identical to the pre-refactor behavior:
   #   bucket:  kameas-ai-prod-releases-use2
-  #   role:    arn:aws:iam::764395350337:role/gh-deploy-prod
+  #   role:    vars.DEPLOY_ROLE_ARN_PROD (gh-deploy-prod)
   #   cf_dist: ENWB9Y4KGTPFD
   #   prefix:  kenaz-harness/<tag>/
   #
@@ -1123,7 +1610,7 @@ jobs:
       always() &&
       needs.build.result == 'success' &&
       (needs.release.result == 'success' || needs.release.result == 'skipped')
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     # The kenaz-harness repo is private and GitHub release assets on
     # private repos require auth — public docs visitors get 404 hitting
     # github.com/.../releases/download/. Mirror to the per-env S3 bucket
@@ -1139,7 +1626,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: download all artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist-flat
           pattern: kenaz-harness-*
@@ -1153,6 +1640,9 @@ jobs:
           TARGET_ENV: ${{ needs.resolve-env.outputs.target_env }}
           RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
         run: |
+          # released_at: real UTC publish time (GITHUB_RUN_STARTED_AT is not
+          # a GitHub-provided variable, so this was always "").
+          export RELEASED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           python3 - <<'PY'
           import json, os, pathlib, re
           # For prod, use the release tag from the release job output;
@@ -1218,7 +1708,7 @@ jobs:
               'tag': tag,
               'env': target_env,
               'commit': os.environ.get('GITHUB_SHA', ''),
-              'released_at': os.environ.get('GITHUB_RUN_STARTED_AT', ''),
+              'released_at': os.environ['RELEASED_AT'],
               'release_url': f"{cdn_base}/",
               'assets': assets,
           }
@@ -1227,7 +1717,7 @@ jobs:
           PY
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ needs.resolve-env.outputs.role_arn }}
           aws-region: us-east-2
@@ -1264,23 +1754,87 @@ jobs:
             --cache-control 'public, max-age=3600' \
             --metadata-directive REPLACE \
             --no-progress
+          # Pin the manifest under the per-tag prefix too — BEFORE the pointer
+          # guard, so a guard failure still leaves a complete per-tag prefix.
+          aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/kenaz-harness/${TAG}/manifest.json" \
+            --cache-control 'public, max-age=3600' \
+            --content-type 'application/json' \
+            --metadata-directive REPLACE \
+            --no-progress
+
+      # The canonical kenaz-harness/manifest.json is the env's "latest"
+      # pointer: core/update/manifest.go (auto-updater), the frontend update
+      # store and the docs download page all read it. Before this guard every
+      # run overwrote it, so re-running release.yml against an OLD tag (the
+      # remedy check-release-integrity.sh gives for a zero-asset release; and
+      # every workflow_dispatch resolves to prod) would have made that old
+      # tag "latest" for every install. The guard reads the current pointer
+      # and refuses to move it backwards; scripts/ci/lib/semver.sh holds the
+      # ordering + decision table, self-tested on every PR by
+      # scripts/ci/check-semver-lib.sh. The per-tag prefix (binaries AND its
+      # manifest.json, uploaded in the step above) and the GitHub Release
+      # assets are published either way — they are harmless — so a guard
+      # exit 1 leaves the per-tag prefix complete and this job re-runnable.
+      - name: Guard — never move the stable pointer backwards
+        id: pointer
+        env:
+          VERSION:    ${{ needs.derive-version.outputs.version }}
+          BUCKET:     ${{ needs.resolve-env.outputs.bucket }}
+          TARGET_ENV: ${{ needs.resolve-env.outputs.target_env }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/lib/semver.sh
+          CUR_JSON="$RUNNER_TEMP/current-manifest.json"
+          CUR=""
+          if aws s3 cp "s3://${BUCKET}/kenaz-harness/manifest.json" "$CUR_JSON" \
+               --no-progress 2>"$RUNNER_TEMP/current-manifest.err"; then
+            # Malformed JSON → empty → treated as "nothing to protect".
+            CUR="$(jq -r '.version // "" | strings' "$CUR_JSON" 2>/dev/null || true)"
+            if [ -z "$CUR" ]; then
+              # The pointer EXISTS but carries no string version ({}, 0-byte,
+              # garbage, numeric) — advancing is right, but never silently.
+              echo "::warning::canonical s3://${BUCKET}/kenaz-harness/manifest.json exists but has no string .version — nothing orderable to protect; advancing to $VERSION"
+            fi
+          elif grep -Eq '\(404\)|NoSuchKey|does not exist|Not Found' "$RUNNER_TEMP/current-manifest.err"; then
+            echo "No canonical manifest in ${BUCKET} yet — first publish to this env."
+          else
+            # Fail closed: a pointer we cannot read is a pointer we must not
+            # blindly overwrite. The per-tag prefix (binaries + manifest) has
+            # already landed, so re-running this job is safe.
+            # (A nonexistent BUCKET also yields "Not Found" above and is
+            # treated as first publish — harmless: the canonical cp that
+            # follows fails on the same missing bucket.)
+            echo "::error::could not read s3://${BUCKET}/kenaz-harness/manifest.json to compare versions:"
+            sed 's/^/  /' "$RUNNER_TEMP/current-manifest.err"
+            exit 1
+          fi
+          if [ -n "$CUR" ] && ! semver_valid "$CUR" && [ "$TARGET_ENV" != dev ]; then
+            echo "::warning::current canonical manifest version '$CUR' is not SemVer — nothing orderable to protect; advancing to $VERSION"
+          fi
+          DECISION="$(pointer_decision "$TARGET_ENV" "$VERSION" "$CUR")"
+          if [ "$DECISION" = hold ]; then
+            echo "::warning title=Stable pointer held::publishing $VERSION, which is OLDER than the current ${TARGET_ENV} pointer ${CUR}. Per-tag assets are published; kenaz-harness/manifest.json is NOT moved and $VERSION is filed into index.json at its historical position, not the top."
+            echo "move=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Pointer decision: advance (${TARGET_ENV}: '${CUR:-<none>}' -> ${VERSION})"
+            echo "move=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload manifest at canonical path (short cache)
         env:
-          TAG:    ${{ needs.derive-version.outputs.version }}
           BUCKET: ${{ needs.resolve-env.outputs.bucket }}
+          MOVE_POINTER: ${{ steps.pointer.outputs.move }}
         run: |
           set -euo pipefail
+          # (The per-tag copy was uploaded with the binaries, before the guard.)
+          if [ "$MOVE_POINTER" != "true" ]; then
+            echo "Stable pointer held (see guard step) — canonical manifest.json left unchanged."
+            exit 0
+          fi
           # The download page fetches /kenaz-harness/manifest.json at runtime.
           # Short cache so a fresh release shows up within minutes.
           aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/kenaz-harness/manifest.json" \
             --cache-control 'public, max-age=120, must-revalidate' \
-            --content-type 'application/json' \
-            --metadata-directive REPLACE \
-            --no-progress
-          # Also pin a copy under the per-tag prefix for forensic lookup.
-          aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/kenaz-harness/${TAG}/manifest.json" \
-            --cache-control 'public, max-age=3600' \
             --content-type 'application/json' \
             --metadata-directive REPLACE \
             --no-progress
@@ -1292,8 +1846,18 @@ jobs:
           BUCKET:     ${{ needs.resolve-env.outputs.bucket }}
           CDN_BASE:   ${{ needs.resolve-env.outputs.cdn_base }}
           TARGET_ENV: ${{ needs.resolve-env.outputs.target_env }}
+          MOVE_POINTER: ${{ steps.pointer.outputs.move }}
         run: |
           set -euo pipefail
+          # When the guard held the pointer (publishing an OLDER version than
+          # the env's current one), the entry must not be stamped released_at
+          # =now — the picker sorts on released_at, so that would put the old
+          # version at the top. File it at its historical position instead,
+          # dated by its commit, and leave an existing entry untouched.
+          export HELD_RELEASED_AT=""
+          if [ "$MOVE_POINTER" != "true" ]; then
+            HELD_RELEASED_AT="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ "$GITHUB_SHA" 2>/dev/null || true)"
+          fi
           # Maintain s3://.../kenaz-harness/index.json — a sorted list of
           # every version that's been published to this environment. The
           # download page fetches this lazily when the user opens the
@@ -1314,17 +1878,25 @@ jobs:
           tag = os.environ['TAG']
           cdn_base = os.environ['CDN_BASE']
           target_env = os.environ['TARGET_ENV']
-          # Drop any prior entry for the same tag (rolling 'main' replaces
-          # itself; tagged releases shouldn't republish but if they do the
-          # latest wins).
-          versions = [v for v in versions if v.get('tag') != tag]
-          versions.append({
-              'tag': tag,
-              'version': os.environ['VERSION'],
-              'env': target_env,
-              'released_at': os.environ['NOW'],
-              'manifest_url': f"{cdn_base}/kenaz-harness/{tag}/manifest.json",
-          })
+          held = os.environ.get('MOVE_POINTER') != 'true'
+          if held and any(v.get('tag') == tag for v in versions):
+              # Older than the pointer and already listed: keep its original
+              # released_at and position.
+              pass
+          else:
+              # Drop any prior entry for the same tag (rolling 'main' replaces
+              # itself; tagged releases shouldn't republish but if they do the
+              # latest wins).
+              versions = [v for v in versions if v.get('tag') != tag]
+              versions.append({
+                  'tag': tag,
+                  'version': os.environ['VERSION'],
+                  'env': target_env,
+                  # Held (older) version: its commit time, so it sorts into
+                  # its historical slot rather than to the top.
+                  'released_at': os.environ['HELD_RELEASED_AT'] if held else os.environ['NOW'],
+                  'manifest_url': f"{cdn_base}/kenaz-harness/{tag}/manifest.json",
+              })
           # Newest first by released_at, with rolling dev builds pinned to
           # the top so the picker shows them at the front.
           versions.sort(key=lambda v: (0 if v.get('env') == 'dev' else 1, v.get('released_at', '')), reverse=True)

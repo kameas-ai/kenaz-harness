@@ -92,10 +92,40 @@ parse_gen_file "${GEN_FILE}" "${CUR_FILE}"
 PREV_FILE="${TMPDIR_LOCAL}/prev.txt"
 PREV_GEN="${TMPDIR_LOCAL}/prev_gen.go"
 
+# FLOOR GUARD. This gate's entire signal is the DIFF against HEAD~1, so a
+# baseline it cannot read is not "an empty baseline" -- it is no signal at
+# all. With an empty PREV every kind classifies as "new" rather than
+# "changed", nothing trips the unbumped-version check, and the gate exits 0
+# while inspecting nothing. That is the failure this repo keeps finding
+# (docs/unwired-ledger.md, finding #59: a check that passes on something
+# adjacent to the property it claims to verify).
+#
+# It is not hypothetical. actions/checkout defaults to fetch-depth: 1, where
+# HEAD~1 does not exist at all. The gate runs in pr.yml's lint-go job, which
+# sets fetch-depth: 0 -- but gates_can_fail_test.go exercises it from the
+# test-go job, which did not, and the planted-violation proof duly failed
+# with "the gate cannot see an unbumped version". That proof is how this was
+# found; the else-branch below had been silently swallowing the condition.
+#
+# So distinguish the two cases that reach here:
+#   - HEAD~1 does not RESOLVE  -> shallow clone or root commit. Abort: the
+#     gate cannot do its job and must say so rather than pass.
+#   - HEAD~1 resolves but the FILE is absent -> genuinely new file, and an
+#     empty baseline is the correct reading.
+if ! git rev-parse --verify --quiet "HEAD~1" >/dev/null; then
+  echo "[manifest-version-bump] FAIL: cannot resolve HEAD~1, so there is no baseline to diff against."
+  echo "[manifest-version-bump] This gate compares ${GEN_FILE} against its HEAD~1 copy; without real"
+  echo "[manifest-version-bump] history it would inspect nothing and exit 0. Refusing to report clean."
+  echo "[manifest-version-bump] In CI: set 'fetch-depth: 0' on the actions/checkout step for this job."
+  echo "[manifest-version-bump] Locally: run from a full clone, not a shallow or single-commit one."
+  exit 1
+fi
+
 if git cat-file -e "HEAD~1:${GEN_FILE}" 2>/dev/null; then
   git show "HEAD~1:${GEN_FILE}" > "${PREV_GEN}"
 else
-  # File doesn't exist in parent commit — treat as empty.
+  # HEAD~1 exists but did not contain the file: genuinely new, empty is right.
+  echo "[manifest-version-bump] ${GEN_FILE} absent at HEAD~1 — treating baseline as empty (new file)."
   > "${PREV_GEN}"
 fi
 parse_gen_file "${PREV_GEN}" "${PREV_FILE}"

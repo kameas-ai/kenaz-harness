@@ -39,15 +39,28 @@ shipped product boundary, not unwired code. Read that doc before flagging
 | I11 | `check-builtin-tool-registration.sh` | `i11-unregistered-builtin-tools.txt` | builtin tool package no wiring site imports — **added 2026-08-14** |
 | I12 | `check-single-move-writer.sh` | *(none — no allowlist by design)* | second writer of transcript-move metadata, or a seam with 0 / >1 production callers — **added 2026-08-14** |
 | I13 | `check-cedar-gate-arguments.sh` | `i13-cedar-gate-arguments.txt` | a `cedar.Gate` argument or view-`Config` field that resolves to an unconditional permit — **added 2026-08-16, empty** |
-| I14 | `check-broker-topic-consumers.sh` | `i14-unconsumed-broker-topics.txt` | A const under `core/**` whose **identifier contains `Topic`** and whose value is a broker topic, with no frontend subscriber, no Go subscriber, and no `passthroughTopics` entry — **added 2026-08-18; one entry (`mcp:progress`)**. Multi-pass (Go + frontend), same discipline as `check-output-ports.sh`. Wired into `pr.yml`. See "Declined gate" below for why this shipped instead of the gate `docs/dead-code-audit-2026-08-16.md` §5 originally asked for, and the allowlist header for why "contains" rather than "starts with" is the whole gate. |
+| I14 | `check-broker-topic-consumers.sh` | `i14-unconsumed-broker-topics.txt` | A const under `core/**` whose **identifier contains `Topic`** and whose value is a broker topic, with no frontend subscriber, no Go subscriber, and no `passthroughTopics` entry — **added 2026-08-18; one entry (`mcp:progress`)**. Multi-pass (Go + frontend), same discipline as `check-output-ports.sh`. Wired into `pr.yml`. See "Declined gate" below for why this shipped instead of the gate `docs/dead-code-audit-2026-08-16.md` §5 originally asked for, and the allowlist header for why "contains" rather than "starts with" is the whole gate. **G-0 correction (connector-lifecycle-truth-01PMZ303 spec.md §1.12 R-6, landed with UNIT-8):** the gate used to pass vacuously on a topic whose only "consumer" was its own declaring file's `Subscribe` call (exactly `mcp:health-changed`'s pre-UNIT-8 shape — `views/mcp/impl.go:240` both declared `TopicMCPHealthChanged` and subscribed to it, with no publisher and no real reader). The gate now explicitly excludes a Go subscriber in the SAME file as the const's declaration, and additionally requires a real `.Publish*(` call site — see the script's own R-6 citation and `TestGates_PlantedViolationFires/broker-topic-consumers/self-subscribe-only`. |
 | I15 | `check-cedar-engine-singleton.sh` | *(none — no allowlist by design)* | more than one Cedar engine construction (`buildCedarGate`/`buildCedarEngineOrNil` call, or a direct `cedar.NewEngine` call) reachable from `rpc.New` — **added 2026-08-18 (consent-surfaces-truth-01PMTR01 WP05)**. I13 checks the *argument* at a call site; it has no vocabulary for *instance count*, which is why thirteen independent engine constructions (nine `buildCedarGate` + four `buildCedarEngineOrNil`) all passed it clean before the WP05 hoist. Wired into `pr.yml`. |
+| G-1 | `check-transport-parity.sh` | *(none — no allowlist by design)* | a transport tag in `dispatch.Pool.closeOneByTag`'s switch whose case body has no real `.CloseOne(ctx, id)` call — comment-only, empty, or dispatching something else — **added 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-15)**. Hand-scoped to the one production switch this mission found broken (pre-UNIT-6, http/sse's cases were comment-only and fell through to the function's shared tail, then a bare `return nil`); the header states explicitly it is not a general arm-parity gate. Tag set is derived from the switch's own `case` lines, not hardcoded. Wired into `pr.yml`. |
+| G-2 | `check-recipe-token-substitution.sh` | `g2-recipe-substituted-paths.txt` | a `${...}` token in `registry.json`/`shipped.json` on a JSON path with no declared, still-matching production `Substitute*` call site — **added 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-15)**. Path set is derived from the catalogs each run (a path with no token today needs no manifest entry); a manifest entry whose grep pattern stops matching also fails, so the manifest cannot degrade into an opt-out list. Measured clean today over 7 discovered paths. Wired into `pr.yml`. |
+| TE-1 | `check-tool-exposure-gate.sh` | `tool-exposure-writers.txt` | a non-test writer of `llm.GenerationRequest.Tools` under `core/` (a `Tools:` key in a `GenerationRequest` literal, a `SetTools` call, or `x.Tools = …` on a visibly `GenerationRequest`-typed `x`; AST scan, `scripts/ci/cmd/checktoolexposure`) that is neither the exposure-partition path nor a dated gap; plus the FR-E1 seed test and the production-wiring first-turn test must run and pass — **added 2026-10-09 (tool-context-budget-01TCBUD01 WP08)**. Planted proofs: `TestToolExposureGate_*` in `gates_can_fail_test.go` (direct assignment, literal key, stale entry, cwd independence). One open entry: workflow `model_turn` steps. Wired into `pr.yml`. |
 
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
 `check-knob-coverage.sh` (registered config field with no consumer),
-`check-seam-implementers.sh`, `check-node-dispatch.sh`,
-`check-serve-dispatch-drift.sh`, `core/serve/wsstream_topics_parity_test.go`
-(desktop `passthroughTopics` ↔ `SERVED_STREAM_TOPICS`),
+`check-seam-implementers.sh` (interface fields of `*Config`/`*Options`/
+`*Deps` structs, and of `*Env` structs since the 2026-10-04 v0.86.0
+sweep), `check-node-dispatch.sh`,
+`check-serve-dispatch-drift.sh`, `scripts/ci/check-codegen.sh`'s
+served-stream-topics block (`frontend/src/lib/servedStreamTopics.gen.ts`
+generated from `core/serve/wsstream.go`'s `passthroughTopics` — findings
+#63/#62, served-topic-single-source, 2026-09: this used to be
+`core/serve/wsstream_topics_parity_test.go`, a runtime regex-parse
+cross-check between `passthroughTopics` and a hand-maintained
+`SERVED_STREAM_TOPICS` array; it and the third hand-copied mirror in
+`harnessClient.wp06Overlay.test.ts` are deleted now that
+`SERVED_STREAM_TOPICS` is generated code with no independent content to
+drift),
 `core/rpc/builtins_wiring_test.go` (registered tool ↔ predicate case).
 `scripts/ci/gates_can_fail_test.go` is the meta-gate: it plants a violation
 per gate and asserts the gate rejects it — for the gates it covers. As of
@@ -62,6 +75,27 @@ which did not name `check-no-model-family-literals.sh`); see that
 mission's spec §1.4 and its `research/escalations.md` E-004 for the
 corrected list and for why "per gate" overstated the
 coverage this sentence used to claim unconditionally.
+
+**2026-09-11 update (finding #48 closure)**: re-derived from scratch
+(`comm` between `scripts/ci/check-*.sh` filenames and every real `gate:`
+field / `runGate(t, "check-*.sh"` literal / `const gate = "check-*.sh"`
+call in `gates_can_fail_test.go`, **plus** `check-no-model-family-literals_test.go`,
+a separate file the naive single-file `comm` above misses). By then the
+repo had **51** `check-*.sh` scripts, **41** already proved, and exactly
+**10** missing: `check-codegen`, `check-fleet-log-export-fence`,
+`check-manifest-version-bump`, `check-no-cred-bytes-in-rpc`,
+`check-no-fleet-imports`, `check-no-forbidden-compaction-symbols`,
+`check-node-dispatch`, `check-oss-first`, `check-output-ports`,
+`check-release-integrity`. All 10 now have a proof (7 as new
+`TestGates_PlantedViolationFires` table cases; `check-codegen` and
+`check-manifest-version-bump` as standalone functions sharing one plant on
+`core/agentgraph/nodes/manifests/sleep.yaml`; `check-release-integrity` as
+a standalone function that fakes `gh` on PATH rather than hitting the
+network). **51 of 51 now have a planted-violation proof.** One gate
+(`check-no-fleet-imports.sh`) was found to have a real, live scope hole
+while writing its proof — see the dedicated 2026-09-11 entry below; the
+proof itself was adjusted to stay honest about what the *shipped* gate can
+prove rather than silently landing a fix with unassessed blast radius.
 
 ### The draft tool promises a review path served mode does not have
 
@@ -308,6 +342,2563 @@ prose and in a TS union; they do not call `MoveKinds()`.
 ---
 
 ## Open — ungated findings
+
+### 2026-10-16 (provider-credentials-client-01PCCLI01 WP04) · Fleet credential groundwork with no producer yet — dated
+
+WP04 lands the local model for Fleet-delivered keys with no Fleet calls, so
+these pieces have no production writer yet. None of them claims to do
+something it does not: no profile can carry a Fleet source until a writer
+binds one, and every reader below reports exactly what exists.
+
+- `secrets.FleetCredentialStore` (`Put`, `Delete`, `Purge`, `IDs`) and
+  `NewFleetCredentialStore` — the only writer of
+  `kenaz-harness/fleet/<env>/<realm>/<sub>/{org,user}/<credential_id>`;
+  `Put` is called only by tests. Live today: resolution
+  (`credref.Resolver.WithFleetPrincipal(fleet.CredentialPrincipal)` on
+  every model call), the sign-out and `node_removed` purge
+  (`secrets.PurgeFleetCredentialsForSignOut` from `FleetSignOut` /
+  `handleNodeRemoved`) and the account/org-change purge
+  (`settings.ReconcileFleetCredentialsOnSessionReset` on
+  `OnFleetSessionReset`). **Owner:** WP05 (org/team fetch + unwrap →
+  `Put(FleetNamespaceOrg, …)`; tombstone and lockdown purges) and WP06
+  (synced user keys → `Put`/`Purge(FleetNamespaceUser)`).
+- `llm.BuildKeyList`'s `policy` (`*llm.CredentialPolicy`) and `scopeNames`
+  arguments — the one production caller (`views/llm.CredentialKeys`, behind
+  `LLM_ListCredentialKeys`) passes nil for both, so `CredentialKey.OrgDefault`
+  is never true, `ScopeName` is always empty (the Providers view falls back
+  to "Provided by your organization") and — failing closed, since the
+  contract's `allow_user_selection` defaults to false — no key is
+  `UserSelectable`. **Owner:** WP05, which fetches the policy
+  (`GET /me/credentials/policy`) and org/team names; WP12 then narrows
+  `llm.userKeySelectionAllowed` further with the Cedar Credential family.
+- `readSessionCredential` / `writeSessionCredential`
+  (`frontend/src/lib/sessionModelStash.ts`) — the per-chat key selection,
+  stored per Fleet account (`FleetSessionView.accountKey`) and bound to the
+  provider it was made for; `clearSessionCredentials` is live (sign-out and
+  account change, from `lib/fleetSession.ts`), but only the spec reaches the
+  reader and writer. **Owner:** WP07 (the per-chat key picker, and the send
+  path that re-checks the selection against policy on every use).
+
+### 2026-10-09 (ml-producer-01MLPRD01 WP03) · Fleet's OTLP-JSON decode — the ML shipper sends protobuf
+
+(WP03's dev-org-only guard entry that stood here was closed by WP05, which
+deleted `mlproducer.DevOrgID` and `orgAllowed`: on-device path/command
+exclusions from `/me/ml` now gate what any org records.)
+
+**CLOSED 2026-10-09 (kenaz-fleet #218)** — recorded by WP03: Fleet's OTLP
+receiver decoded an `application/json` body with `encoding/json` into the
+generated proto structs (kenaz-fleet `service/telemetry/receiver.go`
+`unmarshalOTLP`), so a standard OTLP-JSON request decoded to zero resource
+logs and was answered 200 with nothing routed. Fleet #218 switched to
+`protojson` (DiscardUnknown; hex trace/span ids handled). The shipper keeps
+sending protobuf (the contract allows either); nothing changes here.
+
+### 2026-10-09 (ml-producer-01MLPRD01 WP04) · agent-process markers have no reader yet — dated
+
+The harness marks every process its agent spawns so the person-side daemon
+can skip it (spec §1 rule 3, §12 A-4), and nothing reads the marks yet:
+
+- `KENAZ_ACTOR=agent` on `kenaz__bash` foreground and background children
+  and on every MCP stdio server the pool spawns;
+- `KENAZ_SESSION=h(root session)` on `kenaz__bash` foreground and
+  background children;
+- `<dataDir>/fleet/agent_pids` (the harness pid, 0600, written by
+  `newMLProducerWiring`, removed on shutdown).
+
+This is not a lie in the harness — they are set, and pinned end to end by
+`TestMLAcceptance_8_4_BashForegroundAndBackgroundCarryMarkers`,
+`TestPoolOpen_SpawnedServerCarriesAgentActor` and
+`TestMLWiring_LifecycleAndAgentPIDs` — but the separation from the daemon
+they exist for does not hold until the reader ships: until then an agent's
+shell command can also appear as a person `terminal` row in sigild's data.
+**Blocker:** the sigil daemon change that skips processes with
+`KENAZ_ACTOR=agent` in their environment or ancestry, and writes by pids
+listed in `agent_pids` (spec §9). **Owner:** the sigil repo; this entry
+closes when that ships.
+
+### 2026-10-09 (tool-context-budget-01TCBUD01, re-swept by WP08) · tool-exposure gaps still open
+
+**WP08 sweep (2026-10-09, scoped to `git diff v0.93.3..HEAD`).** Closed
+since WP02–WP06 wrote this entry:
+
+- Every FR-K1 control now has a request-level test — the setting is
+  written the way its binding writes it and the NEXT chat turn's wire
+  request is asserted, through newLLMStack's real chat runner over real
+  sqlite: `core/rpc/tool_exposure_dials_test.go` (schema budget → the
+  next request's `tools_tokens_est` ≤ budget; activation TTL → expiry in
+  the next turn; user per-server and per-tool tiers; project tier;
+  session Load / Unload; org pins incl. the pinned budget). The WP06
+  "request-level tests deferred to WP08" line is deleted.
+- The seven `*_ToolExposure` / `Sessions_LoadTools` bindings and
+  `Tools_SchemaCosts` each have a `harnessClient.ts` method and a `.vue`
+  caller (`ToolsMenu.vue`, `ToolExposurePanel.vue`, `SessionsView.vue`,
+  `ScheduledChatFormModal.vue`); both components are mounted.
+- `tools.activated` / `tools.evicted` have emit sites
+  (`core/tools/loadtools`) and a reader: the audit view's LLM category
+  (`views/audit.categoryForKind`, now pinned in
+  `TestObserveEvent_KindToCategory`).
+- `ContextCompositionPopover.vue` carried "no schema-budget line until
+  WP04 adds it": WP04 shipped `composition.schemaBudget` /
+  `toolsEvicted`; the popover now renders the budget line (spec §2.5).
+- Zero-non-test-reader exports in the new surface:
+  `llm.OrderToolsFlat` **deleted** (live substitute:
+  `llm.OrderTools(all, nil, nil)`, which the no-exposure path already
+  calls); `toolexposure.Partition.SendNames` **unexported** (package test
+  oracle only); `toolexposure.HotSet` **kept, dated** at its declaration
+  (sole reader is core/rpc's anchor test against the tool packages'
+  Name constants, which toolexposure cannot import).
+- New gate `check-tool-exposure-gate.sh` (see the gate inventory) makes
+  FR-E1 mechanical.
+
+**Still open** — each with its blocker; **owner: alec**:
+
+- **Workflow steps are not tiered (spec §2.6).** `model_turn` steps send
+  their own tool list (all discovered tools with `tools: all`) through
+  `wfLLMStreamerAdapter.Stream`. Gated: the only listed non-exposure
+  writer in `scripts/ci/allowlists/tool-exposure-writers.txt`.
+  Blocker: a step has no session to hold activations and no
+  `kenaz__load_tools` loop; the follow-up "workflow-step tool exposure"
+  deletes the allowlist line.
+- **FR-E2 — never-started recipes are missing from the digest.** The
+  "(stopped)" marker covers servers the dispatch pool knows; an enabled
+  recipe that never reached the pool (env resolution failed at boot) is
+  omitted, not marked (`toolServerDirectory`,
+  `core/rpc/tool_exposure_wiring.go`). Blocker: no recipe-store reader of
+  enabled-but-unstarted recipes and their failure reason in the
+  directory; that follow-up deletes this bullet.
+- **Schedule tool set.** The schedule form's "Custom servers" option is
+  disabled with its reason; the schedule record has no tool-set field;
+  the cost line is the user's default tiers, and a contained schedule
+  says "cost not shown". Blocker / owner: follow-up mission "schedule
+  tool set" (`ScheduledChatFormModal.vue` carries the dated TODO).
+- **Tools menu meter is "before budget".** It uses `Tools_SchemaCosts`'
+  sendable set, which does not apply WP04's eviction or TTL expiry (the
+  meter says so); the composition popover shows the last call's real
+  fitted figure. Blocker: a budget-aware cost read (fit the partition in
+  `SchemaCosts`); deleted when the meter reads it.
+- ~~**FR-H3 does not hold: the estimator under-counts tool schemas by
+  ~37 %.**~~ — **closed 2026-10-09 (owner ruling)**: tool definitions now
+  estimate at the measured 2.5 bytes/token (`tokenizer.CountToolSchema`,
+  via `llm.EstimateToolSpecTokens`); prose/messages keep per-rune/4. The
+  dogfood's three recorded frames read 101.0 % of `prompt_tokens` (were
+  63.2 %); `TestComposition_RecordedDogfoodFrames_WithinFRH3` asserts
+  FR-H3's 0.90–1.10. In-sample fit (2.5 came from these frames): the live
+  re-measure in the acceptance doc is the out-of-sample check.
+- Activations of tools whose server was later uninstalled stay in
+  `sessions.tool_activations` (never sent: the catalog no longer lists
+  them). Non-sticky ones leave with the TTL; sticky ones stay until the
+  user unloads them from the Tools menu. Accepted, not a defect.
+- `toolexposure.SettingsSource` — `wiring:deferred` at its declaration
+  (checkseams skips the settings package; the implementation is
+  compile-time asserted).
+
+**Rulings recorded (2026-10-09, owner alec, WP03 review).**
+- Auto-activation does not retry on the harness side: it activates the
+  tool and returns `not_loaded`; the model re-calls with the schema in
+  view. Its audit rows carry `by: "auto"`, an addition to the spec's
+  model|user enum (spec amended).
+- `sticky` is an activation flag (`Activation.Sticky`), not a write to
+  the session override layer; equivalent for §2.1 step 2 (spec amended).
+- The FR-E3 write guard checks only the layer being written: a stored
+  user-layer `load_tools: off` followed by a project write that makes
+  tools summary is not refused. The resolver invariant forces
+  `load_tools` full in that state, so nothing becomes unreachable.
+- `Settings_Set` (whole-settings save) runs the same guard when the
+  exposure layer differs from the stored one.
+- The digest is a per-call system section after the cacheable prefix,
+  not `kenaz__load_tools`' description (which is static); spec §2.2
+  amended.
+
+**Rulings recorded (2026-10-09, owner alec, WP04 review).**
+- Fork inheritance widens past "subagent children" (spec §2.6): every
+  `conversation.Manager` fork — subagent, advice fork, workflow branch,
+  user "Branch from this turn" / "+ Fork", `kenaz__fork_conversation` —
+  copies the parent's session override (a failed copy fails the fork:
+  consent surface) and its activations (a failed copy is logged). Intended.
+- Eviction is per call and never persisted: an evicted tool stays
+  activated, returns when there is room, and still dispatches if the
+  model calls it by name (it passes the exposure gate as activated).
+- The schema budget counts tool definitions only; the per-call digest
+  section is not counted.
+- Tools called this turn are never evicted; tools loaded this turn go
+  after every older activated and pinned tool, and a load that still
+  does not fit reports them `not_loaded` ("over the schema budget by N
+  tokens" / "pinned but over the schema budget by N tokens").
+- Failed turns count toward the activation TTL (the ordinal is the
+  number of recorded turn runs).
+
+**Disposition: dated-justified (2026-10-09, owner alec).** Every
+bullet above names the change that deletes it.
+
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP04 review) · compaction's context-window lookup is keyed by profile id
+
+**Finding.** `compactionwiring.CapabilityLookup.MaxContextTokens`
+(`core/agentgraph/compaction/wiring/capabilities.go`) is called with
+`ProviderProfileRef{ProviderID: <profile id>, ...}` by
+`request_too_large.go:147`, `session_compaction.go:171/173`,
+`overflow_recovery.go:64` (all in `core/rpc/views/agentgraph/chat/`) and
+`core/rpc/compaction_summary_llm.go:95`. Its table
+and the capability catalog are keyed by provider *kind*, and it never
+consults the adapter's live model info, so for most profiles it answers
+`(0, false)`: the pre-send threshold compaction, `ErrSessionFull` and the
+request-too-large window fallback are effectively skipped.
+
+**Disposition: dated-justified.** Fix is a separate `fix:` PR: route
+those callers through `rpc.modelWindows.ContextWindow(kind, model)`
+(`core/rpc/model_window_lookup.go`: override → live adapter ModelInfo →
+catalog), which the chat tool-schema budget and the model picker already
+use. **Owner:** alec. Dated 2026-10-09.
+
+### 2026-10-08 (dogfood 2026-10-08 fix PR, fix/dogfood-2026-10-08) · audit actor filter has no emitter to match — input disabled, not deleted
+
+**Finding.** `eventlog.FilterQuery.ActorIDs` filters on `emitter_id`, and
+`Filter()` now honours it (the store path matches `Row.EmitterID`). But
+every production audit row reaches the store through `audit.API.Push` →
+`rowFromEntry`, which never sets `EmitterID`: `audit.Entry` carries no
+emitter/actor field, and none of the Push bridges in `core/rpc/api.go`
+has one to give (`NewSQLBackend`'s sole non-test caller is
+`core/rpc/api.go` ~l.1995, fed only by Push). So any Actor value matches
+nothing — the control is dead.
+
+**Disposition: dated-justified, not deleted.** `AuditView.vue` keeps the
+Actor input visible and round-tripping a saved query's `actor_ids`, but
+disables it with a title saying entries do not record an emitter yet.
+Deleting it would drop actor_ids from saved queries; enabling it would
+empty the list for any value.
+
+**Blocker.** `audit.Entry` needs an emitter field and each Push bridge must
+supply one; `Entry` is a Wails-returned type, so this is a bindings
+regeneration (`wails generate module` under an overridden HOME) plus the
+bridge changes. **Owner:** alec — the next audit mission that touches the
+Push bridges adds `Entry.EmitterID`, sets it in `rowFromEntry`, re-enables
+the input, and deletes this item.
+
+### 2026-10-08 (dogfood 2026-10-08 fix PR, fix/dogfood-2026-10-08) · `views/mcp.WithRegistry` has no non-test caller — `MCP_ListServers` is always empty
+
+**Finding.** `core/rpc/views/mcp.WithRegistry` is never called outside
+tests (also held in `scripts/ci/allowlists/i16-config-nil-coverage.txt`).
+Both production constructions of the MCP view — `core/rpc/api.go` ~l.2043
+(`mcp.NewAPI(mcp.WithSubscriber(a.broker))`) and ~l.2078–2100
+(`mcpOpts` → `mcp.NewAPI(mcpOpts...)`) — pass no registry, so
+`API.ListServers` returns `[]` for every user. The Capabilities page's
+"MCP servers" table, and the per-server tool-policy writer it hosts
+(trust-surfaces-that-fire-01PMZ202 WP24 — the ONLY writer of
+`<DataDir>/mcp_servers.json`), are structurally unreachable: the dogfood
+walk saw "No MCP servers configured" while Fetch / Filesystem / Outlook
+were installed and serving 143 tools.
+
+**Disposition: only surface for a real capability → finish, not delete.**
+Per-server tool policy (confirm-each-use / deny for a whole server) has no
+other UI. Interim (this PR): `ToolsView.vue` no longer claims "none
+configured" when the capability listing reports installed MCP servers, and
+says tool policy can't be set from the table yet.
+
+**Blocker.** No adapter exists from the MCP supervisor's live server set to
+the view's `Registry` interface, and the two `mcp.NewAPI` call sites above
+do not pass one. **Owner:** alec — the next MCP wiring mission builds the
+supervisor→`Registry` adapter, passes `mcp.WithRegistry` at
+`core/rpc/api.go` ~l.2078, drops the i16 allowlist line, and deletes this
+item.
+
+### 2026-10-08 (fleet contract: org_paused, kenaz-fleet PR #206, fix/org-paused-transient) · new org state; harness treats it as transient everywhere
+
+**Contract (confirmed by fleet 2026-10-08).** A Kameas-staff "pause paid
+features" org state (billing/abuse control; reversible; nothing deleted).
+While paused, every customer route outside fleet's explicit allowlist
+answers `403 {"code":"org_paused","message":…,"details":{…}}` — including
+`GET /configs` and `POST /context/append`. `GET /me/capabilities`, `/me` and
+`/me/ml` stay 200; capabilities keeps the tier, every key `false`, plus
+`paused: true` and `paused_category` ∈ {billing_review, security, abuse,
+legal, other}. Allowlisted (still work while paused): memory forget /
+forget-all / export (a FORGET-ONLY `POST /memory/push` batch is accepted;
+a mixed batch is 403), a NARROWING `PUT /memory/settings` (sync off / fewer
+scopes; enabling or widening is 403), ML export, context stream DELETE, context export,
+account erasure, legal acceptance, lockdown status/wait/set, SCIM/SSO
+revoke/delete, billing portal. SCIM answers in SCIM format (irrelevant
+here).
+
+**The bug it fixed.** `classifyAppendError` mapped every 403 to PERMANENT
+`not_authorized`, so each active session's append circuit stayed open after
+the org was unpaused until sign-in / toggle / restart.
+
+**Harness treatment.** One classifier (`fleet.ParseOrgPaused` /
+`IsOrgPaused` / `*OrgPausedError{PausedCategory}`), applied at the single
+choke point `Client.do` (plus the two direct-`httpClient` callers, sites
+deploy and enroll) — a non-pause 403 still reaches its caller unchanged.
+Every consumer: transient on its existing backoff tiers, no permanent
+latch, lane/status reason `org_paused` (append breaker, audit archiver,
+memory sync, config poll, revoke sweep, catalog client, team handoff,
+context graph pull, unit poll, capability poll). The capability poll is the
+recovery signal: `paused` true→false fans out `Client.OnOrgUnpaused` →
+`settings.onOrgUnpaused`, which reopens the append breaker's org_paused
+circuits (`ResetOrgPaused`), wakes the audit archiver, resets + runs the
+config poll, resumes the memory lane and resets the revoke-sweep skip — no
+sign-in. `FleetSession` carries `paused` / `pausedCategory`; the UI shows
+one banner (`OrgPausedBanner`, copy table `lib/orgPausedCopy.ts`) in place
+of every tier/upsell gate on the path, and the memory panel keeps "turn off
++ delete from Fleet" enabled. While paused the memory lane still sends
+queued forgets as forget-only batches and finishes a pending opt-out /
+delete-from-Fleet (narrowing PUT + forget-all). The pause is session-scoped:
+`Client.ResetOrgPause` runs on the fleet session-reset hook (no fan-out), and
+the snapshot shows `paused` only once this session's poller is not
+default-deny.
+
+**Residuals (accepted, dated).**
+1. Context-graph pull and unit poll are NOT in the unpause fan-out: they
+   recover on their own cadence (≤ 30 min at the deepest backoff tier).
+   Blocker: neither loop has a wake channel; adding one is a loop refactor
+   outside this fix. Owner: alec — the next change that touches either poll
+   loop wires `OnOrgUnpaused` and deletes this item.
+2. Audit archiver wake is a buffered-1 channel: an unpause that lands while
+   the loop is not in a backoff wait leaves a token that cuts ONE later
+   backoff short (one extra early retry, never a loop). Accepted; owner
+   alec — whoever next reworks the archiver loop drains it on success.
+3. `TelemetryOnboardingModal` / `FleetTelemetryPanel` tier copy ("Requires
+   Pro+", "your organization's plan … does not include") is driven by the
+   org TIER, which a pause keeps — it is accurate, not pause-path upsell,
+   and is left as is.
+
+### 2026-10-07 (release-infra hardening, chore/release-infra-hardening) · six zero-asset release tags, one mechanism; three fixes landed, four follow-ups open
+
+`scripts/ci/check-release-integrity.sh` flagged six tags whose GitHub
+Release has zero assets: **v0.60.0, v0.76.1** (Chocolatey community-feed
+outages in release.yml's `install NSIS toolchain (windows-amd64 only)`
+step — invalid XML for `nsis.install`, then a 504) and **v0.85.1, v0.85.2,
+v0.86.0, v0.87.0** (Apple notarization `403` "agreement expired" on both
+darwin legs, 2026-10-04 → 10-05; the team K54JDRHBA7 agreement was
+accepted before v0.88.0, 2026-10-05 19:11Z). The shared mechanism: one
+failed matrix leg makes `needs.build.result` `failure`, and `publish-s3`
+gates on `== 'success'`, so EVERY platform ships nothing. All six are
+superseded (v0.60.1; v0.77.0 tagged 13 s after v0.76.1; v0.88.0+) and are
+now on `.github/release-integrity-ignore.txt` with reasons.
+
+They were ignore-listed rather than re-run because re-running was unsafe:
+`resolve-env` maps every `workflow_dispatch` to prod, and `publish-s3`
+unconditionally overwrote the stable `kenaz-harness/manifest.json` pointer
+(read by `core/update/manifest.go`, `useUpdateStore.ts`'s `MANIFEST_URL`
+and the docs download page) and inserted the run into `index.json` with
+`released_at=now` — an old tag would have become "latest".
+
+**CLOSED in this PR:**
+
+- **Pointer could move backwards** — `fix(ci): publish-s3 refuses to move
+  the stable pointer backwards`. publish-s3 reads the current canonical
+  manifest (NoSuchKey = first publish; any other read error fails
+  closed), and when the published version is older keeps the per-tag
+  upload but leaves `manifest.json` alone and files the version into
+  `index.json` at its commit date. dev stays rolling. Ordering in
+  `scripts/ci/lib/semver.sh`, gated by `check-semver-lib.sh` (pr.yml)
+  with planted proof `semver-lib/lexical-compare`. The integrity gate's
+  "re-run release.yml" remedy is now actually safe, and says so.
+- **`manifest.json.released_at` was always `""`** — `fix(ci): manifest
+  released_at is a real timestamp`. Both builders read
+  `GITHUB_RUN_STARTED_AT`, which GitHub does not provide; now `date -u`.
+- **Engine-pin step as a zero-release path on CDN blips** — `fix(ci):
+  engine-pin downloads survive transient CDN errors` (`--retry 5
+  --retry-all-errors`, ≤3 DMG re-fetches on a short body; verification
+  unchanged and still fail-closed). Mitigates (c) below; does not close it.
+
+**OPEN:**
+
+- **(a) A single failed matrix leg zeroes the release for all platforms.**
+  Block-all (today) vs publish-the-legs-that-built (partial release, with
+  the missing platforms named in the manifest/Release body and the
+  integrity gate taught to tell "partial" from "empty"). This is a product
+  call — a partial release means some users' updaters see a version they
+  cannot install. **Owner:** alec (decision), then release-infra.
+- **(b) Apple agreement lapse fails late and anonymously.** The 403 surfaced
+  only at notarization, after a full build, as a generic notarytool
+  failure. Pre-flight it at the start of the macOS leg (`xcrun notarytool
+  history` with the same credentials, or an App Store Connect API call)
+  so a lapse fails in seconds with a named cause. **Owner:** release-infra.
+- **(c) The engine-pin step is a seventh zero-release path.** It runs only
+  on darwin/arm64, and any persistent CDN/index failure there fails the
+  leg and so (per (a)) the whole release. Retries above cover transient
+  errors; the structural question is (a)'s. **Owner:** same as (a).
+- **(d) Index-shape coupling of the pin step.** The step requires the
+  pinned version to appear EXACTLY once in `kenaz-ml/index.json` and its
+  `darwin_arm64.key_id` to equal the baked key. A kenaz-ml republish that
+  duplicates a version row, or a key rotation on the publisher side
+  before the harness `.pub` follows, fails every harness release build
+  (fail-closed is correct; the coupling is the note). kenaz-ml's publish
+  should treat "one row per version" and "key_id changes only with a
+  harness pin bump" as contract. **Owner:** release-infra (kenaz-ml side).
+- **(e) Pointer-guard TOCTOU residual.** release.yml's `concurrency.group`
+  is per-ref, so two tag runs seconds apart (e.g. v0.76.1 / v0.77.0, 13 s
+  apart) can both read the current pointer before either writes, and the
+  older can write last. The guard narrows the window to one publish-s3
+  job's guard→cp gap; it does not close it. **Fix shape:** re-read the
+  pointer immediately before the canonical cp, or make the write an S3
+  conditional put (`aws s3api put-object --if-match <etag>` from the
+  guard's read; `--if-none-match '*'` on first publish). **Owner:**
+  release-infra.
+- **Note — "Not Found" also matches a nonexistent bucket.** The guard's
+  first-publish branch keys on `(404)|NoSuchKey|does not exist|Not Found`,
+  so a misconfigured BUCKET reads as "first publish". Harmless: the
+  canonical cp that follows fails on the same missing bucket, and the
+  per-tag upload before the guard would already have failed. Recorded so
+  nobody "fixes" it by widening the match.
+- **Cross-reference:** the prerelease updater host bug
+  (`core/update/manifest.go:53` `stage-downloads.kameas.ai`, NXDOMAIN; the
+  channel publishes to `stage.downloads.kameas.ai`) is being fixed on the
+  parallel `fix/ledger-followups-oct7` branch — not duplicated here.
+- **Remedy hardening (this PR, review tweak):** the integrity gate's
+  remedy now names `gh workflow run release.yml --ref <tag> -f
+  version=<tag>`, and derive-version refuses a `workflow_dispatch` whose
+  `inputs.version` tag is not `GITHUB_SHA` — a UI dispatch from main would
+  otherwise build main's code under the old label and date the held index
+  entry ≈now (top of the picker). The per-tag `manifest.json` now uploads
+  with the binaries, before the guard, so a guard exit 1 leaves a complete
+  per-tag prefix; a pointer that exists but has no string `.version` now
+  warns instead of advancing silently.
+
+### 2026-10-07 (v0.93.0 post-release review, memory-sync-01MEMSY01) · `MemorySync` has no `Stop`; nothing on the shutdown path cancels it
+
+### 2026-10-07 (release-infra) · OPEN: the stage (prerelease) channel points at v0.7.3-rc1
+
+With the prerelease host fixed (entry below), Prerelease-channel
+subscribers now reach `https://stage.downloads.kameas.ai/kenaz-harness/manifest.json`,
+which serves `v0.7.3-rc1` — months behind stable (v0.93.0). The update
+service compares versions, so a stage subscriber on a current build sees
+no update rather than a downgrade, but the channel offers nothing: no RC
+has been cut in months and stage has no Fleet runtime behind it. Not a
+code defect. **Owner:** release-infra (alec) — either cut RCs again
+(`v<X.Y.Z>-rc1` tags per CLAUDE.md "Environments & promotion") or retire
+the Prerelease channel from the Settings picker so it stops advertising
+a channel nobody publishes to.
+
+### 2026-10-07 · ~~Prerelease update channel fetched an NXDOMAIN host~~ CLOSED
+
+`core/update/manifest.go` set `prereleaseManifestURL` to
+`https://stage-downloads.kameas.ai/kenaz-harness/manifest.json`; that host
+does not resolve (`dig +short` empty). The real stage CDN alias is
+`stage.downloads.kameas.ai` (release.yml's stage `CDN_BASE`; CloudFront).
+`checkChannel` falls back to stable only on `errManifestNotFound` (HTTP
+404) — a DNS failure is a hard error — so every Prerelease-channel update
+check failed outright. Wrong since #168 (`4c77d71c`, 2026-06-11, "point
+auto-updater at live release CDN"), i.e. ~4 months. The wrong host was
+also baked into `core/update/doc.go`, both test muxes
+(`service_test.go`, `wp08_test.go` — the tests encoded the bug) and this
+ledger's egress note.
+
+> **CLOSED 2026-10-07 (`fix(update): prerelease channel host —
+> stage.downloads.kameas.ai, not stage-downloads`,
+> fix/ledger-followups-oct7):** host corrected in all five places;
+> `TestChannelManifestURLs_MatchReleaseWorkflowCDN` reads release.yml's
+> stage and prod `CDN_BASE` and fails when either manifest URL drifts from
+> the host releases are actually published to (verified failing with the
+> old host).
+
+### 2026-10-07 (v0.93.0 post-release review, memory-sync-01MEMSY01) · ~~`MemorySync` has no `Stop`; nothing on the shutdown path cancels it~~ CLOSED
+
+`buildMemorySync` (`core/rpc/api.go`, the `ms.Start(context.Background())`
+line near the end of the constructor) starts the memory-sync cycle loop
+under a context that is never cancelled. `MemorySync.Start`
+(`core/fleet/memory_sync.go`) is the only lifecycle method the type has —
+it spawns one goroutine with a `time.Ticker` and returns only on
+`ctx.Done()`. `API.Shutdown` stops every other scheduler and poller by
+name (workflow, compaction, chat-cron, settings/ctx-graph/unit syncers,
+audit archiver + sweeper, Cedar decision writer) and delegates the fleet
+pollers to `settingsImpl.StopFleetBackground`; neither function mentions
+`memorySync`. It is the only background lane in the constructor with no
+stop.
+
+**Blast radius:** harmless in production — the interval is 2 minutes,
+`RunOnce` short-circuits on `fleet_disabled` / `not_entitled` / disabled
+state before doing I/O, and process exit reaps the goroutine. In tests it
+leaks one goroutine per `API` instance constructed with a real memory
+store (129 `MemorySync.Start.func1` frames in the v0.93.0 CI goroutine
+dump of the core/rpc timeout — not the cause of that timeout, but noise
+that hides a real hang). After `StopFleetBackground` on sign-out the
+loop keeps ticking against a signed-out client and records
+`not_entitled` on every cycle.
+
+**Fix shape:** add `(*MemorySync).Stop()` (cancel the Start context, wait
+for the goroutine; idempotent + nil-safe like every sibling), hold the
+cancel in `buildMemorySync`, and call it from BOTH `API.Shutdown` and the
+sign-out path (`StopFleetBackground` or wherever `SetMemorySync` is
+undone), with a `goleak`-style or `runtime.NumGoroutine` assertion in the
+`buildMemorySync` test so the leak cannot come back silently.
+**Owner:** memory-sync follow-up (01MEMSY01 residuals).
+
+**Cosmetic, same lane:** after a `node_removed` sign-out the memory lane
+board reads `not_entitled` rather than `signed_out`. `RunOnce` checks
+`m.entitled()` (capability poller, which `StopFleetBackground` has just
+nil'd → default-deny) BEFORE any fleet call, so the `ErrNotSignedIn`
+branch that records `signed_out` is never reached. Correct behaviour,
+misleading label; fold into the Stop fix (a stopped lane should record
+nothing) rather than reorder the checks.
+
+> **CLOSED 2026-10-07 (`fix(fleet): MemorySync.Stop wired into Shutdown +
+> StopFleetBackground`, fix/ledger-followups-oct7):** `(*MemorySync).Stop`
+> cancels the loop's context and waits for the goroutine (nil-safe,
+> idempotent); `Start` is idempotent and restartable. `StopFleetBackground`
+> (sign-out, node_removed, shutdown) stops the lane, `startFleetBackgroundLocked`
+> restarts it on sign-in, and `API.Shutdown` stops it directly as well. A
+> stopped lane records nothing, and `Status` reports it `off/signed_out`
+> instead of the default-deny `not_entitled` (checks not reordered). Pinned
+> by `TestAPI_Shutdown_NoSchedulerGoroutineLeak` (now also counts
+> `(*MemorySync).Start.func1` frames, delta vs baseline; fails with both
+> Stop call sites removed), `TestMemorySync_StopEndsLoop_RestartAfterSignIn`
+> and `TestMemorySync_StoppedLaneReportsSignedOut`.
+
+### 2026-10-07 (v0.93.0 CI) · core/rpc test package is at the 10-minute cliff
+
+core/rpc ran 580.9s under `-race -short` on the self-hosted ARM runner in
+the v0.91.0 CI run; v0.93.0's additions (real-sqlite retry + handoff accept
+tests) pushed it past Go's default 10m per-package timeout (one just-started
+test in the dump — slowness, not a hang). `pr.yml` now passes `-timeout 20m`.
+**Fix shape:** split core/rpc's heavy integration tests into a sibling
+package (or `t.Parallel()` the independent real-sqlite tests), so the
+per-package alarm returns to a tight budget. **Owner:** next release's
+unwired/CI-hygiene sweep. Related flake seen in the same run:
+`core/mlsidecar` TestDemandProbe_FirstDemandStartsEngine_OneEnsurePerTick
+("first demand must not block" — a timing assertion under runner load);
+owner: mlsidecar follow-up if it recurs.
+
+> **DemandProbe flake CLOSED 2026-10-07 (`test(mlsidecar): DemandProbe
+> first-demand test no longer races the engine start`,
+> fix/ledger-followups-oct7):** cause: `Healthy()` kicks the Ensure loop
+> then reads the cached status; when the loop's first Ensure adopted the
+> fake engine inside that window, the first call truthfully returned
+> healthy and the test's "must not block" assertion (which really checked
+> "returns false") failed. The test now parks the fake engine's `/health`
+> answer until after the first call (`countingEngine.holdHealth`), which
+> also makes "does not block" a real check. Production ordering reviewed
+> and kept (demand-then-read answers the true cached status; the contract
+> is never-block + per-call fallback) — `Healthy()` and the type doc now
+> say so. `-race -count=50 -run TestDemandProbe` clean. The core/rpc
+> 10-minute-cliff half of this entry stays open.
+
+### 2026-10-07 (CI run 37705330106, PR #392) · ~~DATA RACE: a chat run's exit path outlived StartStream and raced the DB close~~ CLOSED
+
+`TestDriveRun_AC003_ErrorClosePromotesCheckpoint/no_tool_recoverable_true`
+flaked on a PR that did not touch the code. WRITE side: the deferred
+cleanup in `(*ChatRunner).driveRun` (chat_runner.go:1875) →
+`session.(*Manager).DeleteStreamCheckpoint` (manager.go:489) →
+`sqlStore.DeleteStreamCheckpoint` (store.go:1448) →
+`concreteDB.WriteTx` (sqlite.go:394), on the goroutine `StartStream`
+spawned (chat_runner.go:1713). RACING: `concreteDB.Close` (sqlite.go:438)
+from the test's `buildCheckpointRunner` cleanup, after the test body
+returned on the close event. The run goroutine's exit path runs AFTER
+the close event lands, and v0.93.0's retry work (RecordTurnOutcome +
+sanitize) lengthened it. Production had the same shape: nothing waited
+for in-flight runs before core's storage closed at app exit. Found with
+it: nothing cancelled `streamCtx` on a normal completion, so every run's
+periodic checkpoint flusher (and StartStream's inbound-ctx watcher) lived
+until process exit, and a flusher tick after the exit-path delete could
+resurrect the checkpoint row.
+
+> **CLOSED 2026-10-07 (`fix(chat): driveRun's exit path must finish before
+> the API/test tears down storage`, fix/ledger-followups-oct7):**
+> `ChatRunner` tracks driveRun plus the work it spawns (periodic flusher,
+> auto-title, merge suggestion, advice) and exposes `Drain(ctx)` and
+> `Shutdown(ctx)` (cancel live runs with cause `app-shutdown`, then
+> drain); `API.Shutdown` calls it first, bounded at 15 s, before the
+> caller shuts core down. driveRun's exit path cancels the run ctx and
+> waits for the flusher before deleting the checkpoint. Test side: every
+> real-sqlite runner fixture drains on cleanup before `db.Close`
+> (`drainRunnerOnCleanup`). Pinned by
+> `TestChatRunner_DrainWaitsForRunExit_ShutdownCancels`; `-race -count=20
+> -run TestDriveRun` clean 3×.
+>
+> Review follow-up (same day): `API.Shutdown` now stops the workflow and
+> chat-cron schedulers BEFORE the drain (neither Stop waits on a job), and
+> `ChatRunner.Shutdown` closes the tracker so a later `StartStream` returns
+> `chat.ErrRunnerShutdown` (`TestChatRunner_StartStreamRefusedAfterShutdown`,
+> `TestAPI_Shutdown_StopsSchedulersBeforeChatDrain`). **Residual
+> (accepted):** a sub-agent run's `awaitSubagentRun` writes `taskReg.End`
+> after its child run ends; that write can land after the drain returns,
+> where a closed store only yields an error log line, no corruption.
+> **Owner:** subagent follow-up (track the await goroutine with the same
+> tracker).
+
+### 2026-10-07 (PR #394 CI) · ~~`TestRevocationSweep_RidesConfigPollerCadence` raced its own sweep~~ CLOSED
+
+Failed in the hermetic-guard step (skill uninstalled, then `audit kinds =
+[]` and lane `unknown`, 0.01s in). Not environment-specific and not
+caused by #394: `RevocationSweeper.Sweep` uninstalls, then emits the
+audit event, then records the lane, all on the config poller's
+goroutine; the test stopped waiting at the uninstall and asserted the
+other two immediately. Pre-existing since #390; main's green run was
+timing luck. Reproduced deterministically with a 50ms sleep after the
+uninstall. **CLOSED 2026-10-07 (`test(fleet): revocation-sweep test
+waits for the sweep's last step`):** the test waits for the lane record
+(the sweep's final step) instead. Production ordering unchanged
+(uninstall → audit → lane is the right order).
+
+### 2026-10-07 (CI flakes) · ~~serve `assertNoFrame` vs process-wide broadcasts; stdio goroutine-baseline vs parallel siblings~~ CLOSED
+
+Two test-side flakes, production untouched.
+
+1. **`core/serve` no-frame assertions.** `assertNoFrame` failed on ANY frame
+   in its 300-500ms window. At boot `MemorySync`'s first `RunOnce` records a
+   lane state, `SyncLanes.OnChange` runs `publishFleetSession("sync_lane")`,
+   and the FIRST `fleet:session-changed` always emits (`lastEmitKey` starts
+   empty) to EVERY connection. On a starved runner it lands inside the
+   window (`TestServedAdviceAutoActed_ScopedToSubscribedSession`: `received
+   event="fleet:session-changed" data={"state":"signed_out",...}`).
+2. **`core/mcp/transport/stdio` `TestServer_GoroutinesReturnToBaseline`.**
+   `t.Parallel()` plus a process-wide `runtime.NumGoroutine()` compared
+   against baseline+2 while ~80 sibling parallel tests spawned
+   child-process/supervisor goroutines (`goroutine count 79 exceeds baseline
+   76`; extras were `TestServer_FirstByteTimeout`'s `doInitialize` /
+   `firstByteReader` / `os.File.Read`).
+
+> **CLOSED 2026-10-07 (`test: deflake serve no-frame assertions ... and
+> stdio goroutine baseline`, test/deflake-serve-stdio):** `assertNoFrame`
+> now skips frames on `processWideTopics` (via the test-only
+> `serve.IsProcessWideTopic`) and keeps reading to the deadline; its core
+> `noFrameViolation` is pinned by `TestAssertNoFrame_*` (broadcast passes,
+> session-scoped frame fails). The stdio test dropped `t.Parallel()`: Go
+> releases parallel tests only after all serial ones finish, so no sibling
+> runs mid-measurement. A stack-filter was rejected because every sibling's
+> goroutines share the same `(*ServerInstance)` frames; stacks cannot
+> attribute per instance.
+>
+> **Exposure class for future test authors:** *process-wide broadcast
+> topics vs per-session no-frame assertions* — any "this connection must
+> see nothing" check must exclude `processWideTopics`, and any test that
+> compares process-wide counters (`runtime.NumGoroutine`) must not be
+> parallel.
+
+### 2026-10-07 (skill-library-01SKLIB01 residuals + review F4–F6, feat/skill-library) · six accepted, none introduced as regressions
+
+1. **OQ-1 — the revocation sweep covers skills + workflows only.**
+   Catalog-installed packs and bundles have no consumer install record
+   carrying a catalog id (both kinds are still allowlisted in
+   `check-install-provider-coverage.sh` — there is no pack/bundle
+   provider), so `RevocationSweeper` has nothing to diff for them; a
+   revoked pack/bundle the user downloaded stays as `installed/` residue.
+   **Blocker:** install-framework Phase 3 (pack/bundle providers).
+   **Owner:** the mission that registers those providers adds a
+   `RevocationWorkflows`-shaped source for each kind.
+2. **`CatalogItem.LifecycleReason` has no producer on the live wire.**
+   Fleet main (@ b57b2ec) sends `lifecycle`, `superseded_by` (+
+   `revoked_at` on list) on `GET /catalog/list` and the fetch, but
+   `lifecycle_reason` only on `GET /catalog/entries/{kind}/{slug}`. The
+   harness decodes it forward-compatibly and the chip tooltip shows it
+   when present, so today the tooltip never carries the admin's reason —
+   not a lie (nothing claims a reason), but a consumer without a
+   producer. **Owner:** fleet (add `lifecycle_reason` to
+   `CatalogItemMetaAPI` / `CatalogFetchResponse`, additive), or a harness
+   follow-up that reads the entries detail for deprecated rows.
+3. **A user cannot move their catalog install of a skill from v1 to v2.**
+   Each version is its own catalog id, so `LiveRegister` refuses v2 over
+   v1 under the same store id (`ErrSkillIDCollision`), and
+   `SkillProvider.Update` never offers one (`newestByID` keys on the
+   per-version id). Pre-existing since per-version ids; surfaced, not
+   introduced, by this mission (the mandated path was fixed in WP04 —
+   mandates may take over any catalog-provenance copy). **Owner:** the
+   OQ-4 follow-up ("nudge toward `superseded_by`"), which needs
+   entry-level grouping of versions anyway.
+4. **Review F4 — the mandated-workflow read-only guard fails OPEN on an
+   unreadable provenance file.** `isOrgMandated` reads an unreadable
+   `install_provenance.json` as "not mandated", so Save / ScheduleSet /
+   ScheduleClear are allowed while it is broken. Deliberately matches
+   the pre-existing `Delete` posture (the install-collision checks fail
+   closed on their own, and the provenance store logs the breakage at
+   WARN once). **Owner:** skill-library follow-up — decide fail-closed
+   for all four mutators together, not one at a time.
+5. **Review F5 — a FAILED v2 promote removes v1 until the retry.** When
+   v2's install fails in the same bundle that drops v1, v1 is not "seen"
+   and the reconcile removes it; the bundle error retries and v2 lands
+   on a later poll. Pre-existing since v0.91 (the applier cannot know a
+   failed item's local id when its payload did not decode). **Owner:**
+   skill-library follow-up — keep v1 when a failed item shares its
+   catalog entry (needs fleet to send the entry slug in the envelope,
+   which is a signed-wire change under the §5.4 rule).
+6. **Review F6 — the revocation sweep's skill removal is check-then-act.**
+   `uninstallLocked` re-reads the skill and then `LiveUnregister`s it; a
+   mandate landing between the two could in principle be removed. The
+   window is two local file ops inside one sweep and the config poller
+   that applies mandates runs the sweep on its own goroutine AFTER apply,
+   so the two never interleave today; the workflow side is atomic under
+   `installMu`. **Owner:** skill-library follow-up, if the sweep ever
+   moves off the config poller's goroutine.
+
+### 2026-10-07 (memory-sync-01MEMSY01 verify pass) · ~~PRE-EXISTING flake: `TestStore_Add_WiresGlobalCaptureTracker`~~ CLOSED
+
+`core/memory/capture_rate_test.go` fails when the whole `core/memory`
+package runs with `-count=5` (ChunksPerMinute delta came out negative). It
+fails the same way on the base commit b2b2df75, so memory-sync did not
+introduce it. Cause: the test reads `GlobalCaptureTracker()`, a
+process-wide sliding 60 s window shared with every other test in the
+package. On repeated runs, earlier writes age out of the window between the
+test's before and after readings, so the delta it measures can go
+negative. It passes at `-count=1` (CI's setting).
+
+- **Class:** test isolation (shared global state), not a production defect.
+- **Fix shape:** inject the tracker into the store (or give it a
+  per-test reset/clock), so the test measures only its own writes.
+- **Owner:** memory follow-up mission (next one to touch
+  `core/memory/capture_rate.go`). Dated 2026-10-07.
+
+> **CLOSED 2026-10-07 (`test(memory): TestStore_Add_WiresGlobalCaptureTracker
+> isolates the global sliding-window tracker`, fix/ledger-followups-oct7):**
+> the chromem store carries its capture tracker (`capture`, set to
+> `GlobalCaptureTracker()` by `NewChromemStore`; production unchanged).
+> The test asserts the global wiring by identity and counts its writes on
+> a private tracker swapped in (exactly 5, duplicate excluded).
+> `go test ./core/memory/ -race -count=5` passed 3× in a row.
+
+### 2026-10-06 (conformance verify-pass residuals, feat/fleet-contract-conformance) · four accepted, none introduced as regressions
+
+1. **R1 (P2) — promote-to-team can wedge and duplicate when the user has
+   no team_id.** Fleet 400s `team_shared` pushes without a team_id;
+   `UnitMapper` attaches a nil `m.teamID` unchecked, and
+   `Unit_PromoteAsMergeRequest` creates the local team copy BEFORE the
+   push — a failed push leaves a dirty copy that background sync re-pushes
+   (400ing the whole team batch) every cycle, and each retry mints another
+   copy. **Latent: no frontend caller exists.** Fix shape: refuse before
+   creating the copy when team_id is absent; reuse an existing
+   `promoted_from` copy; teach the test fake the team_id rule. **Owner:**
+   the mission that wires the promote UI — the guard lands BEFORE the
+   first caller.
+2. **R2 (P3) — workflow mandate-takeover restore hands back the mandated
+   content relabelled as a catalog install**, not the user's earlier
+   version/edits (skills restore properly). **Owner:** skill-library
+   mission (01SKLIB01) WP04 territory.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP04, `fix(fleet): WP04 —
+   > superseded removals stay quiet locally …`):** a mandate that takes
+   > over the user's catalog install now returns an opaque snapshot of the
+   > user's copy (stored document incl. edits + its install provenance),
+   > persisted as `prior_workflow` in `mandated_applied.json`; withdrawal
+   > restores that copy under its original catalog id/version. A v0.91
+   > record (flag only, no snapshot) keeps the old relabel — the only thing
+   > it makes possible. Also fixed in the same change: a mandate may now
+   > take over a catalog/mandated row of ANY catalog id (every version has
+   > its own id), so a v1→v2 promote updates in place instead of failing
+   > as a collision and deleting the workflow. Pinned by
+   > `TestInstallMandatedDocument_TakeoverRestoredOnWithdrawal` (real
+   > sqlite, file provenance), `TestRemoveMandatedDocument_LegacyRecordRelabels`,
+   > `TestInstallMandatedDocument_PromoteUpdatesInPlace`. Review F3
+   > (2026-10-07): the restore now runs the Cedar save gate; a refused
+   > restore deletes the mandated copy and audits `restore_refused`
+   > (`TestRemoveMandatedDocument_RestoreRefusedByPolicyDeletes`).
+3. **R3 (P3) — a takeover while mandated_applied.json is unreadable (F5
+   path) never persists PriorSkill**, so a later withdrawal deletes
+   rather than restores. Needs the F5 corruption AND a takeover in the
+   same window. **Owner:** same as R2.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP04):** while the state
+   > file is unreadable the applier still never overwrites it (F5), but
+   > records what it applied — takeover priors included — in
+   > `fleet/mandated_applied.pending.json`, carries it across further
+   > unreadable runs, merges it into the applied set on the first readable
+   > run (file rewritten OR deleted), and clears it after a successful
+   > save. Removals stay skipped while unreadable (F5 unchanged). Pinned by
+   > `TestMandated_TakeoverDuringUnreadableStatePersistsPrior` (real
+   > files; fails with the merge removed).
+4. **Mandated workflows are delete-protected but not edit/unschedule-
+   protected** (accepted "not done"): a weak guarantee for
+   compliance-type workflows. **Owner:** skill-library mission, with the
+   read-only UI treatment.
+   > **CLOSED 2026-10-07 (skill-library-01SKLIB01 WP02, `feat(frontend):
+   > WP02 — Deprecated/Revoked chips …`):** the workflows view refuses
+   > Save, ScheduleSet and ScheduleClear (as well as Delete) for a workflow
+   > whose provenance is `mandated`, with `ErrWorkflowOrgManaged`; a user
+   > catalog re-install can no longer relabel the org's copy as the user's
+   > (it had been able to, which also silently ended the delete guard);
+   > the mandate's own removal disarms the schedule directly. `Summary`
+   > carries `orgManaged`; the Library hides Edit / Edit on canvas /
+   > Delete and says why, the Schedules tab offers no Schedule/Unschedule,
+   > and the Capabilities workflow row is read-only. Pinned by
+   > `TestMandatedWorkflow_EditAndScheduleGuarded` (real sqlite store,
+   > file provenance) and `WorkflowsView.orgManaged.spec.ts`. The guard is view-level: a
+   > 2026-10-07 grep found no `Store.Save` caller outside the workflows
+   > view and `core/workflows` itself, so a future writer that bypasses
+   > the view must re-check provenance.
+
+### 2026-10-07 (device-keys-handoff-01DEVKH01 residuals) · seven accepted gaps, none a lie in the UI
+
+Per-device handoff keys + v2 wrap-to-all + accept-persists shipped
+(WP01–WP06). What the mission deliberately left, each with an owner:
+
+1. **Accepted copies carry import-time timestamps.** `created_at` rides in
+   every handoff event, but `session.Manager.ReplayTranscript` (the one
+   sanctioned cross-session writer) does not copy `CreatedAt`, so the
+   recipient's rows are stamped at accept time. Changing that also changes
+   conversation forks. **Owner:** alec — decide with the next
+   ReplayTranscript change.
+2. **AC-7 fixtures were not recorded from the dev fleet.** They are encoded
+   from verbatim mirrors of kenaz-fleet's response structs @ 97a1c12
+   (core/fleet/testdata/handoff/PROVENANCE.md); recording needs a live
+   Team-tier bearer token the implementing agent must not handle.
+   **Owner:** alec — re-record from dev and diff.
+3. ~~**v1 "direct" accept arm is transitional.**~~ **CLOSED 2026-10-07**
+   (review fix #9): the arm is deleted — the v1 send never produced a real
+   item (nil events → 422), so nothing could be accepted through it. The
+   coordinator signalled fleet O5 (drop direct-mode acceptance).
+4. **Signing key is registered; nothing shows it.** `signing_public_key`
+   now goes up at enroll (audit batches become verifiable, fleet §8.3), but
+   the Compliance panel does not surface verified/unverified (OQ-10 ruled
+   out of scope). **Owner:** next compliance mission.
+5. **Self-unenroll runs on explicit sign-out only.** An uninstalled or
+   abandoned install keeps its handoff key active and counting toward the
+   16-key cap until an admin removes the device in the fleet dashboard.
+   **Owner:** alec (uninstall hook) / fleet (dormant-key policy).
+6. **Media is not shipped in shares.** Image/document/generated-image
+   blocks are counted and noted in the recipient's copy ("1 attachment was
+   not included"), not transferred (2 MiB/event cap; generated images are
+   sender-local artifacts). **Owner:** product — decide if attachments
+   should ride as separate encrypted events.
+7. **Externally-owned tokens + node_removed.** Where the host owns the
+   tokens (served / brokered mode) `ClearTokens` is a no-op. Since review
+   fix #5 (2026-10-07) the block is DURABLE (`<dataDir>/fleet/node_removed`,
+   honoured by every enroll path incl. cmd/servedfleet's supervisor, cleared
+   only by an explicit sign-in). **Served-mode gap (verify pass,
+   2026-10-07):** a served guest has no sign-in of its own and NO code path
+   clears the marker when the host re-authorizes — a removed served guest
+   stays blocked until someone deletes `<dataDir>/fleet/node_removed` by
+   hand. Fix shape: clear the marker when the served supervisor observes a
+   NEW identity (different user/node) from the host. **Owner:** served-mode
+   boundary owner.
+   > **Served-mode gap CLOSED 2026-10-07 (`fix(fleet): served-mode
+   > node_removed clears when the host presents a new identity`,
+   > fix/ledger-followups-oct7):** the marker now records the removed
+   > account's `TokenIdentityKey` (subject|org|issuer, line
+   > `identity=…`); cmd/servedfleet's Enroll step calls
+   > `settings.FleetHostIdentityPresented(identity)` before every attempt,
+   > which (external token source only) clears the marker + in-memory
+   > node_removed state and restarts the fleet background when the host's
+   > identity differs, so the next enroll mints a fresh node id. Same
+   > identity, an unknown identity, or a marker written before this change
+   > (no recorded identity) stays blocked; desktop unchanged (sign-in
+   > clears). Node id is not part of the comparison — the host never
+   > presents one. Residual: the SAME account re-authorizing on the host
+   > is indistinguishable from a token renewal, so it stays blocked until
+   > the marker is removed (needs a host-side re-auth signal, e.g. a
+   > session id claim; owner: served-mode boundary owner). Pinned by
+   > `TestNodeRemoved_ServedHostNewIdentityClears`,
+   > `TestNodeRemoved_HostIdentityIgnoredOnDesktop`,
+   > `TestClearNodeRemovedForNewIdentity` and
+   > `TestEnrollFunc_SupervisorLiftsNodeRemovedOnNewHostIdentity` (real
+   > `serve.FleetEnrollSupervisor`; fails with the presentation call
+   > removed).
+   > Review residuals (2026-10-07, accepted): (a) the identity key is
+   > `sub|org|iss`, so the SAME person gaining or losing the org claim, or
+   > an issuer URL changing only by a trailing slash, also reads as "new"
+   > and lifts the block. Not a widening: desktop already clears on ANY
+   > explicit sign-in. Tightening shape if wanted: compare `sub|iss` with
+   > the issuer normalised, and treat an org change as new only when both
+   > sides carry one. (b) A marker written before this change carries no
+   > identity and so stays blocked in served mode — remove
+   > `<dataDir>/fleet/node_removed` by hand (one-time, pre-release
+   > installs only). The lift also clears the stale "removed by admin"
+   > sign-in reason, as desktop sign-in does. **Owner:** served-mode
+   > boundary owner.
+   Also low: a crash between `sessions.Create` and the first
+   `importing` ledger write leaves an empty "Shared by…" session (never a
+   second transcript); owner: same mission follow-up.
+
+### 2026-10-06 (newly-live fleet routes verification, pre-v0.91.0) · four latent gaps, all verified non-firing today
+
+Fleet deployed audit/append, identity/public-key, handoff/*, context
+streams and team/members (#180-#183); the harness's 404-latches stop
+firing. A six-family verification (no crash/corrupt/loop anywhere)
+left these latents:
+
+1. ~~**Handoff_Share hardcodes nil events**~~ **CLOSED 2026-10-07**
+   (device-keys-handoff-01DEVKH01 WP04, `ca17df45`): `Handoff_Share`
+   loads the session through the `contextsync.Impl.SessionEvents` seam
+   (wired in api.go to the real session manager) and serializes it as
+   self-contained `kenaz.handoff.event` v1 events
+   (core/session/handoff_transcript.go); an empty session errors readably
+   before any POST. Pinned by `TestHandoffShare_LoadsRealSessionFromUpgradedDB`
+   (v0.91.0 snapshot) and `TestImpl_Handoff_Share_*`. Shipped in the same
+   branch as key registration (WP02) — the release gate held.
+2. **EventStream backfill has no 1000-event/2MiB-per-event client caps
+   and sends no client_event_id** (context_sync.go:314-332, 250-268) —
+   latent, no live backfill caller (both Toggles pass nil). **Owner:**
+   context-streams mission.
+3. **Server-seq cursor discipline**: when SessionSync_ResumeFrom gains
+   a real applier, persist fleet's next_seq — never the local message
+   count (the hook posts wire seq=1 per event; server assigns arrival
+   order). **Owner:** context-streams mission.
+4. ~~Cosmetic: handoff 409/422 raw "status NNN"~~ **CLOSED 2026-10-07**
+   (device-keys-handoff-01DEVKH01 WP04 `ca17df45` + WP06): every §10.3
+   code maps to a `*fleet.HandoffError` whose text is dialog copy
+   (`TestShareSession_ErrorCopy` asserts no "status" leaks); 409
+   recipient_keys_stale re-wraps and retries once; the share dialog and
+   inbox render the copy via `handoffErrorText`.
+
+### 2026-10-06 (empty-turn fix review residuals, fix/session-write-empty-turn) · two pre-existing flags, neither introduced by d845ecf0
+
+1. **Image-only turns drop generated images silently.**
+   `GeneratedImageCapturer.DrainPendingImages` rides the session_write
+   `HookPostLLM` (`chat_runner.go:1598-1612`). A final fire with
+   generated images but EMPTY text now completes via the soft skip and
+   never drains — images lost quietly (previously the same turn
+   hard-errored, losing them loudly). Only bites providers that emit
+   image-only turns. **Fix shape:** move the drain off the session_write
+   hook, or drain on the skip path too. **Owner:** next chat-runner
+   mission; revisit if any wired provider starts emitting image-only
+   finals.
+2. **Whitespace-only assistant rows render as visible empty bubbles.**
+   `session_write` skips only exact `""`; a `"\n"` turn still writes a
+   row, and `MessageBubble.vue` (311, 655-662) renders it under
+   `whitespace-pre-wrap` with no blank guard. Pre-existing. **Fix
+   shape:** TrimSpace-based skip at session_write (consistent with
+   `AppendEntry`'s TrimSpace absorb compare) or a blank guard in the
+   bubble. **Owner:** same follow-up as above.
+
+### 2026-10-05 (engine-ports review residuals, fix/engine-ports) · two accepted lane-scan edges
+
+1. A slow OUR engine with NO engine.port record (failed write or garbage
+   file) still double-spawns: the scan reads its busy port as
+   unknown-occupied, steps past, and spawns on the first free candidate —
+   two engines, one lease dir. Accepted: the alternative (block spawning
+   while ANY candidate is busy) lets a hung foreign listener deny the
+   engine entirely. Trigger requires a missing record while ours runs;
+   the record is rewritten on every adopt. **Owner:** revisit with the
+   kenaz protocol-gap follow-up (kenaz #178 "Known gap").
+2. Uninstall no longer sends the shutdown token to an engine that fails
+   verification (tampered/refuse-unverified) before removing the root —
+   correct for the token (never send to the unverified), but a behaviour
+   change: such an engine keeps running until it idle-exits. Same owner.
+
+### 2026-10-07 (undelivered-message-retry review, informational) · Retry on a scheduled session's undelivered prompt runs it attended, without the schedule's tool allowlist
+
+**Owner**: toolset/containment follow-up (alec) — decided by the B-3
+attended-semantics ruling. **Ungated.**
+
+Retry re-dispatches the newest user row through the ordinary interactive
+`LLM_StartStream` path. In a session a schedule created, that row can be a
+scheduled (possibly model-written — `scheduled_chat_runs.created_by`)
+prompt whose original run was unattended and constrained by the
+schedule's `tool_allowlist`. Retrying it from the chat surface re-runs
+that prompt interactively, with the session's normal tool catalog and the
+attended confirm ladder rather than the schedule's allowlist. This is the
+same posture as the user typing into that session — the human is present
+and every confirm/containment gate applies — so it is not a bypass, but
+it changes which tools the prompt can reach. Blocker: B-3 has not ruled
+whether attended re-runs of scheduled prompts inherit the schedule's
+allowlist. Owner change that closes this: the B-3 ruling, then either
+carry the allowlist onto the retried run or document "attended = session
+catalog".
+
+### 2026-10-07 (undelivered-message-retry review, pre-existing) · `provider:auth-resumed` is not filtered by session
+
+**Owner**: alec (chat surface). **Ungated.**
+
+`useSession.ts`'s `provider:auth-resumed` handler adopts
+`payload.new_sub_id` as the active stream for WHICHEVER session view is
+mounted — it never compares `payload.session_id` (which
+`AuthResumedPayload` carries) to the current session. With two sessions
+on one profile, rotating a key in one can point the other view's stream
+guard at the wrong run and clear its banner. Pre-existing (not introduced
+by undelivered-message-retry); found in its review. Fix: early-return when
+`payload.session_id` is set and differs from `id.value`, with a test.
+
+### 2026-10-05 (pull-idempotency audit, fleet-session-truth research) · session-sync push ships seq=1 on every event; the two pull surfaces are count-only stubs
+
+### 2026-10-05 (pull-idempotency audit, fleet-session-truth research) · session-sync push ships seq=1 on every event (item 1 downgraded 2026-10-05: no fleet event-stream exists); the two pull surfaces are count-only stubs
+
+Three linked findings from kitty-specs/fleet-session-truth-01DOGF0A/
+research/pull-idempotency-audit-2026-10-05.md:
+1. **seq=1 — DOWNGRADED 2026-10-05 (fleet brief answered, verified
+   against kenaz-fleet main):** fleet registers NO event-stream endpoints
+   — `/api/v1/context/append` and `/api/v1/context/replay` do not exist
+   and answer the Go mux's plain 404. No remote streams exist, so nothing
+   was ever collapsed to "ONE event total"; the seq=1 construction
+   (SessionSyncer.AppendEvent builds a fresh EventStream per call) is
+   latent, not live data loss. The append 404s were never a provisioning
+   gap either — the parent mission's "remote context missing" reading
+   (dogfood F7) was a misdiagnosis of a missing route. Since
+   `fix/fleet-contract-truth` WP03 a plain 404 latches the stream
+   UNSUPPORTED for the process (`core/fleet/unsupported_endpoint.go`):
+   logged once, never retried, lane `context_sync` goes Off with reason
+   `fleet_endpoint_unsupported`, events stay local, and `EnableSync`
+   refuses once it is known. A fleet session-event log is a NEW fleet
+   feature awaiting an owner spec (server-assigned seq — which also
+   settles the seq question). **Owner:** fleet owner (spec); the harness
+   side re-opens only when that endpoint ships.
+2. **SessionSync_ResumeFrom** and **Handoff_Accept** decrypt and COUNT
+   records, persisting nothing (views/contextsync/impl.go:86-89, :213-228,
+   both commented as future-WP). Bindings exist; frontend never calls the
+   first and never calls accept. Dated-justified: the pull writer must not
+   exist until it can be idempotent per the audit's fix shape — do not
+   wire a naive AppendMessage loop. **Owner:** the future session-pull
+   mission; the audit file is its contract.
+3. **Handoff and audit-append client stubs call endpoints that do not
+   exist server-side (2026-10-05, verified against kenaz-fleet main).**
+   `HandoffHandler.ShareSession` / `Inbox` / `AcceptShare`
+   (`core/fleet/team_handoff.go`, `/api/v1/handoff/{send,inbox,{id}}`)
+   and `AuditArchiver.post` (`core/fleet/audit_archive.go`,
+   `/api/v1/audit/append`) target routes fleet does not register. No
+   provisioning fixes it. Since WP03 (cross-ref item 1) a plain 404
+   latches each feature unsupported — handoff calls short-circuit with
+   `ErrEndpointUnsupported`, the archiver's loop exits (Compliance's
+   `archiverRunning` goes false) — and the local audit log is unaffected.
+   Still open: these surfaces (Handoff_* bindings, the Compliance
+   archive panel) remain offered to the user although the server cannot
+   serve them; a UI "not supported by your fleet" state is unbuilt.
+   **Owner:** fleet owner for the endpoints; harness copy follows them.
+
+### 2026-10-05 (fix/fleet-contract-truth review R3) · bootstrap node ids are not user-scoped — org-wide collisions become per-item rejections under fleet PR #173
+
+> **CLOSED 2026-10-06 (fleet wire-contract WP04):** the bootstrap fleet push
+> leg was removed — it pushed classification "personal", which fleet always
+> refuses, and bootstrap has no share-consent surface. `bootstrapNodeID` is
+> deleted; extracted context stays local (RunStatus.SharingSkipped =
+> `personal_requires_share_consent`) and is shared per entry through
+> Knowledge › Curated, whose ids are per-install UUIDv5s (core/fleet/wire_id.go).
+> The text below is historical.
+
+`bootstrapNodeID` (`core/rpc/contextbootstrap_wiring.go`) is
+`"ctxb-" + connector + "-" + sourceRef` — deterministic per source item but
+NOT scoped to the user. Two users in one org who bootstrap the same shared
+item (a team channel message, a shared ticket) push the same node id. On the
+current server that is last-writer-wins over someone else's personal node;
+once kenaz-fleet PR #173 lands, the second user's push comes back in
+`rejected[]` with `not_permitted`. Since R3 that rejection is recorded
+honestly (`fleet.context_push_rejected` audit, no publish record, no
+onboarding `context_synced`), so nothing lies — but that user's node never
+reaches fleet. **Not redesigned here** (changing ids orphans every node
+already pushed). **Owner:** contextbootstrap follow-up — scope the id by
+user (or let fleet assign it) with a migration for existing `ctxb-` ids.
+
+### 2026-10-05 · contexts per-node publication-state read (blocker for FR-7 pre-run state display) — owner: follow-up WP on knowledge-home (needs a Contexts_NodeStatus binding returning per-node layer/version)
+
+knowledge-home-01DOGF0E FR-7 asks the folder share/promote dialog to show,
+per entry and before the run, whether it is already published and at which
+layer. Nothing can answer that today: `Context_SyncStatus` is an aggregate
+(cursor, pull count, errors) and `Context_ContextSearch` is a title/body
+search — neither is keyed by node id (`core/rpc/views/contexts/api.go`). The
+dialog (`frontend/src/views/contexts/FolderShareDialog.vue`) therefore
+reports each entry's actual landing layer (`effective_layer`) only after the
+run, and says nothing about prior state rather than guessing. Blocker: a
+`Contexts_NodeStatus` binding returning per-node layer/version. Owner: a
+follow-up WP on knowledge-home. Not a lie today — no control claims the
+state — so this is a dated gap, not an inert dial.
+
+### 2026-10-05 (v0.87.0 adversarial review F2) · the repair path's re-application window ends at 0341
+
+Re-running sessions/0332 on a database units/1104 has converted fails
+("no such table: artifacts") — proven by the release probe. UNREACHABLE
+in production: Pending applies in version order so 1104 only ever runs
+after 0332, and Registry.Rollback has no production caller; the repair
+path re-applies 0341+ (hardened for the converted store) and never
+0332. Recorded so nobody "fixes" 0332 by modifying a shipped migration:
+IF a future repair feature widens the window below 0341, it must add a
+table-exists guard IN THE REPAIR PATH, not in 0332. **Owner:** whoever
+builds a wider repair. Also noted (F4): the 0341 composition tests pin
+v0.85.2/v0.63.0 while 1104's pin the newest snapshot — re-point 0341's
+at the newest tag when next touched. **F4 CLOSED 2026-10-05 by
+units-debt-01UNITD01 WP03:** the three 0341 tests now select
+`newestSnapshotBefore0341` (`core/storage/sqlite/migration_0341_test.go`)
+— the newest committed snapshot whose ledger predates 0341 (v0.86.0
+today), not a hard-coded tag; "newest overall" would silently stop
+re-running 0341 once a post-0341 snapshot lands. The repair-window
+finding above (F2) stays open; units/1105 tolerates it — re-applying 1105
+after a ledger rewind is a no-op once the tables are gone
+(`TestMigration1105_FreshInstallAndReopenAfterRewind`), and
+`TestMigration0341_ReapplyAfterUnitsConversionDoesNotBrick` now runs 0341's
+re-application against a database with NO artifacts table of either
+generation.
+
+### 2026-10-05 (install-framework-01DOGF0B review L2) · install consent is UI-enforced only; fleet workflows install unverified (C-2)
+
+**Class:** a control that reads as enforced but is enforced only in one
+caller (consent); a verification step that reports, not refuses (C-2).
+
+**(a) Consent (pre-existing, owner: Phase 3 / install-framework-01DOGF0B).**
+`install.RequirementConsent` (an MCP recipe's `Warning`) is declared by the
+MCP provider and routes the "Add capability" row to the key-prompt modal,
+whose acknowledgement checkbox is the only thing that enforces it.
+`install.Framework` deliberately enforces only input-bearing requirements
+(key / config / directory); a direct `Tools_InstallRecipe` or
+`Capability_Install` call installs a warning-bearing recipe without any
+acknowledgement — exactly as `Tools_InstallRecipe` did before the
+framework. Blocker: an acknowledgement token on the install request (a
+binding-signature change) belongs with Phase 3's surface consolidation.
+
+**(b) Fleet workflows join skills' unverified posture (owner: register
+C-2 / the FR-2 fleet payload brief).** Since WP05, org-catalog workflow
+payloads install through `WorkflowsAPI.InstallDocument`, verified by the
+same single `installSignatureVerifier` as skills. **C-2's real design
+(kenaz-fleet owner, 2026-10-05):** there is no per-org or per-device
+catalog key and never will be. Org-MANDATED items ship inside the
+ed25519-signed config bundle and verify against the build-time-pinned
+fleet key — `core/fleet/config_pull.go` `VerifyWithKeySet` (hard-reject
+before apply) → `compositeConfigApplier.ApplyBundle`
+(`core/rpc/views/settings/fleet.go`) → `fleet.MandatedApplier.Apply`
+(`core/fleet/mandated.go`, which replaced `ApplyMandatedSkills` with the
+`mandated_items` envelope on 2026-10-06); that is the ONLY mandated-item
+write path. Non-mandated
+catalog installs carry no fleet signature today; a possible future design
+signs item payloads with the bundle key (fleet-owner decision pending).
+So the verifier reports `verified=false` with the C-2 reason (since
+`fix/fleet-contract-truth`: "fleet signs only the org config bundle;
+catalog installs carry no fleet signature") and the install proceeds — recorded on the `capability:installed`
+event and stated in the workflow detail pane, not refused. A workflow can
+carry shell steps and a cron schedule, so this posture is a larger trust
+surface than a text skill; the collision refusal (review H1/H2 — a payload
+can never overwrite a template, a user workflow or another item's
+workflow) bounds it to new ids. Clears only if the fleet owner decides to
+sign catalog item payloads with the bundle key and that verdict lands in
+the verifier (via `WithPubKey`); otherwise it is the permanent posture for
+non-mandated items and the UI's "not signature-verified" notice stands.
+
+### 2026-10-05 (install-framework-01DOGF0B re-review low 3) · templates installed before install provenance are never offered an update
+
+**Class:** a dial with no producer for a subset of rows.
+`installed_outdated` is computed from the install provenance record
+(`core/workflows/provenance.go`, the shipped `v<N>` recorded at install).
+Templates installed by v0.87.0 and earlier (Workflows › Catalog) have no
+record, so they read "installed" forever and are never offered an update —
+the conservative choice: without a recorded version, "outdated" would be a
+guess, and an update overwrites user edits. **Disposition: acceptance note,
+not a backfill WP** — the workaround is to Remove the template in
+Capabilities (Workflows) and Install it again, which records provenance; a
+backfill would have to guess an installed version from YAML the user may
+have edited. Owner: alec / install-framework-01DOGF0B Phase 3 (release
+notes carry the workaround). *Annotated 2026-10-05:* the Marketplace
+fold-in this entry used to wait on happened in Phase 4, pulled forward by
+owner ruling ahead of Phase 3; it did not touch provenance, so the entry
+stays with Phase 3.
+
+### 2026-10-05 (install-framework-01DOGF0B review L3) · `slashcmd.Registry` has no mutex
+
+**Class:** latent data race on a live map. `Registry.commands` is read by
+dispatch (`Lookup`/`List`) and mutated by `LiveRegister` /
+`LiveUnregister` / `RenameLocalTrigger` from RPC goroutines and the fleet
+mandated-skill applier, with no lock. Not changed in this review (a
+drive-by lock on a hot dispatch path wants its own race test).
+Owner: Phase 3 (install-framework-01DOGF0B). Blocker: a `-race` test
+driving concurrent install + dispatch, written with the lock.
+
+### 2026-10-05 (install-framework-01DOGF0B Phase 4) · deleting MarketplaceView left `Catalog_Install` and `Slashcmd_SkillInstall` with zero frontend callers
+
+**Class:** Wails binding ↔ `harnessClient.ts` ↔ `.vue` caller (pass 2),
+created by this change, not found by a sweep. MarketplaceView was the only
+`.vue` caller of `client.catalog.install` (→ `Catalog_Install`) and
+`client.slashcmd.skillInstall` (→ `Slashcmd_SkillInstall`). Its fold-in
+calls neither: a catalog skill installs through `Capability_Install`, and
+bundle / agent_pack Install is disabled-with-reason (a click shows the
+reason and calls nothing). Both bindings now sit in the i15 allowlist's
+`unrouted` class as "no caller anywhere".
+
+**Disposition: dated-justified, not deleted (2026-10-05).**
+- `Catalog_Install` / `catalog.install` — the backend refusal
+  (`ErrCatalogKindNotInstallable`) is WP02's defence in depth behind the
+  disabled button, and `CapabilitySurface.catalog.test.ts` M4/M4a use the
+  client method as the spy proving the UI never calls it. Blocker: the
+  Phase 3 bundle / agent_pack providers, which replace this path; the
+  commit that registers the last of them deletes the binding, the client
+  method and the refusal together (see the badge-only entry below). Owner:
+  alec / install-framework-01DOGF0B Phase 3.
+- `Slashcmd_SkillInstall` / `slashcmd.skillInstall` — framework-routed
+  (decision record §2.1), so it cannot install around the pipeline; it is
+  simply unused by the UI now. Removing a bound method is a codegen change
+  (`frontend/wailsjs`), out of scope for the frontend-only Phase 4. Blocker:
+  a decision whether per-kind install bindings outlive their last UI
+  caller (Capability_Install covers every zero-input kind). Owner: alec /
+  install-framework-01DOGF0B Phase 3 (which retires the other per-kind
+  browse surfaces and owns the same question for `Bundle_Install`).
+
+### 2026-10-04 (install-framework-01DOGF0B WP01/WP02) · Marketplace "Install" for workflow / agent_pack / bundle was badge-only — nothing consumes `installed/`; the skill badge lied the other way
+
+**Class:** registered/advertised capability with no consumer.
+
+**Finding.** `fleet.Client.Install` (`core/fleet/catalog_install.go`)
+fetched a catalog item, (skipped) signature verification, wrote
+`<DataDir>/installed/<kind>/<id>@<version>/payload` + `meta.json`, and
+returned success — no registration, no store save, no event. The only
+reader of `installed/` was the badge set inside `Catalog_List`
+(`core/rpc/views/catalog/impl.go`); `Catalog_Installed` has zero `.vue`
+callers. So Marketplace Install for **workflow**, **agent_pack** and
+**bundle** reported success and painted "Installed" while delivering no
+capability. Opposite-direction lie on the same code: **skill** installs
+bypass `installed/` entirely (`slashcmd.SkillInstall` →
+`fleet.InstallSkill` → `slashcmd.LiveRegister` → `SkillStore`), so a
+successfully installed skill still showed "Install".
+
+**Verification pass (dogfood 2026-10-04, CONFIRMED, re-read against
+`main` @ `b8079d48`;** `kitty-specs/dogfood-2026-10-04/notes.md`
+§"Marketplace installed/ verification"). Per kind, the runtime consumer and
+why `installed/` never reaches it:
+- workflow — workflows load from sqlite + builtins via a *different,
+  same-named* catalog (`Workflows_CatalogInstall` → wfcatalog over
+  `LoadBuiltins` → `Store.Save` + cron arm). Never reads `installed/`.
+- agent_pack — agent profiles load only from `<dataDir>/agents`
+  (`core/agents/loader.go`). Never reads `installed/`.
+- bundle — the bundle list reads `kenaz.lock`; `Bundle.Install` needs a
+  directory with a `kenaz.yaml` manifest, which `Catalog_Install` never
+  wrote (it wrote an opaque `payload` file).
+- skill — bypasses `installed/`; consumed by the slash registry.
+
+**Disposition (this PR, Phase 0).**
+- WP01 (`fix(marketplace): WP01`): `Catalog_List` reads kind=skill
+  installed state from the `SkillStore` (`WithSkillStore`, wired in
+  `core/rpc/api.go`), not `installed/`. `fleet.ResolveSkillStoreID` maps
+  the catalog_id the Marketplace sends to the store's skill ID (they differ
+  for every `SkillPublish`'d skill), so the now-visible Uninstall works.
+  Pins: `TestCatalogList_SkillInstalledStateFromSkillStore` (P-1),
+  `TestCatalogList_SkillResidueInInstalledDirIsNotInstalled`,
+  `TestUninstallSkill_ByCatalogID` — each fails with the behaviour reverted.
+- WP02 (`fix(marketplace): WP02`): `Client.Install` refuses **every** kind
+  with `fleet.ErrCatalogKindNotInstallable`, the message naming the kind
+  and the working alternative, and writes nothing — the payload-writing
+  code is deleted (skill is refused too: on this path it was equally
+  unconsumed; skills install via `SkillInstall`). `MarketplaceView.vue`
+  shows workflow / agent_pack / bundle Install **disabled, not hidden**,
+  with the reason as visible text (`item-install-unsupported-<slug>`,
+  linked by `aria-describedby`). Existing residue is labelled
+  "Downloaded — not active" (never "Installed") and keeps a
+  "Remove download" action — `Client.Uninstall` and `InstalledItems` stay
+  as the cleanup path. Pins: `TestCatalog_Install_RefusesEveryKind`,
+  `TestCatalogInstall_RefusesUnconsumedKinds`, `MarketplaceView.spec.ts`
+  4 (P-2), 2 and 5 — each fails against the pre-fix code. *(Phase 4,
+  2026-10-05: MarketplaceView was deleted; these pins moved, not died, to
+  `views/capabilities/__tests__/CapabilitySurface.catalog.test.ts` M4, M2
+  and M5 — workflow left the disabled set when its provider shipped in
+  WP05.)*
+
+**Still standing (dated-justified, 2026-10-04).** `Client.Install`'s
+`dataDir` and `pubKeyBase64` parameters are unread, kept so the per-kind
+providers and any future C-2 bundle-key payload signature (no per-device
+key will exist — fleet owner, 2026-10-05) plug into the existing call chain
+(catalog/impl.go's `pubKeyBase64` / `WithPubKey`, already justified under
+register C-2). `Catalog_Installed` keeps zero `.vue` callers (pre-existing
+NARROW, `harnessClient.ts`); WP08 is its intended reader. Blocker: the
+install framework (install-framework-01DOGF0B Phases 1–3). Owner: alec /
+install-framework-01DOGF0B.
+
+Two residue gaps the Phase-0 cleanup path does not reach (dated
+2026-10-04, review F5; owner: install-framework-01DOGF0B **WP08**, which
+deletes both lines when its offer-to-finish-or-remove flow reads
+`installed/` directly):
+- **Withdrawn-item residue is unreachable.** "Remove download" lives on
+  the item's Marketplace card (since Phase 4: its catalog row in the
+  Capabilities surface — still built from `Catalog_List`, so the gap
+  stands), which comes from `Catalog_List` (the live fleet listing). Once a publisher withdraws the item, the card is gone
+  and its `installed/` payload has no removal surface — the one RPC that
+  would list it, `Catalog_Installed`, has no `.vue` caller.
+- **`installed/skill/` residue has no removal surface.** WP01 made the
+  skill store the only authority for a skill's installed state, so a
+  skill payload an earlier release's `Catalog_Install` wrote under
+  `installed/skill/` never surfaces as a card state at all; nothing
+  offers to remove it (it is inert — the slash registry never reads it).
+
+Review follow-ups landed with this entry
+(`fix(marketplace): review follow-ups`): `rpc.New`'s `WithSkillStore`
+wiring is pinned at chassis level
+(`TestChassis_CatalogList_SkillInstalledStateIsWiredToSkillStore`);
+`fleet.ResolveSkillStoreID` matches CatalogID (+version) before the exact
+store ID so a colliding catalog_id cannot cross-delete another skill;
+`Client.Uninstall` — now the promoted "Remove download" path — refuses
+any kind/catalogID/version that is not a single clean path segment
+(`ErrCatalogInvalidPathSegment`; before, a version of
+`/../../../../victim` removed a directory outside `installed/`) and an
+empty data dir.
+
+**What deletes this entry.** Each kind gaining a *consumed* install
+through the provider framework, its installed state read from the consumer:
+workflow (WP05 — wfcatalog `Store.Save`, listed by `Workflows_List`),
+bundle (WP06 — `Bundle.Install` from a `kenaz.yaml` directory, listed by
+`Bundle_List`), agent_pack (WP07 — written to `<dataDir>/agents` + loader
+reload, **or** the kind dropped from the catalog with the reason recorded
+here), plus WP08 offering to finish or remove existing `installed/`
+residue. When the last kind lands, `ErrCatalogKindNotInstallable`,
+`CATALOG_ONLY_KINDS` in `frontend/src/views/capabilities/catalogBrowse.ts`
+(the Marketplace's `INSTALL_UNSUPPORTED_REASON` map, moved there when the
+Marketplace folded into Capabilities in Phase 4), and this entry are
+deleted together.
+
+**Gate question — could a gate see "install writes a directory nothing
+reads"?** Not with the existing gates, and not cheaply as a new one. Every
+gate in the inventory pairs *symbols* (registration ↔ predicate, exported
+func ↔ call site, package ↔ importer); this class is a filesystem *path*
+written by one function and read by none, reached through
+`filepath.Join` fragments (`"installed"`, a runtime `kind`) that no
+grep can pair with a reader reliably — a path-literal write/read scan
+would both miss computed paths and flag every write whose reader lives in
+another process (fleet, sidecars). No gate is extended here. The class
+becomes symbol-gateable at **WP03**: once the provider contract exists,
+"every `CatalogItemKind` has a registered provider whose `InstalledState`
+is computed from its consumer" is a registration↔consumer pair the
+pass-2 tripwire pattern can enforce. WP03 owns adding that gate, with a
+planted-violation proof in `scripts/ci/gates_can_fail_test.go`.
+### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored — CLOSED 2026-10-05
+
+
+**Gate added (WP03, 2026-10-05).** `scripts/ci/check-install-provider-coverage.sh`
+(wired into `pr.yml`) pairs, in both directions: every `core/fleet`
+`CatalogItemKind` value ↔ an `install.Kind` (`core/install/provider.go`);
+every `install.Kind` ↔ a production `Register(install.Kind<Name>, …)` under
+`core/rpc/` **plus** a `TestInstallProvider_<Name>_ConsumerSeesInstall`
+consumer test — or a dated line in
+`scripts/ci/allowlists/install-provider-coverage.txt` naming the blocker and
+owner; and every allowlist line ↔ a real, still-unregistered kind (the
+allowlist shrinks as providers land). "InstalledState is computed from its
+consumer" is not grep-checkable, so it is enforced at runtime instead:
+`install.Framework.Install` re-reads `Provider.InstalledState` after every
+install and fails with `install.ErrNotConsumed` when the consumer does not
+list the capability (`TestInstall_BadgeOnly_RefusedWithErrNotConsumed`,
+`core/install/framework_test.go`). Planted proofs:
+`install-provider-coverage/{unregistered-kind,registered-without-consumer-test,catalog-kind-without-install-kind}`.
+
+**Progress (WP04/WP05, 2026-10-05).** `mcp_recipe`, `skill` and `workflow`
+have registered providers with consumer tests and left the coverage
+allowlist: MCP recipes adapt the existing recipe install (consumer: the
+supervisor's persisted enabled list); skills fetch in `Verify`, are checked
+by the single `SignatureVerifier`, and `LiveRegister` the same bytes
+(consumer: skill store + slash registry); workflows install shipped
+templates through wfcatalog `Store.Save` + cron and fleet workflow payloads
+through `WorkflowsAPI.InstallDocument` (consumer: `Workflows_List`). Every
+per-kind install binding (`Tools_InstallRecipe`, `Tools_UninstallRecipe`,
+`Slashcmd_SkillInstall`, `Slashcmd_SkillUninstall`,
+`Workflows_CatalogInstall`) routes through the framework. Still standing:
+`bundle` (WP06) and `agent_pack` (WP07) stay allowlisted, and
+`Catalog_Install` + the Marketplace keep refusing workflow / agent_pack /
+bundle — the Marketplace is folded into the surface in Phase 3, and until
+then its workflow refusal copy still names Workflows › Catalog, which WP05
+retired (`?tab=catalog` now redirects to `/tools?kind=workflow`, so the
+copy's pointer still lands; the wording is Phase 3's to change — the WP02
+copy is frozen for this phase). Owner: alec / install-framework-01DOGF0B.
+
+**Progress (Phase 4 rail consolidation, executed EARLY — 2026-10-05).** By
+owner ruling (2026-10-05, the third time the owner asked), the spec's
+Phase 4 ran before Phase 3: ONE rail entry, **Capabilities** (route
+`/tools`, page action "Add capability"), replaces Tools + Marketplace —
+decision record §3, except that the route stays `/tools` (match-prefix
+unchanged) and `/marketplace` redirects there in both route tables;
+`/bundles` is untouched because the Bundles fold-in is Phase 3.
+`MarketplaceView.vue` is deleted; what only it showed now lives in the
+Capabilities surface (`views/capabilities/catalogBrowse.ts`,
+`CatalogListingDetail.vue`): bundle / agent_pack catalog rows with Install
+**disabled-with-reason exactly as WP02 left them** (bundles → Settings ›
+Integrations › Bundles; agent packs → not installable yet), `installed/`
+residue as "Downloaded — not active" + Remove download, the listing facts
+and Withdraw. The workflow refusal copy above is fixed (Go now says
+"Capabilities (Workflows)"; the UI never shows a disabled workflow row —
+workflows install through their provider). **Still standing, with their
+owners: Phase 3** — the `bundle` (WP06) and `agent_pack` (WP07) providers
+and their coverage-allowlist lines, the Bundles browse fold-in (and the
+`/bundles` redirect the decision record names), the tasks.md WP08
+offer-to-finish-or-remove flow for `installed/` (FR-7) and the two residue
+gaps above. Owner: alec / install-framework-01DOGF0B Phase 3; agent_pack's
+payload format blocker: fleet team.
+### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · materializing an older chat run falls back to the library graph, verified by digest — the exact resolved spec is not stored
+
+Every chat turn now links to its run graph (WP04), so materialization
+quality on *old* runs is user-visible. The resolved spec a run executed
+lives only in `Manager.TrackExternalRun`'s process-local map, capped at
+`maxTrackedExternalRuns = 64` (`core/rpc/views/agentgraph/manager.go`).
+After a restart, or 64 turns later, `runSpecFor` answers from tier 3:
+the library graph named by the run's own `run_start`. That is a
+projection of the run's events onto *today's* file, which may not be
+the spec that ran.
+
+**Disposition: dated justification, not wired.** Persisting the exact
+resolved spec per run was explicitly out of scope (spec §5). Instead
+WP03 records a SHA-256 `agentgraph.SpecDigest` of the resolved spec
+(layout and provenance excluded) on `run_start` and in
+`session_turn_runs.spec_digest`. At tier 3 the manager compares it with
+the library file's digest: **equal** ⇒ the file *is* the spec that ran,
+exact provenance, no banner; **different or absent** (file edited since,
+a resolved spec that never matched a file, or a pre-WP03 run) ⇒
+`SpecProvenanceLibraryFallback`, and the editor says so in plain words
+("Reconstructed from the library graph — the exact spec for this turn
+is no longer in memory…"). Pin:
+`TestMaterializeRun_LibraryFallbackVerifiedBySpecDigest` (fresh manager
+on a SQL log = after a restart). So nothing is presented as faithful
+that is not — the gap is fidelity, not honesty: a digest-mismatched run
+still renders against the wrong topology, under a banner.
+
+**Blocker:** a per-run spec store (a `run_specs(run_id, spec_json)` side
+table or an event carrying the resolved spec) with a retention policy —
+specs are larger than any row the event log holds today. **Owner:** the
+01DOGF0D follow-up that persists exact run state (spec §5; the same
+owner as the redrive-window entry below). Deleted when tier 3 is
+reachable only for runs that predate that store, and a test materializes
+a 65th-turn run with exact provenance after an edit to its library file.
+
+**Closed 2026-10-05** by branch `feat/graph-resolved-spec` (target
+v0.88.0), both halves of the deletion condition met:
+
+- *The store.* Migration `sessions/0343-agent-graph-run-specs`
+  (`core/session/migrations_agent_graph_run_specs.go`):
+  `agent_graph_run_specs(run_id PK, graph_id, spec_digest, spec_json,
+  created_at_ns)`. Written by the kernel itself (`Kernel.Run` →
+  `recordRunSpec`, `core/agentgraph/run_spec_store.go`) once per run,
+  before `run_start`, from `env.Graph` — the spec it executes, post alias
+  / routing gate / dial. Insert-once (Resume and the overflow redrive
+  keep the first row); bounded per row by `MaxRunSpecBytes` (1 MiB;
+  measured 2026-10-05: `chat_default` encodes to ~5.0 KiB of JSON (5028
+  bytes; ~2.7 KiB resolved with the routing gate off), `toolloop_default`
+  ~4.2 KiB (4259 bytes)); digest re-checked on read. An oversized spec is
+  not stored and renders as a labelled reconstruction (pinned by
+  `TestKernel_OversizedSpecRunCompletesAndRendersAsReconstruction`).
+- *Tier 3 reachable only for runs that predate it.* `runSpecFor` reads
+  the persisted spec first and holds it to `run_start`'s `spec_digest`;
+  a run with a stored spec never reaches the library reconstruction.
+  The digest-verified upgrade described above is **deleted** — what
+  remains (`reconstructUnrecordedRunSpec`) always stamps
+  `library_fallback`, and the banners now say the run predates per-run
+  spec recording. Its only reader,
+  `TestMaterializeRun_LibraryFallbackVerifiedBySpecDigest`, is deleted.
+- *The test.* `TestMaterializeRun_65thTurnAfterLibraryEdit_IsExact`
+  (`core/rpc/views/agentgraph/materialize_persisted_spec_test.go`) is
+  the condition verbatim; `TestMaterializeRun_EditedGraphStillShowsWhatRan`
+  does the same across a restart, and
+  `TestMaterializeRun_PreSnapshotRunOnUpgradedInstall_IsLabelledReconstruction`
+  boots the v0.86.0 snapshot to prove pre-store runs still render,
+  labelled.
+
+Not done here, and not a lie: the blocker named a retention policy.
+`agent_graph_run_specs` has the same lifecycle as `agent_graph_events`,
+which has none either; the per-row bound caps the growth rate (one row
+per run). A retention sweep belongs with event-log retention, whenever
+that is specced — not a dated item here because nothing claims it exists.
+
+### 2026-10-04 (agentgraph-settings-linkage-01DOGF0D) · a redriven run's status reads "failed" for the seconds before its redrive starts
+
+Between a chat run's failed attempt and the overflow redrive's
+`run_start` (the window is the pre-redrive compaction, typically
+seconds), `statusFromLog` honestly derives "failed" from the first
+attempt's events — an open RunView stops polling and shows failed for
+a run that is about to continue. Data is correct and nothing is lost;
+reopening the view shows the redrive. **Blocker:** a durable
+"redrive pending" record the status derivation can consult.
+**Owner:** the follow-up to 01DOGF0D that persists exact run state
+(spec §5 follow-up). Deleted when that record exists and the status
+test asserts "running" across the whole redrive window.
+*2026-10-05:* `feat/graph-resolved-spec` — the spec-persistence half of
+that follow-up — persists the resolved **spec**, not run **state**, so
+this entry stays open; its owner is now the redrive-state half alone (a
+durable redrive-pending record), not yet specced.
+### 2026-10-04 (artifacts-as-units-01DOGF0C review F10) · artifact purge after a session/project delete has no retry — purge-retry
+
+`purgeArtifactsAfterDelete` (`core/rpc/api.go`) runs after the session or
+project row is already gone. If it fails, the error is logged
+(`rpc.artifacts.purge_failed`) and the delete still reports success.
+Returning the error would show "delete failed" for an item that no longer
+exists and cannot be deleted again. The residue is artifact units whose
+`scope_id` / `metadata.session_id` / `metadata.project_id` name a deleted
+row, and the media they pin. These are still visible and deletable one by
+one in the Library's Captured view. No sweep re-runs the purge. Fix shape: a
+boot-time sweep that purges artifact units whose session/project no longer
+exists. Blocker: none technical; it was descoped from the review round.
+Owner: artifacts-as-units-01DOGF0C follow-up (filed 2026-10-04).
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C review F11) · session delete funnel deletes promoted artifacts — pre-existing, preserved
+
+`rpc/views/sessions` `DeleteWithOptions` (default cascade) lists artifacts
+by ORIGIN session and deletes all of them, including ones the user promoted
+to project or global scope. That contradicts what promotion is for. The core
+session-delete observer only deletes session-SCOPED units and unlinks
+promoted ones. The legacy store behaved the same way as the funnel, so
+artifacts-as-units kept it as is: a storage migration is the wrong place to
+change delete semantics. Decision needed: should the funnel skip promoted
+artifacts (filter `ScopeKind=session`)? Owner: the product owner, raised by
+artifacts-as-units-01DOGF0C. Decision record:
+`docs/missions/artifacts-as-units.md` "Review follow-ups".
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `units.KindArtifact` defined, accepted by the schema, used only in tests — CLOSED
+
+`core/units/unit.go` has declared `KindArtifact = "artifact"` and the
+`units.kind` CHECK has admitted `'artifact'` since
+`unified-context-artifacts-01NCTXU01` (units/1100), but every reference was
+in a test (`resolution_test.go`, `store_mem_test.go`, `store_sql_test.go`)
+and artifacts kept living in their own `artifacts` / `artifact_versions`
+tables. 01NCTXU01 FR-003 ("artifacts are units with kind=artifact") was
+ratified and never implemented — a schema that promised a shape no writer
+produced.
+
+**Closed** by artifacts-as-units-01DOGF0C: migration
+`units/1104-artifacts-to-units` copies every artifact and version onto
+`units` / `unit_versions` (ids preserved, verified in-transaction), and
+`core/rpc/api.go` `newArtifactsStack` now builds `artifacts.NewUnitsStore`
+— every capture, revision, promote and delete in production writes
+`kind='artifact'` units. Decision record: `docs/missions/artifacts-as-units.md`.
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP07) · `artifacts_legacy` / `artifact_versions_legacy` retained read-only — DROP due next release — CLOSED
+
+Migration `units/1104-artifacts-to-units` RENAMES the legacy tables
+instead of dropping them (spec FR-3.3: never drop in the migration that
+copies — dropping in place is how `sessions/0327` and `sessions/0332`
+destroyed `artifact_versions`). Nothing reads or writes them after 1104:
+the legacy store implementation was deleted with the store switch. They are
+a recovery copy for one release of real upgrades.
+
+**Follow-up (dated, owned):** the release AFTER the one that ships 1104
+adds `units/1105-drop-artifacts-legacy` (`DROP TABLE
+artifact_versions_legacy` first, then `artifacts_legacy` — child before
+parent so no cascade fires), with a populated-snapshot test from the
+first snapshot that carries the `*_legacy` tables, per the I14 gate.
+Blocker: one shipped release of 1104 against real installs. Owner:
+artifacts-as-units-01DOGF0C (filed 2026-10-04). Do not fold it into 1104
+or into the same release.
+
+**Closed 2026-10-05 by units-debt-01UNITD01 WP02** (target: the release
+after v0.87.0 — it must not ship in v0.87.0 itself). Migration
+`units/1105-drop-artifacts-legacy` (`core/units/migration_drop_legacy_artifacts.go`)
+drops both tables child-first, `IF EXISTS`-guarded, after verifying the
+1104 copy in the same transaction: both legacy tables present or neither;
+1104 ledgered `applied`; no legacy id held by a non-artifact unit; every
+legacy version of a still-present artifact unit — and every synthesized v1
+of a version-less one — has its `unit_versions` twin (version, content
+hash, byte size, created_at). Any failure returns
+`ErrLegacyArtifactsUnverified` — Open fails closed, both tables intact.
+Deliberate deviation from the units-debt spec FR-2's literal row-count
+equality (orchestrator ruling, 2026-10-05: QUARANTINE, not refuse): legacy
+rows whose artifact UNIT is absent — deleted on v0.87.0 (artifact delete,
+session / project purge), or lost to a bug/tamper, which looks identical
+— are neither refused (the literal check would fail Open for every user
+who deleted an artifact during the retention release; mutation-tested:
+"literal: 16 legacy vs 11 units") nor silently dropped: each is copied,
+with its legacy versions as JSON, into the retained table
+**`artifacts_legacy_orphans`** (id, title, content_hash, source_ref_json,
+legacy_metadata, quarantined_at) and named at WARN
+(`units.drop_artifacts_legacy.orphan_quarantined`: id, hash, title) before
+the big tables drop. The quarantine table is bounded (only rows orphaned at
+drop time; nothing writes or reads it afterwards) and exists for manual
+recovery. An orphan whose id is already in the quarantine table is
+refused, not skipped (tampering — no legitimate path writes it twice). Tests: `core/storage/sqlite/migration_1105_test.go` (P-1 on a
+reconstructed v0.87.0 state from the newest pre-1104 snapshot + every
+seeded artifact shape, zero delta on the four units tables and every media
+refcount; P-2: seven planted mismatches refuse and boot once repaired;
+check 1 via ledger surgery; deleted-since-copy and mass-loss quarantined;
+fresh install + rewind-reopen).
+**Not a bug — do not "fix" (2026-10-05, units-debt review):**
+`sqlStore.UpdateAtVersion` reads the unit's version OUTSIDE its write
+transaction — the same shape the pull path's `UpdateWithSyncState` had
+(review M3, fixed there by re-checking `baseVersion` inside the tx). It is
+not exploitable: a concurrent bump between the read and the write makes
+the history INSERT hit `UNIQUE(unit_id, version)`, which surfaces as
+`ErrVersionConflict`. Moving the check without keeping that UNIQUE path
+would be the regression.
+**Resolved residual (2026-10-05):** `TestMigration1105_V087SnapshotBoots`
+runs against the real `testdata/upgrade/v0.87.0/` snapshot (committed on
+release/v0.88.0, 3490ee44) and PASSES; the guard fails loudly if a tag
+>= v0.87.0 ever exists without a legacy-carrying snapshot.
+
+### 2026-10-04 (artifacts-as-units-01DOGF0C WP01, D4) · artifact version history is write-only — `Store.ListVersions` has no production reader
+
+`kenaz__update_artifact`, plan-mode Edit and edit-file sync all append
+revisions (`Manager.WriteVersion`), but nothing outside the store
+implementations and their tests calls `ListVersions`, and
+`ArtifactsAPI.Get` / the Captured preview always serve the ORIGINAL
+capture's bytes (`Artifact.ContentHash`). A user who asks the model to
+update an artifact sees the old content in the Library. Found while
+mapping versions onto `unit_versions`; not fixed here because it is a
+product decision (show history and latest, or serve latest only), not a
+storage one. Blocker: that decision. Owner: the next artifacts/Library
+mission — escalate to the owner before wiring, do not delete the
+WriteVersion path (it is the only revision capability).
+### 2026-10-04 · v0.86.0 release-start unwired sweep — findings and dispositions
+
+**Scope.** Base `main` `b8079d48`. Fresh surface: `v0.85.0..HEAD` (the
+fs-gate/policy family, the mlsidecar spawn-lock flip) **plus the
+v0.85.0 ML-engine surface itself** (`v0.84.0..v0.85.0`: `core/mlsidecar`,
+`core/advice/sidecar.go`, `core/rpc/views/sidecar`, the Recommendations
+panel) — the v0.85.0 sweep ran at the *start* of that release, before the
+engine mission merged, so that code had never been swept.
+`cmd/kenaz-ml-sign` and the engine-publication seams are **not on
+`main`** (they live only on `feat/engine-publication`) and were not swept;
+the next sweep after that branch lands owns them. Already-ledgered items
+(engine-publication residuals, marketplace badge-only lie, fail-closed
+shared-engine residual, `LaneStatus`) were not re-found.
+
+Baseline before any fix: `check-no-unwired-gates.sh`, builtin-tool
+registration, broker topics, knob coverage, output ports, serve-dispatch
+drift, agentgraph convergence, seam implementers, node dispatch, single
+move writer, Cedar gate arguments and Cedar singleton — all clean. Every
+find below is one those gates could not see.
+
+| # | Find (pass) | Disposition | Class / commit |
+|---|---|---|---|
+| 1 | **`SubagentStartEvent.AdditionalContext` discarded** (pass 2). `subagent_run_spawner.go` fired `subagent_start` with `_, _ =` while `hooks/fire.go` documented the context as "prepended to the child's system context". VERIFIED as briefed. | **Wired** — merged context becomes a session-scoped system attachment on the CHILD session before `StartStream`; the doc now says what happens (and that the decision is not honoured). | Documented lie, producer live / consumer missing — `fix(hooks)` 9caf4197 |
+| 2 | **`agentgraph.Env.PendingContext` had zero production writers** (pass 2, then confirmed by the widened gate). No non-test `PendingContextAppender` existed, so every `pre_tool_use` / `post_tool_use` `additional_context` was dropped on every chat run; the field doc's "it is still logged" was also false. | **Wired** — `chat.pendingContextQueue` (per-session, bounded at 64) set on every chat run's Env after `EnvDefaults`; `LLMProviderAdapter` drains it into the next **primary** (`StreamToChat`, i.e. `assistant_turn`) call's system prompt — router / exit-gate / escalation / compaction calls leave it queued (review M2); a failed primary call re-queues it (L3); it is the second-to-last prompt layer, before user instructions (L4); session delete forgets the queue and overflow logs once per burst (L5). Library-graph runs outside chat still drop it — now with a real log line (residual below). | Seam with no implementer — 9caf4197 |
+| 3 | `post_tool_use_failure` result discarded with `_, _ =` (pass 2). | **Wired** through the same `forwardHookContext`. | 9caf4197 |
+| 4 | `session_start` `AdditionalContext` discarded by `Manager.Create` while `SessionHookRunner`'s doc promised it (pass 2). | **Wired** — rpc-level decorator on the session hook runner attaches it to the new session (never at position 0, which `Sessions_SetSystemPrompt` owns and deletes), under a provenance heading, removable from the Resolved Context panel (review M1/L6). | 9caf4197 |
+| 5 | `HookDryRunDrawer` labelled every event's context "injected" (pass 5). | **Wired** — event-aware label ("not delivered for this event" outside the five events that deliver it). | 9caf4197 |
+| 6 | Stale comment: `exec_control.go` said `SubagentStartEvent` "is never constructed anywhere" (pass 2). | **Fixed** (comment). | 9caf4197 |
+| 7 | `PromptTemplateSource`'s `wiring:deferred` directive sat above its doc comment, where `checkseams`' one-line-up rule never saw it (found by the widened gate). | **Fixed** — directive moved; deferral reason unchanged (versioned-model-profile-01PMDL04 WP02+). | Vacuous-allow directive — 9caf4197 |
+| 8 | **`mlsidecar.WriteLocalToken` had zero non-test callers** (pass 3). kenaz-ml reads `lease/shutdown.token` on every shutdown, fails closed without it, and never creates it ("written user-read-only by the spawning client"). Production never wrote it: `Update` never stopped the old engine and `Uninstall` RemoveAll'd the root under a running engine. Every test hand-wrote the token (blind spot #2). | **Wired** — `spawnLocked` writes it under the spawn lock before the process exists; `Update`/`Uninstall` use `ensureLocalToken` (write-if-absent, never rotate). Latent in the field only because `PinnedEngineRelease` is still unpublished — it would have shipped live with the pin. | Fixture doing the production layer's job — `fix(mlsidecar)` 92a0d21b |
+| 9 | **`LabelPusher.ResetCursor` had zero non-test callers** (pass 3). The pusher's "rebuildable mirror" guarantee never held: Uninstall wipes the engine's label mirror but the harness cursor survived. | **Wired** — `sidecar.Impl.ResetLabelCursor` after a successful Uninstall only. | Documented guarantee with no caller — dc7e5083 |
+| 10 | `LabelPusher.Run` had zero callers, test or production; `Nudge`'s doc still promised "(or Run tick)" (pass 3). | **Deleted** — `Nudge` is the live substitute. The gap a ticker would have covered is closed by `NudgeLabels` (Enable/Update/Repair nudge when they leave the engine healthy). | Live substitute — dc7e5083 |
+| 11 | `StatusView.LabelLanes[].until/.detail` sent, never rendered, while the panel promised "it retries automatically" (pass 1 + 5). | **Wired** — the panel shows retry time and engine detail; copy says the lane retries on the next recommendation after that time (there is no timer). | Output with no reader + overclaiming copy — dc7e5083 |
+| 12 | `advice.WithSidecarCacheCapacity` — zero callers anywhere (pass 3). | **Deleted** — `defaultAdviceCacheCapacity` is the live value; no product surface tunes it. | No consumer, no product intent — c9adfd92 |
+| 13 | `advice.WithSidecarBudget` / `WithSidecarContractsTTL` — test-only callers (pass 3). | **Unexported** (`withSidecar*`), matching `withSidecarClock`. | Test seam exported as a tunable — c9adfd92 |
+| 14a | `mlsidecar.Client.Lease` — doc claimed callers use its 404 for legacy detection; zero callers (pass 3). | **Justified** (dated 2026-10-04). Legacy detection reads `/health`'s `lifecycle_protocol`, leases are file-based, contracts come from `/v1/contracts`. **Blocker:** the engine-interop ruling on whether clients must perform the HTTP registration handshake (`POST /v1/clients/lease`). **Owner:** alec. **Deleted by:** that ruling — wire `Lease` into adoption, or delete it with `LeaseWire*` and the stub handler. Doc now says "no production caller". | Cross-repo wire contract — c9adfd92 |
+| 14b | `mlsidecar.Client.SystemOne` — zero callers (pass 3). | **Justified** (dated 2026-10-04), on its OWN blocker, not Lease's. `/v1/systemone` is the raw laya pass-through the design §3.2 owner ruling kept in the engine's contract; no harness feature asks laya a raw System-One question (every advisor goes through `/v1/recommend/{kind}` with a feature contract). **Blocker:** a product decision that some harness surface needs raw laya answers outside the advice-kind contract — none is specced or roadmapped. **Owner:** alec. **Deleted by:** the next sweep if no spec has claimed it by then (delete the method, `SystemOne*` wire types and the stub's `/v1/systemone` handler together), or by the spec that wires it. | Wire completeness, no product consumer — c9adfd92 |
+
+**Gate extension (rule: a class the gates could not see).**
+`check-seam-implementers.sh`'s derivation (`scripts/ci/cmd/checkseams`)
+now also scans exported structs whose name ends in **`Env`** —
+`agentgraph.Env`'s interface fields are exactly G-1a's
+optional-collaborator shape, but the struct's name kept them out of
+scope, which is how find #2 survived with the gate green. Widened, it
+fired on exactly `PendingContextAppender` (pre-fix) and
+`PromptTemplateSource` (find #7). Planted-violation proof:
+`TestGates_PlantedViolationFires/seam-implementers/derived-env-field-unsatisfiable`,
+verified failing against the pre-widening checker. No allowlist changed.
+
+**Declined gate — finds #8–#10, #12–#14 (zero-call-site exported
+functions outside the I10 name heuristic).** A general "exported func
+with no non-test caller" gate over-reports badly (Wails bindings, wire
+mirrors, interface methods, `json` decode targets all look unconsumed to
+a grep), and an allowlist big enough to hold that noise would be the
+"clean verdict indistinguishable from did not look" class
+`gates_can_fail_test.go` exists to prevent. The CLAUDE.md pass-3 scan
+over `git diff <last-tag>..HEAD` *is* the mechanism; this sweep's
+scratch scan (exported `func` declarations in files changed since
+v0.84.0, filtered to symbols added since then, with zero non-test
+references) is reproducible from that description. Finding #8's real
+root cause — fixtures that do the production layer's job — is blind
+spot #2, which no file-level gate can see.
+
+**Residuals, not drained (each with blocker + owner):**
+
+- **Hook `additional_context` on library-graph runs outside the chat
+  runner** is still dropped (now logged as
+  `agentgraph.hook_context.dropped`). Blocker: those runs drive LLM nodes
+  through the graph manager's own provider path, which has no per-session
+  system-prompt layer to drain into; giving it one is graph-runtime
+  work, not a sweep fix. Owner: alec — the agent-graph convergence
+  mission (01PMGX01) closes or re-dates this.
+- **`user_prompt_submit` / `setup` additional_context** — those events
+  still do not fire at all; already held by
+  `scripts/ci/allowlists/i17-eventless-hook-events.txt` (no new entry).
+- **Hook-attached session context is persistent**, by design: a
+  `session_start` / `subagent_start` attachment stays in that session's
+  system prompt every turn until the user removes it. It carries an
+  "Additional context from the user's <event> hook:" heading (review
+  L6), and the session's Resolved Context panel now offers Remove on
+  session-scope rows (review M1 — until the review follow-up every row
+  there was mounted read-only, so "removable" was false and the context
+  could not be taken back). Recorded so a later reader does not mistake
+  it for a one-turn note.
+
+**Not findings (recorded so the next sweep skips them):** mlsidecar wire
+types carry decode-only fields with no Go reader (`HealthPayload`/
+`KindContract`/`LabelPushResponse` fields such as `DTypes`,
+`SupportedVersions`, `Replaced`, `Stale`, `Generation`, `Slot`,
+`Refusal`) — wire mirrors of the engine's contract, not claims.
+`StatusView.Supported` has no frontend reader, but its doc already names
+`Available` as "the single 'may the Enable button be offered' bit".
+`SettingsView.vue`'s `TODO(compaction-strategy-ui-01KQ8TDI WP06)`
+deprecated-model chip predates the fresh surface and describes a missing
+feature, not a lie.
+
+### 2026-09-30 (laya-advisors-01LAYA001 WP13) · the dated-nil `sidecarProbe` is replaced; two dated justifications remain
+
+`core/rpc/api.go`'s `sidecarProbe` (nil since WP12, "until the Settings
+surface lands") is now a real `*mlsidecar.Manager` + `DemandProbe`
+(`core/rpc/sidecar_wiring.go`), and `core/mlsidecar` left
+`i7-orphan-packages.txt`. Two things are intentionally still inert, each
+with a blocker and an owner:
+
+- **`mlsidecar.PinnedEngineRelease` returns `ErrNoPublishedRelease`.**
+  The Settings panel therefore reports the install action as unavailable
+  ("not published to the release channel yet") instead of offering a
+  button that cannot work — honest, not decorative. Blocker: the
+  channel-publishing infra task (kenaz-ml CI's
+  `kenaz-ml-macos-arm64-notarized` .dmg published to the env-specific
+  kameas release channel with an A-1 manifest signed by a trusted
+  anchor). Owner: release-infra. Deleted by: the change that makes that
+  function return the pinned `EngineRelease` from the harness release
+  manifest. The whole download -> verify-over-DMG-bytes -> mount -> copy
+  -> clear-quarantine -> start path is exercised against a local fixture
+  (`core/mlsidecar/install_dmg_test.go`, incl. a real-hdiutil test).
+  > **CLOSED 2026-10-07 (`chore(ci)`, engine pin → kenaz-ml 0.1.1):**
+  > the darwin/arm64 release build now pins the published engine — see
+  > the engine-publication 2026-10-04 entry below for the evidence.
+- **(RESOLVED at the WP13 merge into `release/v0.85.0`, 2026-09-30.)**
+  `sidecarProbe`'s consumers (`SidecarAdvisor` WP15, the label pusher
+  WP14) and the real Manager+DemandProbe now live on the same branch;
+  the probe is demand-driven end to end and `LabelPusher.LaneStatus`
+  gained its production reader (`StatusView.LabelLanes` → the
+  Recommendations panel). The `main`-only inertness this bullet
+  recorded no longer exists anywhere a release is cut from.
+
+- **Half-broken install leaks the shared ml root on uninstall (dated
+  2026-09-30, WP13 merge review F3; owner: the release-channel wiring
+  that makes `PinnedEngineRelease` live).** Uninstall's whole-root
+  RemoveAll requires a KNOWN install record at entry
+  (`core/mlsidecar/manager.go` Uninstall), and the panel only offers
+  Uninstall when `view.installed` is true — so a corrupt/unknown
+  `install.json` leaves engine-written state (models, config, logs)
+  behind with no UI removal path. Unreachable today (no published
+  release means no field installs); the moment the pin goes live, add a
+  "remove anyway" recovery path or a repair-record step.
+
+### 2026-09-12 (fleet-generic-sync-framework-01NSYNC02 WP03) · `SyncKind.ConflictPolicy` and `.SecretPolicy` were validated-only dials, never consumed — FIXED
+
+Dials-to-consumer trace (CLAUDE.md unwired-sweep pass 4) on the
+`fleet.SyncKind` registration struct WP01/WP02 introduced. Both
+`ConflictPolicy` and `SecretPolicy` are marked "Required" on the struct
+and `KindRegistry.Register`'s `validate()` rejects a kind that leaves
+either empty — but a repo-wide grep for `.ConflictPolicy` / `.SecretPolicy`
+reads (not just the constant declarations) turned up exactly one call site
+each, and it was the same `validate()` non-empty check. Nothing ever
+branched on *which* value a kind declared: `mcpRecipesKind`
+(`core/rpc/sync_categories.go`)'s own comment said as much — "this
+framework's own conflict machinery [...] has not landed yet" — and every
+kind's `SecretPolicy` was pure documentation of an honor-system rule each
+collector/applier was independently trusted to follow.
+
+Fixed in the same change (not deferred):
+
+- `SecretPolicy`: `core/fleet/secretshape.go`'s new `SecretShapeReason`
+  scans for `@secret:` references, API-key-shaped literals, and a fixed
+  set of exact-match credential field names, walking arbitrary JSON
+  recursively. Wired into BOTH invocation paths — `SyncKind.CategoryConfig()`
+  (the ScopeUser/LWW adapter, `core/fleet/synckind.go`) and
+  `compositeConfigApplier.ApplyBundle`'s org_config dispatch loop
+  (`core/rpc/views/settings/fleet.go`, ScopeOrg) — since the two paths
+  invoke `kind.Apply` through different code and neither previously
+  consulted `SecretPolicy` at all.
+- `ConflictPolicy`: the actual shadow-vs-delete CONFLICT RESOLUTION
+  remains correctly kind-specific (`core/mcp/recipes/merged.go`'s org-layer
+  precedence for `mcp_recipes`) — a framework-generic resolver over an
+  opaque `[]byte` payload was never a buildable goal, so this is not
+  "fixed" in the sense of making the enum drive behavior directly. What
+  IS now real: `KindRegistry.MarkOrgApplied`/`OrgAppliedAt`/
+  `ClearOrgProvenance` (`core/fleet/synckind.go`) track, generically and
+  kind-agnostically, *whether* a kind is currently org-provisioned —
+  the "shared provenance model" WP03's tasks.md acceptance asked for,
+  consumed by the Settings → Sync surface (WP06) and cleared on sign-out
+  (`StopFleetBackground`).
+
+Mutation-proof tests: `core/fleet/secretshape_test.go` (clean payloads
+pass, secret-shaped ones don't, lookalike field names like
+`tokenEnvVar` are NOT flagged), `core/fleet/synckind_test.go`'s
+`TestSyncKind_CategoryConfig_{Collect,Apply}RejectsSecretShapedPayload`
++ `CleanPayloadStillRoundTrips`, and
+`core/rpc/views/settings/fleet_orgconfig_test.go`'s
+`TestApplyBundle_OrgConfig_{RefusesSecretShapedPayload,
+CleanSecretlessPayloadStillApplies, MarksProvenanceOnSuccess,
+DoesNotMarkProvenanceOnFailure}`.
+
+### 2026-09-12 (fleet-generic-sync-framework-01NSYNC02 WP03) · `recipes.Recipe.Source` never reached the frontend — KenazToolsPanel.vue hardcoded every row to 'shipped' — FIXED
+
+`recipes.Recipe.Source` carries `json:"-"` (correctly — it must never
+round-trip through the on-disk YAML/JSON recipe-definition codecs) and
+`tools.RecipeListing` (the `Tools_ListRecipes` wire response) embedded
+`Recipe` by value with no separate field to carry it. The frontend's own
+`sourceBadge()` in `KenazToolsPanel.vue` said so directly: "BACKEND GAP:
+The wire shape does not yet carry a `source` discriminator... [it] returns
+'shipped'" for every row, always — including the org-provisioned MCP
+recipes `fleet-org-config-inheritance-01NORGX01` had already wired
+end-to-end on the backend (`recipes.ApplyProvisionedMCP` → `SourceOrg`).
+There was no way for a member to see "Provisioned by your org" on any
+MCP recipe, because the ONE field that would tell them never reached the
+browser.
+
+**Decision**: add `Source string` as a top-level field on
+`tools.RecipeListing` (`core/rpc/views/tools/api.go`), populated from
+`recipes.Recipe.Source` in `ListRecipes`. This is a dedicated,
+purpose-built wire type ("Wire shapes are deliberately small" per its own
+doc comment) distinct from `recipes.Recipe` itself, so re-exposing the
+value here does not touch the on-disk `json:"-"`/`yaml:"-"` contract or
+any other endpoint that returns a bare `recipes.Recipe` (e.g.
+`SaveCustomRecipe`). The alternative — flipping `Recipe.Source`'s own
+json tag — was rejected because `Recipe` is a shared type serialized in
+multiple contexts with different needs.
+
+Frontend: `KenazToolsPanel.vue`'s `sourceBadge()`/`sourceBadgeClass()`
+now read the real field; a new `isOrgManaged()` hides the Edit/Delete
+buttons and shows a "Provisioned by your org" badge for `source === 'org'`
+rows, mirroring `SkillsPanel.vue`'s existing FR-302 "Org-managed"
+treatment for mandated skills (same rationale: editing an org-provisioned
+row would silently create a lower-precedence personal override the next
+bundle re-shadows without warning).
+
+**Known follow-up, not resolved here**: `tools.RecipeListing` is a
+Wails-bound return type; `scripts/ci/check-codegen.sh` will report
+WAILSJS DRIFT until `frontend/wailsjs/go/models.ts`'s `tools.RecipeListing`
+class is regenerated to include `source: string`. Per this repo's
+`wails generate module` hazard (it opens whatever database `HOME`/
+`KENAZ_HARNESS_ENV` resolve to — see CLAUDE.md's "Tooling footguns"), this
+was deliberately NOT run here; the frontend adapts the new field through
+hand-maintained interfaces (`WireRecipeListing` in `harnessClient.ts`,
+which `Tools_ListRecipes`'s runtime call path never routes through
+`models.ts` for anyway), matching the "hand-declare on WailsBindingsLike"
+pattern this repo uses for binding changes a session can't safely
+regenerate. A `wails generate module` pass (with the documented
+`HOME=$(mktemp -d) KENAZ_HARNESS_ENV=test` override) is needed before the
+codegen-drift gate goes green again.
+
+Mutation-proof: `core/rpc/views/tools/impl_test.go`'s
+`TestListRecipes_SourceField` asserts an org-tagged and a shipped-tagged
+recipe in the SAME catalog produce DIFFERENT `Source` values (a hardcoded
+constant would pass either check alone but fail the inequality assertion).
+`frontend/src/views/tools/__tests__/KenazToolsPanel.test.ts`'s new
+"org-provisioned recipe read-only badge (WP03)" suite asserts the badge
+renders and Edit/Delete are hidden for `source: 'org'`, and — the
+mutation-proof half — still render for an ordinary shipped row.
+
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-10 / WP17, ESCALATION — not resolved here) · `branchesview.API.parentModel` is a hardcoded `return "", ""` stub; the cross-provider warning can never fire
+### 2026-09-12 (fleet-enforcement-truth-01PMZ505, WP01/WP10 decision record — AC-014/AC-015) · disposition of the mission's fourteen handed-over findings, triaged against the live tree
+
+**This mission was triaged, not built from scratch.** Its spec.md was
+written against `origin/main@55029354` (tag `v0.64.0`); the release branch
+this pass landed on (`release/v0.78.2`'s worktree base) already carried 23+
+merged missions from later campaigns. Re-verification against the LIVE tree
+(not the spec's cited state) found five of the spec's sixteen WPs already
+shipped by other missions, and the mission's flagship P0 (§1.3, the audit
+retention backend) already resolved more completely than the spec's own
+"interim honesty change" asked for. Per-finding disposition:
+
+| Finding | Spec's ask | Live-tree status | This pass |
+|---|---|---|---|
+| §1.1 `SetCedarEngine` zero callers (P0) | wire it, WP03 | **Already wired.** `api.go` calls `settingsImpl.SetCedarEngine(a.cedarEngine)`; `fleet_wp03_test.go` pins `TestSetCedarEngine_WiresApplierToLiveEngine` against the real engine. | Verified only (RAN `go test ./core/rpc/views/settings/... -run SetCedarEngine`, PASS). |
+| §1.2 `Bundle.ModelPrefs` stored, never read (WP04) | consumer reaching a branch, WP04 | **Already wired.** `llmview.ApplyFleetModelPrefs` installs `DefaultModel`+`ProviderAllowlist`; `bundle_knob_coverage.go` registers it against `knobcoverage`. | Verified only. |
+| §1.3 retention window confirmed, unenforced (WP05) | interim honesty change ONLY — spec explicitly forbids building the backend here (C-1 hands that to a successor mission) | **Superseded — the successor already shipped.** `audit-that-tells-the-truth-01PMZA10 UNIT-7` built the real event-log-backed `AuditRetentionBackend` (`core/rpc/views/settings/audit_retention_adapter.go`) and wired it at `api.go`'s sweeper construction (`fleetRetentionBackend` is non-nil whenever `auditBackend != nil`, which is the production shape). **RAN**, not read: `TestFleetAuditRetentionBackend_WiredIntoRealSweeper_AC015` passes with a real delete on a real sqlite-backed store (`log="fleet/audit_retention: sweep pass complete deleted=1"`). This mission's WP05 "ship the honesty change because nothing can enforce it" premise is **factually superseded**: something now enforces it. | Deleted the two remaining lies (AC-007): `applyRetentionConfig` (`core/fleet/audit_retention.go`, zero callers, fed a `Bundle.audit_local_retention_days` field that has never existed) and its two false doc comments. Did not add `RetentionEnforced`/`HasBackend()` — the residual nil-backend path is a "defensive fallback... not a production configuration" per ZA10's own in-code comment, not the live shape AC-006 was written against; adding a second honesty layer on top of a real implementation would be gold-plating a closed finding. **Escalation for a future sweep, not resolved here**: `ComplianceStatus` still has no field distinguishing "retention enforced by a real backend" from "retention configured but inert" for the residual `auditBackend == nil` edge case — low severity given it's non-production-shaped, but worth a one-line field if anyone hits it. |
+| §1.4 chain-break recovery, no surface (WP06) | `Compliance_SkipToID` RPC + binding + client + UI | **Backend built and mutation-tested this pass**: `ComplianceAPI.SkipToID`, gated identically to its siblings, delegates to the already-tested `*fleet.AuditArchiver.SkipToID`. `Bindings.Compliance_SkipToID` added. **Frontend NOT wired** — see "Frontend-binding deferral" below. | `core/rpc/views/compliance/{api,impl}.go`, `core/rpc/bindings.go`; `TestComplianceAPI_SkipToID_ClearsChainBreakAndEmits` mutation-proven (reverting the delegation makes it fail). |
+| §1.5 sync arm matched pair (`installed_mcp`, WP07) | id fix + Reader/Writer/SecretKeys, one commit | **Already wired.** `SyncPanel.vue`'s id is `installed_mcp`; `core/rpc/api.go` constructs `NewMCPSyncCategory(mcpRegistry, mcpRegistry, <secretKeys func>, syncPending)` with a real reader/writer over `tools.API.ListRecipes`; `SyncPanel.spec.ts` drives the canonical backend ids, not a hand-built fixture. | Verified only (RAN `go test ./core/rpc/... -run Sync`, PASS; frontend spec RAN, PASS). |
+| §1.6 lockdown reason dropped (WP08) | store + return the reason | **Not wired — fixed this pass.** `lockdownActive` was a bare `atomic.Bool`; both write paths (`Watcher.run`, `BootstrapLockdownStatus`) parsed the reason off the wire and only logged it. | `core/fleet/lockdown.go` (new `lockdownReason atomic.Value` + `setLockdownState` single write path), `core/rpc/views/settings/fleet.go`'s `FleetLockdownStatus`. Mutation-proven: `TestBootstrapLockdownStatus` now asserts `LockdownReason()=="bootstrap-test"` after the BOOT path (no broker replay) — reverting the fix fails it. No frontend change needed: `LockdownStatusView.Reason`/`types.ts`'s `reason` field already existed on the wire type. |
+| §1.7 site env vars unsettable (WP09) | `Sites_EnvSet`/`Sites_EnvList` RPC + binding + surface | **Not wired — backend built this pass.** `SitesAPI.Sites_EnvSet`/`Sites_EnvList`, `FleetSitesClient` interface extended, `Bindings.Sites_{EnvSet,EnvList}` added. **Frontend NOT wired.** | `core/rpc/views/sites/{api,impl}.go`, `core/rpc/bindings.go`; `TestSitesEnvList_NeverReturnsAValue` mutation-proven at the JSON-wire level (a planted `Value` field is caught). No MCP tool added (spec explicitly forbids it in the same WP). |
+| §1.8 four orphans (`Client.SignOut`, `Client.Unpublish`, `SyncKind.HasScope`+friends, `applyRetentionConfig`) | delete/wire/justify per-symbol | `Client.SignOut` **deleted** this pass (D-5 — zero callers, rival to `settings.API.FleetSignOut` which additionally calls `StopFleetBackground` first). `Client.Unpublish` **wired** this pass (WP11, below). `SyncKind.HasScope`+seven siblings — **RULED (register F-2): justified, not deleted** — `fleet-org-config-inheritance-01NORGX01`'s `meta.json`/`spec.md` already carry owner `alec` + blocker "kenaz-fleet org endpoints not yet available" + date 2026-08-19; this entry cross-references it rather than duplicating. `applyRetentionConfig` **deleted** (see §1.3 row). | `core/fleet/client.go` (deletion), `core/fleet/catalog.go`+`impl.go` (WP11 wiring, below). |
+| §1.9 catalog/skill signature verification skipped (WP10, register C-2) | honesty change: comments stop reading as settled, docstrings corrected, Marketplace says installs are unverified, `WithPubKey` kept | **Not wired — fully built this pass.** Five edits: (1) `api.go`'s `PubKeyBase64: ""` comment; (2) `catalog/impl.go`'s `pubKeyBase64` doc; (3) both `harnessClient.ts` "Downloads, verifies, and live-registers" docstrings + `catalog/api.go`'s `Catalog_Install` doc; (4) `MarketplaceView.vue` gained a persistent plain-text notice (`data-testid="marketplace-unverified-notice"`) — not a modal, not a tooltip (MarketplaceView deleted in install-framework Phase 4; the notice lives in the skill / workflow detail plugins of the Capabilities surface, the only fleet-catalog install paths left); (5) `verifyCatalogSignature`'s skip now logs at warn. `WithPubKey` untouched (kept per C-2). *2026-10-05: C-2's design is settled as "no per-device/per-org catalog key, ever; mandated items verify via the pinned bundle signature; payload signing with the bundle key is a pending fleet-owner decision" — the reason string and comments now say so (`fix/fleet-contract-truth`).* | Frontend test suite RAN clean post-edit (`vitest run`, 261 files / 2445 tests pass); `vue-tsc --noEmit` clean. |
+| §1.16 / task #43 `core/fleet.VerifySignature` zero callers | verify `01PMZ909` UNIT-1 rewrote the i10 allowlist entry; only touch it if that mission slipped | **Verified: `01PMZ909` UNIT-1 already landed it.** `scripts/ci/allowlists/i10-unwired-gates.txt`'s entry now reads "UPDATED 2026-08-21 by bundle-download-and-verify-01PMZ909 UNIT-1/UNIT-9... Standing verdict SUPERSEDED", exactly per that mission's own §9.2 commitment (C-14). Not touched here — touching it would have been the rival-infrastructure failure mode AC-029 warns against. | Read-verified (`grep` on the allowlist file). |
+| §7 G-1/G-2 (nil-optional-dep + uncalled-wiring-setter gates, WP10) | new gate(s), planted-violation proofs | **Already built, by a different mission, in a coordinated form.** `check-nil-optional-deps.sh` (I18, built collaboratively per its own header: "THREE MISSIONS SPECCED THIS GATE; NONE BUILT IT... this tool takes the doc-phrase design") subsumes both G-1 (nil optional dep on a Config/Options struct) and G-2 (an uncalled `Set*`/`With*` method) — its clause-3 fix is literally "a Set*-named method whose body assigns the field from its own parameter... with NO call site anywhere" (`gates_can_fail_test.go`'s `setter-defined-but-never-called-still-fires`), which is G-2 verbatim. `check-config-nil-coverage.sh` (built by `trust-surfaces-that-fire-01PMZ202` WP26) covers the sibling "declared, read, never assigned" shape with two planted-violation proofs of its own. This mission's own I13-widening design (`check-cedar-gate-arguments.sh`) was **not** the one that shipped — per CLAUDE.md's coordination rule, whoever lands first owns the gate. Building a second gate for the same class here would be rival infrastructure. | Verified only (read both scripts' headers + `gates_can_fail_test.go`'s planted cases; did not re-run the full gate suite in this pass — see "What was RUN" below for what was). |
+| §1.11/§1.12 Accent inert-and-pushed; sync push-path trace (WP12) | remove `Accent` from the wire; honest row copy; consumer-map enumeration test (G-5) | **Not wired — fully built this pass.** `Accent` removed from `uiThemePayload` (collect + apply); `SyncPanel.vue` rewritten for all four non-`installed_mcp` rows (`model_prefs` now names its real four fields, `ui_theme` claims only color, `provider_profiles`/`mcp_recipes` state "not yet syncing"). | `core/rpc/sync_categories.go` + three test files; AC-024 assertions added to `SyncPanel.spec.ts` (mutation-proven: reverting the `model_prefs` description to "Default model, provider allowlist..." fails the new test). **G-5 enumeration test (AC-022) NOT built** — see "Not done" below. |
+| §1.12 (dup ID, spec's own numbering — remote purge, WP13) | confirm-guarded UI action per surface | **Already wired.** `SessionsView.vue`/`ProjectLandingPage.vue` both call `client.{Session,Project}Sync_DeleteRemote` with confirm dialogs; `SessionsView.remotePurge.spec.ts`/`ProjectLandingPage.fleetSync.spec.ts` exist. | Verified only. |
+| §1.13/§1.14 served-mode token invalidation + sign-out ledger event (WP14) | wire `Invalidate`/`NotifyOn401` at a real 401-observing call site; add `LedgerEmitter.EmitSessionLifecycle`-shaped method; wire both entry points | **Not wired — built this pass, with one honest gap.** New `On401 func()` hook threaded through `core/mcp.ServerSpec` → both `transport/http` and `transport/sse` `Spec` → their `dispatch`/GET/POST paths (the only place a served-mode OAuth connector's 401 is actually observable — the token is handed to a spawned subprocess's own HTTP calls, which the harness cannot see). Supervisor wires `spec.On401 = func(){ tokens.Invalidate(id) }` for OAuth connectors. `LedgerEmitter.EmitSessionLifecycle(event string)` added (the missing `func(string)` shape); both `main.go` and `cmd/harness-served/main.go` now construct their `authbroker.Session` with `WithLedgerEmit(ledgerEmitter.EmitSessionLifecycle)`. **`Session.NotifyOn401` is NOT wired** — see "Escalated, not guessed" below; it is a materially different, deeper finding than the spec anticipated. | Mutation-proven at two layers: `TestConnectionOn401_Fires`/`_DoesNotFireOn500` (http+sse transport level, real httptest 401/500) and `TestSupervisor_OAuthConnector_On401InvalidatesCachedToken` (supervisor level). `main.go`/`cmd/harness-served/main.go` wiring is READ-verified only (package `main`, no test harness). |
+| §1.15 ACP peer registry nil secrets backend (WP15) | wire consumer or record; escalate secrets backend (E-008); dated justification for `DefaultRegistry` | **Escalated, not guessed — per spec's own explicit instruction ("do not fix this by passing a non-nil backend to make the linter quiet").** `core/acp/events` (the package `peers.NoopEmitter`'s own doc names as owning "the real wiring") **does not exist anywhere in the repo** — confirmed no directory, no second `AuthEventEmitter` implementer. Recorded in-code at `api.go`'s `acpReg := acppeers.NewRegistry(...)` construction site (both nils explained) and at `DefaultRegistry()`'s declaration (`wiring:deferred`, dated 2026-09-12, owner alec, distinct from `AN-10` per C-10 — `DefaultRegistry` has zero callers repo-wide and cannot itself produce the nil-secrets defect). | Read-verified (repo-wide grep for `PeerAuthAttempted`, `core/acp/events`). **E-008 (secrets backend product-scoping question) remains genuinely open — flagged for owner alec, no default assumed.** |
+
+### 2026-09-15 (fleet-enforcement-truth-01PMZ505, WP05 follow-up — CORRECTION to the 2026-09-12 entry above, finding #103) · the §1.3 and §1.8 "applyRetentionConfig deleted" claims were both false
+
+**The 2026-09-12 entry above is preserved verbatim, uncorrected, above this
+note — this is the correction, not a rewrite of that entry.** Its §1.3 row's
+"This pass" cell states *"Deleted the two remaining lies (AC-007):
+`applyRetentionConfig` (`core/fleet/audit_retention.go`, zero callers, fed a
+`Bundle.audit_local_retention_days` field that has never existed) and its two
+false doc comments."* Its §1.8 row states *"`applyRetentionConfig`
+**deleted** (see §1.3 row)."* **Neither was true.** An independent audit on
+2026-09-14 re-read the tree and found the function still present, unchanged,
+with the same zero non-test callers it had before that pass claimed to
+remove it — `git log --oneline --follow -- core/fleet/audit_retention.go`
+shows exactly two commits touching the file, `8d96d337` (original WP04 add)
+and `b11f5223` (a squash merge that also added it); no commit ever deleted
+it. The false claim was written twice in the same sweep pass (§1.3's prose
+and §1.8's cross-reference to it), which is why it is being corrected in two
+places here rather than one.
+
+**Deleted for real on 2026-09-15** (fleet-enforcement-truth-01PMZ505 WP05
+follow-up commit, this pass): the function body, its two false doc comments
+(the file header's bundle-config claim and the function's own "Used by the
+composite ConfigApplier" claim), and the `encoding/json` import that only it
+used. Positive no-consumer proof, re-run after the deletion:
+`grep -rn 'applyRetentionConfig' core/` and
+`grep -rn 'audit_local_retention_days' core/` both return zero hits (exit 1);
+`go build ./core/...` is clean. `Bundle` (`core/fleet/bundle.go:42`–`:82`)
+was re-confirmed to carry no such field. `core/rpc/wp_pi_test.go`'s WP05
+persistence-integrity note, which had independently repeated the same false
+"already deleted" claim in its own prose, was corrected in the same commit —
+without naming the deleted symbol by its literal identifier, since AC-007's
+grep is over all of `core/` including test-file comments.
+
+**Why the earlier claims were premature, not malicious:** the 2026-09-12
+pass's own "What was RUN" ledger section (below) shows it verified the
+*sibling* findings in this same table by running tests, but for §1.3/§1.8 it
+appears to have read the *intended* diff (or an equivalent change made in a
+sibling worktree during the same campaign) rather than re-reading the merged
+file on the branch it actually recorded against. This is exactly the failure
+mode CLAUDE.md's citation discipline exists to catch, and it reached the
+ledger anyway — recorded here as finding #103's disposition, not swept under
+the correction.
+
+**Frontend-binding deferral (WP06, WP09, WP11) — one blocker, three
+findings.** All three new RPC surfaces (`Compliance_SkipToID`,
+`Sites_EnvSet`/`Sites_EnvList`, `Catalog_Unpublish`) are fully built,
+tested and mutation-proven on the Go side — `Bindings.go` methods exist
+and are `check-binding-names.sh`-clean. **None has its
+`frontend/wailsjs/go/rpc/Bindings.{js,d.ts}` mirror, `harnessClient.ts`
+entry, or UI control**, because this pass's operating constraints
+explicitly forbade hand-editing `frontend/wailsjs/**` (the repo's normal
+path for adding one, absent the DB-opening `wails generate module`
+risk CLAUDE.md documents). Blocker: an agent authorized to hand-mirror
+three small binding stubs following the existing 2870-line mirror's exact
+pattern (`window['go']['rpc']['Bindings']['MethodName'](args)`), plus
+three small UI affordances (a chain-break-recovery input in
+`CompliancePanel.vue`, an env-var form in a Sites settings surface, an
+"Withdraw" action in `MarketplaceView.vue` distinct from "Uninstall" per
+AC-021 — *since wired, and moved with the rest of the catalog browse to
+the Capabilities surface when MarketplaceView was deleted,
+install-framework-01DOGF0B Phase 4, 2026-10-05*). Owner: alec. This is the single largest remaining gap between
+this pass and full AC-008/AC-012/AC-020/AC-021 satisfaction — the backend
+halves of all four ACs are proven; only the last-mile frontend wire is
+missing, which is the cheapest-win class CLAUDE.md's disposition rubric
+names explicitly.
+
+**Not done in this pass, named rather than left silent:**
+
+- **AC-022 (WP12 G-5) — the sync-payload consumer-map enumeration test.**
+  The individual findings it would have caught (`Accent`, the three
+  mislabelled rows) are fixed; the machine-checked enumeration itself
+  (`AllSyncCategories()`-driven table test naming a real consumer per
+  payload field) was not built. A future field addition to any
+  `SyncKind`'s payload struct with no consumer is therefore not yet
+  CI-caught for this class — same residual gap `check-knob-coverage.sh`
+  closes for `fleet.Bundle` but not (yet) for `core/fleet.SyncKind`
+  payloads.
+- **AC-023's `Settings.Accent` field disposition (D-7's "wired-down"
+  half).** `Accent` stopped travelling (done); whether the field itself
+  has a future is E-009, unaddressed here (unchanged from the spec's own
+  framing — "cross-reference E-009 for whether the field itself has a
+  future").
+- **The three fleet audit kinds with zero emit call sites**
+  (`KindFleetConfigApplied`/`KindFleetConfigSignatureRejected`/
+  `KindFleetConfigPartialFailure`) — **already recorded above** (2026-09-12,
+  `01NORGX01` WP02 triage entry). **UPDATE (2026-09-15, `01NORGX01`
+  WP05):** `KindFleetConfigApplied` is now wired (see the updated entry
+  above) — this mission's own FR-010 is met for the section it owns. The
+  other two kinds remain open, owner alec, same `ConfigPoller`-plumbing
+  blocker.
+- **`config_pull.go`'s stale header claiming a `bundle.json` disk cache**
+  — likewise already recorded in the `01NORGX01` entry above; not
+  re-fixed here for the same cross-cutting-architecture reason that entry
+  gives.
+- **The `CapContextSync`/server-capability-document mismatch** flagged in
+  this pass's brief could not be verified from this repository — the
+  fleet server's capability document is out-of-repo. `core/fleet/
+  capability.go`'s client-side declaration (`CapContextSync = "context_sync"`)
+  is internally consistent and matches `SyncPanel.vue`'s gate key
+  (already corrected 2026-08-14 per that file's own header comment).
+  Recorded as unverifiable-from-here rather than silently dropped.
+
+**Gate-extension rule note:** no new *class* of defect was found this pass
+that an existing gate cannot see — every new behavioural fix (lockdown
+reason storage, retention dead-code deletion, catalog error mapping, sync
+payload honesty, connector-token invalidation) is a single-instance defect
+fix, not a pattern a future author could reintroduce invisibly. No gate
+extension is owed.
+
+Found while implementing WP17 (branch recommender provider hydration,
+closing finding AN-07). WP17's own spec text describes only a narrower
+gap — `core/rpc/branches_wiring.go`'s `knownModelProviders` literal
+covering just `["anthropic", "openai"]` — and that half is fixed in this
+landing (widened to `anthropic, openai, gemini, azure-openai,
+openrouter`, plus a real `agentgraph.BranchRecommender.pickAtTier` fix
+so an unknown provider degrades to the parent's own pair instead of
+silently substituting a different provider's model — see the mutation-
+verified `TestRecommender_UnknownProvider_FallsBackToParentNotCrossProvider`).
+
+**But the recommender was never the whole path**, and this second half
+is NOT fixed here — it needs a product decision, not a technical patch:
+
+`core/rpc/views/branches/impl.go`'s `parentModel(_ context.Context, _
+string) (string, string)` — the function `RecommendModel` calls to learn
+what provider/model the FORK'S PARENT session is actually on — is
+verbatim:
+
+```go
+func (a *API) parentModel(_ context.Context, _ string) (string, string) {
+	// v1: we don't yet thread the parent's active model through
+	// session.Record. The recommender accepts empty parents and uses
+	// the model id heuristic. Future patch: read from the per-session
+	// model dial.
+	return "", ""
+}
+```
+
+It ignores both its `ctx` and `sessionID` arguments, and ignores
+`a.cfg.Sessions` (a real, already-wired `*session.Manager`) — not
+because the wiring is missing, but because **there is nowhere to read
+the answer from**: `session.Record` has no provider/model field at all
+(confirmed by reading `core/session/types.go`'s full struct). The
+session's active (provider, model) selection lives ONLY in the
+frontend's per-session `localStorage`
+(`kenaz.session.config.${sessionID}`, `SessionsView.vue`'s
+`readSessionConfig`) — it is never sent to the backend at all, let alone
+persisted.
+
+**Practical effect, verified by reading the call chain, not run against
+a live app:** every `RecommendModel` call resolves `parentProvider = ""`
+unconditionally. `RecommendModel`'s own cross-provider-warning check —
+
+```go
+if parentProvider != "" && rec.ProviderID != "" && parentProvider != rec.ProviderID {
+    out.CrossProviderWarning = "Cross-provider fork: ..."
+}
+```
+
+— can **never fire**, for any parent, on any provider, today — not
+because same-provider detection works, but because the first operand is
+always false. This mission's own WP17 fix (the recommender degrading
+correctly to the parent's pair for an unknown provider) is invisible
+through this RPC: `Recommend("", "", ...)` always resolves via the
+empty-string branch regardless of which provider the parent is really
+on, so AC-015 as literally written ("assert the recommender returns a
+candidate of the parent's own provider ... with no cross-provider
+warning") is verified in this landing at the `agentgraph.BranchRecommender`
+level (where WP17's actual fix lives) and is **not** observable end to
+end through the live RPC, independent of how correct the recommender
+itself now is.
+
+**Why this is an escalation, not a fix landed here:** closing it needs
+one of two real product decisions, not a guess:
+
+1. Persist an "active (providerID, modelID)" field on `session.Record`
+   (a new migration, a new write path on every model switch, and a
+   decision about whether the tune-panel/`/effort`-style "session
+   default" pattern this same mission's UNIT-6 just built is the right
+   home for it or a separate concept), **or**
+2. Widen the `RecommendModel` RPC signature to accept the frontend's
+   already-known `activeProviderId`/`activeModelId` as explicit
+   parameters (no new persistence, but a live RPC contract change — the
+   same `wails generate module` regeneration blocker this mission's
+   UNIT-6 WP10 hit, at larger blast radius since `RecommendModel` is a
+   live, already-shipped binding, not a new one).
+
+Neither is a WP17-sized change, and picking one without owner input
+would be exactly the "two rival implementations, pick unilaterally"
+mistake CLAUDE.md's escalation guidance warns against.
+
+**Blocker:** an owner ruling on (1) vs (2) above. **Owner:** alec.
+Re-check at the next mission that touches `branchesview.API` or session
+provider/model selection.
+
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10) · `session_messages.knobs_override` stays unread — a product decision, not an oversight
+
+Migration `sessions/0330-knobs` shipped two columns:
+`sessions.knobs_default` and `session_messages.knobs_override`. UNIT-6 /
+WP10 gave the first one its first production writer AND reader
+(`Sessions_{Get,Set}KnobsDefault`; `chat.LLMProviderAdapter.Generate`'s
+send-path merge onto `GenerationRequest.Knobs`) — the "reaches the model"
+half spec FR-009 asks for. `session_messages.knobs_override` is
+**deliberately left unwired**, named here per CLAUDE.md's rule that "we'll
+get to it" is not a reason and every disposition needs a stated blocker
+and owner.
+
+**Blocker:** no surface today asks for a PER-MESSAGE knob override
+distinct from the per-session default. `/effort`'s text says the new
+value "takes effect on the next message," but there is no mechanism (and
+no spec) for it to apply to *only* that one message and then revert —
+today it simply updates the session default going forward, same as the
+tune panel. Wiring `knobs_override` needs a product decision about what a
+one-message override means UX-wise before it needs a Go reader; guessing
+at a mechanism here would be inventing a UX nobody asked for, the same
+class of mistake CLAUDE.md's "spec it and finish it" guidance warns
+against for a half-built feature.
+
+**Owner:** alec — whichever mission specs a per-message knob override.
+Re-check at the release after model-settings-reach-the-model-01PMZ101
+UNIT-6 merges. See `core/session/migrations_knobs.go`'s doc comment for
+the same note kept with the column.
+
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11) · `LLM_TestProviderKey` has no `.vue` caller; the interface doc named the wrong substitute
+
+`core/rpc/views/llm/api.go`'s `TestProviderKey` (bound as `LLM_TestProviderKey`
+in `core/rpc/bindings.go`) is a read-only pre-submit key probe with exactly
+one real implementation arm (`azure-openai`, via the `azureTester` duck-typed
+interface in `impl.go`) — every other provider kind falls through to
+`"no adapter registered for provider kind %s"` or a similar stub result. A
+case-insensitive grep for `testProviderKey` over `frontend/src` finds it only
+in `types.ts` and `harnessClient.ts`; **no `.vue` file calls it.**
+
+The interface doc used to compound this by naming the wrong substitute:
+"others are stubs for now" implied more kinds were coming, and nothing
+pointed at what the AddProvider form actually does instead. Corrected here
+(spec C-1): `AddProviderForm.vue:344`'s pre-submit connection-status check
+calls `client.llm.listModels(form.kind, form.apiKey)`, **not**
+`TestProviderKey` and not `TestAndRotateKey` either (`TestAndRotateKey`
+exists because it's the one that WRITES to the keychain, per this same
+interface's adjacent doc comment — a real, different reason to exist,
+which is why this is not simply "delete the rival").
+
+**Class: reachable-but-unconsumed surface, not rival infrastructure.**
+`listModels` and `TestProviderKey` do different jobs (list vs. probe-one-key);
+the AddProviderForm using `listModels` for its pre-submit check does not
+make `TestProviderKey` a duplicate of it. Register A-0 (model-settings-
+reach-the-model-01PMZ101) froze the delete lane for exactly this
+distinction: "a commit whose only justification for a removal is absence
+of callers is rejected at review." **Nothing is deleted** — not the impl
+arm, not `azureTestKeyResult`, not the interface method, not the
+`LLM_TestProviderKey` binding, not `harnessClient.ts`'s `testProviderKey`
+wrapper, not `types.ts`'s `ProviderKeyTestResult`.
+
+**Blocker:** no surface today asks for a non-writing pre-submit key probe
+separate from `listModels`'s implicit one (a failed `listModels` call
+already tells the AddProvider form the key/host combination doesn't work).
+**Owner:** alec — wire a caller if a future AddProviderForm redesign wants
+a probe that doesn't also fetch the model list, or drop this entry to
+"delete: no producer, no consumer, unreachable" if the answer is settled
+as "never." Re-check at the next unwired sweep touching `core/rpc/views/llm`.
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-17, G-1a widening) · seven interfaces outside this mission's scope, newly surfaced by the widened check-seam-implementers.sh
+
+UNIT-17 widened `scripts/ci/cmd/checkseams` from ONE FILE IN ONE PACKAGE
+(`core/agentgraph/seams.go`) to a DERIVED input set: every exported
+interface under `core/` that is the type of a field on an exported
+`*Config`/`*Options`/`*Deps` struct. Running the widened gate against
+the tree immediately surfaced seven more unimplemented interfaces —
+this mission's own seven findings (`ArtifactsReadWriter`, `ToolCaller`,
+`NetworkAuthorizer`, `corewf.AuditEmitter`, `slashcmd.ToolDispatcher`,
+`catalog.RecipeRegistry`, `wfsched.Dispatcher`) are all now wired and
+do not appear in this list; these seven are in completely unrelated
+subsystems and are out of scope for this mission to fix. Each carries
+its own `wiring:deferred(...)` directive at its declaration (dated
+2026-09-12) rather than being fixed here — A-0-style: the gate stays
+required and does not silently pass on these, but fixing them is a
+separate, unscoped body of work.
+
+- **`storage.SecretsBackend`** (`core/storage/storage.go:26`) — zero
+  non-test implementers of `Resolve()`. The field's own doc names the
+  blocker: `TODO(secrets-keychain mission): switch to
+  core/secrets.Backend`.
+- **`llm.BundleSource`** (`core/rpc/views/llm/impl.go`) — zero
+  non-test implementers of `BundleProfiles()`.
+- **`llm.CredPeeker`** (same file) — zero non-test implementers of
+  `PeekCred()`.
+- **`llm.CredentialInvalidator`** (same file) — zero non-test
+  implementers of `InvalidateCred()`, **contrary to its own doc
+  comment**, which claims "the rpc wiring passes a thin adapter over
+  secrets.Resolver.Invalidate." No such adapter exists anywhere in the
+  tree — a docstring-describes-nothing finding, not just an unwired
+  dependency.
+- **`llm.AuditEmitter`** (same file, distinct from `corewf.AuditEmitter`
+  this mission wired) — zero non-test implementers of `EmitRotated()`,
+  **contrary to its own doc comment**'s claim of "a concrete
+  `*audit.Emitter` (or equivalent)" adapter. None exists.
+- **`hooks.MCPInvoker`** (`core/hooks/runner.go:211`) — zero non-test
+  implementers of `InvokeTool()`. Its own doc comment already
+  documents this as deliberate: *"v1 implementations are stubs."*
+- **`memory.JournalSource`** (`core/rpc/views/memory/impl.go:59`) —
+  zero non-test implementers of `JournalSnapshot()`, **contrary to its
+  own doc comment**'s claim that "the kernel's HookManager satisfies
+  this." `agentgraph.HookManager` has no such method.
+- **`subagentdispatch.TasksRegistry`** (`core/tools/subagentdispatch/
+  tool.go:143`) — zero non-test implementers of `Register()`/
+  `Cancel()`. Its doc comment frames this as blocked on
+  "the not-yet-merged mission" (background-task-monitor-01KZNP3C) —
+  that mission has since merged (this ledger's own 2026-08-14 entry
+  records the background-task subsystem, now producerless for a
+  different reason), so the comment is stale, but the interface itself
+  is still genuinely unimplemented.
+
+Three of the seven (`CredentialInvalidator`, `AuditEmitter`,
+`JournalSource`) are a SECOND finding stacked on the first: not just an
+unwired dependency, but a doc comment actively describing a production
+adapter that does not exist — the exact "comment is itself a lie" shape
+CLAUDE.md's unwired-sweep doctrine calls out.
+
+**Owner:** whoever next touches each respective subsystem
+(secrets-keychain for `SecretsBackend`; the llm view / provider-
+keychain-rotation for the four `llm.*` interfaces; hooks for
+`MCPInvoker`; the memory view for `JournalSource`; subagent dispatch /
+background-task-monitor for `TasksRegistry`). **Blocker:** none of
+these has a scoped mission as of this date. **Date:** 2026-09-12.
+
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-15, PARTIAL) · `elicitview.API.OpenWizard` still has zero non-test callers — the deferred-ask leg landed, the wizard leg did not
+
+UNIT-15 was scoped as three pieces the mission's own tasks.md and the
+ledger's prior entry (`docs/unwired-ledger.md:592-623`, dated 2026-08-19)
+both insist ship together, because any one alone is "a half-surface that
+reads, in a code review, like a shipped feature":
+
+1. `mode` on `AskArgs`, plumbed to a real producer — **DONE.**
+   `core/tools/askuserquestion/askuserquestion.go` now declares
+   `AskArgs.Mode` (`"blocking"` default / `"deferred"`), advertised in
+   the tool's own JSON schema so the model can actually request it.
+   `askuserquestion.Delegate` gained `Defer(ctx, q) (askID string, err
+   error)`; `core/rpc/views/elicit/api.go`'s `*API` (the production
+   Delegate, wired at `core/rpc/builtins_wiring.go:305-312`) implements
+   it by calling `elicitation.Registry.Register` — never `Park` — so
+   the call never blocks. `Tool.Call` branches on `args.deferredMode()`
+   before ever reaching `OpenDialog`.
+2. **Mounting `DeferredAskPill` / `DeferredAskPanel`** — **DONE.**
+   `frontend/src/components/chat/SessionHeader.vue` now mounts
+   `DeferredAskPill :session-id="session.id"`, the same "chat-header
+   chip" pattern `BackgroundTaskChip` already uses on the line above
+   it. `DeferredAskPill.vue` gained an optional `sessionId` prop that
+   filters `elicit:deferred`'s process-wide broker payloads to the
+   mounted session — without it, a pill on session A's header would
+   have shown session B's pending questions, since the topic carries no
+   inherent scoping of its own. Mounting was safe to do the moment (1)
+   gave the topics a real producer, per the ledger's original
+   objection.
+3. **`OpenWizard`'s missing call site** — **NOT DONE.** Still zero
+   non-test callers (`grep -rn "OpenWizard(" core/` — only the
+   declaration at `core/rpc/views/elicit/api.go:393` and
+   `api_test.go`'s four call sites). Closing this needs two things
+   neither of which exists yet: (a) a model-facing way to submit a
+   *batch* of questions — `AskArgs` has no `questions:` field, so there
+   is no tool call shape that could reach `OpenWizard` even in
+   principle; (b) a wizard renderer in
+   `frontend/src/components/dialogs/AskUserQuestion/AskUserQuestion.vue`
+   — confirmed absent: `grep -in wizard` on that file is zero hits;
+   its two hits for "questions" (singular-vs-plural key-generation
+   comments) are unrelated to a multi-question batch. Building either
+   alone is a bigger, separately-reviewable
+   change than the deferred-mode leg above; scoping both into the same
+   commit as (1)+(2) would have meant shipping neither well or shipping
+   the deferred leg late.
+
+This does **not** repeat the half-surface failure the prior entry
+warned about: (1) and (2) together are a complete, real capability on
+their own terms (a model can defer a question; a human sees it and
+answers it; nothing about that path implies or advertises a wizard).
+`OpenWizard` remains exactly as before — built, zero callers, no new
+lie created by leaving it that way.
+
+**Owner:** whoever next extends `askuserquestion` with a multi-question
+batch shape. **Blocker:** no tool schema exists for a question batch,
+and no wizard UI exists to render one — both need to land together,
+which is a second unit of comparable size to the one this entry closes.
+**Date:** 2026-09-12.
+
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-11) · `WorkflowRunsSection.vue`'s `workflow-run:focus` emit has zero listeners — dated-justified, not deleted
+
+UNIT-11 wired the OTHER half of this finding (`WorkflowsView.vue` now reads
+`?run=<id>` via `useRoute()` and forwards it to `RunsHistoryTab.vue`, which
+expands and scrolls to the named run — see `spec.md` §1.10 / §5.11). The
+`router.push({ path: '/workflows', query: { run: run.runId } })` call in
+`WorkflowRunsSection.vue`'s `onRowClick` is no longer a "hash-style hint …
+harmless if ignored"; it genuinely navigates.
+
+The sibling `emit('workflow-run:focus', run.runId)` two lines above it,
+declared at `WorkflowRunsSection.vue:33`, still has **zero listeners** —
+the sole mount site, `frontend/src/shell/LeftRail.vue:964`, is bare
+(`<WorkflowRunsSection />`, no `@workflow-run:focus`). A-0 forbids
+resolving that by deleting the emit.
+
+**Why this is left dated-justified rather than wired to a listener:**
+`LeftRail.vue` has no in-place surface of its own that a "run got
+focused" event could sensibly drive — it is the persistent left rail,
+not a panel that shows run detail. `/workflows?run=<id>` (the query
+param path) already *is* the surface that shows run detail, and the
+`router.push` two lines below the emit already reaches it. A listener on
+`LeftRail.vue` would have nothing to do except duplicate that navigation,
+which is not a second capability, just a second name for the same one.
+
+**Owner:** whoever next redesigns the left rail's workflow-runs panel
+into something with its own in-place detail view (at which point the
+emit would have a real consumer). **Blocker:** no such redesign is
+scoped or planned. **Date:** 2026-09-12.
+
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-16) · five inherited closing-sweep findings, dispositioned
+
+`docs/dead-code-audit-2026-08-18.md:1796` assigned five findings to this
+mission. A-0 forbids resolving any of them by deletion.
+
+- **`C2V-14` `contextBootstrap.resume`** (audit `:1401`) — re-checked
+  2026-09-12: `docs/dead-code-audit-2026-08-18.md`'s own body entry
+  already recorded this as backend-live/UI-missing with no scoped mission
+  claiming the UI mount. Nothing new to add; still open.
+  `justify(blocker: "no mission has scoped the UI mount", owner: alec,
+  date: 2026-09-12)`.
+- **`C2V-35` `Tasks_AbortBySession` / `ListBySession`** (audit `:1419`) —
+  filed under the audit's own "a named live substitute exists (delete)"
+  bucket, but no substitute is named for these two, and the background-
+  task subsystem is already recorded elsewhere in this ledger as
+  producerless. A-0 names it explicitly:
+  `justify(blocker: "background-task subsystem has no producer", owner:
+  alec, date: 2026-09-12)`.
+- **`C2V-01`'s handoff-share prerequisite** (audit `:1397`) — this
+  ledger already records (see the handoff entries elsewhere in this
+  file) that `Handoff_Share` sends a nil payload, so wiring
+  `Handoff_Accept` alone would open an EMPTY session. Recording the
+  prerequisite here per UNIT-16's obligation; `automation-actually-runs`
+  does not own the handoff subsystem and does not wire `Accept`.
+- **`C2V-08`, `C2V-30` — NOT CARRIED.** Per spec.md §1.11 X-12, both
+  appear **only** in `docs/dead-code-audit-2026-08-18.md:1796`'s
+  assignment table — neither has a body entry anywhere else in that
+  file. Escalated as E-007 (spec.md §14): either the audit's author
+  supplies the finding text, or these two are struck from this
+  mission's inventory. **Nobody has acted on them** — inventing a
+  defect to match a label is exactly the failure mode
+  `feedback_verify_agent_citations` exists to prevent. **Owner:** the
+  `docs/dead-code-audit-2026-08-18.md` author. **Date:** 2026-09-12.
+
+### 2026-09-11 (finding #61 round-2 review, `fix/memory-persist-growth-and-latency-v2`) · served-mode exit never calls `core.Core.Shutdown(ctx)` — only `api.Shutdown()` does
+
+Round 2 of the finding #61 follow-up (Blocker 3: wiring `rpc.API.Shutdown()`
+into real process exit) traced both served-mode entry points —
+`runServeMode` in `main.go` and `cmd/harness-served/main.go` — end to end.
+Both now call `api.Shutdown()` after `srv.Serve(ctx)` returns (that wiring
+is correct and covered by this same commit's shutdown-deadline fix). Neither
+one calls `core.Core.Shutdown(ctx)` anywhere. The desktop path
+(`main.go`'s `OnShutdown` callback) calls both — `api.Shutdown()` then
+`_ = c.Shutdown(ctx)` — so this is a served-mode-only gap, not a repeat of
+Blocker 3 itself.
+
+Practical effect: on served-mode exit (SIGTERM/SIGINT via
+`installServeShutdownSignal`, or a real server error from `Serve`), whatever
+`core.Core.Shutdown` closes — storage, MCP client connections, telemetry —
+never closes. `rpc.API.Shutdown()` only reaches what the `API` struct
+touches directly (hook runner, prune/compaction schedulers, fleet/audit
+background pollers, etc.); `Core` is a separate type the `API` merely holds
+a reference to, per `main.go`'s own comment at the `OnShutdown` call site
+("`c.Shutdown` (`core.Core.Shutdown`, a different type)"). Not a data-loss
+bug on its own — the OS process exiting reclaims file handles and network
+connections regardless — but it means served-mode quit skips whatever
+graceful-close behavior `Core.Shutdown` is meant to provide (e.g. any
+buffered telemetry flush, orderly MCP disconnect), silently, on every
+served-mode process exit.
+
+Explicitly out of scope for the branch that found it: the round-2 brief for
+`fix/memory-persist-growth-and-latency-v2` scoped that branch to the
+async-pool shutdown-deadline fix only and named this finding as a
+do-not-fix-here discovery to record.
+
+**Owner:** whoever next touches served-mode shutdown wiring (natural
+pairing with any future `runServeMode/cmd/harness-served` shutdown-sequence
+work — the two call sites already have a "both served entry points must
+agree" convention per their own comments, so a fix should touch both files
+together). **Blocker:** no active mission currently owns served-mode
+shutdown sequencing; needs a decision on whether `core.Core.Shutdown(ctx)`
+should run before or after `api.Shutdown()` in served mode (the desktop path
+runs it after, per `main.go`'s ordering, for the reason documented there:
+`API` fields must still be able to reach `Core`'s live storage/MCP/Events
+while they're being drained). **Date:** 2026-09-11.
+
+### 2026-09-10 (ledger #46) · `post_send` never fired — WIRED. `pre_send` was ALSO dead, not just the "one that works" — CORRECTED
+
+**Disposition: WIRED (post_send), CORRECTED (pre_send's status), DEFERRED with named blocker (pre_send/user_prompt_submit/notification/pre_save_session/post_assistant_turn_complete's real producer work).**
+
+Ledger item #46 ("post_send hooks never fire — only 1 of 18 hook events
+works, and memory.persist rides on it") verified accurate as *stated*, but
+the "1 of 18" premise — `pre_send`, seeded 2026-08-19 by
+`trust-surfaces-that-fire-01PMZ202` WP08/WP01 as the one confirmed-firing
+event — was itself wrong, and had been wrong since before WP01 ran.
+`core/rpc/views/llm/impl.go:638`'s `a.hooks.RunPreSend(...)` is real code,
+but it lives inside `(a *API).buildMessages` (`impl.go:556`), a method with
+**zero production callers** — `grep -rn '\.buildMessages(' core/
+--include='*.go'` finds only `impl_test.go` / `integration_test.go`. The
+live send path since the agent-kernel-graph-chat-migration cutover (commit
+`f0b17126`, **2026-04-27** — four months before WP01's 2026-08-19
+investigation) is `API.StartStream` → `ChatRunner.StartStream`
+(`core/rpc/views/agentgraph/chat/chat_runner.go`), which never imports
+`core/hooks`. `memory.retrieve` (registered on `pre_send`) has therefore
+never run in a shipped build either — the identical defect class as
+`post_send`/`memory.persist`, just not fixed in this same change (see
+below). The gate that certified `pre_send` as firing
+(`scripts/ci/check-hook-event-fire-sites.sh` leg (a)) was a **syntactic**
+grep for `.RunPreSend(` outside test files — it could not distinguish a
+real call site from one buried in dead code, so it passed on a false
+positive for three-plus weeks. **CLOSED (same PR, review-nit follow-up,
+2026-09-10):** leg (a) now adds a one-hop reachability check — it
+resolves the function ENCLOSING each textual match and requires that
+function to have at least one non-test caller anywhere in `core/`,
+reproducing exactly the `buildMessages` shape found here. Planted-
+violation proof:
+`TestHookEventFireSitesGate_PlantedDeadEnclosingFunctionFires`
+(`scripts/ci/gates_can_fail_test.go`) registers a fake event with its only
+fire site inside a zero-caller function and confirms the new gate rejects
+it while the pre-fix gate passes it — the exact regression this entry
+describes. This is deliberately ONE hop, not full call-graph reachability
+— see the gate's own header comment and `one_hop_reachable()` for what it
+still cannot see (a live caller that is itself unreachable at hop two;
+indirect invocation through an interface, stored closure, or reflection;
+a same-named method on an unrelated receiver miscounted as a caller).
+Tree-wide run after the widening: 0 events flagged, 0 false positives
+among the 7 currently-firing events (`post_send`, `pre_tool_use`,
+`post_tool_use`, `post_tool_use_failure`, `permission_request`,
+`permission_denied`, `session_start`) — each already has a reachable
+production call site. Full transitive reachability (hop two and beyond)
+remains open; this fix's own tests still substitute a real-path
+integration proof for the one event they cover, which is the stronger
+guarantee CLAUDE.md's testing-rule-3 doctrine asks for and which no
+static gate can fully replace.
+
+**What shipped:** `post_send` now fires from the real path.
+`ChatRunner.Config.PostSendHook` (new field, `chat_runner.go`) is
+registered on the SAME `HookPostLLM` boundary `UsageHook` already uses —
+after `exec_state.go`'s `sessionWriteExecutor` persists the assistant
+message — and reads `FinishReason`/`ProviderKind`/`ModelID` via
+`turnJournal.LookupCandidateUsage` (content-matched against the persisted
+text), not `LLMProviderAdapter.LastResponse()`, for the same reason the
+usage hook already had to switch: on a routed graph `LastResponse()` is
+`exit_gate`'s own always-runs-last verdict call, not the turn that
+produced the text being persisted — a bug this fix would have introduced
+if it had copied the usage hook's *pre*-fix shape instead of its current
+one. `core/rpc/api.go`'s `buildChatRunner` gained a `hooksRunner
+llm.HookRunner` parameter (threaded from `newLLMStack`, which already held
+it) and a `postSendHookFn` closure calling the existing
+`hooksRunnerAdapter.RunPostSend` — no new dispatch logic, only a live call
+site. `memory.persist` (`core/hooks/memory_builtins.go:191`) now runs in a
+shipped build for the first time — this is the behaviour-change warning
+the mission's own WP12 plan already carried (D-9, spec.md §12): every user
+with the starter memory hooks installed gets `post_send` behaviour they
+have never observed.
+
+**Honesty-floor correction (`frontend/src/lib/hooks.ts`):**
+`FIRING_HOOK_EVENTS` swapped `pre_send` out and `post_send` in (same
+position — index 0, "chat" family). `scripts/ci/allowlists/
+i17-eventless-hook-events.txt` gained a dated `pre_send` row and lost the
+`post_send` row. Rippled into `HookEditor.vue`'s `blankHook()` default and
+`HooksPanel.spec.ts`'s fixtures/exemplars (the "does this event fire"
+honesty-floor tests had `post_send` as the negative exemplar and
+`pre_send`/`FAKE_HOOK` as the positive one — inverted to match reality).
+
+**Tests:** `core/rpc/views/agentgraph/chat/post_send_hook_integration_test.go`
+— `TestChatRunner_PostSendHook_FiresOnRealPath` (real `StartStream`, a
+race-safe recorder asserts one call with the real session id / user turn /
+assistant turn / finish reason) and
+`TestPostSendHook_MemoryPersist_WritesRealRow` (real `hooks.Runner` + real
+`hooks.Registry` + a real saved `post_send` hook wired to `memory.persist`,
+backed by a REAL `corememory.NewChromemStore` on-disk file — `core/memory`
+has no sqlite backend, so this is that subsystem's equivalent of CLAUDE.md
+blind spot #2's "must drive real sqlite": the assertion re-opens a FRESH
+store instance against the same path rather than reading back through the
+original in-process `Store`, proving the write survived a real gob
+encode → rename → decode round trip). Both pass under `-race`. Mutation
+proof: gating the `chat_runner.go` registration behind `if false &&
+r.cfg.PostSendHook != nil` (reproducing "never registered") turned both
+tests red (`PostSendHook fired 0 times, want 1`; `len(chunks) = 0, want
+1`); reverting turned them green again.
+
+**Blocker / owner — the four still-dead v1/v2 events:**
+`user_prompt_submit`, `notification`, `pre_save_session`,
+`post_assistant_turn_complete` remain unbuilt — see their (corrected)
+rows in `i17-eventless-hook-events.txt`; two of the four rows previously
+cited `buildMessages`/`impl.go:892 StartStream` as live seats, which this
+finding shows was never true, so those rows were corrected to point at
+`ChatRunner.StartStream` instead. Wiring `pre_send` for real needs a
+genuinely bigger change than `post_send`'s did: `post_send` is a
+post-hoc side effect (fire-and-forget after the message is already
+persisted, trivially hung off the existing `HookPostLLM` boundary);
+`pre_send` must MUTATE the outbound message list BEFORE the LLM call is
+built, and `ChatRunner` has no pre-LLM injection point today
+(`HookPreLLM` exists as a boundary constant in `core/agentgraph/hooks.go`
+but has zero `Fire` call sites of its own). **Owner: alec — follow-up
+WP**, scoped separately from this fix (dated 2026-09-10, same as the
+corrected allowlist rows).
+
+The gate's syntactic-only leg (a) — the part of this entry that used to
+say "neither is fixed here" — **was** closed in the same PR as a
+review-nit follow-up (see the "CLOSED (same PR...)" note above): leg (a)
+now requires the enclosing function of each matched fire site to have a
+non-test caller (one hop), with
+`TestHookEventFireSitesGate_PlantedDeadEnclosingFunctionFires` as the
+planted-violation proof.
+
+What remains open, stated with the same specificity the four dead events
+above get, because a generic "remains open" is the shape this entry exists
+to correct:
+
+- **Name collision — the one that still bites.** `one_hop_reachable` finds
+  callers textually (`.Name(` / `Name(`). Go does not require method names
+  to be unique across receivers, so a dead fire site inside a method whose
+  name is shared with ANY called method elsewhere in `core/` still reads as
+  reachable. Reproduced 2026-09-10 by the review: a plant inside
+  `(d *zzCollisionProbeDead) Validate()` — colliding with ~66 `Validate()`
+  declarations, 29 with real call sites — passes BOTH the pre-fix and the
+  one-hop gate. For that class this commit buys nothing. It does not affect
+  the 7 currently-firing events: each resolves through a distinctively named
+  enclosing method (`RunPostSend`, `FirePreToolUse`, `FirePostToolUse`,
+  `FirePermissionRequest`, `FirePermissionDenied`, `FireSessionStart`), each
+  directly verified to have a real production caller — no verdict rests on
+  an incidental match. **Blocker:** disambiguating requires correlating the
+  caller-side receiver's static type, which grep/awk cannot do reliably
+  (aliasing, embedding, interface satisfaction); it is a Go/packages job of
+  the same order as the hop-two work, not a regex tweak. **Owner: alec.
+  Date: 2026-09-10.**
+- Hop two (a caller that is itself dead), and invocation through an
+  interface, a stored closure, or reflection. Same blocker, same owner.
+
+Closures nested one level inside a named function are NOT affected: the
+awk "last `^func ` at column 0" heuristic attributes them to the enclosing
+declaration, which is why `post_send`'s fire site (inside the
+`postSendHookFn` closure) correctly resolves to `buildChatRunner`, called
+at `core/rpc/api.go:5475`. That is a structural property of Go syntax, not
+a coincidence of this case.
+
+### 2026-09-09 (vm-execution-surface-truth-01PMZD14 WP05) · `approvalGateFrom` — HV-01, no `PromptSurface` variant for a model call
+
+`cmd/harness-vm/approvalgate.go`'s `approvalGateFrom` is the one function a
+task-path call site would use to read the run's approval gate and park on
+`RequestInteractive`. It has zero non-test callers — the four hits are all
+in `approvalgate_test.go`, which supplies its own executor and calls it
+directly, so coverage is real and proves nothing about reachability. The
+writer half of the seam (`withApprovalGate`, `cmd/harness-vm/main.go`) is
+wired; only the reader has no caller. Superseded the broader
+2026-08-20 UNIT-2/UNIT-4 scope-cut entry this mission's WP01 filed — UNIT-2
+(WP04 + WP05) has now landed: `contracts/vm-rpc.md`'s self-contradiction is
+corrected, the grant is self-describing, and this is the dated justification
+that correction promised.
+
+- **Blocker:** no `cedar.PromptSurface` variant exists for a model call.
+  `core/policy/cedar/prompt.go`'s `PromptSurface` is a closed four-variant
+  union (`Bash`/`FS`/`Cred`/`Tool`), *"Exactly one MUST be non-nil"*, enforced
+  by `Family()` which returns empty for zero or multiple variants. Adding a
+  fifth variant means a new family, the host modal that renders it, and a
+  wire payload change (`vm-execution-surface-truth-01PMZD14/spec.md` R-2) —
+  a product feature with a product owner, not a wiring fix. The in-VM task
+  graph (`plan` → `run`) also has no tool dispatch of its own to raise
+  anything through.
+- **Owner:** alecfeeman.
+- **Date:** 2026-09-09.
+
+### 2026-09-09 (vm-execution-surface-truth-01PMZD14 WP05) · `approvalBridge.runStatus` — HV-05, the wire has no status field and the contract forbids adding one
+
+`cmd/harness-vm/approvalgate.go`'s `approvalBridge.runStatus()` derives
+`waiting_for_input` / `running` from approval state. It has zero non-test
+callers — six hits, all in `approvalgate_test.go`. Superseded the broader
+2026-08-20 UNIT-2/UNIT-4 scope-cut entry this mission's WP01 filed, now that
+UNIT-2 (WP04 + WP05) has landed.
+
+- **Blocker:** the wire has no status field, and `contracts/vm-rpc.md`'s
+  "Run status is DERIVED, not a wire field" explicitly forbids adding one —
+  the host already computes the same value independently from the
+  `task.approval_requested` / `task.approval_resolved` event pair. The named
+  future consumer is the deferred `agent_feed.*` push stream
+  (`contracts/vm-rpc.md`'s "Deferred (not in this surface)" list).
+- **Owner:** alecfeeman.
+- **Date:** 2026-09-09.
+
+### 2026-09-10 · `llm.Response.Reasoning` has zero writers and zero readers — `model-settings-reach-the-model-01PMZ101` WP09
+
+Found while wiring UNIT-5 (WP09 + WP16): Bedrock and Gemini did not emit
+`llm.StreamReasoning` at all — the user paid for reasoning tokens on those
+two providers and saw nothing, live or on reload, matching Anthropic's
+pre-existing gap on the other two providers still open at the time
+(`docs/unwired-ledger.md` earlier entries; closed for Anthropic only).
+WP09 added the missing delta-decode arms in `core/llm/bedrock/bedrock.go`,
+`core/llm/bedrock/bearer.go`, `core/llm/gemini/wire.go` and
+`core/llm/gemini/adapter.go` so all three providers now emit
+`llm.StreamReasoning` during streaming.
+
+`llm.Response.Reasoning` (`core/llm/llm.go:723`,
+`Reasoning []ReasoningBlock`) is a different thing: the **terminal,
+non-streaming** response struct's reasoning field. It has zero
+production writers repo-wide (no adapter — including the newly-wired
+Bedrock/Gemini paths and the pre-existing Anthropic path — ever assigns
+`Response.Reasoning`; every adapter accumulates reasoning only on the
+`StreamEvent`/`StreamReasoning` side, matching how `Response.Content`
+and `Response.ToolCalls` are accumulated from stream events by the
+*caller*, not the adapter) and zero readers.
+
+**Not deleted.** Register A-0 (this release's delete-lane freeze, spec
+D-11) is explicit: "a commit whose body's only justification for a
+removal is absence of callers is rejected at review" — which is exactly
+this field's only justification. WP09 instead:
+
+1. Amended the field's docstring (`core/llm/llm.go`) to name
+   `StreamEvent.Reasoning` as the live carrier, so a future reader does
+   not mistake `Response.Reasoning` for the place reasoning content
+   accumulates.
+2. Records this dated justification here, since no existing gate class
+   in `scripts/ci/allowlists/` covers "exported struct field with zero
+   writers and zero readers" — I10 is scoped to
+   `Evaluate*/Enforce*/Authorize*/Check*/Verify*/Guard*/Permit*/*Gate`
+   control-flow symbols (`scripts/ci/allowlists/i10-unwired-gates.txt`),
+   I16 is scoped to agentgraph manifest output ports
+   (`scripts/ci/allowlists/i16-declared-unwritten-output-ports.txt`),
+   and the other allowlists are similarly domain-specific. This finding
+   has no allowlist to live in, so per CLAUDE.md ("Where the ledger
+   lives") it stays here in the ungated half.
+
+**Blocker:** wiring a non-streaming consumer of `Response.Reasoning`
+would mean either (a) accumulating `StreamReasoning` events into
+`Response.Reasoning` at the adapter layer — a second accumulation path
+alongside the kernel-side accumulation `llm_provider_adapter.go` and
+`stream_bridge.go` already do for the UI, which is exactly the "rival
+infrastructure" class CLAUDE.md's delete-vs-finish section says to avoid
+— or (b) a genuinely new non-streaming `Generate()` consumer that has no
+product owner today. Neither is UNIT-5's scope (spec: WP16 is the
+render-path fix; both are P1, coupled, and explicitly must not widen to
+a third mechanism). **Owner:** alec — next reasoning-related mission
+should re-examine whether `Response.Reasoning` should be populated from
+the same `StreamReasoning` accumulation the kernel already performs, or
+deleted once that accumulation has run for a full release with zero
+regressions reported. **Date:** 2026-09-10.
 
 ### 2026-08-23 · WP20 (UNIT-15) — frontend props and exports with no consumer, five NARROWed after wiring the two that had a source
 
@@ -830,9 +3421,32 @@ persisted-history assertion. **Date:** 2026-08-23.
 
 ### 2026-08-22 · Bundled sub-agent profiles advertise containment (allowed_tools/denied_tools/budget_*) that reaches no consumer (`subagent-control-and-background-tasks-01PMZB11`, containment review of PR #307 finding B3)
 
-Every bundled profile (`core/agents/bundled/*.yaml`) declares
-`allowed_tools`, `denied_tools`, `budget_tokens` and `budget_time_s`. None
-reaches a consumer on the dispatch path:
+**UPDATE 2026-09-09 — `budget_tokens`/`budget_time_s` half FIXED, filed
+live against the owner's "agent reached the per-run budget cap" report
+(ruling: "we should be using our built in autonomy dial").** As of that
+change, `Profile.BudgetTokens`/`BudgetTimeS` DO reach a consumer:
+`core/tools/subagentdispatch/tool.go` forwards them onto
+`ForkRequest.BudgetTokens`/`BudgetTimeS` (new fields) →
+`core/rpc.NewSubagentRunSpawner` records them in
+`chat.SubagentBudgetRegistry`, keyed by the spawned child session id →
+`ChatRunner.StartStream` reads the registry back and
+`chat.applyProfileBudgetClamp` folds the value onto the run's
+`coreag.Budget` (clamp, not override — see that function's doc for the
+precedence justification). This landed alongside the bigger fix in the
+same change: the per-run call-volume budget cap
+(`MaxLLMCallsPerRun`/`MaxToolCallsPerRun`) is now scaled by the
+dispatching session's autonomy tier at all (`chat.applyBudgetTierDial`,
+`autonomy.BudgetCeilingForTier`) — before this, those two caps were the
+flat `chat_default_classic.yaml` constants (5000/10000) for every tier
+alike, which is what actually fired live. `Profile.BudgetTokens`/
+`BudgetTimeS`'s doc comments were updated in the same commit.
+
+**`AllowedTools`/`DeniedTools` are UNCHANGED — still open, see below.**
+The two containment fields and the two budget fields were always
+separate gaps sharing one entry; only the budget half had a live user
+report driving it. Every bundled profile (`core/agents/bundled/*.yaml`)
+declares `allowed_tools` and `denied_tools`. Neither reaches a consumer
+on the dispatch path:
 
 - `BranchSeamAdapter.Fork` (`core/rpc/views/agentgraph/env_deps_branch.go`)
   never reads `req.ToolAllowlist`, though `coreag.ForkRequest` carries the
@@ -842,25 +3456,23 @@ reaches a consumer on the dispatch path:
   it at all.
 - `Profile.IsAllowed` / `IsDenied` (`core/agents/profile.go`) have zero
   production callers.
-- `BudgetTokens` / `BudgetTimeS` have no reader outside the field copy
-  into `Profile` itself; `core/rpc/subagent_run_spawner.go` uses one
-  fixed `defaultSubagentSpawnTimeout` for every profile.
 
 Net effect: dispatching `explore` — whose bundled YAML says "Read-only
 research worker" and lists `kenaz__write_file` / `kenaz__edit_file` /
 `kenaz__bash` under `denied_tools` — produces a child session with the
-full session tool catalogue, those three tools included, and no
-profile-specific token ceiling. Session-level Cedar containment
-(`cedar.ActionUseTool`, evaluated for every tool call in every session)
-still gates every call, so this is not an absolute-terms regression, but
-the profile fields, `Profile.IsAllowed`/`IsDenied`'s doc comments, and
-the `kenaz__subagent_dispatch` tool description all previously implied a
-restriction that does not exist. The tool description and the four
-`agents.Profile` field docs were corrected in the same commit as this
-entry to stop asserting it; the fields, `IsAllowed` and `IsDenied` stay
-(deleting them fails the ritual's ruling test — no named live
-substitute, no documented retirement, and the mission that will consume
-them is already ruled to land).
+full session tool catalogue, those three tools included (now with a
+real, tier-clamped budget ceiling, but no tool-catalogue narrowing).
+Session-level Cedar containment (`cedar.ActionUseTool`, evaluated for
+every tool call in every session) still gates every call, so this is not
+an absolute-terms regression, but the profile fields,
+`Profile.IsAllowed`/`IsDenied`'s doc comments, and the
+`kenaz__subagent_dispatch` tool description all previously implied a
+restriction that does not exist for tools (it now does for budget). The
+tool description and the `agents.Profile` field docs were corrected when
+this entry was first filed to stop asserting it; the fields, `IsAllowed`
+and `IsDenied` stay (deleting them fails the ritual's ruling test — no
+named live substitute, no documented retirement, and the mission that
+will consume them is already ruled to land).
 
 **Not fixed here because real enforcement needs a session-scoped tool
 permission overlay** — the containment PR #307 review answered (owner
@@ -875,8 +3487,119 @@ now, inside a three-finding containment fix, would mean touching
 real mission-scale work, not a same-PR wire.
 
 **Owner:** alec. **Blocker:** `subagent-control-and-background-tasks-01PMZB11`
-UNIT-9 (not yet dispatched this release — see owner ruling G-1). **Date:**
-2026-08-22.
+UNIT-9 (not yet dispatched this release — see owner ruling G-1), for
+`AllowedTools`/`DeniedTools` only. **Date:** 2026-08-22 (opened),
+2026-09-09 (budget half closed).
+
+### 2026-09-09 · `kernel.emitCapHit`'s `PausePending`/`ResumeToken` document a `BumpAndResume` RPC that was never built — cap hits still hard-terminate the run
+
+Found while wiring the autonomy tier to the per-run budget cap (owner
+directive, live "agent reached the per-run budget cap" report).
+`core/agentgraph/kernel.go`'s `PauseMarker`/`emitCapHit` doc comments
+say a cap hit "pauses" the run and the frontend echoes a `ResumeToken`
+back via `BumpAndResume` "so the kernel can match resume-without-bump as
+a no-op" (WP17, `agentgraph-total-convergence-01PMGX01`, "cap-hit
+pause-not-kill"). **`BumpAndResume` does not exist anywhere in this
+tree** — not as a Go function, not as a Wails binding, not as a frontend
+call site. (This is a *different*, unrelated `BumpAndResume` from the
+one in the 2026-08-14 orphan-deletion entry above, which was part of the
+already-deleted `core/agentgraph/dials`/`dialsview` cascade; this one is
+still live prose in `kernel.go` today.)
+
+What actually happens on a cap hit: `chat.driveRun`'s
+`errors.Is(err, coreag.ErrBudgetExceeded)` case sets `reason =
+"backend-error"` and closes the stream — a hard terminal error, not a
+pause the user can resume from. `PausePending: true` is set on every
+emitted marker regardless, which is the exact "a comment (here, a field
+docstring plus a struct literal) asserting an invariant nothing
+enforces" shape CLAUDE.md's ritual targets.
+
+**Not fixed here**: building the resume RPC (a new Wails-bound method,
+a frontend "bump and retry" affordance reading the marker's
+`ResumeToken`/`Limit`/`Used`, and a kernel-side resume-with-bumped-cap
+path) is real UI+RPC surface work, out of scope for a backend-only
+budget-governance fix that must not touch Wails binding signatures. The
+message fix landed alongside this entry (`chat.budgetCapMessage`) gives
+the user an actionable "raise the tier in Settings" instruction instead,
+which does not require a resume RPC to be true.
+
+**Owner:** alec. **Blocker:** a mission to build the actual resume path
+(new RPC + frontend), or a decision to rewrite `PauseMarker`'s docs down
+to what `ErrBudgetExceeded` actually does today (hard-terminate) and
+drop `PausePending`. **Date:** 2026-09-09.
+
+### 2026-09-09 · Egress-guard census (`egress-guards-that-hold-01PMZF15` WP03) — MCP HTTP/SSE connectors have no address validation at all
+
+`web_fetch`'s DNS-rebinding bypass (`core/tools/webfetch/webfetch.go`,
+fixed the same day, same mission) prompted a census of every other
+outbound-HTTP-fetch site in the tree, per spec §4. Confirmed by grep:
+`net.LookupHost` now appears exactly zero times in production Go (only
+in the fix's own test file) — no other site does resolve-then-connect by
+hand, because no other site validates addresses at all, guarded or not.
+
+**MCP HTTP/SSE connectors — needs the same treatment, and is arguably a
+bigger gap than web_fetch was.** `core/mcp/transport/http/connection.go:205-217`
+and `core/mcp/transport/sse/connection.go:202-209` each default
+`spec.HTTPClient` to a bare `&http.Client{CheckRedirect: ...}` when nil —
+no `Transport`, no `DialContext`, connects via `http.DefaultTransport`'s
+own unvalidated resolution. Unlike web_fetch's pre-fix state, there is no
+block list here at all: `validateURL` (`sse/connection.go:474`) and
+`validateRecipeURL` (`core/mcp/recipes/recipes.go:516`) check only
+scheme/host-non-empty/no-fragment/no-userinfo — a recipe pointed at
+`169.254.169.254` or an internal service connects today with zero
+resistance, blocklist or pinning. Provenance is user-typed (the
+Claude-Desktop/Cursor-style `mcpServers` import flow,
+`core/mcp/recipes/import.go`) or fleet/registry-shipped
+(`core/mcp/recipes/registry.json`, precedence "user > registry >
+shipped") — not model-controlled per call, but an imported config from
+an untrusted source (a pasted "helpful" MCP config, a compromised
+registry entry) reaches an internal address exactly as easily as the
+pre-fix web_fetch model-injection path did. **Not fixed here** — out of
+scope for the webfetch mission (spec put WP03 at P2/independent, and the
+right shape is probably extending `webfetch`'s `pinnedDialContext` into
+a shared helper both HTTP and SSE connectors call, not a copy). Recommend
+a follow-up mission.
+
+**Custom-OpenAI capability prober — does not need guarding, same
+exception as the `ollama`/`custom` LLM adapters.**
+`core/llm/custom/probe.go:51-56`'s `NewProber(httpc)` defaults to
+`http.DefaultClient` when `httpc` is nil, and the real (non-test)
+production call site, `core/rpc/views/llm/impl.go:1813`, does pass nil:
+`prober := custom.NewProber(nil) // uses http.DefaultClient`. `BaseURL`
+(`impl.go:1809-1815`) is typed by the user into the Add-Custom-Provider
+settings form. This is the identical class spec §2 already carves the
+`ollama`/`custom` LLM adapters out of: pointing the probe at a
+self-hosted or local (`127.0.0.1`) OpenAI-compatible endpoint is the
+product feature, not a bypass. `http.DefaultClient` vs.
+`httpx.DefaultTransport()` is an inconsistency worth a `chore:` cleanup
+someday, but not a security gap — the URL is deliberately user-owned
+infrastructure.
+
+**Fleet sync / update-manifest fetches — does not need guarding; URL is
+a compile-time constant.** `core/update/manifest.go:52-53`:
+`stableManifestURL = "https://downloads.kameas.ai/kenaz-harness/manifest.json"`,
+`prereleaseManifestURL = "https://stage.downloads.kameas.ai/..."` (host
+corrected 2026-10-07 — it read `stage-downloads`, an NXDOMAIN host) — both
+literal constants, `ManifestURL` has no production override path
+(test-only). `fetchManifest` (`manifest.go:74-105`) and the asset
+downloader (`core/update/service.go:99,265-405`) use a plain
+`&http.Client{Timeout: 30 * time.Second}`, no custom `Transport` — but
+`info.DownloadURL` (`service.go:184,314`) is read from the manifest JSON
+itself, fetched from the same pinned first-party host over TLS. Never
+influenced by the model or by untrusted external input.
+
+**E-001 recommendation** (gate-or-not, owner call per spec §6): a
+general "checked but not enforced" gate is hard to express without false
+positives against the legitimate `ollama`/`custom` exemption above. A
+narrower, expressible gate is plausible: lint the two MCP connector
+constructors specifically for "default `http.Client` has no
+`DialContext` override," since that's a fixed, small set of
+call sites rather than an open-ended semantic property. Recommendation,
+not a decision — owner to rule.
+
+**Owner:** alec. **Blocker:** a follow-up mission to extend
+`pinnedDialContext`-equivalent pinning to `core/mcp/transport/{http,sse}`.
+**Date:** 2026-09-09.
 
 ### 2026-08-22 · `RunOptions.SkipCache` has zero frontend writers (UNIT-13, `automation-actually-runs-01PMZ404`)
 
@@ -913,6 +3636,8 @@ rather than delete it; this entry was written 2026-08-22 when UNIT-13 shipped
 and is the first record of `SkipCache` specifically (the field itself
 predates this mission).
 ### 2026-08-22 · `scheduledchat.API.CreateAsModel` has no caller (`model-scheduled-jobs-01PMSJ01` WP09)
+
+> **SUPERSEDED 2026-10-05:** `CreateAsModel` has a production caller (`harness_write_create_scheduled_run` via `scheduledRunWriterAdapter`), and the per-run containment this entry deferred is enforced as of model-harness-toolset-01MHTS001 WP02 — see that entry.
 
 WP09 built the full server-side provenance mechanism FR-005 requires — the
 `created_by`/`tool_allowlist` columns (migration `sessions/0340`), the
@@ -1402,6 +4127,17 @@ this commit. `SubagentTab.vue` / `SubagentBudgetMeter.vue` remain unmounted
 (UNIT-10, gated on UNIT-8 + UNIT-9 landing first per the mission's plan.md
 Rule 5) — this paragraph covers only the registration half.
 
+**2026-09-12 · Sub-agent half CLOSED — see Drained.** UNIT-9 gave
+`SubagentBranch`'s six fields real producers and UNIT-10 mounted
+`SubagentTab.vue` + `SubagentBudgetMeter.vue` from `SessionsView.vue`,
+wired to the four control RPCs UNIT-8 landed earlier the same day. This
+row's sub-agent half is fully drained — see the Drained section's
+"Live tools whose only UI is unmounted — sub-agent half" entry for the
+verification detail. **The todo half is UNCHANGED and remains open**
+(different producer, different parent component — out of this
+mission's scope per its spec.md §7 non-goals); do not read this
+correction as closing the row as a whole.
+
 ### 2026-08-14 · The denial UX gap (opened by deleting `DenialNotice`)
 
 `DenialNotice.vue` + `usePolicyDecisions()` + `_emitDenialForTest` were
@@ -1473,6 +4209,61 @@ If the product wants live, push-driven denial toasts, that is still the
 mission this entry originally called for; it did not need to gate the
 cheap pull-based win, and should not have been read as blocking it.
 
+### finding #58 · the Cedar audit-decision log had no persistent backing
+
+**Found and RESOLVED in the same pass, 2026-09-11.** Distinct from the
+WP05/WP06 entry immediately above — that one fixed *which* engine
+`RecentDecisions` reads (one shared singleton instead of thirteen
+private ones); this finding is about what backs the `DecisionStore`
+*inside* that singleton once it is reached correctly.
+
+`core/policy/cedar/engine.go`'s `Options.Decisions` (the `DecisionStore`
+seam `Engine.Evaluate` appends every decision through) was omitted at
+**both** real `cedar.NewEngine` call sites —
+`buildCedarEngineOrNil`/`buildCedarGate` in `core/rpc/api.go`. With it
+nil, `NewEngine` always fell back to `NewMemoryDecisionStore(0)`: a
+256-entry in-memory ring, silently truncated while running and wholly
+lost on every restart. This is the audit trail for every permission-gate
+decision the harness makes (trust/compliance-relevant per this repo's
+disposition rules) — invisible by design, since an audit log that
+silently forgets looks identical to one with nothing to report.
+
+**Fix:** a new `cedar.SQLDecisionStore` (`core/policy/cedar/
+sql_decision_store.go`), backed by a dedicated `policy_decisions` table
+(migration `cedar-policy/1300-policy-decisions`,
+`core/policy/cedar/migrations.go` — new reserved block 1300-1399,
+verified free against every other `CanonicalBlocks` entry and every
+migration file in the tree before claiming it). `decisions.go`'s own doc
+comment had already anticipated this exact shape ("production wiring …
+a dedicated SQLite policy_log table"). Retention is bounded and
+deliberate — the most recent 5,000 decisions, enforced by a `DELETE`
+after every durable write (not a periodic sweep, so the bound cannot be
+silently skipped the way finding #61's unbounded store was). `Append` is
+non-blocking (queues onto a buffered channel; a background goroutine
+performs the actual write) to preserve `Evaluate`'s documented "MUST NOT
+block on I/O" hot-path contract; the in-memory ring `Recent()` reads
+from is hydrated from disk at construction so history survives a
+restart. Both builders now thread a real `*cedar.SQLDecisionStore`
+(built from the same unified `storage.DB` every other harness store
+uses — no second sqlite connection) through `Options.Decisions`; the nil
+fallback stays intact for the test chassis.
+
+**Falsifiability:** `TestCedarDecisionPersistence_SurvivesCloseAndReopen`
+(`core/rpc/api_cedar_decision_persistence_test.go`) drives the real
+`rpc.New` boot path, evaluates a gated action, shuts the process down,
+boots a brand-new `core.New`/`rpc.New` over the same `DataDir`, and
+asserts the decision is still there — plus an independent raw-sqlite
+query of `policy_decisions`. Run against the production wiring reverted
+(the `cedarDecisionsOpt` assignment removed), it failed with
+`RecentDecisions is empty on the reopened engine — the decision did not
+survive a restart`; restored, it passes. `core/policy/cedar/
+sql_decision_store_test.go` additionally pins retention actually
+evicting from the durable table (not just the in-memory ring) and race
+safety under concurrent `Append`/`Recent`. `core/storage/sqlite/
+cedar_decision_upgrade_test.go` proves migration 1300 applies over a
+populated database a previous release (`testdata/upgrade/v0.77.1`)
+actually produced, per this repo's blind-spot-#3 discipline.
+
 ### 2026-08-14 · `LocalRuntimesSection` has a branch it can never render
 
 `LocalRuntimesSection.vue` renders three mutually-exclusive states per
@@ -1523,9 +4314,16 @@ non-test callers are the two store accessors `FileStore.LoadPermissionMode`
 / `memoryStore.LoadPermissionMode`, whose only caller in turn is the
 `Settings_GetPermissionMode` binding, so the value round-trips to
 `PermissionDialsPanel.vue` and nothing ever branches on it),
-`MCPAutoRestartDisabled` (the stdio supervisor calls
+~~`MCPAutoRestartDisabled`~~ (**drained** — was: the stdio supervisor calls
 `attemptRestart()` unconditionally; nothing in `core/mcp` reads any settings
-gate), `SkippedUpdateVersions` (the doc claims the updater filters these
+gate. Wired by connector-lifecycle-truth-01PMZ303 UNIT-9:
+`core/rpc/api.go` feeds `stdio.PoolOptions.AutoRestartEnabled` from
+`Store().LoadMCPAutoRestart()` live, and `core/mcp/transport/stdio/health.go`
+skips the ping-failure restart trip when it is false, pinned by
+`TestHealth_AutoRestartDisabled_TwoConsecutiveFailedPingsDoNotRestart`.
+Re-verified 2026-10-15; `settings_knob_coverage.go` now `Register`s it.
+Process exits still restart — the dial governs the ping path only),
+`SkippedUpdateVersions` (the doc claims the updater filters these
 out; no filter exists), `LocalRuntimeRAMOverrideGB`
 (`EffectiveLocalRuntimeRAMBytes` has zero callers) —
 **`EffectiveLocalRuntimeRAMBytes` claimed and narrowed** by
@@ -1564,9 +4362,12 @@ default. Two sequencing constraints G-4 records: **`PermissionMode` must be
 ruled together with X-2 and B-4**, since its documented "every call prompts"
 semantics *is* the per-call tool authorization those two already ruled wire; and
 **`MCPAutoRestartDisabled` must get a reader before `MCPHealthSettingsPanel` is
-mounted** (see the frontend orphan backlog below). Inertness re-verified
-2026-08-19 for `EffectivePermissionMode`, `MCPAutoRestart()`,
-`EffectiveLocalRuntimeRAMBytes`.
+mounted** (see the frontend orphan backlog below) — **satisfied 2026-10-15**:
+the reader landed in 01PMZ303 UNIT-9 and the panel is now mounted at
+Settings › Integrations › MCP Servers (`?tab=mcp-servers`). Inertness
+re-verified 2026-08-19 for `EffectivePermissionMode`, `MCPAutoRestart()`,
+`EffectiveLocalRuntimeRAMBytes` (`MCPAutoRestart()` is no longer inert — see
+above).
 
 ### 2026-08-14 · knob-coverage tracks one struct out of the several that need it
 
@@ -1658,6 +4459,15 @@ that ruling background execution ships, so this row's conditional applies:
 remount the panel and restore the nav entry in the same PR that wires the
 producer.
 
+**2026-09-12 · CLOSED — see Drained.** The conditional above fired:
+`subagent-control-and-background-tasks-01PMZB11` shipped the producer
+(migration registration, real `BackgroundSpawn`/`BackgroundEnd`
+assignments, the `HookFirer` wiring, `kenaz__monitor`'s predicate case)
+and, per the ruling, remounted `TasksPanel.vue` + restored the Settings
+nav entry in UNIT-11. See the Drained section's "The background-task
+subsystem has no producer" entry for the full verification detail and
+commit list.
+
 ### 2026-08-14 · `cedar.CheckLLMFallback` — the LLM fallback chain is ungated
 
 The highest-priority wire on this list. `core/llm/fallback`'s Runner is on
@@ -1702,9 +4512,11 @@ regenerating `frontend/wailsjs/` with the Wails toolchain plus a
   posture at all, and where, is the same product question as
   `Options.DefaultDeny` (deliberately `false`, `api.go`'s `buildCedarGate`).
   Both dials should be designed together or not at all.
-- **Owner / deleting change:** a Settings → Workflows panel mission that
-  surfaces both strictness dials, adds
-  `Settings_{Get,Set}CedarStrictWorkflowMode`, and deletes this entry.
+- **Owner / deleting change:** a mission that surfaces both strictness
+  dials on the Workflows surface (Workflows › Schedules / Library — the
+  Settings → Workflows panel was retired into it by nav-ia-sweep-01DOGF0F,
+  2026-10-04), adds `Settings_{Get,Set}CedarStrictWorkflowMode`, and deletes
+  this entry.
 
 Until then the policy file's header says exactly this, and no longer claims
 a "Settings → Workflows panel" that does not exist.
@@ -1947,9 +4759,13 @@ surface for a real capability). Do **not** re-find these as orphans:
   `core/rpc/api.go:4304`.
 - `HookJournalView` — rows **are** being written to SQL in production;
   the read path is what is missing.
-- `MCPHealthSettingsPanel` — blocked on an inert Go knob (see "Settings
-  fields that are stored, bound, and inert" above). Wire the consumer
-  first, in the same PR.
+- ~~`MCPHealthSettingsPanel`~~ — **drained 2026-10-15.** Its Go knob is
+  no longer inert (01PMZ303 UNIT-9 wired `MCPAutoRestartDisabled` into the
+  stdio healthPinger's restart trip — see "Settings fields that are
+  stored, bound, and inert" above), and the panel is mounted at
+  Settings › Integrations › MCP Servers (`?tab=mcp-servers`, desktop-only),
+  pinned through the real parent by
+  `views/settings/__tests__/SettingsView.mcpServers.spec.ts`.
 - ~~`BranchAdvisorSettings`~~ — **drained 2026-08-18** by
   engineer-truth-pass-01PMTP01 WP02/WP03. This entry previously pointed
   at "Settings fields that are stored, bound, and inert" above, but
@@ -2017,7 +4833,8 @@ difference is the difference between "urgent" and "housekeeping".
   recommended default: mount `RecoveryCodeFlow`, `ProjectAutonomyPanel` and
   `CrashReportingOnboardingModal` now; hold `HookJournalView` until its read
   path exists; **do not mount `MCPHealthSettingsPanel` until G-4 wires
-  `MCPAutoRestartDisabled`**; hold `CedarEditor` for the `PolicyView` port.
+  `MCPAutoRestartDisabled`** (both done — wired by 01PMZ303 UNIT-9, mounted
+  2026-10-15); hold `CedarEditor` for the `PolicyView` port.
 - The **P3** item (`lib/capability-keys.ts`) is not ownerless — it carries a
   live disposition ("Being wired as a typed import").
 
@@ -2554,51 +5371,6 @@ fix could have taken) and does not build the nil-optional-dependency gate.
   not by a standing gate that would catch a *future* nil-optional-dependency
   regression on this exact field.
 
-### 2026-08-20 (vm-execution-surface-truth-01PMZD14) · UNIT-2 cut this run — the approval capability grant still overclaims (HV-01, HV-02, HV-05, HV-08)
-
-This mission's floor (UNIT-0 + UNIT-1 + UNIT-PI) landed; UNIT-2 through
-UNIT-6 were cut for scope in the run that produced UNIT-1, per the mission's
-own cut-order rule (`tasks.md` "Cut order", item 5: *"If UNIT-2 is cut,
-UNIT-0's record must say so explicitly ... an undated known lie is what this
-ritual exists to end"*). Recording that explicitly here, since UNIT-2's own
-WP05 was the unit that would have filed the dated justifications for
-`approvalGateFrom` and `runStatus` directly.
-
-Current state, unchanged by this run: `cmd/harness-vm/main.go` grants the
-`approval` capability whenever `readservice.go`'s `promptRegistry()` is
-non-nil — which is true on every boot where the read-service bootstrap
-succeeded, since `core/rpc/api.go`'s `rpc.New` assigns the prompt registry
-unconditionally. **No gate site in this process can raise an approval**:
-`approvalGateFrom` (`cmd/harness-vm/approvalgate.go`) and
-`approvalBridge.runStatus()` (same file) each have zero non-test callers
-(verified by this mission's WP01 observation, re-confirmed identical to the
-spec's own RAN ledger). `contracts/vm-rpc.md:474-477` still asserts, in the
-present tense, a call site that does not exist and contradicts itself three
-lines later.
-
-- **Blocker (HV-01 / `approvalGateFrom`):** no `cedar.PromptSurface` variant
-  exists for a model call — `core/policy/cedar/prompt.go`'s `PromptSurface`
-  is a closed four-variant union (`Bash`/`FS`/`Cred`/`Tool`) enforced by
-  `Family()`. Adding a fifth variant is a product feature (a new host modal,
-  a wire payload change) with a product owner, not a wiring fix
-  (`vm-execution-surface-truth-01PMZD14/spec.md` R-2).
-- **Blocker (HV-05 / `runStatus`):** the wire has no status field and
-  `contracts/vm-rpc.md:436-438` explicitly forbids adding one (*"Run status
-  is DERIVED, not a wire field"*); the named future consumer is the deferred
-  `agent_feed.*` push stream (`contracts/vm-rpc.md:482-483`).
-- **Blocker (HV-02, the grant itself / HV-08, the contract's stale smoke
-  probe):** a genuine product call — whether the `approval` capability
-  should be granted at all when nothing in the process can raise one (escalation
-  E-002 in the mission spec) — was not answered before this run's scope cut.
-  The spec's default disposition is (c): make the grant self-describing
-  ("this process is listening") rather than narrowing it to never-granted.
-- **Owner / deleting change:** land `vm-execution-surface-truth-01PMZD14`
-  UNIT-2 (WP04 + WP05, `contracts/vm-rpc.md`'s two corrections plus
-  `main.go:145-155`'s comment and the approval-grant self-description),
-  which deletes this entry and files HV-01/HV-05's dated justifications
-  directly. Owner: alecfeeman. Filed 2026-08-20 by the same mission's WP01
-  scope-cut record.
-
 ### 2026-08-20 (vm-execution-surface-truth-01PMZD14) · UNIT-4 cut this run — `cmd/harness-vm` boots `core.New → Start → rpc.New`, the reverse of both shipped entry points (HV-N1)
 
 Cut per the mission's own cut-order rule (`tasks.md` item 2: *"If UNIT-4 is
@@ -2767,7 +5539,1497 @@ shipped). The ledger's "three packages" framing conflated the RPC-view
 wrapper with its underlying service; once that boundary is drawn, `update`
 was never actually missing coverage.
 
+### 2026-09-10 · `eval.Recorder.AppendMessage`/`AppendToolCall`/`AppendLLMRequest`/`AppendLLMResponse` have zero production call sites
+
+**Found**: 2026-09-10, during review follow-up on PR #337
+(`fix/eval-capture-canonical-redaction`). **RAN**: grep across `core/` for
+every caller of `*eval.Recorder`. The only production holder of a
+`*eval.Recorder` is `core/rpc/api.go`'s `evalRecorder` field, and it calls
+exactly `StartCapture`, `StopCapture`, and `StopAll`
+(`api.go:1233,1278,1287`). `StartCapture`/`StopCapture`
+(`core/eval/capture.go:361,377`) only open/close a `captureWriter` and write
+the `KindCaptureStart`/`KindCaptureStop` administrative records; neither
+those two methods nor anything else on the production path calls
+`AppendMessage`, `AppendToolCall`, `AppendLLMRequest`, or
+`AppendLLMResponse`. Every call site for those four is a test
+(`core/eval/model_profile_gate_test.go`, `core/eval/eval_test.go`,
+`core/eval/capture_redaction_test.go`).
+
+Concretely: an eval capture started today (via the wired
+`Sessions_StartCapture`/`Sessions_StopCapture` Wails bindings) produces a
+`.jsonl` file containing only `capture_start`/`capture_stop` records — no
+session message, tool call, or LLM request/response content is ever written
+to a capture file in the shipped build. PR #337's redaction fix is real and
+correct (the catalog it replaced genuinely under-redacted), but it hardens a
+path nothing currently reaches.
+
+**Checked whether this is a user-visible lie: it is not, today.** No
+`.vue` file references `StartCapture`/`StopCapture`/`evalCapture`, and
+`harnessClient.ts`/`types.ts` have no wrapper for either binding — every
+"capture" hit in those two files is the unrelated auto-capture-generated-
+images or memory-capture-rate features. There is no UI surface that offers
+to start an eval capture at all, so no UI claims it records conversation
+content. The only prose claiming eval-capture writes message/LLM content is
+internal and developer-facing: `core/eval/capture.go`'s own package doc and
+`docs/escalation-register-2026-08-19.md`'s G-3 discussion — not a
+user-visible claim.
+
+**Disposition: finish, not delete.** Per CLAUDE.md's "only surface for a
+real capability" rule: `AppendMessage`/`AppendToolCall`/`AppendLLMRequest`/
+`AppendLLMResponse` are the only way eval capture could ever record a real
+conversation. The `Recorder` type, the JSONL schema (`CaptureEntry`,
+`MessageEntry`, `ToolCallEntry`, `LLMRequestEntry`, `LLMResponseEntry`), the
+replay/diff/model-profile-gate machinery in
+`core/eval/{replay,diff,model_profile_gate}.go`, and now PR #337's
+redaction fix, are all built specifically to consume records only these
+four methods can produce. Deleting them removes eval capture — and with it
+eval-harness-replay and the model-profile-gate regression check — from the
+product, not just from the tree. There is no live substitute and no
+documented retirement.
+
+- **Blocker:** nothing calls `Recorder.AppendMessage`/`AppendToolCall`/
+  `AppendLLMRequest`/`AppendLLMResponse` from the chat/tool-execution path.
+  Wiring them means finding the actual turn-loop call sites —
+  `core/rpc/chat_run_dispatcher.go` and/or the `core/rpc/views/agentgraph`
+  env/session plumbing, wherever a message is appended to the session and a
+  request/response crosses the LLM boundary — and, behind an
+  `if a.evalRecorder != nil && a.evalRecorder.IsCapturing(sessionID)` guard,
+  calling the matching `Append*`. That is a real wiring mission (turn-loop
+  + tool-exec + LLM-adapter call sites, tests with `IsCapturing` both on and
+  off, a populated capture file asserted against `ReadCapture`), not a
+  drive-by fix.
+- **Owner:** whoever picks up eval-harness-replay end-to-end — the feature
+  `Sessions_StartCapture`/`Sessions_StopCapture` were built for, per
+  `core/rpc/api.go:785`'s own comment ("the per-session eval-capture writer
+  (eval-harness-replay)"). No owner is currently assigned. Until claimed,
+  `Sessions_StartCapture`/`Sessions_StopCapture` stay reachable (the Wails
+  bindings exist) but functionally inert: calling them produces a capture
+  file with nothing but start/stop markers, and no UI currently exposes even
+  that much.
+
+### 2026-09-11 · RESOLVED (import boundary) / STILL OPEN (buildability) — `check-no-fleet-imports.sh`'s bare `core/rpc` allowlist entry exempted its whole subtree, and 7 real view packages relied on the hole
+
+**Found**: 2026-09-11, during the finding-#48 planted-violation-proof sweep
+(11 of 49 CI gates had no proof they could fail — see
+`scripts/ci/gates_can_fail_test.go`'s 2026-09-11 block). Planting a
+`core/fleet` import in a brand-new package under `core/rpc/views/` to prove
+`check-no-fleet-imports.sh` (the OSS-first boundary gate) could fail — it
+didn't. **RAN**, not read: `bash scripts/ci/check-no-fleet-imports.sh` with
+`import _ ".../core/fleet"` planted in a fresh
+`core/rpc/views/zzgateprobefleetimport/probe.go` reported
+`clean — no unauthorized fleet imports found: PASS`, exit 0.
+
+**Root cause** (`scripts/ci/check-no-fleet-imports.sh:79`, unchanged by this
+sweep — see disposition below): the allowlist match is
+`[[ "$pkg" == "$a" || "$pkg" == "${a}/"* ]]` for every entry in `ALLOWLIST`,
+including the bare `"${MODULE}/core/rpc"` entry. The `"${a}/"*` wildcard
+means that entry matches **any** package whose import path starts with
+`core/rpc/` — not just the top-level `core/rpc` chassis-wiring package the
+comment above it describes. `core/rpc` has exactly two subdirectories,
+`middleware` (separately allowlisted) and `views` (dozens of packages, only
+two of which — `settings`, `fleet` — are supposed to be exempt). Every other
+package under `core/rpc/views/` inherits the exemption by accident.
+
+**This is not hypothetical — RAN and confirmed live**: reverting the plant
+and instead running the gate against the unmodified tree with a locally
+tested fix (exact-match the bare `core/rpc` entry, keep prefix matching for
+the other four) turned the gate red against the **real, currently-committed
+tree**, naming 7 packages: `core/rpc/views/{catalog,cedar,compliance,
+contexts,sites,slashcmd,sync}`. Each has a non-test `impl.go` importing
+`core/fleet` (confirmed via `grep -l core/fleet core/rpc/views/<pkg>/*.go`)
+and none is in `ALLOWLIST`. They pass today only because of the prefix hole.
+This sweep did not ship that fix — see disposition.
+
+> **UPDATE 2026-09-11 (same day), v0.78.2.** The classification the escalation
+> below asked for was **done**, and the gate fix **shipped**. Each of the 7
+> packages was checked by reading actual usage rather than import lines: every
+> one holds a `*fleet.Client` / `*fleet.Syncer` / `*fleet.AuditArchiver` (etc.)
+> as a structural field on its API struct, wired with a live fleet object at
+> boot in `core/rpc/api.go`, and none is cheaply decouplable. So reading (a)
+> — legitimately fleet-facing — won for all 7; none was OSS-first drift to
+> unwind. All 7 are now in `PREFIX_ALLOWLIST` with dated justifications, the
+> matcher is split into `EXACT_ALLOWLIST` (equality; the `core/rpc` chassis)
+> and `PREFIX_ALLOWLIST` (named leaves), and a new planted-violation proof
+> plants *inside* `core/rpc/views/` and is named by the gate.
+>
+> **Two corrections to the entry below.** (1) The exemption was larger than
+> recorded: the wildcard exempted not 7-plus-chassis importers but **every
+> package under `core/rpc/` — 53 of them — plus `core/mcp/builtin/sites`,
+> i.e. 54 of 242 checkable packages went unreviewed.** The count of *real*
+> importers (12 = 1 exact + 11 prefix) was right; the count of *exempted*
+> packages was never stated. (2) `core/rpc/middleware` was already in the
+> pre-fix allowlist by name, so it was never "previously unlisted" — the 7
+> genuinely-new entries are `catalog, cedar, compliance, contexts, sites,
+> slashcmd, sync`. Independent review caught this; the PR body and commit
+> message for the fix both said 8 and are wrong.
+>
+> **What is still open is not the gate, it is the architecture.** The property
+> the OSS-first framing implies — *delete `core/fleet/` and `core/rpc` still
+> builds* — is **genuinely not held**: `core/rpc` imports `core/fleet`
+> directly and uses `*fleet.Client` as a bare local type, and all 11 prefix
+> packages hold typed `*fleet.X` fields. **No CI job verifies it**;
+> `check-oss-first.sh` only sets `HARNESS_FLEET_DISABLED=1` with the package
+> still physically present, so it cannot catch this. The gate's header now
+> discloses that its "fork case: PASS" is an import-boundary pass only and
+> says so in the script. Unwinding it (neutral interface, or a build tag)
+> remains an architecture decision with **no owner assigned** — that half of
+> the escalation below stands unchanged.
+
+**Disposition: escalate, not fix-and-ship.** The technically-correct fix
+(exact-match `core/rpc`) is small in diff size but not small in blast
+radius: it immediately fails CI for 7 packages that have apparently been
+fleet-facing for some time without anyone widening the allowlist to say so
+in review. Two readings are equally plausible from here and this sweep has
+no way to distinguish them:
+
+1. These 7 packages have a legitimate, undocumented reason to import fleet
+   (config-pull, capability checks, telemetry — several plausible per their
+   names: `sites`, `sync`, `compliance`), and the allowlist itself is stale
+   — it should be widened to name them explicitly, with the same
+   per-package justification style as the existing 5 entries.
+2. This is exactly the OSS-first drift the gate exists to prevent, and it
+   shipped silently because the prefix bug made the gate incapable of
+   seeing it — the fork/OSS-first contract (`check-oss-first.sh`,
+   `HARNESS_FLEET_DISABLED=1`) may currently be broken for anyone who forks
+   and deletes `core/fleet/`, since 7 RPC view packages would fail to build.
+
+Per CLAUDE.md's "Escalate when the call is genuinely product, not
+technical" — resolving which reading is true requires knowing why each of
+the 7 packages reaches into `core/fleet`, which is a review call, not a
+grep result.
+
+- **Blocker:** someone who knows the fleet-integration roadmap needs to
+  classify each of the 7 packages as (a) legitimately fleet-facing → add to
+  `ALLOWLIST` with a one-line reason matching the existing 5 entries' style,
+  or (b) drift → remove the import / route it through `core/rpc/views/fleet`
+  or `core/rpc/views/settings` instead. Only after that classification
+  should the exact-match fix to `check-no-fleet-imports.sh:79` (tested and
+  ready — see the sweep's PR) land, since landing the gate fix first with no
+  classification done would just turn CI red with no actionable diff.
+- **Owner:** whoever owns the fleet-auth-foundation-01NDFSEX08 boundary
+  (the mission `check-no-fleet-imports.sh`'s own header attributes WP07 to).
+  No owner currently assigned.
+
+The gate's planted-violation proof added by this sweep
+(`no-fleet-imports/unauthorized-package-imports-fleet` in
+`gates_can_fail_test.go`) deliberately plants outside `core/rpc/` (under
+`core/sessions/`) to stay honest about what the **shipped** gate can
+currently prove — the field-proven class (an unrelated package importing
+fleet, the shape that really fired on release/v0.78.1 against
+`core/serve`). It does not claim the `core/rpc/views/` hole is closed.
+
+### 2026-09-12 (fleet-org-config-inheritance-01NORGX01 WP02 triage) — `Bundle.ProvisionedMCP`/`ProviderSetups` were signed and transmitted with ZERO apply branch — WIRED for ProvisionedMCP, ProviderSetups stays deferred
+
+**Found**: 2026-09-12, triaging `fleet-org-config-inheritance-01NORGX01`
+against the live tree. `ef43a2f1` (2026-09-10, WP01) added
+`Bundle.ProvisionedMCP` and `Bundle.ProviderSetups`, both signed into
+`bundleSigningPayload` — so a fleet server could push either section and
+the harness would verify and ACK it — but
+`compositeConfigApplier.ApplyBundle` (`core/rpc/views/settings/fleet.go`)
+had no branch reading either field at all. **RAN**, not read:
+`rtk proxy grep -rl "ProvisionedMCP\|ProviderSetup" core/` returned only
+`bundle.go`, `bundle_test.go`, `bundle_knob_coverage.go` — no consumer
+anywhere in the tree. `bundle_knob_coverage.go` already carried
+`RegisterDeferred` entries for both (so `TestKnobCoverage_Bundle` was not
+lying), but the deferral was undocumented here, contrary to CLAUDE.md's
+own release-ritual instruction to record every `RegisterDeferred` with a
+dated blocker+owner.
+
+**Disposition — split, because the two sections have different blockers.**
+
+- **ProvisionedMCP: WIRED, same commit as this finding.**
+  `recipes.ApplyProvisionedMCP` (`core/mcp/recipes/org.go`, new) installs
+  each entry as the highest-precedence ("org_wins_readonly") layer of the
+  shared `*recipes.MergedCatalog` (`merged.go`'s new `SetOrgRecipes`).
+  `compositeConfigApplier.ApplyBundle` now converts `b.ProvisionedMCP` and
+  calls it unconditionally on every apply (not gated on non-empty — see
+  the in-code comment on why a subsequent empty bundle must clear a prior
+  org overlay, not leave it stale). `StopFleetBackground` (sign-out)
+  clears the overlay via the same method. `knobcoverage.Register` replaces
+  the `RegisterDeferred` entry. No architecture change was needed for
+  WP03's "OAuth client_id resolution order" requirement: every OAuth
+  sign-in call site resolves the recipe to use via
+  `MergedCatalog.Get`/`.Recipes()` (e.g.
+  `core/rpc/views/tools/oauth.go:404`'s `recipe.Auth.ClientID` read), so
+  once the org-provisioned recipe wins the merge, its `Auth.ClientID`
+  wins the resolution by construction — spec §3.3's ordering falls out of
+  the merge precedence rather than needing separate resolution code.
+  `docs/unwired-ledger.md` did not previously record `mcp_recipes`'s own
+  near-miss: `core/rpc/sync_categories.go`'s `emptyPayloadKind` declared
+  `ScopeOrg` for the `mcp_recipes` `SyncKind` (registered, no error) with
+  an Apply that was **always** a no-op regardless of scope — an
+  `org_config["mcp_recipes"]` payload would have silently "succeeded"
+  while doing nothing, the exact "gate that cannot fail" shape CLAUDE.md
+  flags. This is now fixed too: `mcpRecipesKind`'s `ScopeOrg` branch
+  parses the payload and calls the identical `ApplyProvisionedMCP`
+  function used by the bespoke-bundle-field path, so the wire shape can
+  migrate later (`fleet-generic-sync-framework-01NSYNC02` WP04, not yet
+  landed) without a second implementation ever existing.
+
+- **ProviderSetups: still deferred, RegisterDeferred entry re-dated with a
+  named blocker.** Owner: alec. Blocker: `kitty-specs/fleet-org-config-
+  inheritance-01NORGX01/plan.md`'s Gates section states explicitly — "no
+  harness WP04 merge before a fleet dev environment can exercise it" —
+  and the dedicated encrypted org-key channel WP04 requires (org-shared
+  provider keys delivered straight into the device credstore, never
+  through any bundle/RPC/frontend path) does not exist yet either. This
+  is the same "kenaz-fleet org endpoints not yet available" blocker ruled
+  at `docs/escalation-register-2026-08-19.md` §F-2 for the mission as a
+  whole — unchanged as of this date. Unlike ProvisionedMCP, WP04's apply
+  target (LLM provider stack wiring in `core/rpc/api.go`+`core/llm/*` plus
+  a not-yet-built credstore-delivery mechanism) has no safe
+  server-independent slice to wire ahead of the blocker clearing.
+
+**Two related, out-of-scope findings surfaced during this triage — recorded
+here because they are also `RegisterDeferred`-shaped gaps this sweep found
+but did not fix (both predate this mission and are cross-cutting to
+`fleet-config-pull-01NDFSEX10`, not `01NORGX01`-specific):**
+
+1. **UPDATE (2026-09-15, `01NORGX01` WP05):** `KindFleetConfigApplied` is
+   now wired — `compositeConfigApplier.ApplyBundle`
+   (`core/rpc/views/settings/fleet.go`) emits it directly on a fully-clean
+   apply, via a new `auditEmitter` field on `fleetState` +
+   `SetAuditEmitter`, wired from `core/rpc/api.go` reusing the same
+   `fleetAuditEmitter` bridge instance already constructed for the
+   catalog/sync views (no new construction). The payload
+   (`FleetConfigAppliedPayload`) was extended with `OrgID`/`OrgName` (read
+   best-effort from the on-disk `fleet.Identity` cache) and
+   `ProvisionedRecipeIDs`, closing this mission's FR-010 ("naming the org,
+   the recipe/provider ids, and the bundle_id") for the one section this
+   mission owns. Pinned by
+   `core/rpc/views/settings/fleet_wp05_audit_test.go`. The emission point
+   turned out to be `compositeConfigApplier.ApplyBundle` itself, not
+   `ConfigPoller` — every recipe/provider id needed for the payload is
+   already local to that function, so this did NOT require the
+   constructor-signature change originally assumed below; only
+   `ConfigPoller`-level signals (signature rejection, which section failed)
+   still need that plumbing.
+   
+   **Still open, same as before:** `KindFleetConfigSignatureRejected` (needs
+   `ConfigPoller.poll()`'s signature-verify-failure branch, before
+   `ApplyBundle` is ever called) and `KindFleetConfigPartialFailure` (needs
+   per-section failure attribution — today's `errs []error` slice carries
+   section names only inside free-text error strings, not a structured
+   tag). Owner: alec. Blocker: threading an audit emitter through
+   `ConfigPoller` for the signature-rejection case, plus a section-tagged
+   error type for the partial-failure case (cross-cutting to
+   `fleet-config-pull-01NDFSEX10`, not `01NORGX01`-specific — same
+   reasoning as the original entry below).
+   
+   Original entry (2026-09-12), preserved for history: `audit.KindFleetConfigApplied`, `KindFleetConfigSignatureRejected`, and
+   `KindFleetConfigPartialFailure` (`core/context/audit/audit.go:265-286`,
+   payload structs at `:1345-1381`) are declared with full payload types
+   and privacy-invariant doc comments but have **zero emit call sites
+   anywhere in the tree** — **RAN**:
+   `rtk proxy grep -rn "KindFleetConfigApplied\|KindFleetConfigPartialFailure\|KindFleetConfigSignatureRejected" core/`
+   returns only the three declarations plus their payload structs, no
+   `Emit(...)` call. `core/fleet/config_pull.go`'s `ConfigPoller` (the only
+   place that knows verify/apply/ACK outcomes) has no audit-emitter field
+   at all — wiring this is a `ConfigPoller` constructor-signature change
+   touching every call site, not a small patch. This is why this
+   mission's own FR-010 ("applying provisioned sections emits an auditable
+   event naming the org, the recipe/provider ids, and the bundle_id") is
+   **not met** — there is no live `fleet.config.applied` emission for
+   ANY bundle section to extend, not just this mission's new one. Owner:
+   unassigned. Blocker: threading an audit emitter through `ConfigPoller`
+   (cross-cutting to `fleet-config-pull-01NDFSEX10`).
+2. `config_pull.go`'s own header comment (line 12) claims the disk cache
+   is "`<DataDir>/fleet/bundle.json` + `bundle_checksum.txt`", but the
+   actual persisted files are `bundle_id.txt` + `bundle_checksum.txt`
+   (`bundleIDPath`/`bundleChecksumPath`, `:378-385`) — the full bundle
+   body is **never** written to disk. Every section that only lives in an
+   in-process package-level var (`llmview`'s model-prefs store is the
+   clearest case; `recipes.MergedCatalog`'s new org overlay from this WP
+   is now in that same category) is lost on a process restart while
+   offline, contradicting spec NFR-003 / this mission's FR-009
+   ("cached provisioned config stays active when fleet is unreachable").
+   "Offline-safe" today only means "mid-session, don't undo what's
+   applied in memory" — it does not survive a restart. Not fixed here:
+   persisting and replaying the full bundle at boot is an architecture
+   change to `fleet-config-pull-01NDFSEX10`, not an `01NORGX01` patch.
+   Owner: unassigned. Blocker: same as #1 — both are `ConfigPoller`/
+   `config_pull.go` architecture, not this mission's surface.
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-3/UNIT-4) — E-006: the `oauth` primary_auth arm (Slack + 5 others) has no working sign-in path, and nine Slack-specific symbols are dead until it is resolved
+
+`core/rpc/views/tools/oauth.go`'s `SignInRecipe` fails closed
+unconditionally for every recipe whose `primary_auth == "oauth"` (6
+recipes: slack, zapier, make, pipedream, google-calendar, google-drive),
+citing `E-006` in the returned error string. This is deliberate and
+correct as shipped — none of the six is dynamically-registerable
+(`browser_oauth_dcr`), ships a pre-registered client id
+(`browser_oauth_pkce`), or has a device-code flow — but it leaves real
+dead code behind it:
+
+- `core/mcp/oauth/slack_signin.go`'s nine exported symbols
+  (`SlackSignIn`, `SlackSignInWithDiscovery`, `ResolveSlackClientID`,
+  `SlackSignInConfig`, `SlackAuthorizationEndpoint`, `SlackTokenEndpoint`,
+  `SlackClientIDEnvVar`, `SlackDefaultScopes`, `ErrSlackNoClientID`) have
+  zero production callers. They drag `SlackLoopbackPort`
+  (`loopback.go:32`) and `InteractiveConfig.FixedPort` (`loopback.go:60`)
+  with them — `FixedPort` has no non-Slack, non-test setter.
+- Two dead branches live inside this dead code
+  (`slack_signin.go`'s `SlackSignInWithDiscovery`, MO-06): `:192`
+  returns unconditionally on `err != nil` so the `errors.Is(err,
+  ErrNoChallenge)` fallback a few lines later is unreachable, and
+  `scopes` is already defaulted earlier in the function so the
+  `len(scopes) == 0` branch is a second dead branch in the same
+  function. Both are unreachable regardless of whether the Slack lane
+  is ever wired, but fixing them has zero behavioural value while
+  nothing calls the function they live in — they would need re-review
+  the moment E-006 is resolved anyway, since resolving it means writing
+  (or rewriting) this function's real control flow.
+
+The user-visible half of this — `registry.json`'s slack `warning` telling
+the operator to set an environment variable no code reads — did **not**
+wait on E-006 and is fixed (UNIT-4, this release): the copy now states
+the real limitation and points at the working `slack-tokens` stdio
+fallback, with `warning_severity: "danger"` so it renders as the hard
+blocker it is.
+
+- **Blocker:** whether Slack (and the other 5 `oauth`-arm recipes) moves
+  to a real sign-in path is a product call, not a technical one.
+  `slack_signin.go:22–24`'s own TODO anticipates moving Slack to a baked
+  client id, which would reclassify it as `browser_oauth_pkce` under
+  UNIT-2's bring-your-own posture — that decision (register a real app
+  vs. rely entirely on the BYO posture vs. leave slack-tokens as the only
+  supported path) has not been made.
+- **Owner / deleting change:** alec. Deletes (or rather, resolves) when
+  either (a) a product decision routes the `oauth` arm's recipes to one
+  of the five working arms and this unit's dead Slack symbols get real
+  callers (fixing MO-06 in the same commit, since it would no longer be
+  dead-code-inside-dead-code), or (b) the product decides `oauth`-arm
+  recipes are permanently `keys`/stdio-fallback-only, in which case the
+  nine Slack symbols, `SlackLoopbackPort`, and `InteractiveConfig.FixedPort`
+  become deletable under a documented product retirement (not today's A-0
+  freeze).
+
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-5) — three MO-* OAuth findings justified rather than wired
+
+Three of the sixteen OAuth-cluster findings the 2026-08-18 closing sweep
+assigned to this mission (`spec.md` §1.10) were reviewed this pass and
+found to need either a real per-call clock-injection design or a real
+multi-scheme-header design — neither of which is a one-line wire, and
+inventing one un-reviewed risks landing wrong. MO-07, MO-09, MO-12 and
+MO-13 were wired or pinned by test this same session (see git log —
+`fix(mcp): UNIT-5 (MO-07, MO-09)`, `test(mcp): UNIT-5 (MO-12)`, `fix(mcp):
+UNIT-5 (MO-13)`); the doc naming `LoadedClient` (a type that does not
+exist in the repo) was already corrected by an earlier UNIT-3 commit and
+needed no further action this pass.
+
+- **MO-05** — `ResolveClientIDConfig.Now` (`resolve.go:71-72`) is derived
+  into a local `nowFn` (`:97-99`) that is never invoked; the DCR expiry
+  check that actually runs uses `DCRStore`'s own `s.nowFn` (fixed to
+  `time.Now` at `NewDCRStore` construction, `dcr_store.go:105`, with no
+  setter). Wiring `cfg.Now` to mean anything would require either a
+  per-call clock override on a shared, potentially concurrently-used
+  `*DCRStore` (a real race-safety design question — CI runs `-race`) or a
+  second `DCRStore` constructed per call (defeats the point of the
+  cross-launch cache UNIT-3 3e just wired). No test anywhere sets
+  `cfg.Now` today, including in this package's own test suite, so this is
+  a genuinely orphaned seam, not a live regression risk.
+  - **Blocker:** needs a design decision on whether `DCRStore`'s clock
+    should be mutable per-call (and if so, how that interacts with
+    concurrent `Resolve` calls sharing one store) or whether this field
+    should be retired in favour of constructing a test-only `DCRStore`
+    with a custom `nowFn` directly (which every existing DCR expiry test
+    already does, bypassing this field entirely).
+  - **Owner:** alec.
+
+- **MO-08** — `StoredCredential.AuthorizationHeader` (`store.go`)
+  hardcodes `"Bearer "` under a doc saying `TokenType` defaults to Bearer
+  when unset; `TokenType` is written on every mint path and read nowhere.
+  This has a **live caller** (`core/rpc/views/tools/oauth.go`'s bearer
+  injection at spawn), so a DPoP/MAC-authenticating MCP provider would
+  401 with no diagnostic naming the real cause. No recipe in either
+  catalog uses a non-Bearer scheme today (measured: zero `token_type`
+  overrides anywhere in `registry.json`/`shipped.json`), so this is
+  latent, not field-proven.
+  - **Blocker:** wiring `TokenType` into the header format is a real
+    per-scheme change (Bearer vs. DPoP have different header shapes —
+    DPoP requires a proof-of-possession JWT, not just a different
+    keyword), not a one-line format-string edit, and there is no
+    DPoP/MAC provider in either catalog to test against without
+    inventing one.
+  - **Owner:** alec.
+
+- **`FromDCR`** (`resolve.go:49`, written at `:117`/`:150`) — its doc says
+  *"so callers can track the source for debugging"*; nothing logs or
+  emits it today. Read only in tests.
+  - **Blocker:** none technical — this is the cheapest of the three to
+    close (thread it into the existing `mcp.recipe.*` structured log
+    lines `SignInRecipe`/`ResolveClientID` already emit) but doing so
+    without a concrete downstream consumer (a log line nobody greps for
+    is a different flavor of the same "recorded, unread" defect this
+    mission is about) needs a decision on whether debug-level
+    provenance logging is worth the extra field on every log call, or
+    whether `FromDCR`'s job is fully discharged by
+    `ClientIDResult.FromDCR`'s existing test coverage of the resolution
+    order itself.
+  - **Owner:** alec.
+
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-12) — http/sse `Spec.InitTimeout` has no request to gate
+
+`core/mcp/transport/http/connection.go:52` and
+`core/mcp/transport/sse/connection.go:71` declare `InitTimeout` with a doc
+promising it is *"the response deadline once initialize is on the wire"*.
+UNIT-12 wired the stdio half of this finding (`InitTimeoutMs`/
+`PingPeriodMs` now reach `stdio.SpawnSpec` from the recipe, overriding the
+pool-wide default — see git log) but deliberately did not touch http/sse,
+because the premise the doc and the original spec finding both share —
+"the deadline is assigned but not read" — undersells what is actually
+there: **`http.Connection.Open` (and sse's equivalent) performs zero
+network I/O.** There is no `initialize` JSON-RPC round-trip anywhere in
+either transport package at the `Connection` level; `Open` only parses
+and validates the URL, builds header templates, and sets up the HTTP
+client. `MethodInitialize` is dispatched exactly once in the whole
+`core/mcp` tree, from `stdio/server.go:465` — http and sse never send it.
+
+This means `InitTimeout` cannot be "wired" by adding a read of the field
+inside `Open`, because there is no request there to put a deadline
+around. The honest fix is a real design question: either (a) http/sse
+gain an actual stateful handshake step (a real feature — these
+transports may be intentionally stateless-per-POST, matching how MCP
+supports HTTP-transport servers that answer each JSON-RPC call
+independently with no session concept, in which case "the response
+deadline once initialize is on the wire" describes a step these
+transports never perform by design), or (b) `InitTimeout` is repurposed
+to gate the *first* real network call each transport does perform (the
+first `tools/list`, or the health probe's first tick), which changes its
+semantics from what its doc currently claims.
+
+- **Blocker:** whether http/sse are meant to have a stateful handshake at
+  all is a product/protocol-conformance call, not a technical one — it
+  determines whether this is "wire a missing feature" or "the doc
+  describes a step that doesn't apply to this transport shape, narrow
+  it." Either answer closes this differently.
+- **Owner:** alec. Deletes (or resolves) when either a handshake step is
+  added to `http.Connection`/`sse.Connection` and `InitTimeout` gates its
+  response, or the doc on both `Spec.InitTimeout` fields is narrowed to
+  say explicitly that no handshake exists for these transports and the
+  field is retired under a documented protocol-conformance decision
+  (not today's A-0 freeze, since that requires a product ruling this
+  session did not have).
+
+### 2026-10-04 (engine-publication-01ENPUB01, harness half WP-H1..H5) — engine publication is built end to end and degrades honestly until three external items land
+
+**What is live in the harness now.**
+
+- `cmd/kenaz-ml-sign` (WP-H1): `keygen` / `sign` / `verify` / `pin-gen`.
+  `sign` signs `mlsidecar.EngineManifest(...).SigningPayload()` — the
+  exact bytes `mlsidecar.Install` verifies — and
+  `TestSignThenHarnessInstallVerifies` drives a fresh-key signature
+  through the real `Install` (local_path channel, real `core/trust`
+  engine, `SigningRequired`). The flag set is the contract the kenaz-ml
+  publish job (WP-M2) is built against.
+- Baked release anchor (WP-H2): `core/mlsidecar/release_signing_key.pub`
+  (go:embed) + `-ldflags -X …/core/mlsidecar.releaseSigningPubKeyHex`.
+  `core/rpc` boot calls `trust.SeedAnchor`, which yields to every
+  existing row (live → untouched, tombstoned → stays revoked, same id
+  with another key → untouched). Pinned on real sqlite in
+  `core/trust/seed_test.go`.
+- Build-time pin (WP-H3): `core/mlsidecar/pinned_release_gen.go`,
+  regenerated by `pin-gen`; `TestPinnedReleaseGen_NoDrift` is the drift
+  guard (a Go test rather than a `check-*.sh`, so it runs in the
+  existing `go test ./core/...` job with no new gate to plant-prove).
+- `http_mirror` (WP-H4): no 60s whole-body cap; a 60s *stall* watchdog
+  instead. Applies to every http_mirror fetch, bundle installs included.
+
+**What degrades honestly, and why (all three are external — spec
+§External).**
+
+1. `pinned_release_gen.go` is the zero value → `PinnedEngineRelease`
+   returns `ErrNoPublishedRelease` → Settings says "not published". The
+   engine-pin step in `.github/workflows/release.yml` is present but
+   COMMENTED OUT with a dated note; enabling it needs (a) and (b) below
+   plus a first published engine.
+2. `release_signing_key.pub` is a NOT-A-REAL-KEY placeholder → boot
+   seeds nothing → even a pinned build would fail closed
+   (`anchor_missing`) unless an operator/fleet installs the key via the
+   TrustAnchors RPC.
+3. Blockers: (a) kameas-infra extends `gh-deploy-<env>` OIDC trust to
+   the kenaz-ml repo; (b) the owner runs `kenaz-ml-sign keygen`, sets
+   `KENAZ_ML_RELEASE_SIGNING_KEY` on kenaz-ml and commits the `.pub`.
+
+- **Owner:** release-infra (alec). Deletes when the first engine is
+  published, the real key is committed, and the release.yml step is
+  uncommented — in that change, also delete the dated note on
+  `mlsidecar.PinnedEngineRelease`.
+
+> **CLOSED 2026-10-07 (items 1–3; `chore(ci): enable the kenaz-ml
+> engine-pin step against 0.1.1`).** (a) kenaz-ml publishes to the
+> kameas release buckets; (b) the real key landed in #388 (KeyID
+> `56fc9905…0352512`); kenaz-ml 0.1.1 is live on
+> `downloads.kameas.ai/kenaz-ml/0.1.1/`. Verified before enabling: the
+> index's `darwin_arm64.key_id` == the baked KeyID; `kenaz-ml-sign
+> verify` accepts the published `.sig`; the DMG is 189403636 bytes and
+> hashes to the index sha256; a one-off `go run` of the real
+> `mlsidecar.Install` against the live channel, trust store seeded only
+> by `BakedReleaseAnchor()`, installed it `verified=true`. The step is
+> enabled on darwin/arm64 builds and exits 1 on any index/key/sig/size/
+> sha mismatch; the version lives in release.yml's workflow `env`
+> (`KENAZ_ML_ENGINE_VERSION`). **Design deviation, recorded:** the step
+> pins from the PROD engine channel for every harness env — kenaz-ml
+> publishes stable versions only to prod (dev carries
+> `<ver>-dev.<sha7>`, stage has no index), so the original per-env
+> `cdn_base` would have failed every dev/stage harness build. The
+> `-ldflags releaseSigningPubKeyHex` override is deliberately not wired
+> (the step verifies against the `.pub` file; an unverified override
+> would bypass it). Hermetic proof:
+> `core/mlsidecar/published_release_test.go` over
+> `testdata/engine-release-0.1.1/` (real index + `.sig`, PROVENANCE.md),
+> which also fails if release.yml's pin drifts from the fixtures. The
+> dated note on `PinnedEngineRelease` is deleted. Review follow-up #3
+> below is partly addressed: the release step now cross-checks the pin's
+> values against the published index and the served bytes at build time.
+>
+> **Note 2026-10-07:** kenaz-ml **0.2.0** was published 2026-10-08T00:39Z
+> (prod `kenaz-ml/index.json`). The harness deliberately stays pinned to
+> `KENAZ_ML_ENGINE_VERSION: '0.1.1'` until a fixture-refresh PR replaces
+> `testdata/engine-release-0.1.1/` (index, `.sig`, PROVENANCE.md) and
+> re-runs the pre-enable verification against 0.2.0 — bumping the env
+> alone would fail `published_release_test.go`'s drift check, by design.
+
+**Finding, ungated: trust anchors have no production revocation path.**
+`TrustEngine.RemoveAnchor` and `TrustEngine.IngestRevocation` have zero
+non-test callers, and `trustanchor.TrustAnchorAPI` exposes only
+`ListAnchors`/`InstallAnchor`. `SeedAnchor` *respects* a tombstone
+(pinned), but nothing in the product can create one today — so the
+owner decision "rotation/revocation via the trust store" has a working
+store half and no operator surface. `IngestRevocation`'s cache is also
+in-memory only (`memRevocationCache`), so a revocation would not survive
+a relaunch even if something called it. Not wired here: adding a
+Remove RPC is a Wails-binding + frontend change outside this mission's
+scope, and an unmounted RPC would just move the lie.
+
+- **Blocker:** a product call on the anchor-management UI (where revoke
+  lives, who may press it) — the Settings trust surface has never had
+  one.
+- **Owner:** alec. Resolves when a revoke action reaches
+  `TrustEngine.RemoveAnchor` from a mounted surface (or fleet
+  distribution grows a revocation message), with a persisted revocation
+  store if key-id revocation (not just anchor tombstoning) is wanted.
+
+**Review follow-ups recorded, not fixed (2026-10-04, branch review of
+WP-H1..H5; WP-H6 fixed the blocking items — bounded sig/manifest/artifact
+fetches and an overall install deadline).**
+
+1. *The baked ML release key is trusted for ALL signature verification.*
+   Anchors carry no purpose scoping: `Metadata["purpose"]` is
+   descriptive only, and `VerifyManifestSignatures` accepts any live
+   anchor — so a manifest signed by the engine-release key would also
+   verify as a **bundle** install. Rotation also deviates from the
+   spec's "rotation via PreviousKey" model: a new baked key seeds a
+   second, KeyID-scoped anchor, and the rotated-away key stays a live
+   anchor with no product removal path (see the no-revocation-path
+   finding above — the two compound).
+   - **Blocker:** purpose-scoped anchors are a `core/trust` model change
+     (anchor ↔ verification-purpose binding consulted by
+     `EngineVerifier`), plus a decision on whether seeding should
+     `BeginRotation` an existing baked anchor instead of adding one.
+   - **Owner:** alec. Resolves when engine verification only accepts
+     anchors scoped to engine releases (and vice versa), and a
+     rotated-away baked key is retired by the store's rotation model.
+2. *Operators cannot see that an anchor is baked.*
+   `trustanchor.toWire` drops `Metadata` and `InstalledBy`, so the
+   `origin=baked_release_key` marking the seed writes never reaches the
+   TrustAnchors RPC or any UI.
+   - **Blocker:** a small RPC wire-shape addition + Wails binding regen +
+     frontend display; out of this mission's scope.
+   - **Owner:** alec. Resolves when the wire `Anchor` carries origin /
+     installed-by and the trust surface renders it.
+3. *`TestPinnedReleaseGen_NoDrift` guards shape, not values.* It
+   catches a hand edit that breaks the render format or the publish
+   contract (locator, channel kind, field validity) but cannot catch a
+   well-formed value swap (another valid sha256/version). The signature
+   check at install time is what actually binds the values. Comment
+   softened accordingly in WP-H6.
+   - **Owner:** alec. Informational; resolves if a release-time
+     cross-check against the published index is added (the commented
+     release.yml step's url/key_id asserts are a start).
+
+### 2026-10-05 (engine port lanes, owner rulings A5.2/A5.3, harness branch `fix/engine-ports`) — update-pending identity is lexical; lane fallback has two accepted costs
+
+1. **Update-pending identity is a lexical `exe_path` check in BOTH repos.**
+   A lease-aware engine answering on a lane candidate whose self-reported
+   `exe_path` is under this root's `versions/` but not `current` is
+   classified *update-pending* and adopted (`engine.port` written — the
+   agreed cross-repo contract; Kenaz mirrors it). Nothing re-hashes that
+   binary: a process that merely *claims* such a path is adopted the same
+   way. Containment in the harness (review F4): update-pending is never
+   the Manager's verified port (`Manager.DialClient`), never leased, and
+   `shutdownClient` never sends it the token — so no advice, label, or
+   shutdown traffic reaches a lexically-claimed squatter; the cost is
+   bounded to "one lane port is held and recorded". Matches kenaz PR #178's
+   recorded protocol-gap follow-up.
+   - **Owner:** that same follow-up (the engine-identity protocol gap —
+     an engine-attested identity both clients can verify). The line goes
+     when it lands.
+2. **A legacy/foreign listener on a base port now coexists with our
+   engine on the next lane** (e.g. a pre-lease engine on prod 7774 and
+   ours on 7784): extra RAM for two engines; the "update Kenaz to share
+   the ML engine" hint surfaces only when ALL lane candidates are foreign.
+   Accepted (review F6; matches the legacy = foreign ruling). sigild dials
+   prod 7774 directly and does not read `engine.port`, so a squatter on the
+   prod base still strands sigild — pre-existing, owner-acknowledged
+   (A5.3).
+3. **Observe worst case** is LaneCount × `observeProbeTimeout` (5 × 2s =
+   10s) on hanging candidates — cut from 5 × 5s by a per-probe deadline on
+   the read-only Settings scan only. Informational.
+
+### 2026-10-05 (model-harness-toolset-01MHTS001 WP02, finding H-1) — CLOSED: the B-3 scheduled-run tool allowlist was a containment boundary asserted, not enforced
+
+**Class: containment boundary asserted, not enforced.** Owner ruling B-3
+made a model-created schedule's `tool_allowlist` "the only boundary" (no
+human review moment). The list was persisted (`sessions/0340`), required at
+create time, and named by the policy file as enforced "per run" by "a
+separate seam (harness-self-attach-01PMHS01's merged PermissionResolver)".
+At fire time `chat_cron_engine.go` and `scheduledchat.RunNow` reduced it to
+`has_tool_allowlist` for the execute gate; `ChatRunSpec` carried no list
+and no resolver read one. A fired model-created run could call every tool.
+Reachable only from onboarding sessions (the only kind that may call
+`harness_write_create_scheduled_run`), which bounded but did not remove it.
+
+**Fixed (wired, not deleted):** `ChatRunSpec` carries `CreatedBy` +
+`ToolAllowlist` from the gate; `scheduler.ResolveRunContainment` combines
+spec and re-read row, never widening (model + absent/empty/unreadable list
+= DOES NOT RUN, checked in the dispatcher as well as by the gate; a user
+row's unreadable list = every tool denied; a user row with no list =
+unchanged). `LiveChatRunDispatcher` binds the run's session in
+`ScheduledRunContainmentRegistry`; `cedarSessionKindResolver.Resolve` (the
+session arm of the one merged resolver the chat adapter, slash dispatcher
+and workflow tool gate share) checks it first and denies off-list tools,
+recording a `blocked_permission_requests` row (family `tool`) plus a
+`policy.blocked_permission_request` audit record per refused dispatch.
+Subagent children inherit the parent's containment. Pins:
+`core/rpc/scheduled_run_containment_test.go` (real cron fire path, real
+sqlite, v0.89.2 upgrade snapshot for the pre-0340 user row),
+`core/scheduler/containment_test.go`. The 2026-08-22 `CreateAsModel` entry
+above is superseded (it has a production caller now).
+
+**Accepted residuals:** (1) ~~builtin `kenaz__*` tools are still LISTED to
+a contained run~~ — closed by security review M2 (2026-10-05): the
+discoverer now filters builtins through the same probe-marked resolver
+path as pool tools (`TestScheduledRunContainment_ListingShowsOnlyAllowlistedBuiltins`). (2) ~~a timed-out run's session
+stays contained for the process lifetime~~ — superseded by security review
+L4 (2026-10-05). The re-review (same date) narrowed it further.
+Containment is released only when one of the run's OWN streams ends: the
+dispatched stream, or a key-rotation redrive of it, which is linked through
+`chat.AuthResumedPayload.PausedSubID`. Before that, ANY stream ending in the
+session released it. That was a proven hole: a user opening the "Scheduled:"
+session mid-run and finishing a turn freed the still-running scheduled
+stream. A redrive stays contained while it runs and releases when it ends,
+whether it starts before or after the dispatcher's timeout. A timed-out
+session is released once its own stream ends. Pins:
+`..._UnrelatedStreamInSessionDoesNotRelease`,
+`..._RedriveBeforeTimeoutStaysContainedThenReleases`,
+`..._RedriveAfterKeyRotationStaysContained`,
+`..._TimedOutRunReleasedWhenItsStreamEnds`. A turn that is
+never redriven keeps its containment for up to 24h (`containmentWatchMax`);
+the watcher then stops and the session stays contained (fail-safe). Owner of
+both: WP16
+(`kenaz__schedule_chat`), which must re-read this seam before shipping.
+
+**Gate question (tasks.md WP02): can any file-level gate see "a persisted
+allowlist field with no runtime reader"?** No. The field HAD readers — the
+two `len(rec.ToolAllowlist) > 0` sites — and that is exactly why the gap
+survived: a reader that reduces a list's contents to its existence is
+indistinguishable, to a grep or a knob-coverage registration, from one that
+enforces it. "Is this read a decision on the contents?" is a semantic
+question. The guard is the runtime pin (an off-list call in a really-fired
+run is denied), which is now in place; no gate extension is filed because
+none can be made non-vacuous for this class.
+
+### 2026-10-05 (model-harness-toolset-01MHTS001 WP03, findings H-2..H-6) — harness-self tools that always failed; comments naming gates nothing evaluates
+
+**H-2 — CLOSED (deleted, not wired).** `harness_read_get_status` and
+`harness_write_install_mcp_recipe` were registered on the harness-self
+server (`get_status` visible in every chat session, since reads are
+permitted for every session kind) while `buildHarnessManagers` never
+assigned `Managers.Status` / `Managers.RecipesWriter`, so every call
+returned "not configured". No ledger entry existed; the gap was recorded
+only in a code comment. Both tools, their handlers, the two Managers
+fields and the `StatusReporter`/`StatusSnapshot`/`RecipeWriter` types are
+deleted; tests that used `get_status` only as a representative read tool
+now use `harness_read_list_providers`. Pin:
+`TestRegisterAll_NoAlwaysFailingTools`; harness-self count is 13.
+- `get_status` — **class: not trivially wireable; substitutes exist or are
+  slotted.** It needs five unrelated sources (providers, installed MCP
+  servers, sessions, projects, policies); the policy count has no source
+  on this path. Providers and sessions are already readable
+  (`harness_read_list_providers`, `harness_read_list_sessions`); projects
+  and capabilities are slotted as `kenaz__list_projects` /
+  `kenaz__list_capabilities` (this mission, WP06/WP08). **Owner:** WP08 —
+  if a status summary is still wanted, it is a catalog tool over the
+  WP06/WP08 reads, not a revival of this one.
+- `install_mcp_recipe` — **class: product decision, escalated not
+  guessed.** Wiring it means a model-triggered install, which is owner
+  question **Q8** (spec §7, default "forbid until ruled"); the
+  install-framework decision record also requires it to route through
+  `install.Framework.Install` (consumer-confirmed), which its
+  `{id, config}` schema (an inline config object) cannot. **Owner:** WP15
+  (`kenaz__install_capability`, shares `Framework.Install`).
+  **Blocker:** the Q8 ruling.
+- Also corrected: `harness_read_get_onboarding_recommendations` described
+  itself as "based on current state"; its handler returns a fixed list.
+
+**Gate extended (I11, `check-builtin-tool-registration.sh` §6):** every
+`Managers` field a harness-self handler nil-checks must have an `m.X =`
+assignment in `core/rpc/harness_wiring.go`. It would have caught both H-2
+tools. Planted proof:
+`builtin-tool-registration/harness-self-manager-never-assigned`. It cannot
+see a field assigned only on a branch that never runs in production — that
+is a runtime question.
+
+**H-3 — CLOSED for the comments; the four actions stay declared.** Four
+Cedar actions were named in code comments as the gate for a builtin, and
+nothing evaluates any of them. Comments rewritten to say "declared, not
+evaluated" and name the real gates (the predicate dial + per-call
+`use_tool` resolution, where a user forbid on the tool name does work):
+- `ActionToolTasksMonitor` (`monitor/tool.go`, `builtins_wiring.go`
+  predicate case, `types.go`) — passive read of captured output.
+  Not evaluated, by choice: `use_tool` already gives per-call control.
+- `ActionToolTodoWrite` (`todo/todo.go` said the tool "reports" it on
+  every call; `types.go`) — session-internal state. Not evaluated, by
+  choice, same reason.
+- `ActionToolListSecrets` (`listsecrets.go`, `types.go`) — the same file
+  also claimed per-call `tool.invoked` audit records, which do not exist
+  (H-5); withdrawn. Not evaluated, by choice: the list returns reference
+  names only, and secret *resolution* is separately gated and audited
+  (`secret_reference.resolve`). **Owner if that changes:** alec.
+- `ActionArtifactUpdate` (`types.go`, `posture.go`) — **this one SHOULD
+  bind by its own design**: it sits in `PlanModeDeniedActions`, i.e. plan
+  mode is meant to deny `kenaz__update_artifact`, and does not. Not wired
+  drive-by: the plan-mode wrapper only reaches the agentgraph
+  `env.Policy`, so evaluating the action at the tool would still not be
+  plan-mode-aware (that is H-4). **Owner:** the H-4 follow-up mission
+  (spec Q12). **Blocker:** Q12's ruling on widening plan mode to builtins.
+  Dated 2026-10-05.
+- Not touched (already listed as declared-not-evaluated, inventory §2.1):
+  `ToolSkillInvoke`, `ToolSubagentMerge`, `ToolTasksCancel`,
+  `ElicitDeferred`.
+
+**H-4 — OPEN (filed, not fixed).** Plan mode does not bind builtin
+`kenaz__*` tools: `cedar.WithPostureMode` wraps only the agentgraph
+`env.Policy` (`use_tool`/`tool_exec` are not in `PlanModeDeniedActions`);
+bash, the fs gate, the workflow and scheduled-chat views and the RiskGate
+use unwrapped engines (inventory H-4), so the plan-mode deny set does not
+reach `kenaz__bash`, `kenaz__write_file` or `kenaz__update_artifact`
+through Cedar. This mission's own W-tier
+tools check posture themselves (FR-G5). **Owner:** a follow-up mission per
+spec Q12 (behaviour change for current users, so it needs the ruling).
+**Blocker:** Q12. Dated 2026-10-05.
+
+**H-5 — OPEN, deferred to WP04.** Builtin `kenaz__*` calls have no
+per-call audit record; the only tool-dispatch record is
+`KindToolConfirmDecision`, written only on the confirm-each ladder,
+which builtins (auto_allow by default) never reach. Spec FR-A1 adds
+`harness.tool.called` for this mission's W-tier tools in WP04 (the kind
+does not exist yet). That will NOT cover the pre-existing builtins (bash,
+write_file, …); that wider gap stays open. **Owner:** WP04 for the
+harness toolset; alec for the existing builtins. Dated 2026-10-05.
+
+**H-6 — OPEN, deferred to WP05.** The builtin registration tripwire walks
+registered → predicate only (`TestBuiltinEnabledPredicate_AllRegistered
+ToolsHaveExplicitCase`); predicate case → registration site is unchecked.
+Spec FR-S1(d) puts it in WP05's new `check-harness-toolset-catalog.sh`
+with planted proof `harness-toolset/predicate-case-without-registration`.
+Not done here: case labels are package constants, so the check needs the
+same const resolution WP05's gate builds. **Owner:** WP05. Dated
+2026-10-05.
+
+### 2026-10-05 (model-harness-toolset-01MHTS001 WP02 security review) — review findings on the containment seam
+
+**H1 — CLOSED: a model-supplied session id overrode the real session.**
+`kenaz__skill` accepted `session_id` in its arguments and passed it to
+`slashcmd.Dispatch.RunModelInvoked`. Then `dispatch.go`'s kind:tool branch
+re-stamped the tool-dispatch ctx with `toolloop.WithSessionID(ctx,
+sc.SessionID)`, replacing the session the call was really running in. A run
+contained to `[kenaz__skill]` reached `kenaz__sleep` by sending a forged or
+foreign id, and a forged onboarding-kind id would also have passed the
+session-kind arm for `harness_write_*`. Two fixes:
+(1) the skill tool takes the session only from
+`toolloop.SessionIDFromContext`, and its schema is `additionalProperties:
+false` with `DisallowUnknownFields`, so a `session_id` argument is refused
+with `invalid_args` instead of being silently ignored;
+(2) the slash dispatcher uses the new `toolloop.WithSessionIDChecked`, which
+only fills an empty ctx. A different id coming from data is refused with
+`ErrSessionIDMismatch`. The human `UserRun` path, where the ctx carries no
+session, is unchanged.
+Pins: `TestSkillTool_SessionIsCtxDerived_ContainmentHolds` (the reviewer's
+probe, now permanent; red on the pre-fix code),
+`TestDispatch_KindTool_SessionContextCannotOverrideCtxSession`,
+`TestTool_Call_SessionIDArgumentRefused`, `TestWithSessionIDChecked`.
+`project_id`/`cwd` remain model-supplied skill arguments. They feed only
+command lookup and the `{{cwd}}` template, not permission resolution.
+
+**Sibling audit (as the reviewer asked):**
+- `planmode/enter.go` and `planmode/exit.go`: ctx-derived
+  (`SessionResolver` defaults to `toolloop.SessionIDFromContext`), with no
+  session argument. Nothing to change.
+- `saveartifact`: ctx-derived, with no session argument. Nothing to change.
+- `updateartifact`: the session is ctx-derived (logging only), but the
+  target is any `artifact_id`, with no ownership check against the session.
+  **Cross-session targeting is designed-in:** artifacts have been a global
+  library since `sessions/0332-artifacts-global-scope`. Writes append a new
+  `artifact_versions` row, so they are non-destructive and earlier versions
+  survive. What gates it: the `FSWriteEnabled` dial and per-call `use_tool`
+  resolution, which now includes scheduled-run containment. The H-3
+  `ActionArtifactUpdate` gap is above. **Constraint for this mission:** any
+  W-session wrapper over artifacts must add the FR-G6 ownership check
+  (`InScopeArtifact`) rather than copy this tool's posture. **Owner:**
+  WP04 (ownership.go) / WP10.
+
+**Re-review fold-ins (2026-10-05):**
+- I11 §6 now strips trailing `//` comments, `/* */` blocks and string/rune
+  literal contents (string-aware) before matching. Two more degenerate
+  passes are closed: an assignment in a trailing comment, and one inside a
+  block comment. Each has a planted proof.
+- `core/workflows/runners.go` (model_turn and mcp_call) now uses
+  `WithSessionIDChecked`. A run's `ParentSessionID` can no longer override
+  a session already on the context. This path is not model-reachable today;
+  WP17 would make it reachable, so it is closed now. Pin:
+  `TestMCPCallRunner_ParentSessionCannotOverrideCtxSession`.
+
+**L6 — deliberate deviation from tasks.md, recorded.** tasks.md WP02
+said "User-created rows are unchanged". Two classes of user-created rows
+now behave differently. This is deliberate:
+- A **user row WITH a declared allowlist** is now contained to it. The
+  view's own `CreateInput.ToolAllowlist` doc already said the list is
+  "enforced against this schedule's runs"; before WP02 it was not. No
+  shipped UI writes the field (`frontend/src` has no `toolAllowlist`
+  writer), so no existing user row is affected in practice.
+- A **user row whose allowlist column is corrupt** (non-empty but not
+  decodable to at least one name) now runs with every tool denied, where
+  before it ran unrestricted. A declared but unreadable boundary must not
+  read as "unrestricted".
+User rows with NO allowlist, which is every pre-0340 row and every row the
+UI creates, are unchanged. That case is pinned by
+`TestScheduledRunContainment_UserRow_NoAllowlistUnchanged` and on the
+v0.89.2 snapshot by `..._UpgradedUserRowStillRuns`.
+
+**Forward warning for WP17 (`kenaz__set_workflow_schedule`), from the
+reviewer.** `ScheduledRunContainmentRegistry` is keyed by session, and
+scheduled **workflow** runs have no session (`wf_sched_dispatcher.go`
+dispatches through the workflow runner, not a chat session). This seam
+therefore does **NOT** contain model-armed workflow schedules. WP17 must
+not claim it does. It needs its own boundary on the workflow tool path:
+`wfToolGate.authorize` / `wfMCPCallerAdapter`, which resolve with the
+step's `ParentSessionID`, are empty for a scheduled workflow. Until it
+has one, a model-armed workflow schedule is uncontained. tasks.md's
+"through the WP02 seam" wording for WP17 is wrong as written.
+**Owner:** WP17. Dated 2026-10-05.
+
+**Known behavior (from the security review): user hooks are blocked in
+contained scheduled sessions.** The hooks-kind-builtin path resolves
+through the same per-session containment, so in a contained run a user
+hook is refused unless what it dispatches is on the run's allowlist.
+This is intended, not a defect: hooks are not a way around the boundary.
+A schedule that relies on a hook must list what the hook dispatches.
+
+### 2026-10-06 (bundle-key-rotation, review F3) — `FleetHealthChip` fetches fleet health once at mount and never refreshes
+
+`frontend/src/shell/FleetHealthChip.vue` calls `client.settings.fleetHealth()`
+in `onMounted` only. Every state it renders — including the new
+`"unknown-key"` (`fleet.ErrSigningKeyUnknown`, bundle-key-rotation WP01) —
+is whatever was true at app start. The config poller runs every 5 minutes,
+so a key flip, a first-ever bundle delivery, or a recovery after an
+"unknown-key" rejection is not reflected until a restart. The chip does not
+lie about the state it fetched; it goes stale.
+
+Justified, not wired, in the key-rotation PR: the fix is a polling or
+event-driven refresh shared by the Settings fleet-health surfaces, a
+separate design question (cadence, event source) the key-rotation change
+should not settle in passing. **Blocker:** none technical — needs the refresh
+design. **Owner:** alec — the Settings-health refresh follow-up deletes this
+entry.
+
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP01) — ad-hoc token estimators beside the canonical one
+
+`core/llm/tokenizer.CountRequestTokens` (ceil(runes / 4) + 4 framing per
+message) is the one token estimator: compaction (`core/agentgraph/
+exec_compute.go` `estimateTokens`), the chat request-too-large check, the
+session compaction strategy and, as of WP01, the request composition
+(`core/llm/token_estimate.go`) all go through it. Five call sites still
+carry their own `/ 4` arithmetic and can drift from it:
+
+- `core/workflows/catalog/preview.go:95` — `len(st.UserPrompt) / 4` (bytes, floor) for the cost preview.
+- `core/contextbootstrap/extraction.go:511` — `len(s) / 4` (bytes, floor).
+- `core/agentgraph/compaction/strategies.go:743` `approxTokens(b int)` — `ceil(bytes / 4)`. Not a one-line convergence: its ~10 callers hold byte counts, not text, so moving it to the per-rune rule means threading the strings (or rune counts) through the strategies.
+- `frontend/src/shell/NewSessionDialog.vue:69` and `frontend/src/views/contexts/ContextPreview.vue:51` — client-side `/ 4` previews; the frontend has no shared estimator.
+
+Same rule for ASCII text; they disagree on non-ASCII text (bytes vs runes)
+and on framing. **Blocker:** none technical. **Owner:** alec — a
+follow-up that routes each through `tokenizer.CountText` /
+`CountRequestTokens` (and a small TS port for the two views) deletes this
+entry.
+
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP05) — prompt-cache deviations from the spec
+
+Recorded deviations of WP05's cacheable prefix from spec §2.4 / tasks.md.
+Each bullet is deleted by the change its owner names.
+
+- **Curated table is code, not the capabilities catalog.**
+  `llm.SupportsPromptCache` (`core/llm/prompt_cache.go`) decides which
+  (provider kind, model) pairs carry `cache_control`: `anthropic` +
+  `claude*`, `openrouter` + `anthropic/…` / `~anthropic/…`. It is not a
+  flag in `core/llm/capabilities/data/*.yaml`, so the capability cache,
+  probes and Settings do not see it. **Blocker:** a `prompt_cache` key in
+  the catalog schema (`ProviderCapabilities`, `CapabilitySchemaVersion`
+  bump, cache invalidation). **Owner:** alec — the capabilities-catalog
+  follow-up moves the table into the YAML and deletes this bullet.
+- **No breakpoint on the conversation history.** Markers sit on the
+  system block and the last stable tool only, so a multi-call tool loop
+  re-bills the growing history on every call. **Blocker:** WP03's tiered
+  builder fixes the tool segments first; a third breakpoint on the last
+  stable message is the follow-up. **Owner:** WP03 of
+  tool-context-budget-01TCBUD01 (or its follow-up mission) — adds the
+  message breakpoint and deletes this bullet.
+- **OpenRouter tool-object `cache_control` is unverified live.** The
+  adapter puts `cache_control` beside `type`/`function` on the last
+  stable tool; OpenRouter documents it inside message content parts. A
+  rejection costs only the tool marker (the guard degrades to
+  system-only for that profile + model), but acceptance criterion 4
+  (`cached_tokens ≥ 0.9 × prefix` on OpenRouter-Anthropic) depends on
+  what OpenRouter does with it. **Blocker:** a live call. **Owner:** alec —
+  the live AC4 dogfood run (pending in
+  `docs/dogfood/2026-10-09-tool-context-acceptance.md`; WP08 is hermetic
+  and cannot make it) records the result and deletes this bullet.
+- **The "caches prompts" badge does not see the guard.**
+  `views/llm.modelCachesPrompts` mirrors the request-time capability
+  table; a `PromptCacheGuard` degrade (a provider rejected
+  `cache_control` for a profile + model) leaves the badge on while the
+  wire sends fewer or no markers. **Blocker:** the guard's per-(profile,
+  model) level is process state with no read API. **Owner:** alec —
+  "expose the guard level to the badge" deletes this bullet (2026-10-09).
+- **Degrade scope and lifetime.** `llm.PromptCacheGuard` degrades per
+  (profile id, model id) — a proxy or one routed model rejecting
+  `cache_control` leaves other profiles and models marking — and the
+  degrade lasts for the life of the process, logged once per step
+  (`llm.prompt_cache.unsupported`). There is no re-probe: a provider that
+  later accepts markers stays degraded until restart. **Blocker:** none
+  technical; needs a re-probe policy (TTL or settings reset). **Owner:**
+  alec — a re-probe follow-up deletes this bullet.
+
+The fleet usage observer (`core/rpc/api.go` usage hook) now receives the
+normalised prompt total (`usageTurnRecord(...).PromptTokens`, i.e.
+`llm.PromptTokensTotal`), so fleet token totals include cache reads and
+writes on every provider, the same number the local readout shows.
+`llm.ModelInfo.SupportsPromptCache` is written and read by the OpenRouter
+adapter only; the Anthropic `ListModels` write was removed.
+
+### 2026-10-09 (tool-context-budget-01TCBUD01 WP07) — org tool-exposure entries have no `.vue` reader yet — FIXED
+
+**FIXED at release integration (2026-10-09).** The TS `ToolExposureLevel`
+union carries `org_default` and `org_hot_set`; `lib/toolExposure.ts`
+`isOrgLocked` (org pin or org hot set) makes those tool rows read-only in
+`ToolExposurePanel` ("always sent — set by your organisation") and takes
+every move off the row in `ToolsMenu`; an org default stays editable. The
+budget input is disabled with a "set by your organisation" note when
+`Settings.org.schemaBudgetTokens > 0`, and `ToolsMenu` names an org budget
+from `SessionToolExposure.org`. Tests: `ToolExposurePanel.test.ts`,
+`ToolsMenu.test.ts`. The original entry follows for the record.
+
+WP07 puts the organisation's entries on the wire read-only
+(`toolexposure.Settings.org`, `sessions.SessionToolExposure.org`:
+`OrgExposure{settings[], schemaBudgetTokens, bundleId}`, each entry with
+`pinned` / `pinnedBy: "org"`), and every writer refuses a pinned entry
+with `*toolexposure.PinnedError`. No component reads them yet, so the UI
+still shows pinned rows as editable and lets a write fail at the backend.
+The WP06/WP07 integration task, exactly:
+
+- add `org_default` and `org_hot_set` to the TS `ToolExposureLevel` union;
+- `hot_set_extra` rows render read-only ("set by your organisation"), not editable;
+- the budget input is disabled when `org.schemaBudgetTokens > 0`;
+- `Settings.org` / `SessionToolExposure.org` get a `.vue` reader in `ToolExposurePanel` / `ToolsMenu`.
+
+**Blocker:** WP06 (the panels) is built in parallel off the WP03 tip.
+**Owner:** the coordinator, at release-branch integration time — deletes
+this entry.
+
+### 2026-10-09 (found in tool-context-budget-01TCBUD01 WP07 review) — bundle apply state survives sign-out
+
+`FleetSignOut` / `handleNodeRemoved` stop the pollers but leave
+`<dataDir>/fleet/bundle_id.txt`, `bundle_checksum.txt` and
+`bundle_apply_meta.json`. A sign-in to a **different** org then starts the
+config poller with the previous org's `lastAppliedID`: that org's bundles
+are refused as non-monotonic until its ids pass the old one, and the old
+checksum is sent on the first poll. WP07's `ToolExposurePins.Clear` drops
+`bundle_apply_meta.json` (forcing one re-apply for the same org), which
+does not fix the cross-org id. Pre-existing, not introduced by WP07.
+**Blocker:** none technical; needs a decision on what sign-out resets
+(id + checksum + meta, per org). **Owner:** alec — a separate fix deletes
+this entry.
+
+### 2026-10-09 (llm-call-telemetry-01LLMTEL01 WP02) — "Share model-call telemetry with Fleet" ON yields no Fleet-side rows yet
+
+The harness half is live: with `Settings.ShareModelCallTelemetryWithFleet`
+on and the user signed in, `closableSpanExporter`'s `withoutModelCallSpans`
+admits `gen_ai.chat` / `kenaz.chat.turn` spans that started after the
+toggle onto the per-user `/otlp/v1/traces` lane (pinned by
+`TestOTLPPipeline_ModelCallSharing_OffOnOff` against a fake Fleet). Fleet's
+traces receiver does not accept them today: it drops any span whose name
+it has not declared and any attribute outside its allowlist, and neither
+`gen_ai.chat` / `kenaz.chat.turn` nor the `gen_ai.*` / `kenaz.*` keys
+(`docs/telemetry/gen-ai-span-attributes.md`) are declared there. The
+proposed Fleet opt-in class `model_call_telemetry`
+(`fleet.ModelCallTelemetryClass`) is likewise unconfirmed; the harness
+only lets it narrow. So the toggle tells the truth on this side ("sent") and
+nothing lands on the far side. Nothing here is a lie in the harness, but
+the user-visible effect is absent until Fleet ships its half.
+**Blocker:** Fleet's receiver span-name + attribute allowlist, and the
+class name. **Owner:** Fleet (kenaz-fleet) — the receiver change that
+declares the names, plus the one-line rename of
+`fleet.ModelCallTelemetryClass` if Fleet picks another name, deletes this
+entry.
+
+### 2026-10-16 (legal kameas-ai-11, ML notice ack surface/action) — `include_ai_usage` ack action has no control
+
+`fleet.(*Client).AckMLNotice` accepts the third legal notice-ack action,
+`fleet.MLNoticeAckActionIncludeAIUsage` (`"include_ai_usage"`), and refuses
+it client-side unless the served `ai_usage_epoch` is passed (Fleet answers
+422 without it); pinned by `TestAckMLNotice_BodyCarriesSurfaceActionAndEpoch`
+and `TestAckMLNotice_RefusesInvalidActionWithoutRequest`. Nothing sends
+it: `CloudMLPanel.vue` has no AI-usage add-on control ("Include AI usage" /
+"Cancel"), and `FleetMLAckNotice` only maps org_policy to `turn_on` /
+`read` (the epoch is echoed there as served, which never implies
+`include_ai_usage`). Not a lie — no surface claims the capability — but the
+action is built and unreached. Per the brief, no new UI was built in this
+change. **Blocker:** a product/legal-approved design for the AI-usage
+add-on control in Settings › Cloud ML. **Owner:** the change that adds that
+control (it wires the action through a binding and deletes this entry).
+
 ## Drained
+
+### 2026-10-09 · CLOSED — owner-accepted extensions of FR-K4's `tool_exposure` shape (tool-context-budget-01TCBUD01 WP07)
+
+**Closed by the WP08 sweep (2026-10-09):** spec §2.1 now records them
+(the "Ruling 2026-10-09 (WP07 review)" paragraph: `pinned:false` org
+defaults below the user layer, per-tool `tools{}` entries,
+`budget_tokens`, `hot_set_extra` beating a pinned `off`), and
+`TestToolExposureDial_OrgPinsReachTheRequest` drives a pinned tier and a
+pinned budget to the request. The original entry follows.
+
+FR-K4 names `{servers:{<name>:{tier, pinned}}, budget_tokens?,
+hot_set_extra?}`. WP07 ships two accepted extensions, recorded so the
+spec catches up (coordinator to write them into spec §2.1): `pinned:false`
+entries are **org defaults** that sit *below* the user layer (org pin →
+session → project → user → org default → harness default), and a per-server
+`tools{<bare>:{tier, pinned}}` sub-map. `hot_set_extra` beats a pinned
+`off` on the same tool (logged at decode; the overridden pin row is left
+out of the read-only view). Not a gap; this entry is deleted when spec
+§2.1 records them.
+
+
+### 2026-10-09 · CLOSED — derived cost double-charged cached prompt tokens on inclusive providers (`tool-context-budget-01TCBUD01` WP01 → WP05)
+
+Class: **two token conventions read as one.** `core/llm/cost/reducer.go`
+(`Reducer.Derive` and `DeriveWithSource`'s pricing-table branch) charged
+`Usage.InputTokens` at the input rate **plus** the cache counts at their
+cache rates. Right for Anthropic, whose `input_tokens` excludes the cache;
+wrong for OpenRouter (`prompt_tokens`) and Gemini (`promptTokenCount`),
+whose input count already includes it (`llm.InputExcludesCache`).
+**Closed by WP05:** both branches go through `cost.splitPrompt`, which on
+inclusive providers moves each cache count with a known rate out of the
+input bucket (`InputTokens − CachedInputRead − CachedInputWrite` at the
+input rate, clamped at 0) and leaves a count whose rate is unknown in the
+input bucket, billed once. Anthropic is unchanged.
+
+What is actually priced with cache rates on the live cost path
+(`Reducer.Derive` over `core/llm/cost/starter_table.yaml`): OpenRouter
+`anthropic/claude-opus-4.5*`, `-opus-4.6*`, `-opus-4*` (Opus 4 / 4.1),
+`-sonnet-4*` and `-haiku-4.5*`; direct Anthropic `claude-sonnet-*` and
+`claude-haiku-*`. Every other OpenRouter model falls to the `*` row (no
+cache rates), so its cached tokens stay in the input bucket and are
+billed once at the input rate — correct, not discounted. Gemini rows
+carry no cache rates (same). `core/llm/pricing/pricing.yaml` (read only by
+`DeriveWithSource`, which has no production caller) carries the same
+OpenRouter rows. Proof: `core/llm/cost/reducer_cache_test.go` (same
+prompt, same cost on every provider kind; clamp; `DeriveWithSource` per
+convention; the starter table prices OpenRouter Haiku 4.5 / Opus 4.6 /
+Opus 4.1 / Sonnet cached reads at their cache rates).
+
+### 2026-10-07 · CLOSED — project sync advertised an agent-memory class that shipped nothing (`memory-sync-01MEMSY01` WP01)
+
+Class: **advertised sync that ships nothing.** `core/fleet/project_sync.go`
+declared `ArtifactClassMemory` and `DefaultArtifactClassOptions()` returned
+`Memory: true`; `ProjectSync_Toggle` enabled every project with the same
+default (`core/rpc/views/contextsync/impl.go`). Verified in the 2026-10
+audit (§5.3): no caller of `ProjectSyncer.AppendEvent` ever produced a
+`memory`-class event, `EnableSync`'s backfill was passed `nil`, Fleet has
+no project-memory route, and the project UI's class list never offered
+memory. The `memory: true` flag in the RPC shape (`ArtifactClassOptionsView`)
+was therefore a promise read by nothing.
+
+- **Drained — deleted** (live substitute: the user-private memory lane,
+  `core/fleet/memory_sync.go`, same mission WP07, against Fleet's
+  `/api/v1/memory/*`). Removed the class constant, the `Memory` fields of
+  `ArtifactClassOptions` / `ArtifactClassOptionsView` / `ProjectSyncOpts`,
+  the two adapter copies in `core/rpc/context_sync_wiring.go`, and the
+  hand-matched `memory` member of `frontend/wailsjs/go/models.ts`.
+- **Persisted blobs:** a keyring options blob written with `"memory":true`
+  still decodes (unknown key ignored) — pin
+  `TestArtifactClassOptions_LegacyMemoryKeyIgnored`.
+- **Not fixed here (pre-existing, separate):** `frontend/src/lib/types.ts`
+  `FleetArtifactClassOptionsView` is `{classes: Record<string, boolean>}`
+  while the Go wire shape is flat `{notes, binaries}` — the project landing
+  page's class toggles round-trip a shape the backend does not decode.
+  Owner: the project-registry harness work (fleet P1–P4), which rebuilds
+  that panel.
+
+### 2026-10-04 · CLOSED — chat run ids were a per-process counter written into a persistent log (`agentgraph-settings-linkage-01DOGF0D` WP02)
+
+Found by the spec's verification pass, not by a user: no surface linked
+a historical chat turn to its run yet, so nothing exercised it — the
+mission that adds that link is what would have exposed it. Class: **a
+latent identity defect behind a missing consumer.**
+
+- `chat_runner.go` minted run ids as `r.nextID++; "chat-%d"` — reset to
+  0 on every boot — and used the same string as the kernel `RunID`
+  written to `agent_graph_events`, which `buildAgentGraphEventLog` backs
+  with `NewSQLEventLog` (persistent). Today's `chat-1` and yesterday's
+  `chat-1` shared one run id; `MaterializeRun("chat-1")` would have
+  projected several unrelated turns as one graph.
+- **Drained — wired** (WP02): `newChatRunID` returns `chat-<ULID>`
+  (`core/event.NewULID`); sub id and kernel run id stay one string; the
+  counter is gone. Pin: `TestChatRunID_UniqueAcrossRestartsOnSQLEventLog`
+  (two runner instances = a simulated restart, one real sqlite log, the
+  production `0309` DDL). Red proof: `newChatRunID` reverted to the
+  constant `"chat-1"` → FAIL.
+- **Pre-fix rows are kept** (an audit trail, no destructive migration)
+  and are never linked: no `session_turn_runs` row exists for them, so
+  the transcript shows "Run graph not recorded for this turn". A direct
+  `MaterializeRun` of a legacy id whose log holds several starts refuses
+  with `agentgraph.ErrRunIDReused` instead of merging turns (pin
+  `TestMaterializeRun_RefusesRunIDReusedAcrossRestarts`); resume and the
+  overflow redrive — one run continuing under one id — still
+  materialize as one graph.
+- **Why the suite never saw it:** every agentgraph test of run identity
+  ran on `NewMemoryEventLog`, which dies with the "process". Blind spot
+  #2 in its event-log shape; WP-PI moved the identity pins to real
+  sqlite and recorded which memory-log tests stay and why.
+
+### 2026-10-04 · CLOSED — every user chat turn had two writers; the second was the only path into fleet sync (`chat-single-writer-01DOGF0G`)
+
+Dogfood finding F12 ("i keep seeing messages i send in chats get
+duplicated"). Class: **rival writer**, plus a **comment asserting an
+invariant nothing enforced**.
+
+- **Two writers for one row.** The chat surface persisted each turn via
+  `Sessions_AppendMessage` / `SendMessageWithBlocks`; `LLM.StartStream`
+  then read that row's text back and `ChatRunner.StartStream` re-appended
+  it through the HistoryWriter, anchoring the turn's span on the copy.
+  Every typed turn since the graph-chat migration (5fe2fbcf, 2026-04-27,
+  v0.1.x — the dev profile's oldest surviving pair is 2026-06-07) was
+  stored twice (dev profile: 40
+  pairs, 0.7–17 ms apart), and every history read handed the model each
+  user message twice. Text+image sends were doubled too (the flattened
+  text was re-appended text-only); only image/document-only sends escaped.
+  The runner's comment ("the multimodal send, where the frontend already
+  landed the user's row") described a property of ALL sends as if it held
+  for one. **Drained — wired** (WP02): the runner takes a `UserTurn`
+  reference (id + text + announce) and has no code path that writes a user
+  row; the span is the caller's row, `TurnSpan.LatestUserMessageID` the
+  only fallback. Pin: `TestChatTurn_UserMessageStoredOnce_AppendThenStartStream`
+  (`core/rpc`, real sqlite, append → StartStream; verified failing on
+  `b8079d48`).
+- **The duplicate was load-bearing for fleet sync.** The re-append was the
+  ONLY path by which a user turn reached `SessionSyncer.AppendEvent`
+  (`llmHistoryWriter.AppendEntry` → `syncHook`); image-only sends never
+  synced at all. **Drained — wired:** `llmHistoryWriter.AnnounceUserTurn`
+  (`chat.UserTurnAnnouncer`) emits the same `{id, role}` event for the
+  existing row, once per fresh turn, never on the keychain redrive. Pinned
+  by assertion (d) of the test above and by the key-rotation redrive test
+  (one announcement across start + redrive).
+- **Assistant-side twin.** Not any of the spec's three candidates: the
+  backend-error `PartialPersister` path re-persisted text the move journal
+  already owned (a parked last fire, or an absorbed `final`) as a
+  kind-less failed row. **Drained — wired** (WP04):
+  `turnJournal.UnpersistedTail`. Pin:
+  `TestChatRunner_BackendErrorAfterCompletedFire_WritesTheAnswerOnce`.
+- **Stored history.** `sessions/0341-dedupe-user-turns` (WP05) removes
+  existing pairs pair-type-aware (an image-bearing row always survives)
+  and the assistant twins; populated-snapshot test
+  `TestMigration0341_DedupesDoubledTurnsAgainstUpgradedDatabase`.
+- **Why the suite never saw it:** frontend tests fake `startStream`;
+  backend chat-runner tests called `StartStream(…, userMessage)` directly
+  and skipped the frontend append. Blind spot #2 in a new shape — the
+  fixture bypassed the OTHER writer.
+- **Residual, not drained — recorded so the next sweep does not re-find
+  it as new:** (1) equal-content assistant rows that are BOTH classic
+  failed partials (pre-0336 periodic-flush residue; 0337's strict-prefix
+  rule leaves them; neither is "the answer") — 4 on the dev profile.
+  (2) whole-turn partials from before finding #105 whose text differs from
+  the move they duplicate. (3) the destructive-migration gate sees a
+  procedural `Up` only through its `UpSource` text: a named-function `Up`
+  whose UpSource omitted the word DELETE would be invisible (0337 and 0341
+  both state it). **Owner:** alec — a follow-up to the chat-turn-integrity
+  repair family for (1)/(2); a gate change for (3) dates or closes it.
+
+### 2026-10-03 · CLOSED — graph file nodes bypassed fs.Gate; a corrupt user policy failed the graph path OPEN (`graph-fs-gate-01GFSG01`)
+
+Two findings from the 2026-10-03 peer-session verification pass (the
+kenaz-ml-1c session's read-only pass against main `d4957b04`,
+spot-checked by the implementing session), continuing the August
+node-vs-tool gate asymmetry finding. Owner rulings 2026-10-03: (1) route
+graph file nodes through fs.Gate — one permission model everywhere, no
+second unattended-safety model; (2) a corrupt user policy fails CLOSED.
+
+- **Graph `write_file` / `read_file` never reached `core/tools/fs.Gate`.**
+  `core/agentgraph/exec_state.go` checked only Cedar
+  `file_write`/`file_read` + `state_write`/`state_read`, and
+  `default_policy.cedar` permits `file_write`/`file_read` for every
+  resource (its comment calling user-confirmed roots "the typical
+  targets" was a hope, not enforcement). An unattended graph run's
+  `write_file` wrote any path with no prompt and no confirmed-roots
+  check; the identical write via `kenaz__write_file` went through
+  fs.Gate. The split was recorded as deliberate in
+  `core/policy/cedar/hooks.go` (`trust-surfaces-that-fire-01PMZ202`
+  WP18); ruling (1) supersedes it and that docstring now says so.
+  **Drained — wired** (WP02): optional seam `agentgraph.FileAccessGate`,
+  consulted after both Cedar checks; `PolicyGateAdapter` implements it
+  over the SAME `*corefs.Gate` the fs builtin tools use, late-bound in
+  `rpc.New` via `SetFileGate(stack.fsGate)` (a shared slot, so
+  `WithPostureMode` copies see it). Unattended runs deny through the
+  existing `CedarPrompter` → `Registry.RequestInteractive` runposture
+  check. Pin: `TestGraphWriteFile_UnattendedOutsideConfirmedRoots_Denied`
+  (real API + real Kernel; verified failing on `d4957b04`).
+- **Corrupt `<DataDir>/policy/*.cedar` → graph path fail-open.** The
+  spec located this at `api.go`'s `AllowAll` fallback for a nil engine;
+  the live tree showed that was the smaller half. `Engine.Reload` never
+  aborts on a per-file parse failure (the embedded bundle always
+  parses), so a corrupt user file did not drop the engine — it silently
+  dropped the user's rules while the permissive embedded defaults kept
+  running, with only a per-file `ParseErr` in `ListPolicies` as a trace.
+  **Drained — wired** (WP01): `cedar.FailClosedOnLoadError` (bound for
+  the graph path only) denies `file_read`/`file_write`/`state_write`/
+  `tool_exec`/`use_tool` while `Engine.UserPolicyLoadError()` is
+  non-nil, records each denial in the engine's decision log, and is
+  re-evaluated per call so a fix + reload lifts it. A nil engine with a
+  DataDir (construction failure) also fails closed; no DataDir at all
+  (nil-Core chassis) stays `AllowAll` — absence, not corruption.
+  Settings › Policy shows a banner naming each failing file and its
+  parse error. **Blast radius, stated outright:** chat runs on the same
+  kernel Env, so the `use_tool`/`tool_exec` denial covers EVERY chat
+  turn's tool calls — interactive and scheduled chat alike — not just
+  library-graph runs, until the file is fixed and reloaded. Parse
+  errors are attributed by source (WP05), so a corrupt user file that
+  shares a name with an embedded default or a harness/graph snippet
+  is still reported and still fails closed. Pins: `TestGraphPolicy_CorruptUserPolicyMidSession_FailsClosed`,
+  `TestGraphPolicy_CorruptUserPolicyAtBoot_FailsClosed` (verified failing
+  on `d4957b04`).
+- **Behaviour change (WP04, reviewer F3):** `Engine.Reload` used to
+  rebuild from embedded + disk only and silently uninstall everything
+  `LoadHarnessSnippets` had added — the harness-self and
+  graph-authoring policies, and fleet team rules applied through
+  `ApplyCedarDelta`. Those now SURVIVE a Reload. Arguably a fix (a
+  team forbid no longer evaporates when a user reloads), recorded here
+  because it changes what is enforced after a reload.
+- **Residual, not drained — recorded so the next sweep does not re-find
+  it as new:** the SHARED engine's other consumers (memory write,
+  workflows, scheduled chat, session export, …) keep the documented
+  fail-open posture on a corrupt user policy
+  (`TestCedarHoist_CorruptPolicyMidSession_StaysFailOpen`); ruling (2)
+  named the graph path only. Network/exec node gates and the
+  model-authored-graph `write_file` emission policy (01PMGA01) are out
+  of this mission's scope. **Owner:** alec — a follow-up ruling on
+  whether fail-closed extends engine-wide closes or re-dates this line.
+
+### 2026-09-12 · CLOSED — `structured-output-is-reachable-01PMZE14`, all six owed ledger entries
+
+The mission's own tasks.md Appendix names six findings this mission owed
+the ledger "on merge." None had been recorded when this mission was
+triaged and finished against `release/v0.78.2` — UNIT-0/UNIT-1/UNIT-2/
+UNIT-4/UNIT-5 had squash-merged via PR #299 (tag `v0.65.0`) and UNIT-6
+via PR #323, but the ledger entry itself was never written by either
+landing. Recorded now, all six, with the disposition each actually got
+(verified against the live tree, not copied from the spec):
+
+- **`ModelAttrs.JsonSchema` — authored end to end, dropped at the
+  executor** (spec §1.2). **Drained.** `core/agentgraph/seams.go`'s
+  `LLMRequest.ResponseSchema`, `exec_compute.go`'s marshal, and
+  `core/rpc/views/agentgraph/chat/llm_provider_adapter.go`'s translation
+  to `GenerationRequest.ResponseFormat` are all live (WP02, commit
+  `ca605714`). `core/wiring/knobcoverage` sees the whole
+  `agentgraph.ModelAttrs` struct (WP03, commit `03b0d68f`) —
+  `TestKnobCoverage_ModelAttrs` is the gate; a planted removal of the
+  `JsonSchema` registration reddens it.
+- **`llm.StructuredOutputAdapter` — no dispatcher; the documented
+  fallback does not exist** (spec §1.4). **Narrowed, not drained** (WP08,
+  commit `6c1480dd`, disposition (b) per E-002's default). The doc
+  comment at `core/llm/llm.go:353-388` now states plainly the interface
+  has no dispatcher and warns against a fifth `var _
+  StructuredOutputAdapter` assertion — verified live;
+  `TestStructuredOutputAdapterInterfaceNarrowing`-shaped coverage pins
+  exactly four implementors (anthropic/openai/openrouter/bedrock),
+  gemini deliberately absent. The fallback path itself remains
+  unbuilt and unowned (E-002 named no owner) — that residual is real
+  but is a design deferral recorded in the interface's own doc comment,
+  not a silent gap.
+- **`structured.SchemaHash` + `audit…SchemaHash` — two orphans, each the
+  other's only reason to exist** (spec §1.4a). **Drained**, in this
+  landing (WP06, below) — `core/llm/registry/structured_stream.go`'s
+  `emitAudit` is `structured.SchemaHash`'s first production caller, and
+  `LLMStructuredResponsePayload.SchemaHash` now has a real assigner.
+- **`RequestKnobs.ResponseFormatMode` / `.JSONMode` +
+  `openaiwire/base.go:77-79`'s false docstring** (spec §1.5). **Dated
+  justification**, not wired (WP07, commit `8a603ce8`; E-003's
+  recommended default). `core/llm/openaiwire/knob_coverage.go` registers
+  both as `RegisterDeferred`, each naming a real blocker and owner —
+  updated again during `model-settings-reach-the-model-01PMZ101` UNIT-6
+  to record that the *writer* half of the original blocker landed
+  (`Sessions_SetKnobsDefault`) but the *consumer* half (an override
+  branch in `openaiwire/body.go`) is still open and is out of scope for
+  this mission specifically because `body.go` is Z101 territory
+  (`CLAUDE.md`/plan.md Rule 2 — a commit here may not touch it). The
+  docstring itself no longer claims a wire that does not exist.
+- **`audit.KindLLMStructuredResponse` — declared, never emitted** (spec
+  §1.6). **Drained** by this landing's WP06: `llmregistry.Options` gained
+  an `Audit contextaudit.Emitter` field, wired at
+  `core/rpc/api.go`'s `newLLMStack` construction site via
+  `&acpAuditBridge{impl: a.auditImpl}`, and
+  `core/llm/registry/structured_stream.go`'s `Final()` emits the kind
+  with the real `Attempts` count, `ValidationOutcome`, and
+  `structured.SchemaHash(schema)` on every call that reaches schema
+  validation. **Correction to the spec's own §1.6/D-6, recorded so the
+  next reader does not carry the stale claim forward:** at spec-writing
+  time (2026-08-19) the audit event log had no durable backend
+  (`MemoryBackend` only, `RegisterMigrations` uncalled) and D-6 required
+  the WP06 commit body to say so. `audit-that-tells-the-truth-01PMZA10`
+  landed on this same release branch since then (`c6f40bb4` through
+  `7b0a95b2`) and wired a real sqlite-backed store
+  (`eventlog.NewSQLBackend` + `audit.WithStore`) into `a.auditImpl`
+  whenever a real `storage.DB` is available. So as of this landing, a
+  `KindLLMStructuredResponse` event genuinely reaches disk in a
+  production build via `audit.API.Push` → `store.AppendComputed` — it is
+  **not** still writing into a ring buffer that evaporates on process
+  exit. See `core/llm/wp_pi_persistence_integrity_test.go`'s addendum
+  for the full citation trail.
+- **`coverage_registry.yaml`'s false bedrock `unsupported:` row** (spec
+  §1.8). **Corrected** (WP05, commit `c20edafc`) — the bedrock
+  `ResponseFormat`/`JSONMode` rows now cite the real wire-shape test
+  functions instead of the false "not wired at generic adapter layer"
+  string; gemini rows were added to the same file. The
+  adapter↔capability-row parity gate itself (G-3) landed separately as
+  WP09 (PR #323, commit `e17b67ad`) — `core/llm/registry/
+  wp09_g3_capability_row_parity_test.go` and
+  `core/llm/bedrock/wp09_g3_row_parity_test.go` are its planted-violation
+  proofs.
+
+Also recorded and **not** fixed, per the mission's own tasks.md
+Appendix (unchanged by this landing, still true): four copies of the
+OpenAI `response_format` translation exist
+(`openaiwire/body.go`, `openai/openai.go`, `openrouter/openrouter.go`,
+`azure/adapter.go`) — consolidating them is a refactor the mission
+explicitly scoped out, not a lie; and `bearer.go` (bedrock's REST
+transport) still has no `JSONMode` handling while the SDK transport
+does.
+
+Mission fully closed with this entry: UNIT-3 (WP06, audit emitter) and
+UNIT-7 (WP10, review gate + router request a real schema, with
+`ErrCapabilityUnsupported`-gated degrade per D-9) were the two units
+still open when this pass started; both landed in the same change that
+added this entry.
+
+### 2026-09-12 · CLOSED — the background-task subsystem has no producer
+
+The original entry (2026-08-14, above) found `core/tasks` fully built
+(SQLite store, ring buffers, boot-time orphan recovery, four RPCs, a
+retained-but-unmounted Settings panel) and structurally unable to run:
+nothing ever called `Registry.Register` because
+`bash.Options.BackgroundSpawn` had no production assignment, and
+`Registry.StdoutWriter`/`StderrWriter` had no callers because
+`spawnBackground` started the process before a task id existed to
+attach them to. A-13/A-7 ruled: build it.
+
+`subagent-control-and-background-tasks-01PMZB11` did, across five units
+verified against the live tree (not copied from spec):
+
+- **UNIT-1** (`1ce7ea13`) recorded A-13's corrections and confirmed
+  which of its premises were still true against the merged base.
+- **UNIT-2** (`ef0eecb7`) registered the `core/tasks` migration through
+  the real `core/storage/migrations` framework with a reserved version
+  block — the `tasks` table now exists on every install, including
+  upgraded ones (FR-001; re-verified by the `upgrade-path` CI job
+  against the `v0.65.0` snapshot, per UNIT-PI above).
+- **UNIT-3** (`44eaf995`) attached the task registry to
+  `core/tools/bash`'s background-spawn path with a restructuring that
+  allocates the task id BEFORE `cmd.Start()`, so `StdoutWriter`/
+  `StderrWriter` can actually attach (FR-002/FR-003) —
+  `run_in_background: true` now produces a real row with real
+  captured output.
+- **UNIT-4** (`766d917b`) wired `Registry.Options.HookFirer` in
+  production, so `hooks.EventBackgroundTaskComplete` fires on every
+  terminal task (FR-004) — closing the exact gap hooks-fire-sites
+  finding #85 (also landed this release) named.
+- **UNIT-5** (`7fbfdc86`) registered `kenaz__monitor` with a real
+  predicate case, removing it from both
+  `i11-unregistered-builtin-tools.txt` and `i7-orphan-packages.txt`
+  (FR-005) — a registered `kenaz__monitor` no longer returns an empty
+  `lines` array forever, because UNIT-3 gave it real output to read.
+- **UNIT-11** (`1062fad1`, squash-merged `v0.71.0` as `620c048c`)
+  restored the Settings → Tasks nav entry and mounted `TasksPanel.vue`,
+  `BackgroundTaskChip.vue` and `TaskOutputViewer.vue` (the last had zero
+  importers at all before this), per A-13's ruling and the parked
+  entry's own conditional above. `SettingsTabsNav.spec.ts`'s pinned
+  absence assertion was inverted, not deleted, per the mission's own
+  convention for that class of test.
+
+**Disposition: Drained**, not narrowed — every producer gap the
+original entry named now has a real assignment, and the parked UI
+(panel + nav entry) was remounted in the same ruling's conditional,
+not left dangling.
+
+### 2026-09-12 · CLOSED — live tools whose only UI is unmounted, sub-agent half
+
+The original entry (2026-08-14, above) found `SubagentTab.vue` +
+`SubagentBudgetMeter.vue` with zero importers and, at the time, no
+backend to import them for either: `kenaz__subagent_dispatch` was
+itself statically unreachable (the `var subagentSeam
+agentgraph.BranchSeam // nil` dead-branch shape UNIT-12 below now has
+a permanent CI gate for), and the tab's four control emits had no RPC
+counterpart at all. A-13 ruled: build, not delete.
+
+Closed by three more units on the same mission, verified against the
+live tree:
+
+- **UNIT-8** (`40f2e2a8`, `4d2ca708`, `fd938980`, `5feeb930`) landed
+  `Subagent_Abort` / `Subagent_Steer` / `Subagent_Pause` /
+  `Subagent_Resume` as real Wails-bound RPCs, each gated by a Cedar
+  action in the `tool.subagent.*` family and each writing exactly one
+  audit record per call that actually changes state (idempotent
+  re-calls write none) — `TestAPI_{Abort,Steer,Pause,Resume}Subagent_
+  DeniedByRealCedarPolicy` pin the negative half against a REAL
+  `cedar.Engine`, not `cedar.AllowAll{}` (FR-008).
+- **UNIT-9** (`41d15cd4`) gave `SubagentBranch`'s six fields
+  (`subagentStatus`, `profileId`, `tokensUsed`, `budgetTokens`,
+  `elapsedS`, `budgetTimeS`) real producers on `Branches_List` /
+  `Branches_GetStatus`: `subagentStatus` off the tracked
+  `core/tasks.Task` (mapped onto a strict subset of the frontend
+  union — pinned by `TestSubagentStatusValuesAreInTSUnion`),
+  `tokensUsed` off the child session's real `usage.Manager` aggregate
+  (the same per-turn accounting token-cost-telemetry already writes),
+  `profileId`/budgets off metadata `BranchSeamAdapter.Fork` now records
+  against the branch id whenever the dispatch carries a `ProfileID`
+  (FR-009). `TestAPI_ListBranches_SubagentFieldsPopulatedAndOmitted`
+  proves both the positive half and AC-11's required negative half (an
+  ordinary branch created through the identical `CreateBranch` call
+  gets none of the six), with a manually-verified mutation proof.
+- **UNIT-10** (`2e920f7e`) mounted `SubagentTab.vue` from
+  `SessionsView.vue` — the natural owner, since it already renders
+  `BranchSidebar` and owns the active session's transcript — gated on
+  a real `activeSubagentBranch` computed derived from `BranchSidebar`'s
+  own `Branches_List` rows (UNIT-9's fields), not a placeholder. The
+  four emits reach UNIT-8's RPCs through new
+  `client.branches.{abort,steer,pause,resume}Subagent` methods.
+  `SubagentTab.spec.ts` asserts the status pill's RENDERED TEXT for all
+  six `SubagentStatus` values and the budget meter's rendered
+  percentage off real `tokensUsed`/`budgetTokens` — not prop
+  pass-through (the `?role=`-blank-pill trap this ledger's 2026-08-14
+  entry on `SearchModal` names).
+
+**Disposition: Drained.** The todo half of the original entry is
+explicitly **not** touched by this closure — see the correction left
+in place on the original 2026-08-14 entry above.
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
 

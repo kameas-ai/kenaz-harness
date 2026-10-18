@@ -6,7 +6,7 @@ when_to_use: |
   a long document, conversation thread, or research output. The summarizer
   is a single-turn worker: it reads its input prompt and returns a summary
   immediately without any tool calls.
-model: anthropic/claude-haiku-4-5
+model: anthropic/claude-haiku-4.5
 autonomy_tier: strict
 allowed_tools:
   - kenaz__ask_user_question

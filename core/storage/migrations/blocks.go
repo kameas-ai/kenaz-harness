@@ -18,16 +18,48 @@ func (b VersionBlock) Contains(v int) bool {
 //
 // To claim a new range, add an entry here and update the README.
 var CanonicalBlocks = map[string]VersionBlock{
-	"storage":                     {Min: 1, Max: 99},
-	"event-log":                   {Min: 100, Max: 199},
-	"secrets-keychain":            {Min: 200, Max: 299},
-	"sessions":                    {Min: 300, Max: 399},
-	"scheduler":                   {Min: 400, Max: 499},
-	"mcp":                         {Min: 500, Max: 599},
-	"a2a":                         {Min: 600, Max: 699},
-	"signed-cards-trust":          {Min: 600, Max: 699},
-	"bundle":                      {Min: 700, Max: 799},
-	"shared-context-distribution": {Min: 700, Max: 799},
+	"storage":          {Min: 1, Max: 99},
+	"event-log":        {Min: 100, Max: 199},
+	"secrets-keychain": {Min: 200, Max: 299},
+	"sessions":         {Min: 300, Max: 399},
+	"scheduler":        {Min: 400, Max: 499},
+	"mcp":              {Min: 500, Max: 599},
+	// a2a-signed-cards-trust-01KQ18P9 (2026-04-25) is a single mission
+	// covering both the A2A protocol surface and the signed-cards trust
+	// surface; blocks.go originally reserved 600-699 under BOTH names,
+	// which produced no live collision (neither mission had shipped a
+	// migration) but was a hazard by construction: Registry.Register
+	// keys on Version globally, so any two migrations from these two
+	// names landing on the same version number would fail at
+	// storagesqlite.Open with ErrVersionCollision — an install that
+	// will not start. Found 2026-08-20 (docs/unwired-ledger.md,
+	// "Two pairs of missions share a migration block"); fixed here.
+	// "a2a" keeps 600-699 since nothing has shipped in it yet and the
+	// two names need distinct ranges regardless of which keeps the
+	// original block.
+	"a2a": {Min: 600, Max: 699},
+	// signed-cards-trust-01KQ18P9: moved off the shared 600-699 block
+	// (see the "a2a" comment above) to 1400-1499. Nothing has shipped
+	// under this name yet, so renumbering is free — no ledger rows to
+	// preserve.
+	"signed-cards-trust": {Min: 1400, Max: 1499},
+	// bundle-download-and-verify-01PMZ909 UNIT-3 already shipped
+	// bundle/700-trust-anchors-init (see core/trust/migrations.go) —
+	// this range MUST NOT be renumbered; doing so would either re-run
+	// an already-applied migration or leave a stale ledger row on every
+	// install that has it. shared-context-distribution moved off this
+	// block instead (see below); the two were never a deliberate pair —
+	// they are two unrelated missions (separate kitty-specs/_archive
+	// entries: bundle-format-resolver-01KQ1A3J /
+	// bundle-download-and-verify-01PMZ909 vs.
+	// shared-context-distribution-01KQ18PA) that happened to claim the
+	// same range, most likely a copy-paste at authoring time. Found
+	// 2026-08-20 (docs/unwired-ledger.md); fixed here.
+	"bundle": {Min: 700, Max: 799},
+	// shared-context-distribution-01KQ18PA: moved off the shared
+	// 700-799 block (see the "bundle" comment above) to 1500-1599.
+	// Nothing has shipped under this name yet, so renumbering is free.
+	"shared-context-distribution": {Min: 1500, Max: 1599},
 	"memory-rag":                  {Min: 800, Max: 899},
 	"app-layer":                   {Min: 900, Max: 999},
 	// user-slash-commands-01KQ8TD9: 1000-1099.
@@ -41,6 +73,34 @@ var CanonicalBlocks = map[string]VersionBlock{
 	// subagent-control-and-background-tasks-01PMZB11: 1200-1299.
 	// The tasks table for core/tasks.Registry's persistence store.
 	"tasks": {Min: 1200, Max: 1299},
+	// finding-58-cedar-decision-persistence: 1300-1399.
+	// The policy_decisions table backing core/policy/cedar.SQLDecisionStore
+	// — the durable Cedar audit-decision log (see core/policy/cedar/migrations.go).
+	"cedar-policy": {Min: 1300, Max: 1399},
+	// laya-advisors-01LAYA001 WP08: 1600-1699. The advice_labels table
+	// backing core/advice/labels.SQLStore — the training-label capture
+	// bridge for the advisor seam (core/advice). Checked against
+	// finding #55's collisions before claiming this range: 600-699 is
+	// shared by a2a/signed-cards-trust (a2a keeps it, signed-cards-trust
+	// moved to 1400-1499) and 700-799 is shared by bundle/shared-context-
+	// distribution (bundle keeps it, shared-context-distribution moved to
+	// 1500-1599) — both already resolved above. The highest claimed block
+	// at the time this was reserved was 1500-1599, so 1600-1699 is the
+	// first free range; nothing else in this table touches it.
+	"laya-advisors": {Min: 1600, Max: 1699},
+	// ml-producer-01MLPRD01 WP02: 1700-1799. ml_outbox + ml_tasks for
+	// core/mlproducer/mlstore — the harness ML producer's durable outbox
+	// and per-session task state. Its own block (not the sessions block)
+	// so the sessions-family ledger pins do not move. 1700-1799 is the
+	// first free range above laya-advisors' 1600-1699.
+	"ml-producer": {Min: 1700, Max: 1799},
+	// llm-call-telemetry-01LLMTEL01 WP02: 1800-1899. The model_calls
+	// table backing core/modelcalls.Store — the durable local record of
+	// every LLM provider call. 1700-1799 is ml-producer's
+	// (ml-producer-01MLPRD01, migration ml-producer/1700-ml-outbox-and-tasks,
+	// on feat/ml-producer and already applied on a dev profile), so
+	// telemetry takes the next free range; nothing else touches it.
+	"model-calls": {Min: 1800, Max: 1899},
 }
 
 // LookupBlock returns the reserved block for the given owning-mission

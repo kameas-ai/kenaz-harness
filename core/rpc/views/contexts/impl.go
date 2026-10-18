@@ -56,6 +56,48 @@ type API struct {
 	lib        Library
 	syncer     *fleet.ContextGraphSyncer
 	attAdder   AttachmentAdder
+	// selfUserID returns the signed-in fleet user id ("" when unknown) —
+	// used to hide pulled copies of the user's OWN entries (review F3).
+	selfUserID func() string
+	// selfTeamID returns the enrolled fleet identity's team id ("" when
+	// unknown / teamless) — the team a "team"-layer publish lands in when
+	// the request names none.
+	selfTeamID func() string
+}
+
+// WithSelfUserID wires the signed-in fleet user id source (review F3).
+func (a *API) WithSelfUserID(f func() string) *API {
+	a.selfUserID = f
+	return a
+}
+
+// WithSelfTeamID wires the enrolled fleet identity's team id source. When
+// set, a "team"-layer Context_Publish with no req.TeamID publishes to this
+// team instead of falling back to the org layer.
+func (a *API) WithSelfTeamID(f func() string) *API {
+	a.selfTeamID = f
+	return a
+}
+
+// WithSelfIdentityFromDataDir wires both identity sources (user id and
+// team id) from the fleet identity cached under dataDir (identity.json,
+// written at enroll). Read on every call, so a re-enroll or sign-out is
+// seen without rewiring. An empty dataDir or unreadable identity yields
+// "" for both.
+func (a *API) WithSelfIdentityFromDataDir(dataDir string) *API {
+	load := func() fleet.Identity {
+		if dataDir == "" {
+			return fleet.Identity{}
+		}
+		id, err := fleet.LoadIdentity(dataDir)
+		if err != nil {
+			return fleet.Identity{}
+		}
+		return id
+	}
+	return a.
+		WithSelfUserID(func() string { return load().UserID }).
+		WithSelfTeamID(func() string { return load().TeamID })
 }
 
 // ErrInvalidModule is returned by AttachModule when the directory exists
@@ -100,9 +142,64 @@ func (a *API) List(_ context.Context) (Node, error) {
 	}
 	wire := toWire(root)
 	if a.syncer != nil {
-		wire = mergePulledEntries(wire, a.syncer.PulledEntries())
+		wire = mergePulledEntries(wire, a.withoutOwnEntries(wire, a.syncer.PulledEntries()))
 	}
 	return wire, nil
+}
+
+// withoutOwnEntries drops pulled entries that are the user's OWN published
+// local files, so a shared file does not list twice — once at its path and
+// once as "<layer>/_fleet/<uuid>" (review F3). Two guards:
+//   - the pulled id equals the wire id this install derives for an existing
+//     local path (this install published it);
+//   - the pulled node is owned by the signed-in user AND a local file with
+//     the same title exists (the same user published it from another
+//     install, whose salt derives a different id).
+func (a *API) withoutOwnEntries(local Node, pulled []fleet.ContextNodeEntry) []fleet.ContextNodeEntry {
+	if len(pulled) == 0 {
+		return pulled
+	}
+	ownIDs := map[string]bool{}
+	titles := map[string]bool{}
+	var walk func(n Node)
+	walk = func(n Node) {
+		if n.Kind == KindFile && n.Path != "" {
+			ownIDs[a.syncer.WireNodeID(n.Path)] = true
+			titles[localEntryTitle(n.Path)] = true
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(local)
+	self := ""
+	if a.selfUserID != nil {
+		self = a.selfUserID()
+	}
+	out := make([]fleet.ContextNodeEntry, 0, len(pulled))
+	for _, e := range pulled {
+		if ownIDs[e.ID] {
+			continue
+		}
+		if self != "" && e.OwnerUserID == self && titles[e.Title] {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// localEntryTitle mirrors the frontend's contextEntryTitle: the published
+// title of a library path is its basename without extension.
+func localEntryTitle(path string) string {
+	base := path
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	if i := strings.LastIndex(base, "."); i > 0 {
+		base = base[:i]
+	}
+	return base
 }
 
 // ListAll returns the tree with dotfiles included. Used by the
@@ -117,7 +214,7 @@ func (a *API) ListAll(_ context.Context) (Node, error) {
 	}
 	wire := toWire(root)
 	if a.syncer != nil {
-		wire = mergePulledEntries(wire, a.syncer.PulledEntries())
+		wire = mergePulledEntries(wire, a.withoutOwnEntries(wire, a.syncer.PulledEntries()))
 	}
 	return wire, nil
 }
@@ -268,12 +365,45 @@ func toWire(in corecontexts.Node) Node {
 // The request must specify layer = "team" or "org"; personal entries are
 // rejected with ErrPersonalLayerNotSyncable.
 // Requires a wired ContextGraphSyncer; returns ErrFleetDisabled otherwise.
+//
+// Team resolution for a "team"-layer request, in order: req.TeamID; else
+// the enrolled fleet identity's team_id (selfTeamID — the UI has no team
+// picker); else no team, and the publish widens to the "org" layer.
+// EffectiveLayer always reports the layer actually published, and the
+// frontend surfaces a team→org widening (ContextsView.vue).
 func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (ContextPublishResult, error) {
 	if a == nil || a.syncer == nil {
 		return ContextPublishResult{}, fleet.ErrFleetDisabled
 	}
 
 	layer := contextpack.Layer(req.Layer)
+	teamID := req.TeamID
+	teamIDSource := ""
+	if teamID != "" {
+		teamIDSource = "request"
+	}
+	if layer == contextpack.LayerTeam && teamID == "" && a.selfTeamID != nil {
+		if t := a.selfTeamID(); t != "" {
+			teamID = t
+			teamIDSource = "identity"
+		}
+	}
+	fellBackToOrg := false
+	if layer == contextpack.LayerTeam && teamID == "" {
+		layer = contextpack.LayerOrg
+		fellBackToOrg = true
+	}
+
+	// Log the wire id, never the local id (a library path is user content).
+	wireID := a.syncer.WireNodeID(req.NodeID)
+	logging.L().Info("contexts.publish.start",
+		"node_id", wireID,
+		"requested_layer", req.Layer,
+		"effective_layer", string(layer),
+		"team_fallback_to_org", fellBackToOrg,
+		"team_id_present", teamID != "",
+		"team_id_source", teamIDSource,
+	)
 
 	entry := fleet.ContextNodeEntry{
 		ID:      req.NodeID,
@@ -283,18 +413,33 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		Body:    req.Body,
 		Version: req.Version,
 	}
-	if req.TeamID != "" {
-		entry.TeamID = &req.TeamID
+	if teamID != "" {
+		entry.TeamID = &teamID
 	}
 
 	result, err := a.syncer.PushEntry(ctx, entry, nil)
 	if err != nil {
+		logging.L().Warn("contexts.publish.failed",
+			"node_id", wireID,
+			"effective_layer", string(layer),
+			// Never err.Error(): a lint_blocked refusal carries excerpts of
+			// the body; they belong in the returned (UI) error only.
+			"err", fleet.LogSafeErr(err),
+		)
 		return ContextPublishResult{}, fmt.Errorf("contexts: publish: %w", err)
 	}
+	logging.L().Info("contexts.publish.done",
+		"node_id", wireID,
+		"effective_layer", string(layer),
+		"accepted_nodes", result.AcceptedNodes,
+		"accepted_edges", result.AcceptedEdges,
+		"conflict_count", len(result.Conflicts),
+	)
 	return ContextPublishResult{
-		AcceptedNodes: result.AcceptedNodes,
-		AcceptedEdges: result.AcceptedEdges,
-		Conflicts:     result.Conflicts,
+		AcceptedNodes:  result.AcceptedNodes,
+		AcceptedEdges:  result.AcceptedEdges,
+		Conflicts:      result.Conflicts,
+		EffectiveLayer: string(layer),
 	}, nil
 }
 
@@ -305,10 +450,20 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 		return ContextPromoteResult{}, fleet.ErrFleetDisabled
 	}
 
+	logging.L().Info("contexts.promote.start", "node_id", a.syncer.WireNodeID(nodeID))
+
 	result, err := a.syncer.Promote(ctx, nodeID)
 	if err != nil {
+		logging.L().Warn("contexts.promote.failed",
+			"node_id", a.syncer.WireNodeID(nodeID),
+			"err", fleet.LogSafeErr(err),
+		)
 		return ContextPromoteResult{}, fmt.Errorf("contexts: promote: %w", err)
 	}
+	logging.L().Info("contexts.promote.done",
+		"node_id", result.Node.ID,
+		"new_classification", string(result.Node.Classification),
+	)
 	return ContextPromoteResult{
 		UpdatedNodeID:     result.Node.ID,
 		NewClassification: string(result.Node.Classification),
@@ -343,6 +498,9 @@ func (a *API) Context_SyncStatus(_ context.Context) (ContextSyncStatusView, erro
 		PullCount:      snap.PullCount,
 		TeamCapEnabled: snap.TeamCapEnabled,
 		Conflicts:      conflicts,
+
+		SkippedUnknownKinds: snap.SkippedUnknownKinds,
+		StrippedUnitKeys:    snap.StrippedUnitKeys,
 	}, nil
 }
 

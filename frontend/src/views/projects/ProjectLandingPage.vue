@@ -260,7 +260,7 @@ async function saveDescription() {
 
 function openMemoryView() {
   void router.push({
-    path: '/memory',
+    path: '/knowledge/learned',
     query: { scopeKind: 'project', scopeId: projectId.value },
   });
 }

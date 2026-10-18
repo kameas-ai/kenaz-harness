@@ -101,12 +101,12 @@ func TestHarnessCedarSnippets_ReadTool_AlwaysAllowed(t *testing.T) {
 		context.Background(),
 		cedar.UserUID(),
 		cedar.ActionUseTool,
-		cedar.PermissionToolUID("harness-self__harness_read_get_status"),
+		cedar.PermissionToolUID("harness-self__harness_read_list_providers"),
 		map[cedarlib.String]cedarlib.Value{
 			cedarlib.String(cedar.CtxKeySessionKind): cedarlib.String("chat"),
 		},
 	)
 	if d.Outcome == cedar.Deny {
-		t.Fatalf("chat session harness_read_get_status: want not-Deny, got Deny (reason=%s, matched=%s)", d.Reason, d.MatchedPolicy)
+		t.Fatalf("chat session harness_read_list_providers: want not-Deny, got Deny (reason=%s, matched=%s)", d.Reason, d.MatchedPolicy)
 	}
 }

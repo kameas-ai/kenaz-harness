@@ -123,3 +123,76 @@ package llm_test
 // directory was committed by this WP — that is the responsibility of
 // whichever mission lands last on the release branch, per CLAUDE.md's
 // release-ritual corollary.
+//
+// # ADDENDUM (release branch now release/v0.78.2) — WP06 and WP10 land
+//
+// This mission was triaged and finished against release/v0.78.2, ~13
+// releases after the enumeration above was written. UNIT-1/UNIT-2/
+// UNIT-4/UNIT-5 (WP02/WP03/WP04/WP05/WP07/WP08) had already landed and
+// squashed into main via PR #299 (tag v0.65.0), verified on the tree
+// rather than assumed. UNIT-6 (WP09, the adapter<->capability-row
+// parity gate) had also since landed (PR #323, commit e17b67ad) —
+// verified live: core/llm/registry/wp09_g3_capability_row_parity_test.go
+// and core/llm/bedrock/wp09_g3_row_parity_test.go both exist and pass.
+// This addendum covers the two units still open at that point: WP06
+// and WP10.
+//
+//   - WP06 (feat(llm): emit llm.structured.response with the real
+//     outcome) — the enumeration line above ("emits into ... MemoryBackend
+//     — no libSQL/sqlite Backend exists in the tree today") is NOW FALSE
+//     and is left uncorrected above only because it was true when written;
+//     do not copy it forward. audit-that-tells-the-truth-01PMZA10 landed
+//     on this same release branch since (commits c6f40bb4 WP02 "register
+//     the event-log schema with the production migration framework"
+//     through 7b0a95b2 WP10 "the retention sweep runs"), and
+//     core/rpc/api.go's newLLMStack construction site now wires a REAL
+//     sqlite-backed store: `eventlog.NewSQLBackend(db)` +
+//     `eventlog.NewStore(auditBackend)` are passed via `audit.WithStore`
+//     into `a.auditImpl` whenever a real storage.DB is available
+//     (api.go, immediately above the newLLMStack() call site) — see that
+//     block's own comment: "the honesty threshold — before this, the
+//     Audit view was an in-memory ring that did not survive a relaunch."
+//     WP06 adds NO NEW table or migration of its own — it is a pure
+//     consumer of the table 01PMZA10 already migrated — but for the
+//     first time a KindLLMStructuredResponse event this mission emits
+//     (via `&acpAuditBridge{impl: a.auditImpl}`, wired into
+//     llmregistry.Options.Audit) genuinely reaches disk in a production
+//     build, through audit.API.Push -> store.AppendComputed, not a
+//     ring buffer that evaporates on process exit. Verified by reading
+//     core/rpc/views/audit/impl.go's Push implementation and
+//     core/rpc/api.go's auditOpts construction, not assumed from the
+//     original spec's (now-stale) §1.6.
+//   - WP10 (feat(agentgraph): ask for a schema instead of parsing JSON
+//     out of prose) — none. The review gate and router standalone call
+//     each gained a ResponseSchema literal (an in-memory json.RawMessage
+//     built at call time from a Go map or a package-level const string)
+//     and a degrade-on-ErrCapabilityUnsupported branch. No table,
+//     migration, persisted setting, or FTS index touched — the schema
+//     never reaches any store; it is a wire-request shape only.
+//
+// AC-PI-1 rerun on this landing: `go test ./core/storage/sqlite/...
+// -run TestUpgradePath -count=1 -short -p 4` — RAN, exit 0, all
+// snapshots pass (this landing touches no migration, consistent with
+// the enumeration above).
+//
+// AC-PI-2 for this addendum's own new fixtures:
+//   - core/llm/registry/wp06_structured_audit_test.go's
+//     recordingAuditEmitter — a pure in-memory contextaudit.Emitter fake
+//     (mutex + snapshot per CLAUDE.md's race-safe-fake pattern). It
+//     deliberately does NOT drive the real audit.API/eventlog.SQLBackend
+//     path — that would require a real storage.DB and duplicate what
+//     01PMZA10's own test suite already covers for Push/AppendComputed.
+//     This mission's job is "does structuredStream.Final() call the
+//     emitter with the right payload," not "does the store persist
+//     correctly," which is 01PMZA10's tested property, not this
+//     mission's. Examined and NOT changed to drive real sqlite for that
+//     reason.
+//   - core/agentgraph/wp10_structured_output_degrade_test.go reuses the
+//     pre-existing stubLLM/countingLLM fakes (exec_compute_test.go,
+//     exec_router_test.go) — legitimate in-memory kernel-seam testing,
+//     the same class already audited above for WP02's tests; no new
+//     persistence-bypass risk introduced.
+//
+// AC-PI-5 unchanged: still not the last mission landing before a tag on
+// this branch; the release-ritual upgrade-snapshot step remains the
+// responsibility of whichever mission ships last.

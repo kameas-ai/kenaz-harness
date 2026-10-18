@@ -163,4 +163,44 @@ describe('ShareSessionDialog', () => {
     expect(errEl).not.toBeNull();
     expect(errEl!.textContent).toContain('Fleet unavailable');
   });
+
+  // device-keys-handoff-01DEVKH01 WP06
+  it('4. shows the recipient device count and fingerprints after selection', async () => {
+    const devicesFn = vi.fn(async () => [
+      { keyID: 'k1', fingerprint: 'sha256:aaaa' },
+      { keyID: 'k2', fingerprint: 'sha256:bbbb' },
+    ]);
+    const client = createFakeHarnessClient({
+      Handoff_ListTeam: async () => TEAM,
+      Handoff_RecipientDevices: devicesFn,
+    });
+    mountDialog(client);
+    await flushPromises();
+    await typeInto('share-recipient-input', 'bob');
+    q('share-member-u-bob')!.click();
+    await nextTick();
+    await flushPromises();
+
+    expect(devicesFn).toHaveBeenCalledWith('u-bob');
+    expect(q('share-device-count')!.textContent).toContain('2 registered devices');
+    const fps = Array.from(document.body.querySelectorAll('[data-testid="share-device-fingerprint"]')).map(
+      (e) => e.textContent?.trim(),
+    );
+    expect(fps).toEqual(['sha256:aaaa', 'sha256:bbbb']);
+  });
+
+  it('5. renders backend copy verbatim and never a raw status line', async () => {
+    const copy = "Your teammate's shared-session inbox is full. Ask them to clear some items, then try again.";
+    const shareFn = vi.fn(async () => { throw new Error(copy); });
+    const { client } = buildClient({ team: TEAM, shareFn });
+    mountDialog(client);
+    await flushPromises();
+    await typeInto('share-recipient-input', 'alice');
+    q('share-member-u-alice')!.click();
+    await nextTick();
+    await flushPromises();
+    (q('share-confirm-btn') as HTMLButtonElement).click();
+    await flushPromises();
+    expect(q('share-error')!.textContent?.trim()).toBe(copy);
+  });
 });

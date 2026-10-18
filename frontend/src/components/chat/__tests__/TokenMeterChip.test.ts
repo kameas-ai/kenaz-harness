@@ -215,4 +215,24 @@ describe('TokenMeterChip (per-message-token-meter-01KR3PQR)', () => {
     await w.find('[data-testid="token-meter-chip-button"]').trigger('click');
     expect(w.html()).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
   });
+
+  // ── Cached share (tool-context-budget-01TCBUD01 WP05) ────────────────
+
+  it('shows the cached share of the prompt without adding it to the total', async () => {
+    const w = mount(TokenMeterChip, {
+      props: { promptTokens: 10_000, completionTokens: 12, cachedTokens: 9_000 },
+    });
+    await w.find('[data-testid="token-meter-chip-button"]').trigger('click');
+    expect(w.find('[data-testid="token-meter-cached"]').text()).toBe((9_000).toLocaleString());
+    expect(w.find('[data-testid="token-meter-total"]').text()).toBe((10_012).toLocaleString());
+    expect(w.find('[data-testid="token-meter-popover"]').text()).toContain('of which cached');
+  });
+
+  it('hides the cached row when nothing was cached', async () => {
+    const w = mount(TokenMeterChip, {
+      props: { promptTokens: 10_000, completionTokens: 12, cachedTokens: 0 },
+    });
+    await w.find('[data-testid="token-meter-chip-button"]').trigger('click');
+    expect(w.find('[data-testid="token-meter-cached"]').exists()).toBe(false);
+  });
 });

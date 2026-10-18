@@ -5,7 +5,7 @@ when_to_use: |
   Use when the parent session needs a thorough survey of code, documentation, or
   web resources without any side-effects. Returns a structured report. Ideal for
   "find every place X is used" or "summarise what this module does" requests.
-model: anthropic/claude-haiku-4-5
+model: anthropic/claude-haiku-4.5
 autonomy_tier: cautious
 allowed_tools:
   - kenaz__read_file

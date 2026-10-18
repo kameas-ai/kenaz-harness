@@ -45,9 +45,6 @@ const DESKTOP_ONLY: Record<string, string> = {
   '/sites':
     'core/serve/methods.go dispatches no Sites_* method; SitesView would ' +
     'render over a backend that rejects every call.',
-  '/marketplace':
-    'core/serve/methods.go dispatches no Catalog_* method; MarketplaceView ' +
-    'would render over a backend that rejects every call.',
 };
 
 let desktop: RouteRecordRaw[];
@@ -97,12 +94,29 @@ describe('entry-point route tables', () => {
     expect(onlyServed).toEqual([]);
   });
 
-  it('keeps the desktop routes for both fleet surfaces', () => {
-    // Deleting these is a product decision, not a cleanup: SitesView and
-    // MarketplaceView are finished surfaces over live backends.
+  it('keeps the desktop route for the Sites fleet surface', () => {
+    // Deleting it is a product decision, not a cleanup: SitesView is a
+    // finished surface over a live backend.
     expect(paths(desktop)).toContain('/sites');
-    expect(paths(desktop)).toContain('/marketplace');
   });
+
+  // install-framework-01DOGF0B Phase 4 (WP08/WP09): MarketplaceView was
+  // deleted when its catalog browse folded into Capabilities (/tools). Every
+  // old /marketplace link must still land — with its query — in BOTH bundles.
+  it.each(['desktop', 'served'] as const)(
+    '/marketplace redirects to the Capabilities route with its query kept (%s)',
+    async (which) => {
+      const router = createRouter({
+        history: createMemoryHistory(),
+        routes: which === 'desktop' ? desktop : served,
+      });
+      await router.push('/marketplace?kind=bundle');
+      await router.isReady();
+      expect(router.currentRoute.value.path).toBe('/tools');
+      expect(router.currentRoute.value.query).toEqual({ kind: 'bundle' });
+      expect(router.currentRoute.value.name).toBe('tools');
+    },
+  );
 
   // engineer-truth-pass-01PMTP01 WP05 (finding B13a, B13b): /search and
   // /hooks were both routed with no reachable entry point — /search had
@@ -150,6 +164,24 @@ describe('entry-point route tables', () => {
         await router.isReady();
         expect(router.currentRoute.value.name, `${which} ${path}`).toBe('not-found');
       }
+    },
+  );
+
+  // nav-ia-sweep-01DOGF0F WP03 (P-1): the "Sessions" rail entry is gone,
+  // but the routes it pointed at are not — `/` still lands on the session
+  // surface and `/sessions/:id` still opens a chat, in both bundles.
+  it.each(['desktop', 'served'] as const)(
+    '/ redirects to /sessions and /sessions/:id resolves (%s)',
+    async (which) => {
+      const routes = which === 'desktop' ? desktop : served;
+      const router = createRouter({ history: createMemoryHistory(), routes });
+      await router.push('/');
+      await router.isReady();
+      expect(router.currentRoute.value.path, `${which} /`).toBe('/sessions');
+      expect(router.currentRoute.value.name).toBe('sessions');
+      await router.push('/sessions/abc');
+      expect(router.currentRoute.value.name).toBe('sessions');
+      expect(router.currentRoute.value.params.id).toBe('abc');
     },
   );
 });

@@ -8,7 +8,10 @@
  *   - the Airflow-style GRAPH of the run, per-node status, clickable
  *     through to the trace rows (visual-graph-authoring-01PMUX01 WP05)
  *   - the trace tail (last N events) with kind + node-id badges
- *   - paused-state UI: reads PendingAsk and exposes a resume input
+ *   - paused-state UI: reads PendingAsk and exposes a resume input, or
+ *     reads PendingApproval and exposes approve/reject controls
+ *     (approval-node-01PMZC12 UNIT-7) — the two pending kinds are
+ *     mutually exclusive and never both render
  *
  * ── WHERE THE LIVE NODE STATES COME FROM ──────────────────────────────
  *
@@ -34,11 +37,12 @@
  * executing node on a live one. `materializationStatuses(…, {live})`
  * owns that mapping.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import GraphCanvas from '@/components/canvas/GraphCanvas.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { materializeErrorMessage } from '@/lib/errors';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import { useManifestStore } from '@/composables/useNodeManifest';
@@ -64,9 +68,18 @@ const events = ref<readonly GraphRunTraceEvent[]>([]);
 const error = ref<string | null>(null);
 const askResponse = ref('');
 const submittingAsk = ref(false);
+const approvalReason = ref('');
+const submittingApproval = ref(false);
 
 let pollHandle: ReturnType<typeof setTimeout> | null = null;
 let cancelled = false;
+/**
+ * Set when the backend reports the run does not exist. Terminal for the
+ * poll: an unknown run id does not start existing 500 ms later, and
+ * polling it forever just repaints the same red banner
+ * (agentgraph-settings-linkage-01DOGF0D review H1).
+ */
+let runNotFound = false;
 
 const POLL_MS = 500;
 
@@ -75,9 +88,13 @@ async function pollOnce() {
   if (!id) return;
   try {
     const st = await client.graph.getRunStatus(id);
+    // The view switched runs while this call was in flight: its answer
+    // belongs to the previous run and must not paint over the new one.
+    if (id !== runId.value) return;
     status.value = st;
     const since = events.value.length > 0 ? events.value[events.value.length - 1].seq : 0;
     const tail = await client.graph.getRunTrace(id, since);
+    if (id !== runId.value) return;
     if (tail.length > 0) {
       events.value = [...events.value, ...tail];
       // New events ⇒ the projection can have changed. No new events ⇒
@@ -98,8 +115,21 @@ async function pollOnce() {
       await refreshGraph();
     }
   } catch (err) {
+    if (id !== runId.value) return;
     error.value = err instanceof Error ? err.message : String(err);
+    if (/not found/i.test(error.value)) runNotFound = true;
   }
+}
+
+/**
+ * The poll stops on any state that cannot change on its own — completed,
+ * failed, abandoned — and on a not-found run. `abandoned` was missing
+ * here before, so an abandoned run polled forever.
+ */
+function pollIsDone(): boolean {
+  if (runNotFound) return true;
+  const st = status.value?.state;
+  return st === 'completed' || st === 'failed' || st === 'abandoned';
 }
 
 // ── the run, as a graph (WP05) ───────────────────────────────────────
@@ -107,7 +137,8 @@ async function pollOnce() {
 const runGraph = ref<ParsedGraph | null>(null);
 /**
  * Why the graph gets its own error ref instead of sharing `error`: a run
- * whose resolved spec was evicted cannot be projected at all, and that
+ * whose graph cannot be projected at all (no recorded spec and no
+ * library graph left to reconstruct from), and that
  * must not blank the trace list — the trace is the surface that still
  * works. The graph pane says why it is empty; everything else carries on.
  */
@@ -125,6 +156,7 @@ async function refreshGraph() {
   if (!id) return;
   try {
     const spec = await client.graph.materializeRun(id);
+    if (id !== runId.value) return; // switched runs mid-call
     const parsed = parseGraphText(spec.yaml);
     if (parsed.graph) {
       runGraph.value = parsed.graph;
@@ -133,7 +165,7 @@ async function refreshGraph() {
       graphError.value = parsed.error ?? 'The projected run does not parse.';
     }
   } catch (err) {
-    graphError.value = err instanceof Error ? err.message : String(err);
+    graphError.value = materializeErrorMessage(err);
   }
 }
 
@@ -165,7 +197,7 @@ const isDegraded = computed(
 );
 const canvasNotice = computed(() =>
   isDegraded.value
-    ? 'Degraded projection — the resolved spec this run executed was evicted, so this topology may differ from the one that ran.'
+    ? "Degraded projection — this run's exact spec was never recorded (it predates recording or exceeded the size bound); showing the current library graph, which may differ from the one that ran."
     : '',
 );
 
@@ -219,8 +251,7 @@ function schedulePoll() {
   if (cancelled) return;
   pollHandle = setTimeout(async () => {
     await pollOnce();
-    const st = status.value;
-    if (st && (st.state === 'completed' || st.state === 'failed')) return;
+    if (pollIsDone()) return;
     schedulePoll();
   }, POLL_MS);
 }
@@ -238,6 +269,29 @@ async function resume() {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
     submittingAsk.value = false;
+  }
+}
+
+/**
+ * resolveApproval calls the approval verb, not `resume` — an approval
+ * is a verdict (approved/rejected + an optional reason), not free text,
+ * and `Graph_Resume` refuses a pending approval server-side
+ * (approval-node-01PMZC12 UNIT-3/UNIT-7).
+ */
+async function resolveApproval(approved: boolean) {
+  const id = runId.value;
+  const nodeId = status.value?.pendingApproval?.nodeId;
+  if (!id || !nodeId) return;
+  submittingApproval.value = true;
+  try {
+    await client.graph.resolveApproval(id, nodeId, approved, approvalReason.value);
+    approvalReason.value = '';
+    await pollOnce();
+    schedulePoll();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    submittingApproval.value = false;
   }
 }
 
@@ -276,6 +330,35 @@ onMounted(async () => {
   // this view opened returns its whole trace in one tail, and a run with
   // no events at all still has a topology worth drawing.
   await refreshGraph();
+  if (pollIsDone()) return;
+  schedulePoll();
+});
+
+// vue-router REUSES this component when only :runId changes (opening the
+// next turn's "Run details" from this one), and a completed run stops
+// polling — so per-run state is reset and the new run loaded from
+// scratch whenever the id changes.
+watch(runId, async (id, prev) => {
+  if (id === prev || servedMode.value) return;
+  if (pollHandle) {
+    clearTimeout(pollHandle);
+    pollHandle = null;
+  }
+  status.value = null;
+  events.value = [];
+  error.value = null;
+  runNotFound = false;
+  runGraph.value = null;
+  graphError.value = null;
+  selectedNodeId.value = '';
+  focusedSeq.value = null;
+  askResponse.value = '';
+  approvalReason.value = '';
+  if (!id) return;
+  await pollOnce();
+  if (id !== runId.value) return;
+  await refreshGraph();
+  if (id !== runId.value || pollIsDone()) return;
   schedulePoll();
 });
 
@@ -290,6 +373,11 @@ const stateLabel = computed(() => {
   if (st === 'paused') return 'Paused';
   if (st === 'completed') return 'Completed';
   if (st === 'failed') return 'Failed';
+  // approval-node-01PMZC12 E-002: a run a previous process paused and
+  // never resolved (Manager.rehydrateAbandonedRuns). Distinct from
+  // 'failed' — nothing went wrong with the run itself, the pending
+  // decision just could not survive a restart.
+  if (st === 'abandoned') return 'Abandoned';
   return 'Pending';
 });
 
@@ -299,6 +387,7 @@ const stateClass = computed(() => {
   if (st === 'paused') return 'border-signal-warn text-signal-warn';
   if (st === 'completed') return 'border-signal-ok text-signal-ok';
   if (st === 'failed') return 'border-signal-danger text-signal-danger';
+  if (st === 'abandoned') return 'border-signal-danger text-signal-danger';
   return 'border-border-muted text-ink-dim';
 });
 
@@ -390,6 +479,20 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
       </div>
 
       <div
+        v-if="status?.state === 'abandoned'"
+        class="rounded-md border border-signal-danger bg-surface-1 px-4 py-3"
+        data-testid="run-abandoned"
+      >
+        <div class="font-ui text-[12px] uppercase tracking-[0.18em] text-signal-danger">
+          Run abandoned
+        </div>
+        <div class="mt-1 font-ui text-[13px] text-ink">
+          This run was paused before a process restart and cannot be resumed.
+          <template v-if="status?.error">{{ status.error }}</template>
+        </div>
+      </div>
+
+      <div
         v-if="status?.pendingAsk"
         class="rounded-md border border-signal-warn bg-surface-1 px-4 py-3"
         data-testid="run-pending-ask"
@@ -416,6 +519,48 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
             @click="resume"
           >
             Resume
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="status?.pendingApproval"
+        class="rounded-md border border-signal-warn bg-surface-1 px-4 py-3"
+        data-testid="run-pending-approval"
+      >
+        <div class="font-ui text-[12px] uppercase tracking-[0.18em] text-signal-warn">
+          Approval requested<template v-if="status.pendingApproval.approverRole">
+            — {{ status.pendingApproval.approverRole }}</template
+          >
+        </div>
+        <div class="mt-1 font-ui text-[14px] font-semibold text-ink">
+          {{ status.pendingApproval.prompt }}
+        </div>
+        <div class="mt-2 flex items-end gap-2">
+          <input
+            v-model="approvalReason"
+            type="text"
+            data-testid="run-approval-reason"
+            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[13px] text-ink"
+            placeholder="Reason (optional)…"
+          />
+          <button
+            type="button"
+            :disabled="submittingApproval"
+            class="rounded-sm border border-signal-ok bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-signal-ok disabled:opacity-50"
+            data-testid="run-approval-approve"
+            @click="resolveApproval(true)"
+          >
+            Approve
+          </button>
+          <button
+            type="button"
+            :disabled="submittingApproval"
+            class="rounded-sm border border-signal-danger bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-signal-danger disabled:opacity-50"
+            data-testid="run-approval-reject"
+            @click="resolveApproval(false)"
+          >
+            Reject
           </button>
         </div>
       </div>

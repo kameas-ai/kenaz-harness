@@ -72,6 +72,7 @@ function mountWith(opts: MountOpts = {}) {
       }),
       getRunTrace: async () => [],
       resume: async () => undefined,
+      resolveApproval: async () => undefined,
       cancelRun: async () => undefined,
       materializeRun: async (runID: string) => ({
         id: `g__run_${runID}`,

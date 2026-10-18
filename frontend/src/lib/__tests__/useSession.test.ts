@@ -138,6 +138,64 @@ describe('useSession (chat-ui)', () => {
     w.unmount();
   });
 
+  // chat-turn-integrity-01PMZ606 WP11 / AC-014 — the read half of the
+  // "the turn's cost survives a reload" defect. lastUsage had exactly two
+  // assignments before this WP: the `session.usage.updated` event handler,
+  // and a `null` reset on session switch. load() never repopulated it, so
+  // the composer footer and context-window meter (SessionsView.vue) read
+  // 0 tok · $0.0000 on every session reopen and every app restart, even
+  // though the true number was already sitting in
+  // sessions.last_usage_json.
+  //
+  // Deliberately fires NO `session.usage.updated` event — AC-014 calls out
+  // that a test asserting only the event path still passes with the bug.
+  // This drives the REAL useSession() adapter against a fake HarnessClient
+  // (not a hand-built view-model), so the mapping from the wire `Session
+  // .lastUsage` field to the `lastUsage` ref is genuinely exercised.
+  it('repopulates lastUsage from client.sessions.get on load(), with no event fired', async () => {
+    const { w, session } = mountWithSession({
+      sessions: {
+        list: async () => [],
+        get: async (id: string) => ({
+          id,
+          name: 'Reloaded Session',
+          createdAt: '',
+          updatedAt: '',
+          lastUsage: {
+            promptTokens: 4096,
+            completionTokens: 512,
+            totalTokens: 4608,
+            costUsd: 0.0234,
+            costSource: 'provider',
+          },
+        }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+      } as any,
+    });
+    await vi.runAllTimersAsync();
+    await nextTick();
+
+    expect(session.lastUsage.value).not.toBeNull();
+    expect(session.lastUsage.value).toMatchObject({
+      promptTokens: 4096,
+      completionTokens: 512,
+      totalTokens: 4608,
+      costUsd: 0.0234,
+      costSource: 'provider',
+    });
+    w.unmount();
+  });
+
   it('append + send wires the LLM stream and surfaces subscriptionId', async () => {
     const seenAppend: string[] = [];
     const { w, session } = mountWithSession({
@@ -230,6 +288,73 @@ describe('useSession (chat-ui)', () => {
     const last = session.messages.value[session.messages.value.length - 1];
     expect(last.content).toBe('Hello, world!');
     expect(last.streaming).toBe(false);
+    w.unmount();
+  });
+
+  // live-usage-mid-stream defect (owner report, 2026-09-09): the header
+  // COST/CONTEXT figures and the composer footer's "N tok · $M" readout
+  // are both driven by session.lastUsage, which was previously updated
+  // ONLY by the `session.usage.updated` broker event fired from
+  // HookPostLLM after Generate() returns (core/rpc/api.go ~6321) — i.e.
+  // at turn end. The provider's terminal SSE frame reports usage tokens
+  // earlier than that (before persistence/hooks run), and the backend
+  // already threads it onto the stream as a `kind: "usage"` llm:stream-
+  // chunk (core/rpc/views/agentgraph/chat/stream_bridge.go
+  // translateAGStreamEvent). useSession.ts's stream-chunk switch dropped
+  // this case silently ("tool / reasoning / usage frames not yet
+  // rendered"), so the live wire data never reached lastUsage. This test
+  // fires a `usage` chunk WITHOUT a subsequent `llm:stream-closed` and
+  // asserts lastUsage already reflects it — proving the update happens
+  // while the turn is still streaming, not just at turn end.
+  it('updates lastUsage live from a usage stream chunk, before the turn closes', async () => {
+    const { w, session } = mountWithSession({
+      sessions: {
+        list: async () => [],
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'u-1', sessionId: id, role: role as Message['role'], content }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+      } as any,
+      llm: {
+        listProviders: async () => [],
+        startStream: async () => 'sub-x',
+        stopStream: async () => undefined,
+      } as any,
+    });
+    await vi.runAllTimersAsync();
+    await session.send('q', 'profile');
+    await nextTick();
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-x',
+      session_id: 's-1',
+      chunk: { kind: 'text', text: 'Working on it' },
+    });
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-x',
+      session_id: 's-1',
+      chunk: {
+        kind: 'usage',
+        usage: { input_tokens: 122145, output_tokens: 981, reasoning_tokens: 0 },
+      },
+    });
+    await nextTick();
+    // The stream is still open — no llm:stream-closed has fired — yet
+    // lastUsage must already carry the provider's reported tokens.
+    expect(session.streamSubscriptionId.value).toBe('sub-x');
+    expect(session.lastUsage.value).not.toBeNull();
+    expect(session.lastUsage.value).toMatchObject({
+      promptTokens: 122145,
+      completionTokens: 981,
+      totalTokens: 123126,
+    });
     w.unmount();
   });
 
@@ -570,6 +695,8 @@ function makeSessionsStub(
     setSystemPrompt: async () => undefined,
     moveToProject: async () => undefined,
     resumeMessage: async () => ({ subscriptionId: '', originalMessageId: '' }),
+    turnRuns: async () => [],
+    modelCalls: async () => [],
     getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown', messageCount: 0, pricingDataDate: '' }),
     saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '' }, scopeKind: 'session' as const, createdAt: '', contentHash: '' }),
     suggestTitle: async () => '',
@@ -577,11 +704,16 @@ function makeSessionsStub(
     getAutonomy: async () => ({ level: null, overrides: {} }),
     setAutonomy: async () => undefined,
     resolveAutonomy: async () => ({
-      resolved: { maxIterations: 0, askOnAmbiguity: '', autoApproveFamilies: [], tokenCeilingPerTurn: 0, recapStyle: '', continueOnError: '', destructiveActionPosture: '', sourceTrace: {}, tier: '' },
+      resolved: { maxIterations: 0, askOnAmbiguity: '', autoApproveFamilies: [], tokenCeilingPerTurn: 0, recapStyle: '', continueOnError: '', destructiveActionPosture: '', riskThreshold: 0, sourceTrace: {}, tier: '' },
       global: { level: null, overrides: {} },
       project: { level: null, overrides: {} },
       session: { level: null, overrides: {} },
     }),
+    getKnobsDefault: async () => null,
+    setKnobsDefault: async () => undefined,
+    getToolExposure: async () => ({ exposure: {}, activations: [], org: { settings: [], schemaBudgetTokens: 0, bundleId: 0 } }),
+    setToolExposure: async () => undefined,
+    loadTools: async () => ({ loaded: [], loaded_by_server: {}, not_loaded: [], summary: '' }),
     export: async () => ({ path: '', byteCount: 0 }),
   };
   return { ...stub, ...overrides };

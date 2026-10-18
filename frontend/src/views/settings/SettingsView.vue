@@ -12,41 +12,43 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { redirectLegacySettingsTab } from '@/lib/legacyRoutes';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
 import UpdatesPanel from '@/views/settings/UpdatesPanel.vue';
-import MigrationDriftPanel from '@/views/settings/health/MigrationDriftPanel.vue';
 import CompactionStrategyPanel from '@/views/settings/compaction/CompactionStrategyPanel.vue';
 import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
-import FeatureFlagsView from '@/views/settings/FeatureFlagsView.vue';
 import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
-import WorkflowsSettingsPanel from '@/views/settings/WorkflowsSettingsPanel.vue';
-import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPanel.vue';
-// subagent-control-and-background-tasks-01PMZB11 UNIT-11 — Tasks sub-tab,
-// restored now that bash.Options.BackgroundSpawn has a real producer.
-import TasksPanel from '@/views/settings/TasksPanel.vue';
-import TaskOutputViewer from '@/views/settings/TaskOutputViewer.vue';
 import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecretsPanel.vue';
 import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
-// mission 01NLOGS01 WP05 — Runtime Logs panel
-import LogsPanel from '@/views/settings/LogsPanel.vue';
 import AccountPanel from '@/views/settings/AccountPanel.vue';
 import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
 import PeersPanel from '@/views/settings/PeersPanel.vue';
 import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
+import ModelCallTelemetryPanel from '@/views/settings/ModelCallTelemetryPanel.vue';
+// fix/served-agent-profiles-sep17: served workbenches had no route to
+// AgentsView at all (contracts/agents-served-rpc.md) — a served-mode user
+// could not configure named Sonnet/Opus/Fable delegation profiles.
+import AgentsView from '@/views/settings/AgentsView.vue';
 // fleet-share-and-sync-01NDFSEX14 WP06 — Sync panel
 import SyncPanel from '@/views/settings/SyncPanel.vue';
+import MemorySyncPanel from '@/views/settings/MemorySyncPanel.vue';
+import CloudMLPanel from '@/views/settings/CloudMLPanel.vue';
 // fleet-audit-archival-01NDFSEX13 WP06 — Compliance panel
 import CompliancePanel from '@/views/settings/CompliancePanel.vue';
 // nav-settings-ia-cleanup WP02 — Crash Reporting panel (PRIVACY group)
 import CrashReportingPanel from '@/views/settings/CrashReportingPanel.vue';
+import RecommendationsPanel from '@/views/settings/RecommendationsPanel.vue';
+import MCPHealthSettingsPanel from '@/views/settings/MCPHealthSettingsPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import BranchAdvisorSettings from '@/components/settings/BranchAdvisorSettings.vue';
+import RiskRaterModelPicker from '@/components/settings/RiskRaterModelPicker.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { accountSectionSubtitle, useFleetSession } from '@/lib/fleetSession';
 import { debouncedSave } from '@/lib/settings';
 import { runAsyncAction } from '@/composables/useAsyncAction';
 import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
@@ -85,13 +87,6 @@ const showUpdatesTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'updates';
 });
 
-// v0.5.1 migration-doctor — Health sub-tab (same route disambiguation
-// as Updates; mount switch is in <template> below).
-const showHealthTab = computed<boolean>(() => {
-  const v = route?.query?.tab;
-  return typeof v === 'string' && v === 'health';
-});
-
 // compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring sub-tab.
 // Disambiguates via ?tab=compaction. Mount switch is in <template> below.
 const showCompactionTab = computed<boolean>(() => {
@@ -106,13 +101,6 @@ const showSlashCmdsTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'slashcmds';
 });
 
-// user-slash-commands-01KQ8TD9 WP09 — Feature Flags sub-tab.
-// Disambiguates via ?tab=flags. Mount switch is in <template> below.
-const showFlagsTab = computed<boolean>(() => {
-  const v = route?.query?.tab;
-  return typeof v === 'string' && v === 'flags';
-});
-
 // hooks-event-surface-expansion-01KZNP3A WP07d — Hooks sub-tab.
 // Disambiguates via ?tab=hooks. Mount switch is in <template> below.
 const showHooksTab = computed<boolean>(() => {
@@ -120,43 +108,27 @@ const showHooksTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'hooks';
 });
 
-// workflow-extensions-01KW2D3Y WP02 — Workflows sub-tab.
-// Disambiguates via ?tab=workflows. Mount switch is in <template> below.
-const showWorkflowsTab = computed<boolean>(() => {
-  const v = route?.query?.tab;
-  return typeof v === 'string' && v === 'workflows';
-});
-
-// scheduled-chat-runs-01KX5R8B WP05 — Scheduled Chats sub-tab.
-// Disambiguates via ?tab=scheduledchats. Mount switch is in <template> below.
-const showScheduledChatsTab = computed<boolean>(() => {
-  const v = route?.query?.tab;
-  return typeof v === 'string' && v === 'scheduledchats';
-});
+// nav-ia-sweep-01DOGF0F WP05: the Workflows (workflow-extensions-01KW2D3Y
+// WP02), Scheduled Chats (scheduled-chat-runs-01KX5R8B WP05) and Tasks
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-11) sub-tabs moved to
+// the Workflows surface. Their ?tab= values redirect at the router
+// (lib/legacyRoutes.ts, a /settings beforeEnter); the watch further down
+// covers the one case beforeEnter cannot see — a query-only change while
+// already on /settings.
+watch(
+  () => route?.query?.tab,
+  () => {
+    if (!route || !router) return;
+    const target = redirectLegacySettingsTab(route);
+    if (target !== true) void router.replace(target);
+  },
+);
 
 // model-secret-references-01KW7M5A WP10 — Model Secrets sub-tab.
 // Disambiguates via ?tab=secrets. Mount switch is in <template> below.
 const showSecretsTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'secrets';
-});
-
-// The Tasks sub-tab (background-task-monitor-01KZNP3C WP05) was removed
-// 2026-08-14 because the background-task subsystem had no producer (see
-// docs/unwired-ledger.md). Restored by
-// subagent-control-and-background-tasks-01PMZB11 UNIT-11.
-// Disambiguates via ?tab=tasks. Mount switch is in <template> below.
-const showTasksTab = computed<boolean>(() => {
-  const v = route?.query?.tab;
-  return typeof v === 'string' && v === 'tasks';
-});
-
-// Tracks which task's output is being viewed within the Tasks pane (null
-// = showing the task list). Reset when the Tasks tab is left so
-// navigating away and back always starts at the list.
-const viewingTaskId = ref<string | null>(null);
-watch(showTasksTab, (shown) => {
-  if (!shown) viewingTaskId.value = null;
 });
 
 // model-fallback-routing-01NDFSEX04 WP05 — LLM Routing sub-tab.
@@ -171,13 +143,6 @@ const showLLMRoutingTab = computed<boolean>(() => {
 const showAuditTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'audit';
-});
-
-// mission 01NLOGS01 WP05 — Runtime Logs sub-tab.
-// Disambiguates via ?tab=logs. Mount switch is in <template> below.
-const showLogsTab = computed<boolean>(() => {
-  const v = route?.query?.tab;
-  return typeof v === 'string' && v === 'logs';
 });
 
 // fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab.
@@ -227,6 +192,23 @@ const showBranchAdvisorTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'branch-advisor';
 });
 
+// laya-advisors-01LAYA001 WP13 — Recommendations sub-tab: the local ML
+// engine's install / status / uninstall / update surface (spec §2c).
+// Disambiguates via ?tab=recommendations. Mount switch is in <template> below.
+const showRecommendationsTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'recommendations';
+});
+
+// MCP Servers sub-tab — the MCP auto-restart dial (MCPHealthSettingsPanel).
+// Disambiguates via ?tab=mcp-servers. Mount switch is in <template> below.
+// Its Go knob gates the stdio healthPinger's ping-failure restart trip
+// (core/mcp/transport/stdio/health.go), so this is not an inert toggle.
+const showMCPServersTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'mcp-servers';
+});
+
 // CanvasHead title/subtitle per active query-param sub-tab. The settings
 // sub-panels no longer render their own breadcrumb header (SettingsShell
 // owns it), so the header text has to reflect the current section. General
@@ -234,35 +216,45 @@ const showBranchAdvisorTab = computed<boolean>(() => {
 const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   account: { title: 'Account', subtitle: 'Sign in to access fleet features like shared team context, org-level settings, and role-based capabilities.' },
   updates: { title: 'Updates', subtitle: 'Check for and install harness updates.' },
-  flags: { title: 'Feature flags', subtitle: 'Toggle experimental and environment-gated features.' },
-  health: { title: 'Health', subtitle: 'Migration drift and MCP server health.' },
   compaction: { title: 'Compaction', subtitle: 'Authoring strategy for context compaction.' },
   slashcmds: { title: 'Slash commands', subtitle: 'Author and manage user slash commands.' },
-  workflows: { title: 'Workflows', subtitle: 'Workflow extension and authoring settings.' },
   hooks: { title: 'Hooks', subtitle: 'Lifecycle hooks that fire on chat-pipeline events.' },
-  scheduledchats: { title: 'Scheduled chats', subtitle: 'Recurring chat runs on a schedule.' },
-  tasks: { title: 'Tasks', subtitle: 'Background tasks — bash commands run with run_in_background, and their live output.' },
   secrets: { title: 'Secrets', subtitle: 'Model-accessible secret references.' },
   'llm-routing': { title: 'LLM routing', subtitle: 'Model fallback and routing rules.' },
   // nav-settings-ia-cleanup WP04: renamed from 'Audit' to 'Audit Settings' to
   // distinguish from the separate 'Audit Log' viewer (reached via /audit).
   audit: { title: 'Audit Settings', subtitle: 'Audit-log retention settings.' },
-  // mission 01NLOGS01 WP05 — Runtime Logs section head.
-  logs: { title: 'Logs', subtitle: 'Runtime log ring-buffer — debug failed MCP recipes and harness subsystems in-app.' },
+  'mcp-servers': { title: 'MCP servers', subtitle: 'Health behaviour for local MCP servers.' },
   peers: { title: 'Peers', subtitle: 'Trusted ACP agent peers — register, inspect, and revoke.' },
   sync: { title: 'Sync', subtitle: 'Cross-device settings sync — keep provider profiles, model prefs, MCP recipes, installed MCPs, and UI theme in sync across all your devices.' },
   compliance: { title: 'Compliance', subtitle: 'Immutable fleet audit archival and local retention window (Team+ tier).' },
   'crash-reporting': { title: 'Crash Reporting', subtitle: 'Configure error and crash-report telemetry consent.' },
+  recommendations: { title: 'Recommendations', subtitle: 'Install, check and remove the local ML engine that powers branch, compact and model-switch suggestions.' },
+  // dogfood 2026-10-05: this key was missing, so the pane fell through to
+  // the "App preferences" default head while showing Branch Advisor content.
+  'branch-advisor': { title: 'Branch Advisor', subtitle: 'Inline branch suggestions in chat — a local heuristic with no model calls. The ML-engine-served branch_now advice chips are configured under Recommendations.' },
 };
 const DEFAULT_HEAD = {
   title: 'App preferences',
   subtitle:
     'Theme, route restoration, and data-dir info. Settings persist to a single JSON file under your user config dir.',
 };
+// fleet-session-truth-01DOGF0A FR-10: the Account head used to be a static
+// "Sign in to access fleet features…" rendered above a signed-IN panel body
+// (dogfood F5 — the panel "disagreed with itself"; the culprit was this
+// head). It now derives from the shared fleet session store.
+const fleetSessionStore = useFleetSession(client);
 const currentHead = computed<{ title: string; subtitle: string }>(() => {
   const v = route?.query?.tab;
   const key = typeof v === 'string' ? v : '';
-  return SECTION_HEADS[key] ?? DEFAULT_HEAD;
+  const head = SECTION_HEADS[key] ?? DEFAULT_HEAD;
+  if (key === 'account') {
+    return {
+      title: head.title,
+      subtitle: accountSectionSubtitle(fleetSessionStore.session.value) || head.subtitle,
+    };
+  }
+  return head;
 });
 
 const settings = ref<Settings>({
@@ -1102,11 +1094,17 @@ onMounted(() => {
 </script>
 
 <template>
-  <NotAvailableInServedMode
-    v-if="servedMode"
-    feature="Settings"
-        reason="Settings are read and written through desktop-only RPCs; the in-workbench build exposes no settings surface yet. Workbench-level configuration lives in Kenaz on the host."
-  />
+  <div v-if="servedMode">
+    <!-- Fleet telemetry consent (Fleet_Get/SetTelemetryConsent are served
+         RPCs) and Agent Profiles (Agents_* — contracts/agents-served-rpc.md)
+         are the settings served mode has. -->
+    <FleetTelemetryPanel />
+    <AgentsView />
+    <NotAvailableInServedMode
+      feature="Other settings"
+      reason="Apart from Fleet telemetry and Agent Profiles above, settings are read and written through desktop-only RPCs. Workbench-level configuration lives in Kenaz on the host."
+    />
+  </div>
   <SettingsShell
     v-else
     number="06"
@@ -1126,14 +1124,6 @@ onMounted(() => {
       <UpdatesPanel />
     </div>
 
-    <!-- v0.5.1 migration-doctor — Health sub-tab. -->
-    <div
-      v-else-if="showHealthTab"
-      data-testid="settings-health-pane"
-    >
-      <MigrationDriftPanel />
-    </div>
-
     <!-- compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring sub-tab. -->
     <div
       v-else-if="showCompactionTab"
@@ -1150,61 +1140,12 @@ onMounted(() => {
       <SlashCommandsView />
     </div>
 
-    <!-- user-slash-commands-01KQ8TD9 WP09 — Feature Flags sub-tab. -->
-    <div
-      v-else-if="showFlagsTab"
-      data-testid="settings-flags-pane"
-    >
-      <FeatureFlagsView />
-    </div>
-
     <!-- hooks-event-surface-expansion-01KZNP3A WP07d — Hooks sub-tab. -->
     <div
       v-else-if="showHooksTab"
       data-testid="settings-hooks-pane"
     >
       <HooksSettingsView />
-    </div>
-
-    <!-- workflow-extensions-01KW2D3Y WP02 — Workflows sub-tab. -->
-    <div
-      v-else-if="showWorkflowsTab"
-      data-testid="settings-workflows-pane"
-    >
-      <WorkflowsSettingsPanel />
-    </div>
-
-    <!-- scheduled-chat-runs-01KX5R8B WP05 — Scheduled Chats sub-tab. -->
-    <div
-      v-else-if="showScheduledChatsTab"
-      class="px-6 py-4"
-      data-testid="settings-scheduledchats-pane"
-    >
-      <ScheduledChatsPanel />
-    </div>
-
-    <!-- subagent-control-and-background-tasks-01PMZB11 UNIT-11 — Tasks
-         sub-tab. Toggles between the task list and a single task's live
-         output within the same pane (view-task / back), rather than a
-         separate route, so the Settings shell's numbered-section header
-         stays put. -->
-    <div
-      v-else-if="showTasksTab"
-      class="flex flex-col h-full"
-      data-testid="settings-tasks-pane"
-    >
-      <template v-if="viewingTaskId">
-        <button
-          type="button"
-          class="self-start m-4 mb-0 text-[11px] text-ink-muted hover:text-ink transition-colors underline"
-          data-testid="tasks-viewer-back-btn"
-          @click="viewingTaskId = null"
-        >
-          ← Back to tasks
-        </button>
-        <TaskOutputViewer :task-id="viewingTaskId" class="flex-1 min-h-0" />
-      </template>
-      <TasksPanel v-else @view-task="viewingTaskId = $event" />
     </div>
 
     <!-- model-secret-references-01KW7M5A WP10 — Model Secrets sub-tab. -->
@@ -1233,15 +1174,6 @@ onMounted(() => {
       <AuditSettingsPanel />
     </div>
 
-    <!-- mission 01NLOGS01 WP05 — Runtime Logs tab. -->
-    <div
-      v-else-if="showLogsTab"
-      class="flex flex-col h-full"
-      data-testid="settings-logs-pane"
-    >
-      <LogsPanel />
-    </div>
-
     <!-- fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab. -->
     <div
       v-else-if="showAccountTab"
@@ -1256,6 +1188,15 @@ onMounted(() => {
         </h2>
         <FleetTelemetryPanel />
       </section>
+      <!-- llm-call-telemetry-01LLMTEL01 WP02: the local model-call record's
+           stats pull + retention, and the default-off "Share model-call
+           telemetry with Fleet" opt-in, next to the Fleet sharing controls. -->
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
+          Model-call telemetry
+        </h2>
+        <ModelCallTelemetryPanel />
+      </section>
       <!-- fleet-integrity-observability WP08: unit-sync conflict + error surface. -->
       <section>
         <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
@@ -1263,6 +1204,15 @@ onMounted(() => {
         </h2>
         <UnitConflictsPanel />
       </section>
+    </div>
+
+    <!-- MCP Servers sub-tab — MCP auto-restart dial. -->
+    <div
+      v-else-if="showMCPServersTab"
+      class="max-w-3xl"
+      data-testid="settings-mcp-servers-pane"
+    >
+      <MCPHealthSettingsPanel />
     </div>
 
     <!-- acp-orchestration-integration-01NDFSEX06 WP05 — Peers sub-tab. -->
@@ -1280,6 +1230,16 @@ onMounted(() => {
       data-testid="settings-sync-pane"
     >
       <SyncPanel />
+      <!-- memory-sync-01MEMSY01 WP08: learned-memory sync opt-in (hidden
+           without the memory_sync capability). -->
+      <div class="px-6 py-4">
+        <MemorySyncPanel />
+      </div>
+      <!-- ml-producer-01MLPRD01 WP01: Cloud ML consent (hidden when signed
+           out or without the hosted_inference capability). -->
+      <div class="px-6 py-4">
+        <CloudMLPanel />
+      </div>
     </div>
 
     <!-- fleet-audit-archival-01NDFSEX13 WP06 — Compliance sub-tab. -->
@@ -1307,6 +1267,15 @@ onMounted(() => {
       data-testid="settings-branch-advisor-pane"
     >
       <BranchAdvisorSettings />
+    </div>
+
+    <!-- laya-advisors-01LAYA001 WP13 — Recommendations (local ML engine) sub-tab. -->
+    <div
+      v-else-if="showRecommendationsTab"
+      class="px-6 py-4 max-w-3xl"
+      data-testid="settings-recommendations-pane"
+    >
+      <RecommendationsPanel />
     </div>
 
     <div
@@ -1952,6 +1921,9 @@ onMounted(() => {
           </div>
         </div>
       </section>
+
+      <!-- risk-rated-autonomy-01PMRA01 owner ruling 1 (2026-09-15) — risk-rater model picker. -->
+      <RiskRaterModelPicker />
 
       <section data-testid="cost-notifications-section">
         <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">

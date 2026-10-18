@@ -202,16 +202,19 @@ func TestCaptureRateTracker_LastErrorAt_IsSet(t *testing.T) {
 	}
 }
 
-// TestStore_Add_RecordsGlobalCaptureTracker verifies that Store.Add triggers
-// GlobalCaptureTracker().RecordWrite, so ChunksPerMinute becomes non-zero
-// after real writes via the store (the "pill polls 5s" path in the frontend).
+// TestStore_Add_WiresGlobalCaptureTracker verifies that a production
+// store records into GlobalCaptureTracker() (the tracker the RPC
+// capture-rate surface reads) and that Store.Add records exactly one write
+// per net-new chunk.
 //
-// We use a process-isolated tracker via a fresh CaptureRateTracker rather
-// than the global singleton to avoid interference between parallel tests.
+// The write count is measured on a PRIVATE tracker swapped into the store:
+// the global one is a process-wide sliding 60s window shared with every
+// other test in the package, so a before/after delta on it went negative
+// at -count>1 as earlier writes aged out (unwired-ledger 2026-10-07).
+// The wiring claim is asserted by identity instead.
 func TestStore_Add_WiresGlobalCaptureTracker(t *testing.T) {
 	t.Parallel()
 
-	// Fresh store in a temp directory.
 	dir := t.TempDir()
 	store, err := NewChromemStore(filepath.Join(dir, "mem.gob"))
 	if err != nil {
@@ -219,10 +222,14 @@ func TestStore_Add_WiresGlobalCaptureTracker(t *testing.T) {
 	}
 	defer store.Close()
 
-	// Use the per-test approach: inspect the global tracker BEFORE and AFTER
-	// so we detect whether RecordWrite was called without disturbing other tests.
-	// We capture a before-snapshot, do writes, then verify the delta.
-	before := GlobalCaptureTracker().Snapshot(time.Now().UTC())
+	cs := store.(*chromemStore)
+	if cs.capture != GlobalCaptureTracker() {
+		t.Fatal("NewChromemStore must record into GlobalCaptureTracker()")
+	}
+	tracker := &CaptureRateTracker{}
+	cs.mu.Lock()
+	cs.capture = tracker
+	cs.mu.Unlock()
 
 	ctx := context.Background()
 	const writes = 5
@@ -232,13 +239,11 @@ func TestStore_Add_WiresGlobalCaptureTracker(t *testing.T) {
 			t.Fatalf("Add: %v", err)
 		}
 	}
+	// A duplicate of an existing chunk is not a net-new write.
+	_ = store.Add(ctx, makeTestChunk("cap-0", now))
 
-	after := GlobalCaptureTracker().Snapshot(now)
-	// The after.ChunksPerMinute should be ≥ before + writes (allowing for
-	// other parallel tests that might have also written).
-	if after.ChunksPerMinute < before.ChunksPerMinute+float64(writes) {
-		t.Errorf("ChunksPerMinute delta = %v, want ≥ %d (global tracker wired)",
-			after.ChunksPerMinute-before.ChunksPerMinute, writes)
+	if got := tracker.Snapshot(time.Now().UTC()).ChunksPerMinute; got != writes {
+		t.Errorf("ChunksPerMinute = %v, want exactly %d (one RecordWrite per net-new Add)", got, writes)
 	}
 }
 

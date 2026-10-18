@@ -139,11 +139,17 @@ func DiscoverAuthServer(ctx context.Context, client *http.Client, issuer string)
 		}
 	}
 	// Fallback: derive conventional endpoints. GitHub's OAuth lives at
-	// {issuer}/authorize and {issuer}/access_token.
+	// {issuer}/authorize and {issuer}/access_token, which is also the
+	// generic pre-RFC-8414 convention this function assumes for any
+	// issuer that reaches this point (both well-known lookups above
+	// failed). connector-lifecycle-truth-01PMZ303 UNIT-5 (MO-07): this
+	// used to guard the SAME assignment ({issuer}/access_token) behind a
+	// GitHub-specific condition — the initializer and the guarded
+	// assignment were character-identical, so the condition provably
+	// changed nothing for any issuer, GitHub or otherwise. Collapsed to
+	// the single unconditional assignment it always evaluated to; no
+	// behaviour changes for any caller.
 	tokenEndpoint := issuer + "/access_token"
-	if strings.HasSuffix(issuer, "/oauth") || strings.Contains(issuer, "github.com/login/oauth") {
-		tokenEndpoint = issuer + "/access_token"
-	}
 	return &AuthServerMetadata{
 		Issuer:                        issuer,
 		AuthorizationEndpoint:         issuer + "/authorize",

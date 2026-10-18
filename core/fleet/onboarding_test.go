@@ -174,7 +174,7 @@ func TestContextGraphSyncer_FirstPushHook(t *testing.T) {
 	entry := ContextNodeEntry{
 		ID:    "node-1",
 		Layer: "team",
-		Kind:  "entity",
+		Kind:  "guidance",
 		Title: "Test",
 		Body:  "body",
 	}

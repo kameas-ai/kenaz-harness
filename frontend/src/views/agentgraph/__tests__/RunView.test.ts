@@ -20,9 +20,17 @@ interface MountOpts {
   status?: GraphRunStatus;
   trace?: GraphRunTraceEvent[];
   resumeImpl?: (runId: string, ans: string) => Promise<void>;
+  resolveApprovalImpl?: (
+    runId: string,
+    nodeId: string,
+    approved: boolean,
+    reason: string,
+  ) => Promise<void>;
   /** Materialized projection the run graph renders from (WP05). */
   materializedYAML?: string;
   materializeError?: string;
+  /** getRunStatus rejects with this message. */
+  statusError?: string;
 }
 
 function defaultStatus(over: Partial<GraphRunStatus> = {}): GraphRunStatus {
@@ -44,9 +52,13 @@ function defaultStatus(over: Partial<GraphRunStatus> = {}): GraphRunStatus {
 function mountWith(opts: MountOpts = {}) {
   const status = opts.status ?? defaultStatus();
   const trace = opts.trace ?? [];
-  const getRunStatus = vi.fn(async () => status);
+  const getRunStatus = vi.fn(async () => {
+    if (opts.statusError) throw new Error(opts.statusError);
+    return status;
+  });
   const getRunTrace = vi.fn(async () => trace);
   const resume = vi.fn(opts.resumeImpl ?? (async () => undefined));
+  const resolveApproval = vi.fn(opts.resolveApprovalImpl ?? (async () => undefined));
   const cancelRun = vi.fn(async () => undefined);
   const materializeRun = vi.fn(async (runID: string) => {
     if (opts.materializeError) throw new Error(opts.materializeError);
@@ -83,6 +95,7 @@ function mountWith(opts: MountOpts = {}) {
       getRunStatus,
       getRunTrace,
       resume,
+      resolveApproval,
       cancelRun,
       materializeRun,
     },
@@ -98,7 +111,15 @@ function mountWith(opts: MountOpts = {}) {
       },
     },
   });
-  return { wrapper, getRunStatus, getRunTrace, resume, cancelRun, materializeRun };
+  return {
+    wrapper,
+    getRunStatus,
+    getRunTrace,
+    resume,
+    resolveApproval,
+    cancelRun,
+    materializeRun,
+  };
 }
 
 describe('RunView', () => {
@@ -145,6 +166,79 @@ describe('RunView', () => {
     await wrapper.get('[data-testid="run-ask-submit"]').trigger('click');
     await flushPromises();
     expect(resume).toHaveBeenCalledWith('run-1', 'Alice');
+  });
+
+  // approval-node-01PMZC12 UNIT-7 / AC-09: the pending-approval block
+  // renders the prompt + approver role, and each button calls
+  // Graph_ResolveApproval with the correct verdict. Two assertions, not
+  // one — a single test that only exercises Approve would pass with
+  // Reject wired to Approve.
+  it('renders the pending-approval block and resolves Approve with approved=true', async () => {
+    const { wrapper, resolveApproval } = mountWith({
+      status: defaultStatus({
+        state: 'paused',
+        pendingApproval: { nodeId: 'a', prompt: 'Deploy to prod?', approverRole: 'admin' },
+      }),
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="run-pending-approval"]').exists()).toBe(true);
+    expect(wrapper.html()).toContain('Deploy to prod?');
+    expect(wrapper.html()).toContain('admin');
+    // The ask-resume control must not also render for an approval pause.
+    expect(wrapper.find('[data-testid="run-pending-ask"]').exists()).toBe(false);
+
+    await wrapper.get('[data-testid="run-approval-reason"]').setValue('looks good');
+    await wrapper.get('[data-testid="run-approval-approve"]').trigger('click');
+    await flushPromises();
+    expect(resolveApproval).toHaveBeenCalledWith('run-1', 'a', true, 'looks good');
+  });
+
+  it('resolves Reject with approved=false', async () => {
+    const { wrapper, resolveApproval } = mountWith({
+      status: defaultStatus({
+        state: 'paused',
+        pendingApproval: { nodeId: 'a', prompt: 'Deploy to prod?' },
+      }),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="run-approval-reject"]').trigger('click');
+    await flushPromises();
+    expect(resolveApproval).toHaveBeenCalledWith('run-1', 'a', false, '');
+  });
+
+  it('renders the pending-ask block, not approval controls, for a pending ask', async () => {
+    const { wrapper } = mountWith({
+      status: defaultStatus({
+        state: 'paused',
+        pendingAsk: { nodeId: 'q', question: 'What is your name?' },
+      }),
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="run-pending-ask"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="run-pending-approval"]').exists()).toBe(false);
+  });
+
+  // approval-node-01PMZC12 E-002's "abandoned" fallback: a run a
+  // previous process paused and never resolved must render as
+  // abandoned — not as an unresolvable pending-approval/pending-ask
+  // block promising a resolution that can never land, and not silently
+  // as if nothing were pending at all.
+  it('renders the abandoned state instead of a resolvable pending decision', async () => {
+    const { wrapper } = mountWith({
+      status: defaultStatus({
+        state: 'abandoned',
+        error:
+          'abandoned: process restarted while this run was paused at node "a" (pending approval_pending); ' +
+          'durable run state is not implemented',
+      }),
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="run-abandoned"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="run-pending-approval"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="run-pending-ask"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="run-state"]').text()).toContain('Abandoned');
+    // Cancel is meaningless for a run nothing is executing anymore.
+    expect(wrapper.find('[data-testid="run-cancel"]').exists()).toBe(false);
   });
 
   // agentgraph-total-convergence-01PMGX01 WP12: the run's trace and the
@@ -304,9 +398,16 @@ describe('RunView — the run as a graph', () => {
   it('badges a degraded projection on the canvas itself', async () => {
     const { wrapper } = mountWith({ materializedYAML: MATERIALIZED_DEGRADED_YAML });
     await flushPromises();
-    expect(wrapper.get('[data-testid="canvas-notice"]').text()).toContain(
-      'Degraded projection',
-    );
+    const notice = wrapper.get('[data-testid="canvas-notice"]').text();
+    expect(notice).toContain('Degraded projection');
+    // feat/graph-resolved-spec WP02 (review F3): the reconstruction is
+    // labelled with both causes that are now true — the run predates
+    // spec recording, or its spec exceeded the size bound.
+    expect(notice).toContain("exact spec was never recorded");
+    expect(notice).toContain('predates recording');
+    expect(notice).toContain('exceeded the size bound');
+    expect(notice).toContain('current library graph');
+    expect(notice).not.toContain('evicted');
   });
 
   it('does not badge a healthy projection', async () => {
@@ -332,7 +433,8 @@ describe('RunView — the run as a graph', () => {
   });
 
   /*
-   * A run whose resolved spec was evicted cannot be projected at all.
+   * A run with no recorded spec and no library graph to reconstruct
+   * from cannot be projected at all.
    * That must not take the trace list down with it — the trace is the
    * surface that still works, and it is the one this view existed for
    * before the graph pane arrived.
@@ -350,5 +452,36 @@ describe('RunView — the run as a graph', () => {
     expect(wrapper.find('[data-testid="trace-event-1"]').exists()).toBe(true);
     // The projection failing is not a run failure; the status card stays clean.
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+  });
+
+  // agentgraph-settings-linkage-01DOGF0D review H1: neither a not-found
+  // run nor a terminal one may keep a 500 ms poll alive.
+  it('stops polling a run that does not exist', async () => {
+    vi.useFakeTimers();
+    try {
+      const { wrapper, getRunStatus } = mountWith({
+        statusError: 'agentgraph: run "run-1" not found',
+      });
+      await flushPromises();
+      const calls = getRunStatus.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(getRunStatus.mock.calls.length).toBe(calls);
+      expect(wrapper.text()).toContain('not found');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops polling an abandoned run', async () => {
+    vi.useFakeTimers();
+    try {
+      const { getRunStatus } = mountWith({ status: defaultStatus({ state: 'abandoned' }) });
+      await flushPromises();
+      const calls = getRunStatus.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(getRunStatus.mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

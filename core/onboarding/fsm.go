@@ -87,6 +87,22 @@ type LLMTester interface {
 	TestProvider(ctx context.Context, kind ProviderKind, apiKey string) error
 }
 
+// ProviderStorer persists an API key that has already passed LLMTester's
+// connection test, so it is actually usable for chat once onboarding
+// completes (finding #107). In production it is satisfied by a thin
+// wrapper over the live llm view's AddProvider path (core/rpc/onboarding_
+// wiring.go); in tests it is satisfied by a mock or left nil.
+//
+// StoreProvider is called exactly once, from stepEnterAPIKey's success
+// arm, with the same (kind, apiKey) pair LLMTester.TestProvider just
+// verified. A nil ProviderStorer makes the call a no-op — the tested key
+// is discarded, matching the pre-fix behaviour for any caller that does
+// not care about persistence (e.g. a guided demo with no real provider
+// store). Production always wires a real one.
+type ProviderStorer interface {
+	StoreProvider(ctx context.Context, kind ProviderKind, apiKey string) error
+}
+
 // AccountSigner drives the optional owned-login sign-in flow (WP03).
 // In production it is satisfied by a thin wrapper over the fleet auth
 // surface in core/rpc/views/settings (already allowlisted for fleet
@@ -165,6 +181,9 @@ type FSM struct {
 	// nil means fleet is absent — EventSignIn is unavailable; EventSkipAccount
 	// still succeeds so the OSS-standalone path is always reachable.
 	signer AccountSigner
+	// storer persists a successfully-tested API key (finding #107).
+	// nil discards the key after test (see ProviderStorer's doc comment).
+	storer ProviderStorer
 }
 
 // New constructs an FSM. tester may be nil, in which case the
@@ -185,8 +204,13 @@ func NewWithTransitioner(tester LLMTester, transitioner SessionKindTransitioner)
 // extended onboarding flow (harness-onboarding-01NHON01). Any argument may
 // be nil; nil dependencies cause the corresponding step to degrade gracefully
 // rather than hard-failing.
-func NewFull(tester LLMTester, transitioner SessionKindTransitioner, signer AccountSigner) *FSM {
-	return &FSM{tester: tester, transitioner: transitioner, signer: signer}
+//
+// storer is the ProviderStorer that persists a key once TestProvider
+// confirms it works (finding #107). A nil storer discards the key after
+// test, same as a nil tester always passes the test — production wires a
+// real implementation of both.
+func NewFull(tester LLMTester, transitioner SessionKindTransitioner, signer AccountSigner, storer ProviderStorer) *FSM {
+	return &FSM{tester: tester, transitioner: transitioner, signer: signer, storer: storer}
 }
 
 // InitialCard returns the card for the initial state without consuming an event.
@@ -309,11 +333,39 @@ func (f *FSM) stepEnterAPIKey(
 		}
 
 		if testErr == nil {
-			// Success — clear the key (it will be stored by the caller) and
-			// advance to the account step so the user can optionally sign in
-			// to Fleet before the guided action concludes onboarding (WP03).
+			// Success — persist the key via the configured ProviderStorer
+			// (finding #107: this call did not exist before the fix, so a
+			// tested key was silently discarded here — "clear the key (it
+			// will be stored by the caller)" described a contract nobody
+			// honoured, because no caller was ever wired). A nil storer
+			// discards the key, same as a nil tester always passes the
+			// test — that degraded path is intentional for callers that
+			// don't care about persistence (guided demos, tests); production
+			// always wires a real ProviderStorer.
+			if f.storer != nil {
+				if storeErr := f.storer.StoreProvider(testCtx, fsmCtx.ChosenKind, key); storeErr != nil {
+					// Treat a storage failure the same as a test failure: the
+					// provider is not actually usable end-to-end, so the user
+					// must be told and given the chance to retry rather than
+					// being congratulated on a connection that doesn't work.
+					if fsmCtx.RetriesLeft > 0 {
+						fsmCtx.RetriesLeft--
+					}
+					fsmCtx.LastError = fmt.Sprintf("could not save provider: %v", storeErr)
+					return StepResult{
+						State: StateEnterAPIKey,
+						Card:  renderEnterAPIKey(fsmCtx.ChosenKind, fsmCtx.LastError),
+					}, nil
+				}
+			}
+			// Clear the key now that it is durably stored (or, with a nil
+			// storer, intentionally discarded) — it must not linger in
+			// fsmCtx once the caller no longer needs it.
+			fsmCtx.APIKey = ""
 			fsmCtx.LastError = ""
 			fsmCtx.RetriesLeft = MaxRetries
+			// Advance to the account step so the user can optionally sign in
+			// to Fleet before the guided action concludes onboarding (WP03).
 			return StepResult{
 				State: StateAccountStep,
 				Card:  renderAccountStep(),

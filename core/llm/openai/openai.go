@@ -325,6 +325,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 
 	s := &chatStream{
 		resp:   resp,
+		meta:   llm.CallMeta{RequestID: openaiwire.RequestIDFromHeader(resp.Header)},
 		cancel: cancel,
 		events: make(chan llm.StreamEvent, 16),
 		done:   make(chan struct{}),
@@ -589,6 +590,10 @@ type chatStream struct {
 	usage      llm.Usage
 	finishStop string
 
+	// meta is the provider-returned call metadata for the gen_ai.chat
+	// span (llm-call-telemetry-01LLMTEL01 WP01).
+	meta llm.CallMeta
+
 	// tool_calls accumulator. OpenAI streams tool calls as a sequence
 	// of deltas keyed by index; we reassemble the JSON-encoded
 	// arguments and emit one StreamTool event when the call is
@@ -669,6 +674,7 @@ func (s *chatStream) pump() {
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
 			}
+			s.final.Meta = openaiwire.MetaPtr(s.meta)
 		}
 		s.mu.Unlock()
 		close(s.done)
@@ -736,6 +742,7 @@ func (s *chatStream) handleFrame(raw []byte) {
 		return
 	}
 	var env struct {
+		openaiwire.FrameMeta
 		Choices []struct {
 			Index int `json:"index"`
 			Delta struct {
@@ -757,12 +764,20 @@ func (s *chatStream) handleFrame(raw []byte) {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 			TotalTokens      int `json:"total_tokens"`
+
+			PromptTokensDetails *openaiwire.PromptTokensDetails `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(trimmed, &env); err != nil {
 		s.events <- llm.StreamEvent{Kind: llm.StreamError, Err: "openai: malformed SSE frame: " + err.Error()}
 		return
 	}
+	s.mu.Lock()
+	env.FrameMeta.ApplyTo(&s.meta)
+	if env.Usage != nil && env.Usage.PromptTokensDetails != nil {
+		s.meta.CacheReadTokens = env.Usage.PromptTokensDetails.CachedTokens
+	}
+	s.mu.Unlock()
 
 	for _, ch := range env.Choices {
 		if ch.Delta.Content != "" {

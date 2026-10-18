@@ -38,7 +38,11 @@ function blankHook(): Hook {
   return {
     id: `hk-${Math.random().toString(36).slice(2, 8)}`,
     name: 'New hook',
-    event: 'pre_send',
+    // FIRING_HOOK_EVENTS[0] as of ledger #46 — was 'pre_send' until that
+    // fix found pre_send's only call site was dead code (see hooks.ts's
+    // FIRING_HOOK_EVENTS doc comment) and post_send took its place as the
+    // one real chat-pipeline event with a live fire site.
+    event: 'post_send',
     kind: 'shell',
     enabled: true,
     match: {},

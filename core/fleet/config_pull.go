@@ -25,6 +25,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -36,6 +37,12 @@ import (
 
 // configPollInterval is the normal interval between config bundle fetches.
 const configPollInterval = 5 * time.Minute
+
+// maxConfigBundleBytes caps the config bundle body the poller will read
+// (4 MiB). A real bundle is a few KiB; the cap keeps a misbehaving or hostile
+// endpoint from making the harness buffer an unbounded body before the
+// signature check can reject it. Over the cap → ErrConfigBundleTooLarge.
+const maxConfigBundleBytes int64 = 4 << 20
 
 // configBackoffSteps mirrors capability_poller.go: 5, 15, 60 minutes.
 var configBackoffSteps = []time.Duration{5 * time.Minute, 15 * time.Minute, 60 * time.Minute}
@@ -49,6 +56,13 @@ type ConfigApplier interface {
 	ApplyBundle(ctx context.Context, b *Bundle) []error
 }
 
+// ConfigItemApplier is the optional extension a ConfigApplier implements to
+// report per-mandated-item statuses for the ACK (WP02). When the applier
+// implements it the poller calls ApplyBundleItems INSTEAD of ApplyBundle.
+type ConfigItemApplier interface {
+	ApplyBundleItems(ctx context.Context, b *Bundle) ([]error, []MandatedItemStatus)
+}
+
 // ConfigPollStatus is the wire shape returned to the frontend via the
 // ConfigPullStatus RPC. It is a snapshot of the poller's last state.
 type ConfigPollStatus struct {
@@ -60,11 +74,22 @@ type ConfigPollStatus struct {
 	// LastError is the most recent error string, or empty when the last fetch/apply
 	// succeeded.
 	LastError string `json:"lastError"`
-	// Source is "fleet", "cache", or "default-deny".
+	// Source is "fleet", "cache", or "default-deny". "cache" means a bundle
+	// restored from disk at startup that the server has not yet confirmed
+	// (no 200 or 304 since launch); the first successful revalidation
+	// flips it to "fleet".
 	Source string `json:"source"`
 	// BundleChecksum is the last-seen bundle checksum (SHA-256, hex), used for
 	// 304 Not-Modified gating on the next poll.
 	BundleChecksum string `json:"bundleChecksum"`
+	// SigningKeyUnknown is true when the most recent bundle was rejected with
+	// ErrSigningKeyUnknown: its signed key_id names no key pinned in this
+	// build (the install's pins predate fleet's current signing key). Settings
+	// FleetHealth projects it as ConfigSource "unknown-key", parallel to
+	// "no-key" for ErrSigningKeyNotConfigured. Cleared by the next poll that
+	// judges a served bundle differently (a verified bundle, a 304, or a
+	// different hard rejection); transient fetch errors preserve it.
+	SigningKeyUnknown bool `json:"signingKeyUnknown"`
 }
 
 // ConfigPoller polls the fleet config endpoint, verifies bundles, and drives
@@ -82,6 +107,30 @@ type ConfigPoller struct {
 	lastError     string
 	checksum      string // SHA-256 hex of last-seen bundle JSON (for 304)
 	source        string
+	keyUnknown    bool // last rejection was ErrSigningKeyUnknown
+	// orgPaused: the last fetch was refused 403 org_paused (kenaz-fleet
+	// #206) — transient; the last applied bundle stays in force, and
+	// ResumeAfterOrgUnpause clears the "org_paused" lastError it set. The
+	// session snapshot's paused flag is what surfaces it.
+	orgPaused bool
+	// wake asks the loop for an immediate round with a reset backoff
+	// (buffered 1; the OnOrgUnpaused fan-out never blocks).
+	wake chan struct{}
+
+	// buildVersion is this binary's version (SetBuildVersion). With
+	// reapplyID it implements review F1's re-apply rule: when the build
+	// changed since the last applied bundle, or that bundle had REFUSED
+	// mandated items (a kind this build could not install), the stored
+	// checksum is cleared and the SAME bundle id may be applied once more,
+	// so an upgraded build installs a previously refused pack without
+	// waiting for a new bundle. reapplyID is that bundle id (0 = none).
+	buildVersion string
+	reapplyID    int64
+
+	// afterPoll runs after every poll round, whatever its outcome (the
+	// catalog revocation sweep piggybacks this cadence — no timer of its
+	// own; skill-library-01SKLIB01 WP03). Never affects the poll's backoff.
+	afterPoll func(context.Context)
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -122,16 +171,57 @@ func NewConfigPoller(client *Client, dataDir string, applier ConfigApplier) *Con
 		dataDir:  dataDir,
 		interval: configPollInterval,
 		backoff:  &configBackoffState{},
+		wake:     make(chan struct{}, 1),
 		applier:  applier,
 		source:   "default-deny",
-		done:     make(chan struct{}),
 	}
 	return p
+}
+
+// SetBuildVersion records this binary's version for the re-apply rule (see
+// ConfigPoller.buildVersion). Call before Start.
+func (p *ConfigPoller) SetBuildVersion(v string) {
+	p.mu.Lock()
+	p.buildVersion = v
+	p.mu.Unlock()
+}
+
+// SetAfterPoll registers fn to run after every poll round (success, 304 or
+// failure), on the poller goroutine. Call before Start. A panic in fn is
+// recovered and logged; it never stops polling.
+func (p *ConfigPoller) SetAfterPoll(fn func(context.Context)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.afterPoll = fn
+}
+
+// round is one poll plus the after-poll hook.
+func (p *ConfigPoller) round(ctx context.Context) error {
+	err := p.poll(ctx)
+	p.mu.RLock()
+	fn := p.afterPoll
+	p.mu.RUnlock()
+	if fn != nil && ctx.Err() == nil {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logging.L().Error("fleet.config_poller.after_poll_panic", "panic", fmt.Sprintf("%v", r))
+				}
+			}()
+			fn(ctx)
+		}()
+	}
+	return err
 }
 
 // Start launches the background polling goroutine. Loads the cached bundle
 // state (lastAppliedID + checksum) before the first fetch.
 func (p *ConfigPoller) Start(ctx context.Context) {
+	// Allocated here rather than in the constructor for the same reason as
+	// CapabilityPoller.Start: it is what lets Stop distinguish
+	// never-started from running instead of blocking forever.
+	p.done = make(chan struct{})
+
 	// Restore state from disk cache.
 	if id, cs, err := loadBundleState(p.dataDir); err == nil {
 		p.mu.Lock()
@@ -139,6 +229,12 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 		p.checksum = cs
 		if id > 0 {
 			p.source = "cache"
+			meta := loadBundleApplyMeta(p.dataDir)
+			if meta.BuildVersion != p.buildVersion || meta.HadRefusals {
+				// F1: re-fetch (no 304) and allow bundle id to apply once more.
+				p.checksum = ""
+				p.reapplyID = id
+			}
 		}
 		p.mu.Unlock()
 	}
@@ -164,13 +260,15 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 		}()
 
 		// Immediate first poll.
-		if err := p.poll(innerCtx); err != nil {
+		if err := p.round(innerCtx); err != nil {
 			if innerCtx.Err() != nil {
 				return
 			}
 			wait := p.backoff.next()
 			select {
 			case <-time.After(wait):
+			case <-p.wake:
+				p.backoff.reset()
 			case <-innerCtx.Done():
 				return
 			}
@@ -184,8 +282,19 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 			select {
 			case <-innerCtx.Done():
 				return
+			case <-p.wake:
+				// The org pause lifted: the backoff it built up is moot.
+				p.backoff.reset()
+				if err := p.round(innerCtx); err != nil {
+					if innerCtx.Err() != nil {
+						return
+					}
+					ticker.Reset(p.backoff.next())
+				} else {
+					ticker.Reset(p.interval)
+				}
 			case <-ticker.C:
-				if err := p.poll(innerCtx); err != nil {
+				if err := p.round(innerCtx); err != nil {
 					if innerCtx.Err() != nil {
 						return
 					}
@@ -208,7 +317,15 @@ func (p *ConfigPoller) Stop() {
 	if cancel != nil {
 		cancel()
 	}
-	<-p.done
+	// Same latent deadlock CapabilityPoller.Stop carried: done was allocated
+	// in the constructor, so a never-started poller blocked here forever.
+	// Unreachable today only because SetFleetClient's testing.Testing() guard
+	// wraps the whole ConfigPoller block and leaves the field nil, so Stop is
+	// never called on an unstarted one. Fixed rather than left to the next
+	// person who guards it the other way.
+	if p.done != nil {
+		<-p.done
+	}
 }
 
 // Status returns a snapshot of the poller's current state.
@@ -216,10 +333,11 @@ func (p *ConfigPoller) Status() ConfigPollStatus {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	s := ConfigPollStatus{
-		LastAppliedID:  p.lastAppliedID,
-		LastError:      p.lastError,
-		Source:         p.source,
-		BundleChecksum: p.checksum,
+		LastAppliedID:     p.lastAppliedID,
+		LastError:         p.lastError,
+		Source:            p.source,
+		BundleChecksum:    p.checksum,
+		SigningKeyUnknown: p.keyUnknown,
 	}
 	if !p.lastAppliedAt.IsZero() {
 		s.LastAppliedAt = p.lastAppliedAt.UTC().Format(time.RFC3339)
@@ -240,7 +358,7 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	cs := p.checksum
 	p.mu.RUnlock()
 
-	urlPath := fmt.Sprintf("/api/v1/configs?machine=%s&checksum=%s", nodeID, cs)
+	urlPath := fmt.Sprintf("/api/v1/configs?machine=%s&checksum=%s", url.QueryEscape(nodeID), url.QueryEscape(cs))
 
 	// We need to inspect the status code before letting the fleet http.Client
 	// discard non-2xx bodies, so we call Get directly.
@@ -250,17 +368,41 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 			// Not signed in — skip silently; don't backoff.
 			return nil
 		}
+		if IsOrgPaused(err) {
+			// A staff pause hold: transient (normal backoff); the last
+			// applied bundle stays in force; keyUnknown is untouched (no
+			// bundle body was judged).
+			p.mu.Lock()
+			p.lastError = ReasonOrgPaused
+			p.orgPaused = true
+			p.mu.Unlock()
+			return err
+		}
 		p.setError(fmt.Sprintf("fetch config: %v", err))
 		return err
 	}
+	// Drain-then-close keeps the connection reusable — except after an
+	// over-cap body, where draining would mean reading an unbounded hostile
+	// stream to the end; there we close without draining.
+	drain := true
 	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		if drain {
+			_, _ = io.Copy(io.Discard, resp.Body)
+		}
 		_ = resp.Body.Close()
 	}()
 
 	if resp.StatusCode == http.StatusNotModified {
-		// 304 → our current bundle is still current.
+		// 304 → our current bundle is still current. The server just
+		// confirmed it, so a bundle restored from disk at Start ("cache")
+		// is now the live fleet config. With nothing applied there is no
+		// bundle to confirm, so default-deny stays default-deny.
 		p.clearError()
+		p.mu.Lock()
+		if p.lastAppliedID > 0 {
+			p.source = "fleet"
+		}
+		p.mu.Unlock()
 		return nil
 	}
 
@@ -270,17 +412,25 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return e
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Bounded read: one byte past the cap distinguishes "exactly at the
+	// limit" from "over it" without buffering an unbounded body.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigBundleBytes+1))
 	if err != nil {
 		e := fmt.Errorf("fleet: read config body: %w", err)
 		p.setError(e.Error())
+		return e
+	}
+	if int64(len(body)) > maxConfigBundleBytes {
+		drain = false
+		e := fmt.Errorf("%w: body exceeds %d bytes — rejected unparsed, nothing applied", ErrConfigBundleTooLarge, maxConfigBundleBytes)
+		p.setRejection(e.Error())
 		return e
 	}
 
 	var b Bundle
 	if err := json.Unmarshal(body, &b); err != nil {
 		e := fmt.Errorf("fleet: parse config bundle: %w", err)
-		p.setError(e.Error())
+		p.setRejection(e.Error())
 		return e
 	}
 
@@ -288,17 +438,35 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	keys := FleetSigningKeys()
 	p.mu.RLock()
 	lastID := p.lastAppliedID
+	if p.reapplyID > 0 && p.reapplyID == lastID {
+		// F1 re-apply: the already-applied bundle may verify once more
+		// (a replay of a bundle this device already accepted is harmless).
+		lastID = p.reapplyID - 1
+	}
 	p.mu.RUnlock()
 
 	if err := VerifyWithKeySet(&b, keys, lastID); err != nil {
 		// Hard-reject: do NOT apply; do NOT advance bundle_id; DO set error.
-		p.setError(fmt.Sprintf("bundle verification failed (hard-reject): %v", err))
+		// Error text and the unknown-key flag are set under ONE lock so a
+		// concurrent Status() never sees one without the other.
+		p.mu.Lock()
+		p.lastError = fmt.Sprintf("bundle verification failed (hard-reject): %v", err)
+		p.keyUnknown = errors.Is(err, ErrSigningKeyUnknown)
+		p.mu.Unlock()
 		return err // also triggers backoff
 	}
 
 	// Apply the bundle through the registered applier.
 	// FR-012: applier returns ALL per-section errors so the ACK can carry them.
-	applyErrs := p.applier.ApplyBundle(ctx, &b)
+	var (
+		applyErrs []error
+		itemStats []MandatedItemStatus
+	)
+	if ia, ok := p.applier.(ConfigItemApplier); ok {
+		applyErrs, itemStats = ia.ApplyBundleItems(ctx, &b)
+	} else {
+		applyErrs = p.applier.ApplyBundle(ctx, &b)
+	}
 
 	// Compute new checksum of the raw body (for 304 on next poll).
 	newChecksum := hexChecksumOf(body)
@@ -308,11 +476,25 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	// re-attempted on the next poll. The checksum is also NOT advanced so
 	// the next GET returns the same bundle (no 304 short-circuit).
 	p.mu.Lock()
+	p.keyUnknown = false // the bundle verified under a pinned key
+	hadRefusals := false
+	for _, st := range itemStats {
+		if st.Status == MandatedStatusRefused {
+			hadRefusals = true
+		}
+	}
+	// tool_exposure entries this build refused (WP07) re-apply the same way.
+	if len(ToolExposureRefusals(&b)) > 0 {
+		hadRefusals = true
+	}
+	buildVersion := p.buildVersion
 	if len(applyErrs) == 0 {
 		p.lastAppliedID = b.BundleID
 		p.lastAppliedAt = time.Now()
 		p.checksum = newChecksum
 		p.lastError = ""
+		p.orgPaused = false
+		p.reapplyID = 0
 	} else {
 		// Surface the error set but leave ID + checksum untouched.
 		msgs := make([]string, 0, len(applyErrs))
@@ -331,6 +513,9 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		if saveErr := saveBundleState(p.dataDir, b.BundleID, newChecksum); saveErr != nil {
 			log.Printf("fleet: save bundle state: %v", saveErr)
 		}
+		if saveErr := saveBundleApplyMeta(p.dataDir, bundleApplyMeta{BuildVersion: buildVersion, HadRefusals: hadRefusals}); saveErr != nil {
+			log.Printf("fleet: save bundle apply meta: %v", saveErr)
+		}
 	}
 
 	// ACK back to fleet (best-effort; errors are logged, not propagated).
@@ -338,7 +523,8 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	// the caller's context is cancelled around the same time (e.g. Stop()).
 	ackCtx, ackCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer ackCancel()
-	if ackErr := PostConfigACK(ackCtx, p.client, b.BundleID, applyErrs); ackErr != nil {
+	machineID, _ := NodeID(p.dataDir) // the same id the pull's ?machine= sends
+	if ackErr := PostConfigACK(ackCtx, p.client, b.BundleID, applyErrs, ConfigACKReport{MachineID: machineID, Items: itemStats}); ackErr != nil {
 		log.Printf("fleet: config ack: %v", ackErr)
 	}
 
@@ -348,15 +534,54 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	return nil
 }
 
+// setError records a TRANSIENT failure (fetch, non-200 status, body read).
+// It deliberately leaves keyUnknown alone: a network blip says nothing about
+// which key the served bundle is signed with, so an "unknown-key" state must
+// not flap off and back on across retries. keyUnknown changes only when a
+// bundle body is actually judged — setRejection, the verification path, a
+// verified bundle, or a 304 (clearError).
 func (p *ConfigPoller) setError(msg string) {
 	p.mu.Lock()
 	p.lastError = msg
+	p.orgPaused = false
+	p.mu.Unlock()
+}
+
+// ResumeAfterOrgUnpause is the OnOrgUnpaused hook: clears the org_paused
+// status and asks the loop for an immediate round with a reset backoff.
+func (p *ConfigPoller) ResumeAfterOrgUnpause() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	was := p.orgPaused
+	p.orgPaused = false
+	if was && p.lastError == ReasonOrgPaused {
+		p.lastError = ""
+	}
+	p.mu.Unlock()
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
+// setRejection records a hard rejection of a served bundle body for a reason
+// OTHER than an unknown signing key (oversized, unparseable): the served
+// bundle is no longer the unknown-key one, so the flag clears.
+func (p *ConfigPoller) setRejection(msg string) {
+	p.mu.Lock()
+	p.lastError = msg
+	p.orgPaused = false
+	p.keyUnknown = false
 	p.mu.Unlock()
 }
 
 func (p *ConfigPoller) clearError() {
 	p.mu.Lock()
 	p.lastError = ""
+	p.orgPaused = false
+	p.keyUnknown = false
 	p.mu.Unlock()
 }
 
@@ -393,6 +618,44 @@ func loadBundleState(dataDir string) (int64, string, error) {
 		}
 	}
 	return id, cs, nil
+}
+
+// bundleApplyMeta records, for the last fully applied bundle, the build
+// that applied it and whether it carried refused mandated items (F1).
+type bundleApplyMeta struct {
+	BuildVersion string `json:"build_version"`
+	HadRefusals  bool   `json:"had_refusals"`
+}
+
+func bundleApplyMetaPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "bundle_apply_meta.json")
+}
+
+// loadBundleApplyMeta returns the zero meta when absent/unreadable — which
+// reads as "applied by a different (older) build", triggering one re-apply.
+func loadBundleApplyMeta(dataDir string) bundleApplyMeta {
+	var m bundleApplyMeta
+	if dataDir == "" {
+		return m
+	}
+	if raw, err := os.ReadFile(bundleApplyMetaPath(dataDir)); err == nil {
+		_ = json.Unmarshal(raw, &m)
+	}
+	return m
+}
+
+func saveBundleApplyMeta(dataDir string, m bundleApplyMeta) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(bundleApplyMetaPath(dataDir), string(raw)+"\n")
 }
 
 // saveBundleState atomically persists (lastAppliedID, checksum) to disk.

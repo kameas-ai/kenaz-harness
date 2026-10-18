@@ -238,7 +238,17 @@ func (d *Dispatch) Run(
 		// session id) avoids widening an interface every other
 		// implementer and every test fake would need to grow a
 		// parameter for.
-		dispatchCtx := toolloop.WithSessionID(ctx, sc.SessionID)
+		//
+		// WithSessionIDChecked, not WithSessionID (model-harness-toolset-
+		// 01MHTS001 WP02 security review, H1): sc.SessionID is data, and
+		// when ctx already carries the real session (a model-invoked
+		// skill), a different id must not replace it — that override let
+		// a forged id escape the session's permission resolution.
+		dispatchCtx, sidErr := toolloop.WithSessionIDChecked(ctx, sc.SessionID)
+		if sidErr != nil {
+			err := fmt.Errorf("slash tool dispatch refused: %w", sidErr)
+			return RunResult{Kind: ResultKindError, Text: err.Error()}, err
+		}
 		output, dispErr := d.tools.DispatchTool(dispatchCtx, cmd.Tool, splitArgs)
 		if dispErr != nil {
 			return RunResult{

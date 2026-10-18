@@ -152,7 +152,7 @@ func TestChatRunner_PartialPersist_TextOnly_Recoverable(t *testing.T) {
 	runner, broker, _ := buildResumeRunner(t, llm, persister, []coreag.Message{
 		{Role: "user", Content: "say hi"},
 	})
-	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "say hi")
+	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("say hi"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestChatRunner_PartialPersist_ToolUse_NotRecoverable(t *testing.T) {
 	runner, broker, _ := buildResumeRunner(t, llm, persister, []coreag.Message{
 		{Role: "user", Content: "do it"},
 	})
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-2", "", "do it"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-2", "", testTurn("do it")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -238,7 +238,7 @@ func TestChatRunner_PartialPersist_NoTextSeen_Skipped(t *testing.T) {
 	runner, broker, _ := buildResumeRunner(t, llm, persister, []coreag.Message{
 		{Role: "user", Content: "ping"},
 	})
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-3", "", "ping"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-3", "", testTurn("ping")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -264,7 +264,7 @@ func TestChatRunner_PartialPersist_NotInvokedOnCleanCompletion(t *testing.T) {
 	runner, broker, _ := buildResumeRunner(t, llm, persister, []coreag.Message{
 		{Role: "user", Content: "ping"},
 	})
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-4", "", "ping"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-4", "", testTurn("ping")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	// Wait for the run to wind down.

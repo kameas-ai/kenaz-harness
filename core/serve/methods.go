@@ -35,6 +35,10 @@ var (
 	// servedMethods are the method names POST /rpc dispatches.
 	servedMethods = []string{
 		"AppInfo",
+		"Agents_DeleteProfile",
+		"Agents_ListProfiles",
+		"Agents_LoadProfile",
+		"Agents_SaveProfile",
 		"Auth_State",
 		"Config_GetFlags",
 		"Connectors_List",
@@ -44,8 +48,19 @@ var (
 		"Confirm_Resolve",
 		"Confirm_ResolveAlways",
 		"Connectors_Status",
+		"Documents_BuildSite",
+		"Documents_Create",
+		"Documents_ExportsDir",
+		"Documents_Get",
+		"Documents_List",
+		"Documents_Preview",
+		"Documents_Update",
 		"Elicit_ListPending",
 		"Elicit_SubmitAnswer",
+		"Fleet_GetTelemetryConsent",
+		"Fleet_SetTelemetryConsent",
+		"Fleet_TelemetryStatus",
+		"LLM_ListCredentialKeys",
 		"LLM_ListProviders",
 		"LLM_StartStream",
 		"LLM_StopStream",
@@ -72,6 +87,7 @@ var (
 		"Sessions_SendMessageWithBlocks",
 		"Sessions_SetSystemPrompt",
 		"Sessions_SuggestTitle",
+		"Settings_FleetSession",
 		"ShellStatus",
 	}
 

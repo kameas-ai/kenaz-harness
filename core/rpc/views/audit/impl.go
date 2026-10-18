@@ -238,6 +238,10 @@ type auditPersistedPayload struct {
 	Category string `json:"category"`
 	Subject  string `json:"subject"`
 	Trailing string `json:"trailing,omitempty"`
+	// ToolConfirmDecision round-trips Entry.ToolConfirmDecision (WP10) —
+	// still nothing beyond what Entry itself already carries; see that
+	// field's own doc comment for why this one kind is widened.
+	ToolConfirmDecision *ToolConfirmDecisionDetail `json:"tool_confirm_decision,omitempty"`
 }
 
 // rowFromEntry converts an Entry into a log.Row shaped for
@@ -255,9 +259,10 @@ func rowFromEntry(entry Entry) eventlog.Row {
 		ts = time.Now().UTC()
 	}
 	payload, _ := json.Marshal(auditPersistedPayload{
-		Category: entry.Category,
-		Subject:  entry.Subject,
-		Trailing: entry.Trailing,
+		Category:            entry.Category,
+		Subject:             entry.Subject,
+		Trailing:            entry.Trailing,
+		ToolConfirmDecision: entry.ToolConfirmDecision,
 	})
 	return eventlog.Row{
 		EventID:   entry.ID,
@@ -289,11 +294,12 @@ func entryFromRow(row eventlog.Row) Entry {
 		category = categoryForKind(event.Kind(row.Kind))
 	}
 	return Entry{
-		ID:        row.EventID,
-		Timestamp: row.EmittedAt.UTC().Format(time.RFC3339Nano),
-		Category:  category,
-		Subject:   subject,
-		Trailing:  decoded.Trailing,
+		ID:                  row.EventID,
+		Timestamp:           row.EmittedAt.UTC().Format(time.RFC3339Nano),
+		Category:            category,
+		Subject:             subject,
+		Trailing:            decoded.Trailing,
+		ToolConfirmDecision: decoded.ToolConfirmDecision,
 	}
 }
 
@@ -326,7 +332,7 @@ func EntryFromEvent(ev event.Event) Entry {
 func categoryForKind(k event.Kind) string {
 	s := string(k)
 	switch {
-	case strings.HasPrefix(s, "llm."):
+	case strings.HasPrefix(s, "llm."), strings.HasPrefix(s, "tools."):
 		return "LLM"
 	case strings.HasPrefix(s, "mcp."):
 		return "MCP"
@@ -356,14 +362,62 @@ func categoryForKind(k event.Kind) string {
 	return "STORAGE"
 }
 
+// withinBounds reports whether an Entry timestamp (RFC3339Nano) falls in
+// [since, until]. Both ends are inclusive, matching SQLBackend's
+// `emitted_at >= ? AND emitted_at <= ?` and MemoryBackend's Before/After
+// checks; a zero bound means no bound. An unparseable timestamp passes:
+// on the store path the bounds were already applied in SQL, and
+// rowFromEntry never persists an unparseable one. Shared by Filter and
+// ListEntries so the two read paths cannot disagree about a time range.
+func withinBounds(ts string, since, until time.Time) bool {
+	if since.IsZero() && until.IsZero() {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return true
+	}
+	if !since.IsZero() && t.Before(since) {
+		return false
+	}
+	if !until.IsZero() && t.After(until) {
+		return false
+	}
+	return true
+}
+
 // matchesFilterQuery is the ONE place Filter's matching semantics are
 // implemented — shared by the ring path and the store path so they
 // cannot silently diverge (spec §5.4 item 4: "a silent change in
 // filter meaning is a defect nobody notices for a release").
-func matchesFilterQuery(e Entry, q eventlog.FilterQuery) bool {
+//
+// emitterID is the row's emitter_id on the store path. On the ring path
+// it is always "": Entry carries no emitter field (see rowFromEntry —
+// Push-sourced rows persist an empty EmitterID too), so a non-empty
+// ActorIDs filter honestly matches nothing there rather than being
+// silently ignored and returning every entry.
+//
+// Since/Until follow withinBounds (inclusive, zero = no bound).
+func matchesFilterQuery(e Entry, emitterID string, q eventlog.FilterQuery) bool {
 	// Verbose filter.
 	if !q.Verbose && strings.HasPrefix(e.Subject, "verbose.") {
 		return false
+	}
+	if !withinBounds(e.Timestamp, q.Since, q.Until) {
+		return false
+	}
+	// Actor filter on emitter_id.
+	if len(q.ActorIDs) > 0 {
+		matched := false
+		for _, a := range q.ActorIDs {
+			if a != "" && a == emitterID {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
 	// Kind filter via Subject (Entry.Subject == kind string).
 	if len(q.Kinds) > 0 {
@@ -401,7 +455,7 @@ func (a *API) Filter(ctx context.Context, q eventlog.FilterQuery) ([]Entry, erro
 	}
 
 	if store != nil {
-		rows, err := store.ByTimeRange(ctx, time.Time{}, time.Time{}, "", 0, false)
+		rows, err := store.ByTimeRange(ctx, q.Since, q.Until, "", 0, false)
 		if err != nil {
 			return nil, fmt.Errorf("audit: Filter: %w", err)
 		}
@@ -409,7 +463,7 @@ func (a *API) Filter(ctx context.Context, q eventlog.FilterQuery) ([]Entry, erro
 		out := make([]Entry, 0, len(rows))
 		for _, r := range rows {
 			e := entryFromRow(r)
-			if !matchesFilterQuery(e, q) {
+			if !matchesFilterQuery(e, r.EmitterID, q) {
 				continue
 			}
 			out = append(out, e)
@@ -425,7 +479,7 @@ func (a *API) Filter(ctx context.Context, q eventlog.FilterQuery) ([]Entry, erro
 	out := make([]Entry, 0, len(a.entries))
 	for i := len(a.entries) - 1; i >= 0; i-- {
 		e := a.entries[i]
-		if !matchesFilterQuery(e, q) {
+		if !matchesFilterQuery(e, "", q) {
 			continue
 		}
 		out = append(out, e)
@@ -592,11 +646,9 @@ func (a *API) BulkPurge(ctx context.Context, eventIDs []string) error {
 // listEntriesFilter bundles ListEntries' parsed filter state so the
 // ring path and the store path share one matching function.
 type listEntriesFilter struct {
-	wantCat  map[string]struct{}
-	since    time.Time
-	until    time.Time
-	hasSince bool
-	hasUntil bool
+	wantCat map[string]struct{}
+	since   time.Time // zero = no lower bound
+	until   time.Time // zero = no upper bound
 }
 
 func parseListEntriesFilter(filter Filter) listEntriesFilter {
@@ -608,12 +660,12 @@ func parseListEntriesFilter(filter Filter) listEntriesFilter {
 	}
 	if filter.Since != "" {
 		if t, err := time.Parse(time.RFC3339Nano, filter.Since); err == nil {
-			f.since, f.hasSince = t, true
+			f.since = t
 		}
 	}
 	if filter.Until != "" {
 		if t, err := time.Parse(time.RFC3339Nano, filter.Until); err == nil {
-			f.until, f.hasUntil = t, true
+			f.until = t
 		}
 	}
 	return f
@@ -625,18 +677,7 @@ func (f listEntriesFilter) matches(e Entry) bool {
 			return false
 		}
 	}
-	if f.hasSince || f.hasUntil {
-		t, err := time.Parse(time.RFC3339Nano, e.Timestamp)
-		if err == nil {
-			if f.hasSince && t.Before(f.since) {
-				return false
-			}
-			if f.hasUntil && t.After(f.until) {
-				return false
-			}
-		}
-	}
-	return true
+	return withinBounds(e.Timestamp, f.since, f.until)
 }
 
 // ListEntries returns entries matching filter, newest first. Reads the
@@ -651,7 +692,7 @@ func (a *API) ListEntries(ctx context.Context, filter Filter) ([]Entry, error) {
 	f := parseListEntriesFilter(filter)
 
 	if store != nil {
-		rows, err := store.ByTimeRange(ctx, time.Time{}, time.Time{}, "", 0, false)
+		rows, err := store.ByTimeRange(ctx, f.since, f.until, "", 0, false)
 		if err != nil {
 			return nil, fmt.Errorf("audit: ListEntries: %w", err)
 		}

@@ -6,6 +6,7 @@ import (
 
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // Server is reference-only metadata about a configured MCP server.
@@ -66,4 +67,25 @@ type MCPAPI interface {
 	// (Source stamped "user") or ErrRecipeSaverNotConfigured when no
 	// saver is wired.
 	SaveCustomRecipe(ctx context.Context, req SaveCustomRecipeRequest) (recipes.Recipe, error)
+
+	// SetToolPolicy upserts a permission rule for (server, tool) into the
+	// static permission source (<DataDir>/mcp_servers.json). This is the
+	// writer trust-surfaces-that-fire-01PMZ202 WP24 (finding CHAT-05)
+	// found missing: toolloop.NewStaticResolverFromDataDir has read that
+	// file since confirm-each-enforcement-01PMAG05, but nothing in the
+	// tree ever produced it, so no shipped surface could make a tool
+	// call resolve to "confirm_each". policy is one of "auto_allow",
+	// "confirm_each" or "deny"; tool may be "*" for a whole-server rule.
+	//
+	// The static resolver is read ONCE at chassis boot
+	// (core/rpc/api.go), not per call, so a write here changes behaviour
+	// starting with the next restart — it does not hot-reload a running
+	// session. Returns ErrDataDirNotConfigured when no real DataDir is
+	// wired (the rpc.New(nil) test harness).
+	SetToolPolicy(ctx context.Context, server, tool, policy, reason string) error
+
+	// ListToolPolicies returns every rule currently persisted in the
+	// static permission source, for a settings surface to render. Empty
+	// (not an error) when nothing has been written yet.
+	ListToolPolicies(ctx context.Context) ([]toolloop.StaticRule, error)
 }

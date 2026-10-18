@@ -33,12 +33,30 @@
 # requires at least one TestKnobCoverage* test OUTSIDE the mechanism's
 # own package before it will report clean.
 #
-# Known scope limit, tracked in docs/unwired-ledger.md rather than fixed
-# here: the only struct any package registers today is
-# autonomy.ResolvedKnobs (9 fields). settings.Settings (76 fields) and
-# dials.DialConfig (13) are outside the mechanism entirely, which is why
-# the inert dials in those two structs were found by hand this sweep and
-# not by this gate.
+# UPDATE (controls-and-readouts-that-tell-the-truth-01PMZ808 WP22,
+# 2026-09-12): settings.Settings (82 exported fields as of this commit)
+# is now fully tracked — core/rpc/settings_knob_coverage.go registers 81
+# fields plus one pre-existing registration in
+# core/rpc/harness_self_mcp_disabled_knob_coverage.go, with the real
+# guard at core/rpc/settings_knob_coverage_test.go's
+# TestKnobCoverage_Settings. This closes five of this mission's own
+# findings (MaxVisibleBranchDepth, AutoCollapseBranchesInSidebar,
+# DeleteBranchesWithParent, WindowSize, BranchAdvisorDefaultModel, plus
+# LocalRuntimeRAMOverrideGB) to future regression. It does NOT close
+# every class: SchemaVersion and MaxGeneratedImageBytes register clean
+# while their own documented defects (no migration dispatcher; a
+# Save-validator gap) survive untouched, and SD-06/SD-07 (serve) are
+# interface *methods*, structurally outside what a StructField-reflecting
+# mechanism can see. See settings_knob_coverage.go's package doc for the
+# full scope-limit list. This is a bookkeeping forcing function, not a
+# proof of wiring — Register()/RegisterDeferred() accept any non-empty
+# string and verify nothing about the named consumer.
+#
+# dials.DialConfig — the type this comment used to name — no longer
+# exists under that name in the tree (a 2026-09-12 grep for "type
+# DialConfig" found none); if a resolved-config struct by that name
+# returns, it is untracked and belongs in a future WP the same way this
+# one closed settings.Settings.
 #
 # Exit codes:
 #   0 — every TestKnobCoverage* test passed AND a real (non-self-test)
@@ -51,8 +69,25 @@
 #
 set -euo pipefail
 
-WORKTREE_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-cd "$WORKTREE_ROOT"
+# CWD-INDEPENDENCE FIX (controls-and-readouts-that-tell-the-truth-01PMZ808
+# WP22, AC-063, 2026-09-12). This used to be
+# `WORKTREE_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"`,
+# which resolves correctly from any directory INSIDE this git repo but
+# silently falls back to the caller's own cwd when invoked from outside
+# one entirely (git rev-parse fails, `|| pwd` swallows the error). Proven
+# live: from a mktemp'd /tmp directory, the old script found no `core/`
+# to grep, reported no real guard, and exited 3 — a different verdict
+# than the clean exit 0 it gives from the repo root, the exact "gate
+# whose answer depends on where it was invoked" class
+# TestGates_VerdictIsIndependentOfWorkingDirectory (scripts/ci/
+# gates_can_fail_test.go) exists to catch, and per that test's own
+# history six other gates shipped in this exact state before lib/
+# ci-gate.sh's self-location fix. Reusing that fix here rather than
+# re-deriving a seventh one-off: it resolves the root from THIS FILE's
+# own on-disk location (BASH_SOURCE[0]), which is invocation-cwd-blind
+# by construction, and this script is now listed in
+# gates_can_fail_test.go's cwdSensitiveGates for exactly this reason.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
 
 # The mechanism's own self-test proves the machinery works against a
 # synthetic struct. It is not evidence that any REAL struct is tracked.

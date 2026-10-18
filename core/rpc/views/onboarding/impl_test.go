@@ -61,6 +61,38 @@ func TestAPI_State_FirstRun(t *testing.T) {
 	}
 }
 
+// TestAPI_State_FirstRun_DismissedStaysDismissed is WP25's regression test
+// (SD-02, trust-surfaces-that-fire-01PMZ202): a user with zero providers
+// configured who has already dismissed onboarding (Completed=true) must NOT
+// be reported as FirstRun=true — App.vue's boot check
+// (`if (state.firstRun) onboardingOpen.value = true`) would otherwise reopen
+// the dialog on every cold start forever, contradicting OnboardingState's own
+// documented FirstRun contract ("no provider configured AND the user has
+// never dismissed").
+//
+// Mutation: revert `out.FirstRun = firstRunRaw && !out.Completed` in
+// impl.go's State() to the pre-fix `out.FirstRun = fr` (dropping the
+// !Completed term). This test must fail.
+func TestAPI_State_FirstRun_DismissedStaysDismissed(t *testing.T) {
+	t.Parallel()
+	api := New(Config{
+		// FirstRunChecker's independent provider-count signal: still zero
+		// providers configured, so the raw signal alone says "first run".
+		FirstRun:   stubFirstRun{first: true},
+		Completion: &stubCompletion{done: true},
+	})
+	st, err := api.State(context.Background())
+	if err != nil {
+		t.Fatalf("State: %v", err)
+	}
+	if !st.Completed {
+		t.Fatalf("Completed = false, want true (test setup)")
+	}
+	if st.FirstRun {
+		t.Errorf("FirstRun = true after dismissal, want false — the dialog would reopen on every cold start")
+	}
+}
+
 // TestAPI_BeginAndStep walks the FSM through the welcome → pick state
 // transition.
 func TestAPI_BeginAndStep(t *testing.T) {

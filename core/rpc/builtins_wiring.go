@@ -9,15 +9,22 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 	coremonitor "github.com/kameas-ai/kenaz-harness/core/tools/monitor"
 	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
+	coreforkconv "github.com/kameas-ai/kenaz-harness/core/tools/forkconversation"
+	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/conversation"
+	coredocs "github.com/kameas-ai/kenaz-harness/core/docs"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -30,6 +37,7 @@ import (
 	corefs "github.com/kameas-ai/kenaz-harness/core/tools/fs"
 	corefsbuiltins "github.com/kameas-ai/kenaz-harness/core/tools/fsbuiltins"
 	corefsrequest "github.com/kameas-ai/kenaz-harness/core/tools/fsrequest"
+	coredocuments "github.com/kameas-ai/kenaz-harness/core/tools/documents"
 	coresaveartifact "github.com/kameas-ai/kenaz-harness/core/tools/saveartifact"
 	coreskilltool "github.com/kameas-ai/kenaz-harness/core/tools/skill"
 	coresleep "github.com/kameas-ai/kenaz-harness/core/tools/sleep"
@@ -43,6 +51,8 @@ import (
 	coresecrets "github.com/kameas-ai/kenaz-harness/core/secrets"
 	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
+	"github.com/kameas-ai/kenaz-harness/core/units"
 )
 
 // GlobalFSReadSet is the process-global ReadSet shared across all sessions.
@@ -95,6 +105,11 @@ func registerBuiltinTools(
 	// harness path, same as before this parameter existed) and
 	// kenaz__monitor is not registered (see the monitor block below).
 	taskReg *coretasks.Registry,
+	// mlProducer supplies the bash tool's EnvProvider: every process the
+	// agent spawns carries KENAZ_ACTOR=agent (+ KENAZ_SESSION) so the
+	// daemon can skip agent work (ml-producer-01MLPRD01 spec §1 rule 3).
+	// nil (no data dir) leaves the markers off.
+	mlProducer *mlProducerWiring,
 ) {
 	if registry == nil {
 		return
@@ -183,8 +198,14 @@ func registerBuiltinTools(
 		bgSetPID = func(taskID string, pid int) {
 			taskReg.SetPID(taskID, pid)
 		}
+		mlBgEnd := mlProducer.backgroundEnded()
 		bgEnd = func(ctx context.Context, taskID string, exitCode int) {
 			_ = taskReg.End(ctx, taskID, exitCode)
+			// ml-producer-01MLPRD01 WP07: the follow-up `terminal` with
+			// the job's exit code (and test_fails for a failing suite).
+			if mlBgEnd != nil {
+				mlBgEnd(ctx, taskID, exitCode)
+			}
 		}
 	}
 	bashTool := corebash.New(corebash.Options{
@@ -202,6 +223,9 @@ func registerBuiltinTools(
 		// Tasks_AbortBySession (the session-close-dialog surface, §14
 		// E-004) could never find a session's own background tasks.
 		SessionIDFromCtx: toolloop.SessionIDFromContext,
+		// ml-producer-01MLPRD01 WP03: the agent-process markers
+		// (KENAZ_ACTOR / KENAZ_SESSION) on foreground and background runs.
+		EnvProvider: mlProducer.bashEnvProvider(toolloop.SessionIDFromContext),
 		// Unwired sweep 2026-08-14: this was never passed, so the
 		// Settings dial was permanently false in every shipped build
 		// while BashPermissionModal.vue kept offering "Allow always"
@@ -492,6 +516,138 @@ func registerSubagentDispatchTool(c *core.Core, registry *toolloop.BuiltinRegist
 	logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
 }
 
+// registerForkConversationTool registers kenaz__fork_conversation — the
+// model's surface for forking the conversation it is running in.
+//
+// Called from New() right after a.branchesAPI is constructed (like
+// registerDocumentTools, late registration onto the live registry is
+// visible to the next catalog read). Registered ONLY when the branches
+// view has a real conversation manager and session manager behind it:
+// a fork tool over the nil-manager surface would return
+// ErrManagerUnavailable on every call, and a tool that always fails is
+// never advertised (crash-recovery-tool-gating-0XQTC4RK FR-007).
+//
+// Reuse, not reimplementation: the adapter below calls
+// branchesview.BranchesAPI.CreateBranch — the SAME entry point as the
+// "+ Fork" modal, the Branch Advisor accept flow (both via
+// Branches_Create) and "Branch from this turn" (createExplicit). The
+// handoff seed lands through that method's own appendHandoff writer, so
+// this tool adds no session_messages call site (G-1).
+//
+// Gating parity: human branch creation (Bindings.Branches_Create) has no
+// Settings dial and no dedicated Cedar action; the model's call goes
+// through the generic per-call Cedar arm every tool call takes
+// (cedar.ActionUseTool via newCedarSessionKindResolver) plus the
+// always-on predicate case in builtinEnabledPredicate below.
+func registerForkConversationTool(registry *toolloop.BuiltinRegistry, branches branchesview.BranchesAPI, sessions *session.Manager, convReady bool) {
+	if registry == nil || branches == nil || sessions == nil || !convReady {
+		logging.L().Info("rpc.builtins.fork_conversation_skipped",
+			"reason", "branches view has no conversation/session manager — tool omitted from model catalog (FR-007)")
+		return
+	}
+	tool := coreforkconv.New(coreforkconv.Options{
+		Forker: &branchForker{branches: branches, sessions: sessions},
+	})
+	registry.Register(tool)
+	logging.L().Info("rpc.builtins.register", "tool", tool.Name())
+}
+
+// branchMessageLister is the one session.Manager method branchForker
+// needs to resolve the default branch point.
+type branchMessageLister interface {
+	ListMessages(ctx context.Context, sessionID string) ([]session.Message, error)
+}
+
+// branchForker adapts kenaz__fork_conversation onto the branches view.
+type branchForker struct {
+	branches branchesview.BranchesAPI
+	sessions branchMessageLister
+}
+
+// Fork resolves the branch point (the named message, or the latest
+// user/assistant message of the session) and calls CreateBranch's
+// anchored (explicit) arm, which copies history up to the anchor and —
+// when a handoff is given — appends it after.
+//
+// A named from_message_id that does not belong to req.ParentSessionID is
+// refused by conversation.Manager.CreateBranchAtMessage ("not found in
+// parent session"), so a message id from another conversation cannot be
+// used to reach across sessions.
+func (f *branchForker) Fork(ctx context.Context, req coreforkconv.ForkRequest) (coreforkconv.ForkResult, error) {
+	anchor := strings.TrimSpace(req.FromMessageID)
+	if anchor == "" {
+		msgs, err := f.sessions.ListMessages(ctx, req.ParentSessionID)
+		if err != nil {
+			return coreforkconv.ForkResult{}, err
+		}
+		anchor = defaultForkAnchor(msgs, req.TurnSpanID)
+		if anchor == "" {
+			return coreforkconv.ForkResult{}, coreforkconv.ErrNothingToFork
+		}
+	}
+	br, err := f.branches.CreateBranch(ctx, branchesview.CreateBranchOptions{
+		ParentSessionID:      req.ParentSessionID,
+		ParentMessageID:      anchor,
+		Title:                req.Title,
+		SystemPromptOverride: req.Handoff,
+		CreationPath:         branchesview.CreationPathModelTool,
+	})
+	res := coreforkconv.ForkResult{
+		BranchID:        br.ID,
+		BranchSessionID: br.ChildSessionID,
+		Title:           req.Title,
+		FromMessageID:   anchor,
+		HandoffSeeded:   err == nil && req.Handoff != "",
+	}
+	if err != nil {
+		if errors.Is(err, branchesview.ErrHandoffSeedFailed) {
+			return res, errors.Join(coreforkconv.ErrSeedFailed, err)
+		}
+		// conversation.ErrCycle is what CreateBranchAtMessage's ancestor
+		// walk returns past depth 32. A real cycle cannot form through
+		// any creation path, so for a caller this is the depth cap — say
+		// that, not "cycle detected".
+		if errors.Is(err, conversation.ErrCycle) {
+			return coreforkconv.ForkResult{}, errors.Join(coreforkconv.ErrDepthLimit, err)
+		}
+		return coreforkconv.ForkResult{}, err
+	}
+	return res, nil
+}
+
+// defaultForkAnchor picks the branch point when the model names none.
+//
+// Inside a live chat turn (turnSpanID set — the id of the user message
+// that opened it), the anchor is the last user/assistant row BEFORE that
+// message: the branch carries the conversation as it stood when the user
+// asked, not the open "please fork this" request — ending on that request
+// invites the branch's model to fork again when the user continues there
+// (review M1). The handoff seed then reads as the branch's opening
+// instruction. Outside a turn, or when the span row is not in the
+// transcript, it is the last user/assistant row overall.
+//
+// Tool and system rows are never the anchor: a branch should end on a
+// conversational message, not on the middle of a tool exchange.
+// "" means there is nothing to branch from.
+func defaultForkAnchor(msgs []session.Message, turnSpanID string) string {
+	end := len(msgs)
+	if turnSpanID != "" {
+		for i, m := range msgs {
+			if m.ID == turnSpanID {
+				end = i
+				break
+			}
+		}
+	}
+	for i := end - 1; i >= 0; i-- {
+		switch msgs[i].Role {
+		case session.RoleUser, session.RoleAssistant:
+			return msgs[i].ID
+		}
+	}
+	return ""
+}
+
 // webFetchEnabledLookup returns a closure kenaz__web_fetch consults inside Call
 // to honour the live WebFetch Settings toggle. nil store collapses to "disabled"
 // — correct fail-closed posture for a network-capable tool.
@@ -622,16 +778,23 @@ func saveArtifactEnabledLookup(store settings.SettingsStore) func() bool {
 // PolicyDir, C-16: both land in the same commit because PolicyDir's
 // two call sites are unreachable until a real Prompter exists — a
 // Prompter landing alone makes "Allow always" silently degrade to
-// allow-once, re-prompting forever.)
+// allow-once, re-prompting forever. model-scheduled-jobs-01PMSJ01 WP06
+// adds blockedSink + originResolve: every PromptDeny outcome — whichever
+// path reaches it, interactive or unattended — is now recorded as a
+// durable blocked_permission_requests row instead of vanishing silently.
+// This changes NO decision the gate makes; see corefs.RecordingPrompter's
+// doc.)
 func registerFSBuiltinTools(
 	registry *toolloop.BuiltinRegistry,
 	cedarEngine *cedar.Engine,
 	store settings.SettingsStore,
 	promptRegistry *cedar.Registry,
 	dataDir string,
-) {
+	blockedSink corefs.BlockedRequestSink,
+	originResolve corefs.OriginResolver,
+) *corefs.Gate {
 	if registry == nil {
-		return
+		return nil
 	}
 
 	// Gate: construct a *corefs.Gate with the existing Cedar engine.
@@ -658,7 +821,19 @@ func registerFSBuiltinTools(
 		// channel is attached, NoOpPrompter otherwise" composite from
 		// the coordination note falls out of that nil-tolerance for
 		// free, with no explicit fallback chain to write here.
-		Prompter: &corefs.CedarPrompter{Registry: promptRegistry},
+		//
+		// model-scheduled-jobs-01PMSJ01 WP06: wrapped in RecordingPrompter
+		// so every PromptDeny this arm resolves to — interactive OR the
+		// immediate deny an unattended run's runposture-aware
+		// RequestInteractive already produces — is persisted as a
+		// blocked_permission_requests row and an audit record. This is a
+		// pure decorator: it changes no decision, only whether the
+		// decision leaves a durable trace (FR-004, owner decision 2).
+		Prompter: &corefs.RecordingPrompter{
+			Inner:   &corefs.CedarPrompter{Registry: promptRegistry},
+			Sink:    blockedSink,
+			Resolve: originResolve,
+		},
 		// C-16: PolicyDir was doubly dead (unset here, and both write
 		// call sites sat inside switch arms NoOpPrompter could never
 		// reach). Wiring the Prompter alone would silently degrade
@@ -713,6 +888,71 @@ func registerFSBuiltinTools(
 		registry.Register(tool)
 		logging.L().Info("rpc.builtins.register", "tool", tool.Name())
 	}
+	return gate
+}
+
+// registerDocumentTools installs the spec-092 document tools and the
+// knowledge-site builder (core/tools/documents).
+//
+// Registered from New() after newLLMStack returns rather than inside
+// registerBuiltinTools, because the units manager is built in New() and
+// newLLMStack does not receive it; the tool registry is live, so late
+// registration is visible to the next catalog read (the same property
+// kenaz__subagent_dispatch relies on).
+//
+// Gates, mirrored exactly in builtinEnabledPredicate:
+//   - kenaz__save_document: the save_artifact dial.
+//   - kenaz__update_document, kenaz__build_knowledge_site: the filesystem
+//     write dial kenaz__write_file uses. The site builder additionally asks
+//     fsGate about every path it writes, so Cedar write policy binds it
+//     exactly as it binds kenaz__write_file.
+//
+// Skipped entirely when unitsMgr is nil (no database); skipping the site
+// builder alone when fsGate is nil would leave a write path with no policy
+// seam, so it is not registered in that case.
+func registerDocumentTools(
+	registry *toolloop.BuiltinRegistry,
+	unitsMgr *units.Manager,
+	store settings.SettingsStore,
+	fsGate *corefs.Gate,
+	workspaceDir func() string,
+) {
+	if registry == nil || unitsMgr == nil {
+		logging.L().Info("rpc.builtins.document_tools_skipped", "reason", "no units manager wired")
+		return
+	}
+	service := coredocs.NewService(unitsMgr)
+	registry.Register(coredocuments.NewSave(coredocuments.Options{
+		Store:   service,
+		Enabled: saveArtifactEnabledLookup(store),
+	}))
+	registry.Register(coredocuments.NewUpdate(coredocuments.Options{
+		Store:   service,
+		Enabled: fsWriteEnabledLookup(store),
+	}))
+	logging.L().Info("rpc.builtins.register", "tool", coredocuments.NameSave)
+	logging.L().Info("rpc.builtins.register", "tool", coredocuments.NameUpdate)
+
+	if fsGate == nil || workspaceDir == nil {
+		logging.L().Info("rpc.builtins.build_knowledge_site_skipped", "reason", "no filesystem gate or workspace")
+		return
+	}
+	registry.Register(coredocuments.NewBuildSite(coredocuments.Options{
+		Store:        service,
+		Enabled:      fsWriteEnabledLookup(store),
+		WorkspaceDir: workspaceDir,
+		AuthorizeWrite: func(ctx context.Context, path string) error {
+			d, err := fsGate.Evaluate(ctx, corefs.OpWrite, path)
+			if err != nil {
+				return err
+			}
+			if d.Outcome != cedar.Allow {
+				return corefsbuiltins.ErrFSDenied
+			}
+			return nil
+		},
+	}))
+	logging.L().Info("rpc.builtins.register", "tool", coredocuments.NameBuildSite)
 }
 
 // constructWebSearch builds a websearch.Tool with the package's
@@ -766,6 +1006,27 @@ func defaultBashSandbox(c *core.Core) string {
 	return filepath.Join("/tmp", "kenaz-bash")
 }
 
+// mcpRootsDir returns the directory a spawned stdio MCP server's
+// roots/list response advertises to it.
+//
+// connector-lifecycle-truth-01PMZ303 AN-06: this used to be unconditionally
+// dataDir — the harness data directory, which holds the sessions database,
+// the policy bundle and credential locators — so every stdio MCP server was
+// told "here is where the harness keeps its secrets," while the bash
+// sandbox (defaultBashSandbox, above) was anchored at the resolved agent
+// workspace. Two tools, two different answers to "where is the workspace."
+// core.Core.WorkspaceDir's doc says consumers MUST use it instead of
+// joining "agent-workspace" themselves; this mirrors defaultBashSandbox's
+// resolution so both tools agree. Falls back to dataDir only for the
+// nil-core / unresolved-workspace test path, so existing fixtures that
+// construct the pool without a core keep working.
+func mcpRootsDir(c *core.Core, dataDir string) string {
+	if c != nil && c.WorkspaceDir() != "" {
+		return c.WorkspaceDir()
+	}
+	return dataDir
+}
+
 // builtinEnabledPredicate returns a func(name) bool that the toolloop
 // EnabledFilter consults on every tool listing / dispatch. Maps the
 // in-binary tool names onto the corresponding Settings store toggles.
@@ -790,7 +1051,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 					"tool", name, "err", err.Error())
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 		// ── web_fetch (crash-recovery-tool-gating-0XQTC4RK FR-005) ──
 		// Default OFF: the tool makes outbound HTTP requests; the user must
@@ -803,7 +1063,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-off: fail to disabled on a transient settings error.
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 		case corebash.Name:
 			v, err := store.LoadBash()
@@ -812,9 +1071,8 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 					"tool", name, "err", err.Error())
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
-		case coresaveartifact.ToolName:
+		case coresaveartifact.ToolName, coredocuments.NameSave:
 			v, err := store.LoadSaveArtifactEnabled()
 			if err != nil {
 				logging.L().Warn("rpc.builtins.predicate.read_failed",
@@ -824,7 +1082,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// settings-file glitch.
 				return true
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 		case corefsrequest.ToolName:
 			v, err := store.LoadFSRequestAccessEnabled()
@@ -834,7 +1091,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-on: soft-fail to enabled so the tool works on first launch.
 				return true
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 
 		// ── Builtin filesystem tools (builtin-filesystem-tools-01KR3N4P) ──
@@ -851,13 +1107,13 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-off: soft-fail to disabled so disk access stays off.
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 
 		// Write-family tools: default OFF until the user opts in from the Tools panel.
 		// update_artifact is gated by the same FSWriteEnabled toggle.
 		case corefsbuiltins.NameWriteFile, corefsbuiltins.NameEditFile,
-			coreupdateartifact.ToolName:
+			coreupdateartifact.ToolName,
+			coredocuments.NameUpdate, coredocuments.NameBuildSite:
 			v, err := store.LoadFSWriteEnabled()
 			if err != nil {
 				logging.L().Warn("rpc.builtins.predicate.read_failed",
@@ -865,7 +1121,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-off: soft-fail to disabled.
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 
 		// ── Todo tool (builtin-tools-search-and-elicitation-01KZNP3D) ──
@@ -878,14 +1133,12 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-off: soft-fail to disabled.
 				return false
 			}
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 
 		// ── Passive tools (builtin-tools-search-and-elicitation-01KZNP3D WP04) ──
 		// Sleep is always-on: it has no side effects and must remain available
 		// for __monitor watch patterns regardless of Settings dials.
 		case coresleep.ToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		// ── Skill tool (model-invoked-skills-catalog-01KZNP3E) ──
@@ -893,7 +1146,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		// The tool is registered unconditionally; the dispatch layer enforces
 		// model_invokable=true at resolution time so only eligible commands run.
 		case coreskilltool.ToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		// ── Plan-mode tools (plan-mode-posture-01KZNP3F) ──
@@ -901,7 +1153,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		// side-effects on their own. The Cedar gate enforces write restrictions
 		// while plan_mode is active; the tools themselves are always enabled.
 		case coreplanmode.EnterToolName, coreplanmode.ExitToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		// ── read_context_file (unified-context-artifacts-01NCTXU01) ──
@@ -909,14 +1160,12 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		// is the expected companion behaviour to module attachment. Path-
 		// confinement enforced within the tool itself (module root boundary).
 		case corereadctx.ToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		// ── list_secrets (model-secret-references-01KW7M5A) ──
 		// Always-on when registered (the registration guard is the nil
 		// exposureIdx check; once registered it should always be usable).
 		case corelistsecrets.ToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		case coreaskuser.ToolName:
@@ -930,7 +1179,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// meant the tool fell through to the fail-closed default below
 			// and was denied from every tool catalog (observed twice per
 			// request in prod logs as "no explicit predicate case").
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
 		case coresubagent.ToolName:
@@ -964,7 +1212,27 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// proactively so wiring the seam wouldn't silently repeat
 			// the ask_user_question regression) and needed no change
 			// when UNIT-6 landed.
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
+
+		case coreforkconv.ToolName:
+			// kenaz__fork_conversation (dogfood finding 2026-10-05):
+			// always-on at this coarse gate — parity with human branch
+			// creation (Branches_Create), which has no Settings dial.
+			// Registration is conditioned on a real conversation +
+			// session manager (registerForkConversationTool), and the
+			// per-call Cedar arm every tool call takes still applies. The
+			// tool only creates a dormant branch of its own session; it
+			// starts no run and touches no other conversation.
+			return true
+
+		case loadtools.Name:
+			// kenaz__load_tools (tool-context-budget-01TCBUD01 §2.2):
+			// always on. It is how summary-tier tools become reachable, so
+			// a dial that hid it would strand them; the exposure write
+			// guard refuses turning it off while summary tools exist
+			// (FR-E3). It changes only which schemas the session is sent;
+			// every tool it loads still passes the per-call use_tool
+			// resolution, which this call takes too.
 			return true
 
 		case coremonitor.ToolName:
@@ -972,10 +1240,13 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// 01PMZB11 UNIT-5): always-on at this coarse gate, same
 			// posture as sleep/skill/read_context_file. It only reads
 			// already-captured task output (no side effects of its
-			// own); Cedar's ActionToolTasksMonitor is the per-call
-			// gate. Registration itself is already conditioned on a
-			// non-nil task registry (see registerBuiltinTools above).
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			// own). The per-call gate is the use_tool resolution every
+			// builtin gets; Cedar's ActionToolTasksMonitor is declared
+			// but NOT evaluated anywhere (model-harness-toolset-
+			// 01MHTS001 WP03, H-3 — this comment used to name it the
+			// per-call gate). Registration itself is already
+			// conditioned on a non-nil task registry (see
+			// registerBuiltinTools above).
 			return true
 		}
 		// Fail-closed: an unknown tool name has no explicit predicate case.
@@ -1011,6 +1282,21 @@ func registerReadContextFileTool(
 		Library: lib,
 		Modules: moduleSource,
 	})
+	registry.Register(tool)
+	logging.L().Info("rpc.builtins.register", "tool", tool.Name())
+}
+
+// registerLoadToolsTool wires kenaz__load_tools (tool-context-budget-
+// 01TCBUD01 §2.2) over the shared load core. Registered from
+// newLLMStack after the tool discoverer exists, because the tool lists
+// the session's catalog through it; the registry is live, so the next
+// catalog read sees it. A nil service (nil-core chassis) registers
+// nothing.
+func registerLoadToolsTool(registry *toolloop.BuiltinRegistry, svc *loadtools.Service) {
+	if registry == nil || svc == nil {
+		return
+	}
+	tool := loadtools.New(svc)
 	registry.Register(tool)
 	logging.L().Info("rpc.builtins.register", "tool", tool.Name())
 }

@@ -9,6 +9,13 @@
  * Privacy: no session content is passed through this component.
  * The actual re-encryption + upload happens inside the Go backend.
  *
+ * Multi-device (device-keys-handoff-01DEVKH01 WP06): once a teammate is
+ * picked, Handoff_RecipientDevices lists the devices the session will be
+ * encrypted for, with their key fingerprints (fleet is a trusted key
+ * directory — the fingerprint is what a cautious user compares). A key
+ * rotation racing the send is re-wrapped and retried by the backend, so it
+ * is invisible on success. Errors are the backend's human copy.
+ *
  * (fleet-context-sync-01NDFSEX15 WP07)
  */
 
@@ -16,7 +23,8 @@ import { ref, computed, watch } from 'vue';
 import BaseDialog from '@/components/ui/BaseDialog.vue';
 import Button from '@/components/ui/Button.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import type { FleetTeamMemberView } from '@/lib/types';
+import type { FleetRecipientDeviceView, FleetTeamMemberView } from '@/lib/types';
+import { handoffErrorText } from '@/views/sessions/handoffErrors';
 
 const props = defineProps<{
   open: boolean;
@@ -38,6 +46,9 @@ const selected = ref<FleetTeamMemberView | null>(null);
 const loading = ref(false);
 const sharing = ref(false);
 const errorMsg = ref('');
+const devices = ref<FleetRecipientDeviceView[]>([]);
+const devicesLoading = ref(false);
+const devicesError = ref('');
 
 // ── Load team when dialog opens ────────────────────────────────────────────
 
@@ -49,13 +60,15 @@ watch(
       selected.value = null;
       errorMsg.value = '';
       team.value = [];
+      devices.value = [];
+      devicesError.value = '';
       return;
     }
     loading.value = true;
     try {
       team.value = await client.Handoff_ListTeam();
     } catch (err) {
-      errorMsg.value = String(err);
+      errorMsg.value = handoffErrorText(err);
     } finally {
       loading.value = false;
     }
@@ -80,12 +93,37 @@ const filtered = computed<FleetTeamMemberView[]>(() => {
 function selectMember(member: FleetTeamMemberView) {
   selected.value = member;
   query.value = member.displayName;
+  void loadDevices(member.userID);
+}
+
+async function loadDevices(userID: string) {
+  devices.value = [];
+  devicesError.value = '';
+  devicesLoading.value = true;
+  try {
+    const got = await client.Handoff_RecipientDevices(userID);
+    if (selected.value?.userID === userID) devices.value = got ?? [];
+  } catch (err) {
+    if (selected.value?.userID === userID) devicesError.value = handoffErrorText(err);
+  } finally {
+    devicesLoading.value = false;
+  }
 }
 
 function clearSelection() {
   selected.value = null;
   query.value = '';
+  devices.value = [];
+  devicesError.value = '';
 }
+
+const deviceSummary = computed(() => {
+  const n = devices.value.length;
+  if (n === 0) return '';
+  return n === 1
+    ? 'Encrypted for 1 device registered to this teammate.'
+    : `Encrypted separately for each of this teammate's ${n} registered devices.`;
+});
 
 async function onShare() {
   if (!selected.value) return;
@@ -96,7 +134,7 @@ async function onShare() {
     emit('shared');
     emit('close');
   } catch (err) {
-    errorMsg.value = String(err);
+    errorMsg.value = handoffErrorText(err);
   } finally {
     sharing.value = false;
   }
@@ -116,8 +154,8 @@ async function onShare() {
         Share session
       </h2>
       <p class="mt-1 font-ui text-sm text-ink-muted">
-        The session will be re-encrypted with the recipient's public key before leaving this device.
-        No plaintext leaves the app.
+        The session is encrypted on this device for each of the recipient's registered devices
+        before it leaves. Fleet only ever stores ciphertext.
       </p>
 
       <!-- Recipient search -->
@@ -189,6 +227,27 @@ async function onShare() {
             ×
           </button>
         </div>
+      </div>
+
+      <!-- Recipient devices + fingerprints (trust model: show fingerprints) -->
+      <div v-if="selected" class="mt-2" data-testid="share-recipient-devices">
+        <p v-if="devicesLoading" class="font-ui text-xs text-ink-muted">Checking their devices…</p>
+        <p v-else-if="devicesError" class="font-ui text-xs text-signal-warn" data-testid="share-devices-error">
+          {{ devicesError }}
+        </p>
+        <details v-else-if="devices.length > 0" class="font-ui text-xs text-ink-muted">
+          <summary class="cursor-pointer" data-testid="share-device-count">{{ deviceSummary }}</summary>
+          <ul class="mt-1 space-y-0.5">
+            <li
+              v-for="d in devices"
+              :key="d.keyID"
+              class="font-mono text-[10px] break-all"
+              data-testid="share-device-fingerprint"
+            >
+              {{ d.fingerprint }}
+            </li>
+          </ul>
+        </details>
       </div>
 
       <!-- Error -->

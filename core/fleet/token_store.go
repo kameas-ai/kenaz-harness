@@ -9,8 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zalando/go-keyring"
-
+	"github.com/kameas-ai/kenaz-harness/core/keyring"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 )
 
@@ -57,6 +56,15 @@ func SetExternalTokenSource(fn func() string) {
 	externalTokenMu.Lock()
 	defer externalTokenMu.Unlock()
 	externalTokenSource = fn
+}
+
+// ExternalTokenSourceActive reports whether token renewal is externally
+// owned (served mode's host auth broker). In that mode the served enroll
+// supervisor owns enroll cadence, so the desktop session supervisor in
+// core/rpc/views/settings stands down.
+func ExternalTokenSourceActive() bool {
+	_, ok := externalTokens()
+	return ok
 }
 
 // externalTokens returns the installed source, if any.

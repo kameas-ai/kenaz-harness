@@ -1,0 +1,20 @@
+# cedar-engine-singleton (I15) — non-cedar `.NewEngine(` constructions the
+# package-qualifier-agnostic Check 2 pattern cannot distinguish from a
+# cedar engine. The gate's own header says the broad pattern was safe
+# because "no other package under core/ exposes a NewEngine"; the first
+# counter-example gets a dated line here instead of a silent widening.
+#
+# Format: <file path>:<selector substring>  — the hit is excused ONLY
+# when BOTH match, so a cedar.NewEngine( planted in an allowlisted file
+# is still counted. A line whose file+selector matches NOTHING fails
+# the gate (stale entries must be deleted, allowlists shrink
+# monotonically).
+#
+# 2026-10-04 (engine-publication-01ENPUB01 WP-H1): the signer CLI's
+# verify subcommand builds a throwaway core/trust engine to run the
+# PRODUCTION VerifyManifestSignatures path — a deliberate design choice
+# (review (a)(iii): no parallel verify reimplementation). It is a
+# standalone publisher binary, not the harness process; the cedar
+# singleton promise is per harness process. Deleted when the signer
+# gains a non-engine verify entry point in core/trust.
+cmd/kenaz-ml-sign/main.go:trust.NewEngine(

@@ -184,7 +184,33 @@ func (r *BranchRecommender) tierOf(providerID, modelID string) ModelTier {
 
 // pickAtTier returns the first configured model at the given tier,
 // preferring the parent's provider when one is configured at the tier.
+//
+// CORRECTED (model-settings-reach-the-model-01PMZ101 UNIT-10 / WP17,
+// closing finding AN-07): when preferProvider is non-empty but has NO
+// entry in r.models at ANY tier (i.e. the recommender's known-model
+// table has no opinion about this provider at all — bedrock,
+// custom-openai and ollama today, per core/rpc/branches_wiring.go's
+// knownModelProviders), this now returns an empty Recommendation
+// instead of silently falling back to `best`, the first OTHER
+// provider's model at the target tier. Before this fix, a fork from a
+// parent on a provider the recommender had no data for was silently
+// pointed at whichever provider happened to be enumerated first
+// (anthropic) — a cross-provider substitution the caller's own
+// cross-provider-warning logic (branchesview.API.RecommendModel) exists
+// specifically to flag, not to hide. Recommend's existing
+// `rec.ModelID == ""` branch already returns the parent's own exact
+// pair in this case — the correct degrade, matching how a genuinely
+// tier-less provider (e.g. one where the exact model resolves to
+// ModelTierMedium via tierOf's own default) was always handled.
+//
+// A provider that IS known but has no candidate at this SPECIFIC tier
+// still falls back to `best` (a different provider's model at the
+// target tier) — that narrower tier-fallback question is unchanged and
+// out of this WP's scope.
 func (r *BranchRecommender) pickAtTier(tier ModelTier, preferProvider string) Recommendation {
+	if preferProvider != "" && !r.hasAnyModelFor(preferProvider) {
+		return Recommendation{}
+	}
 	var best Recommendation
 	for _, m := range r.models {
 		if m.Tier != tier {
@@ -198,6 +224,21 @@ func (r *BranchRecommender) pickAtTier(tier ModelTier, preferProvider string) Re
 		}
 	}
 	return best
+}
+
+// hasAnyModelFor reports whether r.models carries at least one entry
+// for providerID, at any tier. Used by pickAtTier to distinguish "this
+// provider is known but has nothing at the requested tier" (existing
+// cross-provider fallback, unchanged) from "this provider is not in my
+// known-model table at all" (new: no candidate, caller degrades to the
+// parent's own pair).
+func (r *BranchRecommender) hasAnyModelFor(providerID string) bool {
+	for _, m := range r.models {
+		if m.ProviderID == providerID {
+			return true
+		}
+	}
+	return false
 }
 
 func stepDown(t ModelTier) ModelTier {

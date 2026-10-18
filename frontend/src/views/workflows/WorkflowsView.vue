@@ -16,18 +16,22 @@
  *     returns the full transcript. WP10 will swap to broker-driven
  *     progress once a real model_turn dispatcher is wired.
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import WorkflowEditor from './WorkflowEditor.vue';
 import SimpleTemplateEditor from './SimpleTemplateEditor.vue';
 import WorkflowGraphEditor from '@/components/workflows/WorkflowGraphEditor.vue';
-import CatalogView from './CatalogView.vue';
-import CatalogPreviewDrawer from './CatalogPreviewDrawer.vue';
 import RunsHistoryTab from './RunsHistoryTab.vue';
+// nav-ia-sweep-01DOGF0F WP04 — Workflows is the automation home: schedules
+// (workflow cron + scheduled chats) and background tasks moved here from
+// Settings › Runtime and Settings › Authoring › Workflows.
+import SchedulesTab from './SchedulesTab.vue';
+import TasksTab from './tasks/TasksTab.vue';
 // fleet-share-and-sync-01NDFSEX14 WP03 — Publish to team catalog
-import PublishDialog from '@/views/marketplace/PublishDialog.vue';
+import PublishDialog from '@/views/catalog/PublishDialog.vue';
 import { signedIn } from '@/lib/featureFlags';
 import { push as pushToast } from '@/composables/useToastQueue';
 import {
@@ -37,7 +41,9 @@ import {
   type WorkflowsWorkflow,
   type WorkflowsRunResult,
   type WorkflowsSaveOutput,
-  type WorkflowsCatalogEntry,
+  type WorkflowsArtifactOption,
+  type WorkflowsProjectOption,
+  type WorkflowsScheduleEntry,
 } from '@/lib/workflowsClient';
 import {
   createScheduledChatClient,
@@ -101,6 +107,7 @@ async function selectWorkflow(id: string) {
   selectedID.value = id;
   runResult.value = null;
   runError.value = null;
+  confirmingDelete.value = false;
   try {
     const w = await client.get(id);
     selected.value = w;
@@ -109,8 +116,48 @@ async function selectWorkflow(id: string) {
       seeded[inp.name] = inp.default ?? '';
     }
     inputs.value = seeded;
+    await loadPickerOptionsIfNeeded(w);
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+// automation-actually-runs-01PMZ404 UNIT-14 (A-11): the four input
+// pickers. artifact_ref / project_ref need their option lists fetched
+// once per workflow selection (lazily — most workflows use neither);
+// `file` opens the OS-native picker on demand and needs no preloaded
+// list. `enum`'s options already ride on the wire (inp.options).
+const artifactOptions = ref<WorkflowsArtifactOption[]>([]);
+const projectOptions = ref<WorkflowsProjectOption[]>([]);
+const pickerLoadError = ref<string | null>(null);
+const filePicking = ref<Record<string, boolean>>({});
+
+async function loadPickerOptionsIfNeeded(w: WorkflowsWorkflow) {
+  const kinds = new Set((w.inputs ?? []).map((inp) => inp.kind));
+  pickerLoadError.value = null;
+  try {
+    if (kinds.has('artifact_ref')) {
+      artifactOptions.value = await client.listArtifactOptions();
+    }
+    if (kinds.has('project_ref')) {
+      projectOptions.value = await client.listProjectOptions();
+    }
+  } catch (err) {
+    pickerLoadError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function pickFileForInput(name: string) {
+  filePicking.value = { ...filePicking.value, [name]: true };
+  try {
+    const path = await client.pickFile();
+    if (path) {
+      inputs.value = { ...inputs.value, [name]: path };
+    }
+  } catch (err) {
+    pickerLoadError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    filePicking.value = { ...filePicking.value, [name]: false };
   }
 }
 
@@ -149,11 +196,61 @@ async function deleteSelected() {
     runResult.value = null;
     runError.value = null;
     await loadCatalog();
+    await loadSchedules();
   } catch (err) {
     saveError.value = err instanceof Error ? err.message : String(err);
   } finally {
     saving.value = false;
+    confirmingDelete.value = false;
   }
+}
+
+// nav-ia-sweep-01DOGF0F WP04 — merged from WorkflowsSettingsPanel (WP01
+// parity rows 10, 11, 15): the Delete button opens a confirmation instead of
+// deleting on one click, and the confirmation warns when the workflow has an
+// active cron schedule (deleting it removes the schedule too).
+const confirmingDelete = ref(false);
+const schedules = ref<WorkflowsScheduleEntry[]>([]);
+
+async function loadSchedules() {
+  try {
+    schedules.value = (await client.scheduleList()) ?? [];
+  } catch {
+    schedules.value = [];
+  }
+}
+
+const selectedHasSchedule = computed<boolean>(
+  () => !!selected.value && schedules.value.some((s) => s.workflowId === selected.value!.id),
+);
+
+// WP01 parity row 9: only user-saved workflows are deletable. Builtins come
+// from LoadBuiltins, not the store, so Workflows_Delete on one returns
+// "not found" — the retired Settings panel hid the button for them; the
+// Library used to offer it and fail. Now the Library hides it too.
+const selectedDeletable = computed<boolean>(() => {
+  if (!selected.value) return false;
+  const row = catalog.value.find((w) => w.id === selected.value!.id);
+  return row?.source === 'user' && !row.orgManaged;
+});
+
+// skill-library-01SKLIB01 (ledger 2026-10-06 item 4): a workflow the org
+// requires is read-only here — the backend refuses Save, Delete and
+// schedule changes for it; it can still be run.
+const selectedOrgManaged = computed<boolean>(() => {
+  if (!selected.value) return false;
+  return !!catalog.value.find((w) => w.id === selected.value!.id)?.orgManaged;
+});
+
+function requestDelete() {
+  if (!selected.value || !selectedDeletable.value) return;
+  saveError.value = null;
+  confirmingDelete.value = true;
+  void loadSchedules();
+}
+
+function cancelDelete() {
+  confirmingDelete.value = false;
 }
 
 // Test seam: the spec drives import via this method so it doesn't need
@@ -161,21 +258,28 @@ async function deleteSelected() {
 // real editor's save button.
 defineExpose({ importFromYaml, deleteSelected });
 
-// WP03: tab navigation. "Library" is the default (preserving existing UX);
-// "Catalog" opens the install-flow surface; "Runs" is reserved.
-type Tab = 'Library' | 'Catalog' | 'Runs';
+// WP03: tab navigation. "Library" is the default (preserving existing UX).
+// nav-ia-sweep-01DOGF0F WP04 (FR-3): Schedules + Tasks joined, and the tab is
+// URL-addressable (`/workflows?tab=schedules|runs|tasks`) so deep
+// links — the chat header's background-task chip, the legacy
+// /settings?tab=… redirects — land on the right tab.
+//
+// install-framework-01DOGF0B WP05: the Catalog tab is retired. Workflow
+// templates (and fleet catalog workflows) install from the one "Add
+// capability" surface; `?tab=catalog` redirects there (CATALOG_HOME).
+const TABS = ['Library', 'Schedules', 'Runs', 'Tasks'] as const;
+const CATALOG_HOME = { path: '/tools', query: { kind: 'workflow' } } as const;
+type Tab = (typeof TABS)[number];
 const activeTab = ref<Tab>('Library');
 
-// WP03: catalog selection for the preview drawer.
-const catalogSelectedEntry = ref<WorkflowsCatalogEntry | null>(null);
+function tabFromQuery(raw: unknown): Tab | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof v !== 'string') return null;
+  return TABS.find((t) => t.toLowerCase() === v.toLowerCase()) ?? null;
+}
 
-function onCatalogInstalled(_workflowId: string) {
-  // Refresh the library list so the newly installed workflow shows up.
-  // _workflowId currently unused — kept on the signature for the
-  // event-shape contract so a future "scroll to / highlight newly-
-  // installed row" behaviour doesn't have to change the emit shape.
-  void loadCatalog();
-  catalogSelectedEntry.value = null;
+function browseTemplates() {
+  void router?.push(CATALOG_HOME);
 }
 
 // WP09: editor mode. The catalog is the default surface; "New" or
@@ -386,6 +490,98 @@ function statusClass(s: string): string {
 }
 
 onMounted(loadCatalog);
+
+// automation-actually-runs-01PMZ404 UNIT-11: WorkflowsView previously
+// never imported useRoute or inspected the query string, so
+// WorkflowRunsSection's `?run=<id>` deep-link (the sidebar's "Workflow
+// Runs" panel) went nowhere — its own comment called it "just a
+// hash-style hint and harmless if ignored." focusRunId below closes
+// that: it switches to the Runs tab and forwards the id to
+// RunsHistoryTab, which expands and scrolls to it.
+const route = (() => {
+  // Defensive, mirroring WorkflowRunsSection.vue's useRouter() guard:
+  // useRoute() throws when there's no active router (every existing
+  // WorkflowsView.spec.ts mount predates this unit and installs none).
+  try {
+    return useRoute();
+  } catch {
+    return null;
+  }
+})();
+
+const router = (() => {
+  try {
+    return useRouter();
+  } catch {
+    return null;
+  }
+})();
+
+const focusRunId = ref<string | null>(null);
+
+function applyTabQuery() {
+  const rawTab = route?.query?.tab;
+  if ((Array.isArray(rawTab) ? rawTab[0] : rawTab) === 'catalog') {
+    // Old deep links to the retired Catalog tab land on its replacement.
+    void router?.replace(CATALOG_HOME);
+    return;
+  }
+  const t = tabFromQuery(rawTab);
+  if (t) {
+    activeTab.value = t;
+    return;
+  }
+  // A bare /workflows (Back, the rail entry) means Library — otherwise the
+  // previous tab keeps showing under a URL that no longer names it. A ?run=
+  // focus owns the tab choice (Runs), so leave it alone then.
+  const run = route?.query?.run;
+  if (run === undefined || run === null || run === '') activeTab.value = 'Library';
+}
+
+/** Tab click: switch, and mirror it into `?tab=` so the URL is shareable. */
+function selectTab(tab: Tab) {
+  activeTab.value = tab;
+  if (!route || !router) return;
+  const query = { ...route.query };
+  // `run` focuses a run on the Runs tab; it means nothing elsewhere.
+  delete query.run;
+  if (tab === 'Library') delete query.tab;
+  else query.tab = tab.toLowerCase();
+  void router.replace({ query });
+}
+
+function applyRunQuery() {
+  const raw = route?.query?.run;
+  const id = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof id === 'string' && id.length > 0) {
+    activeTab.value = 'Runs';
+    focusRunId.value = id;
+  }
+}
+
+// Both orders per AC-012: query present at mount, and navigation to a
+// new ?run=<id> after mount (the sidebar panel is always visible via
+// LeftRail, so a click while already on /workflows only changes the
+// query — Vue Router does not remount the view for a query-only change
+// on the same route).
+onMounted(() => {
+  applyTabQuery();
+  applyRunQuery();
+  // Preload so the delete dialog's "active cron schedule" warning is
+  // already decided when it opens — a fast confirm can't skip it.
+  void loadSchedules();
+});
+if (route) {
+  // One watcher over both keys: leaving /workflows?run=x for a bare
+  // /workflows changes only `run`, and must still fall back to Library.
+  watch(
+    () => [route.query.tab, route.query.run],
+    () => {
+      applyTabQuery();
+      applyRunQuery();
+    },
+  );
+}
 </script>
 
 <template>
@@ -399,13 +595,13 @@ onMounted(loadCatalog);
       number="08"
       section="WORKFLOWS"
       title="Agentic Workflows"
-      subtitle="Pre-canned multi-step agent recipes."
+      subtitle="Multi-step agent recipes, what runs on a schedule, and background tasks."
     />
     <div class="px-6 py-4 space-y-4" data-testid="workflows-view">
       <!-- Tab nav (WP03) -->
       <nav class="flex gap-1 border-b border-border-muted" data-testid="workflows-tab-nav">
         <button
-          v-for="tab in (['Library', 'Catalog', 'Runs'] as const)"
+          v-for="tab in TABS"
           :key="tab"
           type="button"
           class="px-4 py-2 font-ui text-sm focus:outline-none"
@@ -415,30 +611,25 @@ onMounted(loadCatalog);
               : 'text-ink-muted hover:text-ink'
           "
           :data-testid="`workflows-tab-${tab.toLowerCase()}`"
-          @click="activeTab = tab"
+          @click="selectTab(tab)"
         >
           {{ tab }}
         </button>
       </nav>
 
-      <!-- Catalog tab (WP03) -->
-      <template v-if="activeTab === 'Catalog'">
-        <CatalogView
-          :client="client"
-          @select="catalogSelectedEntry = $event"
-        />
-        <CatalogPreviewDrawer
-          :client="client"
-          :entry="catalogSelectedEntry"
-          @close="catalogSelectedEntry = null"
-          @installed="onCatalogInstalled"
-          @redirect-providers="activeTab = 'Library'"
-        />
+      <!-- Runs tab (01NBUG04 — execution history + scheduled subsection) -->
+      <template v-if="activeTab === 'Runs'">
+        <RunsHistoryTab :client="client" :chat-client="chatClient" :focus-run-id="focusRunId" />
       </template>
 
-      <!-- Runs tab (01NBUG04 — execution history + scheduled subsection) -->
-      <template v-else-if="activeTab === 'Runs'">
-        <RunsHistoryTab :client="client" :chat-client="chatClient" />
+      <!-- Schedules tab (nav-ia-sweep-01DOGF0F WP04) -->
+      <template v-else-if="activeTab === 'Schedules'">
+        <SchedulesTab :client="client" :chat-client="chatClient" />
+      </template>
+
+      <!-- Tasks tab (nav-ia-sweep-01DOGF0F WP04) -->
+      <template v-else-if="activeTab === 'Tasks'">
+        <TasksTab />
       </template>
 
       <!-- Library tab (existing content) -->
@@ -585,6 +776,14 @@ onMounted(loadCatalog);
           Workflows chain agents together: a plan step, a research step, an
           implement step, a review step.
         </p>
+        <button
+          type="button"
+          class="mt-3 font-ui text-sm text-accent hover:text-accent-muted"
+          data-testid="workflows-browse-templates-empty"
+          @click="browseTemplates"
+        >
+          Browse workflow templates →
+        </button>
       </div>
 
       <div v-else class="grid grid-cols-12 gap-4">
@@ -610,11 +809,19 @@ onMounted(loadCatalog);
               >
                 <span class="font-medium text-ink">{{ w.name }}</span>
                 <span class="block text-xs text-ink-muted">
-                  {{ w.stepCount }} steps · v{{ w.version }} · {{ w.source }}
+                  {{ w.stepCount }} steps · v{{ w.version }} · {{ w.source }}<template v-if="w.orgManaged"> · required by your org</template>
                 </span>
               </button>
             </li>
           </ul>
+          <button
+            type="button"
+            class="mt-3 px-2 font-ui text-xs text-accent hover:text-accent-muted"
+            data-testid="workflows-browse-templates"
+            @click="browseTemplates"
+          >
+            Browse workflow templates →
+          </button>
         </aside>
 
         <section
@@ -629,6 +836,14 @@ onMounted(loadCatalog);
               class="font-ui text-sm text-ink-muted whitespace-pre-line"
             >
               {{ selected.description }}
+            </p>
+            <p
+              v-if="selectedOrgManaged"
+              class="mt-1 font-ui text-xs text-ink-muted"
+              data-testid="workflows-org-managed-note"
+            >
+              Required by your org and managed by its config — you can run it, but not edit,
+              reschedule or delete it here.
             </p>
           </header>
 
@@ -655,13 +870,91 @@ onMounted(loadCatalog);
                   >*</span
                 >
               </label>
+              <!--
+                automation-actually-runs-01PMZ404 UNIT-14 (A-11): each
+                of the six declared InputKind values gets a control
+                that can only produce a value the workflow accepts —
+                a free-text box where an enum/file/artifact_ref/
+                project_ref was declared let a user submit a value the
+                workflow cannot handle. schema.go's InputKind ↔ this
+                v-if/v-else-if chain is G-2's seed case.
+              -->
               <textarea
                 v-if="inp.kind === 'multiline'"
                 :id="`workflow-input-${inp.name}`"
                 v-model="inputs[inp.name]"
                 rows="3"
                 class="w-full rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-sm text-ink"
+                :data-testid="`workflow-input-${inp.name}`"
               />
+              <select
+                v-else-if="inp.kind === 'enum'"
+                :id="`workflow-input-${inp.name}`"
+                v-model="inputs[inp.name]"
+                class="w-full rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-sm text-ink"
+                :data-testid="`workflow-input-${inp.name}`"
+              >
+                <option
+                  v-for="opt in inp.options ?? []"
+                  :key="opt"
+                  :value="opt"
+                >
+                  {{ opt }}
+                </option>
+              </select>
+              <div
+                v-else-if="inp.kind === 'file'"
+                class="flex items-center gap-2"
+              >
+                <span
+                  class="flex-1 truncate rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-sm"
+                  :class="inputs[inp.name] ? 'text-ink' : 'text-ink-subtle'"
+                  :data-testid="`workflow-input-${inp.name}`"
+                >
+                  {{ inputs[inp.name] || 'No file selected' }}
+                </span>
+                <button
+                  type="button"
+                  class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-xs text-ink hover:bg-surface-2"
+                  :data-testid="`workflow-input-${inp.name}-pick`"
+                  :disabled="filePicking[inp.name]"
+                  @click="pickFileForInput(inp.name)"
+                >
+                  {{ filePicking[inp.name] ? 'Picking…' : 'Choose file' }}
+                </button>
+              </div>
+              <select
+                v-else-if="inp.kind === 'artifact_ref'"
+                :id="`workflow-input-${inp.name}`"
+                v-model="inputs[inp.name]"
+                class="w-full rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-sm text-ink"
+                :data-testid="`workflow-input-${inp.name}`"
+              >
+                <option value="">Select an artifact…</option>
+                <option
+                  v-for="opt in artifactOptions"
+                  :key="opt.id"
+                  :value="opt.id"
+                >
+                  {{ opt.title || opt.id }}
+                </option>
+              </select>
+              <select
+                v-else-if="inp.kind === 'project_ref'"
+                :id="`workflow-input-${inp.name}`"
+                v-model="inputs[inp.name]"
+                class="w-full rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-sm text-ink"
+                :data-testid="`workflow-input-${inp.name}`"
+              >
+                <option value="">Select a project…</option>
+                <option
+                  v-for="opt in projectOptions"
+                  :key="opt.id"
+                  :value="opt.id"
+                >
+                  {{ opt.name || opt.id }}
+                </option>
+              </select>
               <input
                 v-else
                 :id="`workflow-input-${inp.name}`"
@@ -671,6 +964,13 @@ onMounted(loadCatalog);
                 :data-testid="`workflow-input-${inp.name}`"
               />
             </div>
+          </div>
+          <div
+            v-if="pickerLoadError"
+            class="font-ui text-xs text-signal-danger"
+            data-testid="workflows-picker-load-error"
+          >
+            {{ pickerLoadError }}
           </div>
 
           <div class="flex items-center gap-2">
@@ -684,6 +984,7 @@ onMounted(loadCatalog);
               {{ running ? 'Running…' : 'Run workflow' }}
             </button>
             <button
+              v-if="!selectedOrgManaged"
               type="button"
               class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink hover:bg-surface-1 disabled:opacity-50"
               data-testid="workflows-edit-button"
@@ -692,6 +993,7 @@ onMounted(loadCatalog);
               Edit
             </button>
             <button
+              v-if="!selectedOrgManaged"
               type="button"
               class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink hover:bg-surface-1 disabled:opacity-50"
               data-testid="workflows-edit-canvas-button"
@@ -700,11 +1002,12 @@ onMounted(loadCatalog);
               Edit on canvas
             </button>
             <button
+              v-if="selectedDeletable"
               type="button"
               class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink-muted hover:text-signal-danger hover:border-signal-danger disabled:opacity-50"
               :disabled="saving"
               data-testid="workflows-delete-button"
-              @click="deleteSelected"
+              @click="requestDelete"
             >
               Delete
             </button>
@@ -718,6 +1021,47 @@ onMounted(loadCatalog);
             >
               Publish to team
             </button>
+          </div>
+          <!-- Delete confirmation (nav-ia-sweep-01DOGF0F WP04, from the
+               retired Settings › Workflows panel). -->
+          <div
+            v-if="confirmingDelete"
+            role="alertdialog"
+            aria-labelledby="workflows-delete-title"
+            class="rounded-sm border border-signal-danger bg-surface-2 p-3 space-y-2"
+            data-testid="workflows-delete-confirm-dialog"
+          >
+            <h4 id="workflows-delete-title" class="font-ui text-sm text-ink">
+              Delete “{{ selected.name }}”?
+            </h4>
+            <p
+              v-if="selectedHasSchedule"
+              class="font-ui text-xs text-signal-warn"
+              data-testid="workflows-delete-schedule-warning"
+            >
+              This workflow has an active cron schedule. Deleting it will also
+              remove the schedule.
+            </p>
+            <p class="font-ui text-xs text-ink-muted">This action cannot be undone.</p>
+            <div class="flex gap-2 justify-end">
+              <button
+                type="button"
+                class="rounded-sm border border-border-muted px-3 py-1 font-ui text-xs text-ink hover:bg-surface-1"
+                data-testid="workflows-delete-cancel"
+                @click="cancelDelete"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                class="rounded-sm bg-signal-danger px-3 py-1 font-ui text-xs text-white hover:brightness-90 disabled:opacity-50"
+                :disabled="saving"
+                data-testid="workflows-delete-confirm"
+                @click="deleteSelected"
+              >
+                {{ saving ? 'Deleting…' : 'Delete' }}
+              </button>
+            </div>
           </div>
           <!-- Publish dialog (WP03) -->
           <PublishDialog

@@ -1,0 +1,151 @@
+package mlsidecar
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// RootEnvVar is the environment variable the harness sets on the engine
+// process it spawns so the engine resolves the SAME install root this
+// Layout describes (design Amendment A2 / kenaz-ml two-client-engine
+// D-A1). The real engine self-terminates via lease/ under this root, so
+// the client must also have CREATED lease/ before spawning
+// (Manager.spawnLocked enforces that ordering).
+const RootEnvVar = "KENAZ_ML_INSTALL_ROOT"
+
+// ProcessSpawner is the production Spawner (laya-advisors-01LAYA001 WP13):
+// it launches the verified engine launcher (versions/<v>/kameas-ml/
+// kameas-ml) as a DETACHED process in its own process group, so closing
+// the harness never takes the shared engine down with it (the engine's
+// own lease-based self-termination is what stops it — design §3.5).
+//
+// Interop values honored here (real-engine facts, WP13 brief item 4):
+//   - KENAZ_ML_INSTALL_ROOT is set to Layout.Root, so the engine resolves
+//     lease/ and the shutdown token under the harness's install root.
+//   - The caller (Manager.spawnLocked) has already created lease/; this
+//     type never spawns into a root without one (it re-checks).
+//   - The engine is started as `<launcher> serve --port <port>`, port being
+//     the lane candidate the Manager chose (owner ruling A5.2: base +
+//     k*LaneStride, the first one free of foreign listeners) and passed
+//     explicitly per spawn; it binds loopback only (the engine refuses
+//     anything else).
+//   - stdout/stderr go to <root>/engine.log (append), never to the
+//     harness's own stdio.
+//
+// The child is deliberately started with exec.Command, NOT
+// exec.CommandContext: the engine must outlive the ctx of whichever
+// advisor call or Settings click triggered the spawn.
+type ProcessSpawner struct {
+	Layout Layout
+	// ExtraEnv is appended after the inherited environment (and after
+	// RootEnvVar), for tests and for LAYA_THREADS-style tuning.
+	ExtraEnv []string
+	// EnvFunc, when set, is called on EVERY spawn and its entries are
+	// appended after ExtraEnv — for values read fresh at spawn time (the
+	// harness's local activity retention). nil adds nothing.
+	EnvFunc func() []string
+	// ScrubEnv names variables never inherited from the harness's own
+	// environment: the child sees them only when ExtraEnv / EnvFunc set
+	// them. For a harness-owned value, so a stray export never stands in
+	// for the setting (or sits beside the harness's own entry).
+	ScrubEnv []string
+}
+
+// SpawnEnv returns the environment the engine is launched with: the
+// inherited environment, with RootEnvVar forced to root (any inherited
+// value is dropped so a stray developer export can never redirect the
+// engine away from the verified install). An inherited variable that
+// extra also sets is dropped too, so the harness's value replaces it
+// rather than sitting beside it as a duplicate.
+func SpawnEnv(inherited []string, root string, extra ...string) []string {
+	drop := map[string]bool{RootEnvVar: true}
+	for _, kv := range extra {
+		drop[envKey(kv)] = true
+	}
+	out := make([]string, 0, len(inherited)+1+len(extra))
+	for _, kv := range inherited {
+		if drop[envKey(kv)] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	out = append(out, RootEnvVar+"="+root)
+	return append(out, extra...)
+}
+
+// envKey is kv's name (everything before the first '=').
+func envKey(kv string) string {
+	if i := strings.IndexByte(kv, '='); i >= 0 {
+		return kv[:i]
+	}
+	return kv
+}
+
+// Env is the child environment Spawn uses, built from inherited (the
+// harness's own environment): ScrubEnv names removed, then SpawnEnv with
+// ExtraEnv and EnvFunc's entries, read now.
+func (p ProcessSpawner) Env(inherited []string) []string {
+	if len(p.ScrubEnv) > 0 {
+		scrub := make(map[string]bool, len(p.ScrubEnv))
+		for _, k := range p.ScrubEnv {
+			scrub[k] = true
+		}
+		kept := make([]string, 0, len(inherited))
+		for _, kv := range inherited {
+			if !scrub[envKey(kv)] {
+				kept = append(kept, kv)
+			}
+		}
+		inherited = kept
+	}
+	return SpawnEnv(inherited, p.Layout.Root, p.spawnExtra()...)
+}
+
+// spawnExtra is ExtraEnv followed by EnvFunc's entries, read now.
+func (p ProcessSpawner) spawnExtra() []string {
+	out := append([]string(nil), p.ExtraEnv...)
+	if p.EnvFunc != nil {
+		out = append(out, p.EnvFunc()...)
+	}
+	return out
+}
+
+// Spawn implements Spawner. port is the loopback port the engine is told
+// to bind (`serve --port N`) — the lane port the Manager chose and will
+// dial; 0 omits the flag (the engine's own default, prod's 7774), which
+// only the Manager's fixed-endpoint mode (BasePort == 0) ever passes.
+func (p ProcessSpawner) Spawn(_ context.Context, exePath string, port int) (int, error) {
+	if info, err := os.Stat(p.Layout.LeaseDir()); err != nil || !info.IsDir() {
+		return 0, fmt.Errorf("mlsidecar: refusing to spawn: lease dir %s does not exist (the client must create it first)", p.Layout.LeaseDir())
+	}
+	logf, err := os.OpenFile(filepath.Join(p.Layout.Root, "engine.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return 0, fmt.Errorf("mlsidecar: open engine log: %w", err)
+	}
+	defer logf.Close() // the child holds its own dup of the fd
+
+	args := []string{"serve"}
+	if port > 0 {
+		args = append(args, "--port", strconv.Itoa(port))
+	}
+	cmd := exec.Command(exePath, args...)
+	cmd.Dir = filepath.Dir(exePath)
+	cmd.Env = p.Env(os.Environ())
+	cmd.Stdin = nil
+	cmd.Stdout = logf
+	cmd.Stderr = logf
+	detachProcess(cmd)
+	if err := cmd.Start(); err != nil {
+		return 0, fmt.Errorf("mlsidecar: start engine %s: %w", exePath, err)
+	}
+	pid := cmd.Process.Pid
+	// Reap the child when it exits (it self-terminates on zero leases) so
+	// it never lingers as a zombie of the harness process.
+	go func() { _ = cmd.Wait() }()
+	return pid, nil
+}

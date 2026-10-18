@@ -305,6 +305,11 @@ const (
 	// <DataDir>/mcp/recipes/_imports/*.yaml — translated from a
 	// clipboard-pasted Claude Desktop / Cursor config.
 	SourceImported = "imported"
+	// SourceOrg marks recipes installed by ApplyProvisionedMCP from a
+	// fleet-signed ProvisionedMCP entry (fleet-org-config-inheritance-
+	// 01NORGX01 WP02). Org entries are MergedCatalog's highest-precedence
+	// layer (ConflictPolicyOrgWinsReadonly) — see org.go.
+	SourceOrg = "org"
 )
 
 // ConfigOption is one user-editable knob the install modal renders.
@@ -603,6 +608,13 @@ func (r *Recipe) ToServerSpec(env map[string]string, config map[string]any) mcp.
 		PostURL:         r.PostURL,
 		Env:             envCopy,
 		HeadersTemplate: headers,
+		// connector-lifecycle-truth-01PMZ303 UNIT-12: thread the
+		// declared dials through instead of discarding them. Both are
+		// already milliseconds on both sides (Recipe and ServerSpec),
+		// so this is a straight copy — the pool/transport layer is
+		// responsible for the 0-means-default fallback.
+		InitTimeoutMs: r.InitTimeoutMs,
+		PingPeriodMs:  r.PingPeriodMs,
 	}
 }
 

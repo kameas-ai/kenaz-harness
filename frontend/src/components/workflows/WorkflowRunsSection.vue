@@ -57,12 +57,30 @@ function toggleCollapsed() {
 }
 
 function onRowClick(run: RunState) {
+  // automation-actually-runs-01PMZ404 UNIT-11: WorkflowsView now reads
+  // `?run=<id>` (RunsHistoryTab expands + scrolls to the named run) —
+  // the deep-link below is no longer a "hash-style hint … harmless if
+  // ignored", it actually navigates the user to that run. DECISION:
+  // navigation wins over this panel's own local expand. The two were
+  // tearing down each other's state (this sidebar panel's expand only
+  // matters while the user stays on this panel; the moment router.push
+  // moves them to /workflows, whether *this* row is still expanded in
+  // the sidebar is not the affordance that matters). expandedRunId is
+  // kept for the panel's own non-navigating browse-in-place UX (see the
+  // `router` nil-guard below — a test/served-mode host with no router
+  // gets exactly that: the toggle, no navigation), not as the source of
+  // truth for "which run is focused" once navigation has happened.
   expandedRunId.value =
     expandedRunId.value === run.runId ? null : run.runId;
+  // emit('workflow-run:focus', run.runId) below has zero listeners —
+  // LeftRail.vue mounts this component bare (`<WorkflowRunsSection />`,
+  // no @workflow-run:focus). A-0 forbids resolving that by deleting the
+  // emit: recorded as a dated justification (docs/unwired-ledger.md,
+  // UNIT-11, 2026-09-12) rather than wiring a listener that would only
+  // duplicate the router.push below — LeftRail has no in-place surface
+  // of its own to focus a run onto; /workflows is that surface, and the
+  // query param already reaches it.
   emit('workflow-run:focus', run.runId);
-  // Best-effort deep-link to the workflows surface; the WorkflowsView
-  // can pick up `?run=<id>` when WP09 wires the query param. Until
-  // then this is just a hash-style hint and harmless if ignored.
   if (router) {
     void router.push({ path: '/workflows', query: { run: run.runId } });
   }

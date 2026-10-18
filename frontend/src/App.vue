@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, provide, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onMounted, provide, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import Shell from '@/shell/Shell.vue';
 import CommandPalette from '@/components/ui/CommandPalette.vue';
 import ToastRoot from '@/components/ui/ToastRoot.vue';
@@ -8,6 +8,7 @@ import OnboardingDialog from '@/views/onboarding/OnboardingDialog.vue';
 import TelemetryOnboardingModal from '@/components/onboarding/TelemetryOnboardingModal.vue';
 import AboutDialog from '@/components/about/AboutDialog.vue';
 import AskUserQuestion from '@/components/dialogs/AskUserQuestion/AskUserQuestion.vue';
+import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { setConnectionState } from '@/lib/useConnectionState';
 import { restoreLastRoute, installRouteAuditing } from '@/lib/routing';
@@ -24,6 +25,30 @@ import { useEventStream } from '@/lib/useEventStream';
 
 const client = useHarnessClient();
 const router = useRouter();
+const route = useRoute();
+
+// Confirm-each tool confirmations (workflow-tool-permission-gate hang
+// fix). ConfirmBus is process-global — HasChannel() does not care which
+// view is on screen — so ConfirmToolModal.vue must be too. It used to
+// mount exclusively inside SessionsView.vue; navigating to /workflows
+// (or anywhere else) unmounted its useEventStream('tool:confirm-pending')
+// subscription while the goroutine it exists to unblock stayed parked,
+// so a "Run now" click from Workflows could hang forever with no
+// visible way to resolve it. Mounted here, next to AskUserQuestion, for
+// the identical reason that dialog is: both own a blocked goroutine and
+// must be reachable from every route, not one view.
+//
+// activeSessionId still derives from the URL when the user happens to
+// be on /sessions/:id, preserving the existing "label foreign rows"
+// behaviour SessionsView's mount had — this is display-only (see
+// ConfirmToolModal's prop doc: it never FILTERS on this value), so
+// falling back to '' on every other route just marks every row foreign,
+// which is the honest reading when no session is in front.
+const activeSessionId = computed<string>(() => {
+  if (route.name !== 'sessions') return '';
+  const p = route.params.id;
+  return typeof p === 'string' ? p : '';
+});
 
 // Markdown extensions dial — hydrated from settings, defaults to 'all'.
 // Provided as a ref so the SettingsView write path can update the
@@ -215,6 +240,16 @@ onMounted(async () => {
        wherever the user happens to be — the same reasoning that puts
        ConfirmToolModal outside the chat surface. -->
   <AskUserQuestion />
+  <!-- Confirm-each tool confirmations (workflow-tool-permission-gate hang
+       fix). Moved here from SessionsView.vue: ConfirmBus is process-global
+       (HasChannel() does not care which view is on screen), so a "Run now"
+       click on the Workflows view could park a confirm_each call that only
+       SessionsView's mount could hear about — navigating away hung the run
+       with no visible way to resolve it. activeSessionId is computed above
+       from the route and is LABEL-only (see the component's own prop doc);
+       it never filters which rows render, so this single instance still
+       serves both the chat surface and every other route. -->
+  <ConfirmToolModal :active-session-id="activeSessionId" />
   <!-- About dialog — opened by OS menu bar "About" item (menu:about:open event) -->
   <AboutDialog
     :open="aboutStore.isOpen.value"

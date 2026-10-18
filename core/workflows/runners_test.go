@@ -946,7 +946,7 @@ func (denyAllAuthz) Authorize(_ context.Context, _, _ string) error {
 // reason, rather than silently disappearing from the transcript.
 func TestLinearRunner_FailedStepSkipsDownstream(t *testing.T) {
 	t.Parallel()
-	mcp := &fakeMCP{err: errors.New("MCP server \"slack\" is not installed or not authorized — install it from Tools")}
+	mcp := &fakeMCP{err: errors.New("MCP server \"slack\" is not installed or not authorized — install it from Capabilities")}
 	wf := Workflow{
 		ID: "downstream-skip", Name: "Downstream Skip", Version: 1,
 		Steps: []Step{

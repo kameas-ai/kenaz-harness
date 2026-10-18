@@ -8,12 +8,13 @@
  *   4. sign-in button click calls fleetSignIn
  *   5. sign-out button click calls fleetSignOut
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import AccountPanel from '@/views/settings/AccountPanel.vue';
-import { createFakeHarnessClient } from '@/lib/harnessClient';
+import { createFakeHarnessClient, fakeFleetSession } from '@/lib/harnessClient';
+import { _resetFleetSessionForTest } from '@/lib/fleetSession';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { FleetIdentity, FleetProfileInfo } from '@/lib/types';
+import type { FleetIdentity, FleetProfileInfo, FleetSessionView } from '@/lib/types';
 
 const prodProfile: FleetProfileInfo = {
   name: 'prod',
@@ -40,45 +41,60 @@ const mockIdentity: FleetIdentity = {
   roles: ['member'],
 };
 
-function buildDisabledClient() {
+// fleet-session-truth-01DOGF0A WP04: the panel renders the shared fleet
+// session store, so every client here serves Settings_FleetSession snapshots
+// and flips them the way the backend would on sign-in / sign-out.
+function session(
+  state: FleetSessionView['state'],
+  profile: FleetProfileInfo = prodProfile,
+  over: Partial<FleetSessionView> = {},
+): FleetSessionView {
+  return fakeFleetSession({
+    state,
+    profile,
+    identity: state === 'signed_in' || state === 'degraded' ? mockIdentity : undefined,
+    ...over,
+  });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildClient(initial: FleetSessionView, over: Record<string, any> = {}) {
+  let current = initial;
   return createFakeHarnessClient({
     settings: {
-      fleetProfile: vi.fn(async () => { throw new Error('fleet: disabled by env'); }),
-      fleetSignedIn: vi.fn(async () => false),
-      fleetSignIn: vi.fn(async () => ({ userId: '', orgId: '', teamId: '' })),
-      fleetSignOut: vi.fn(async () => {}),
-      fleetRefreshIdentity: vi.fn(async () => ({ userId: '', orgId: '', teamId: '' })),
+      fleetSession: vi.fn(async () => current),
+      fleetProfile: vi.fn(async () => current.profile ?? prodProfile),
+      fleetSignedIn: vi.fn(async () => current.state === 'signed_in'),
+      fleetSignIn: vi.fn(async () => {
+        current = session('signed_in', current.profile);
+        return mockIdentity;
+      }),
+      fleetSignOut: vi.fn(async () => {
+        current = session('signed_out', current.profile);
+      }),
+      fleetRefreshIdentity: vi.fn(async () => mockIdentity),
+      ...over,
     } as any,
   });
+}
+
+function buildDisabledClient() {
+  return buildClient(fakeFleetSession({ state: 'disabled' }));
 }
 
 function buildSignedOutClient() {
-  return createFakeHarnessClient({
-    settings: {
-      fleetProfile: vi.fn(async () => prodProfile),
-      fleetSignedIn: vi.fn(async () => false),
-      fleetSignIn: vi.fn(async () => mockIdentity),
-      fleetSignOut: vi.fn(async () => {}),
-      fleetRefreshIdentity: vi.fn(async () => mockIdentity),
-    } as any,
-  });
+  return buildClient(session('signed_out'));
 }
 
 function buildSignedInClient(profile: FleetProfileInfo = prodProfile) {
-  return createFakeHarnessClient({
-    settings: {
-      fleetProfile: vi.fn(async () => profile),
-      fleetSignedIn: vi.fn(async () => true),
-      fleetSignIn: vi.fn(async () => mockIdentity),
-      fleetSignOut: vi.fn(async () => {}),
-      fleetRefreshIdentity: vi.fn(async () => mockIdentity),
-    } as any,
-  });
+  return buildClient(session('signed_in', profile));
 }
 
 // ── specs ────────────────────────────────────────────────────────────────
 
 describe('AccountPanel', () => {
+  beforeEach(() => _resetFleetSessionForTest());
+
   it('1. disabled state renders banner with no sign-in CTA', async () => {
     const client = buildDisabledClient();
     const wrapper = mount(AccountPanel, {
@@ -173,4 +189,179 @@ describe('AccountPanel', () => {
 
     expect(wrapper.find('[data-testid="env-badge"]').exists()).toBe(false);
   });
+
+  // ── fleet-enroll-not-provisioned ────────────────────────────────────────
+  //
+  // Before this fix, enrollIdentity's raw-body error (no code branch) fell
+  // through humanizeFleetError's `return raw;` and the panel rendered the
+  // literal 403 JSON body to the user. This pins that a sign-in failing
+  // with ErrUserNotProvisioned now renders an actionable message + a real
+  // link built from FleetProfileInfo.fleetBaseUrl, not the raw response.
+
+  it('6. user_not_provisioned sign-in error renders an actionable link, not raw JSON', async () => {
+    const rawServerBody =
+      '{"code":"user_not_provisioned","message":"This Zitadel user has no Fleet account. ' +
+      'Finish signup at the SPA host.","details":{"zitadel_user_id":"test-user-id"}}';
+    const client = buildClient(session('signed_out'), {
+      fleetSignIn: vi.fn(async () => {
+        // Mirrors core/fleet/identity.go's wrapped sentinel: stable
+        // prefix from ErrUserNotProvisioned, raw server body appended
+        // after "(server: ...)" the way mapSiteError-style wrapping does.
+        throw new Error(
+          'fleet: this Zitadel user has no Fleet account; finish signup at the SPA host ' +
+            `(server: ${rawServerBody})`,
+        );
+      }),
+    });
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-testid="sign-in-btn"]').trigger('click');
+    await flushPromises();
+
+    const errorMsg = wrapper.find('[data-testid="error-msg"]');
+    expect(errorMsg.exists()).toBe(true);
+    // The raw JSON body must never reach the DOM.
+    expect(errorMsg.text()).not.toContain('user_not_provisioned');
+    expect(errorMsg.text()).not.toContain('zitadel_user_id');
+    expect(errorMsg.text()).not.toContain('{');
+
+    const link = wrapper.find('[data-testid="finish-signup-link"]');
+    expect(link.exists()).toBe(true);
+    expect(link.attributes('href')).toBe(prodProfile.fleetBaseUrl);
+  });
+
+  it('7. mounting with stuck tokens (already "signed in", enroll never succeeded) renders the same actionable link', async () => {
+    // This is the half-signed-in state from the bug report: FleetSignIn
+    // saved tokens before enroll ran, so fleetSignedIn() (token-expiry
+    // based) reports true on every future mount even though enroll has
+    // never once succeeded. init() runs automatically on mount — this is
+    // the path a user hits by opening the app or Settings → Account, with
+    // no click required, so it must not stay silent.
+    const rawServerBody =
+      '{"code":"user_not_provisioned","message":"This Zitadel user has no Fleet account. ' +
+      'Finish signup at the SPA host.","details":{"zitadel_user_id":"test-user-id"}}';
+    // The backend snapshot for that state: tokens usable, enroll failing
+    // with not-provisioned → degraded, automatic retry stopped (FR-4).
+    void rawServerBody;
+    const client = buildClient(
+      session('degraded', prodProfile, {
+        reason: 'not_provisioned',
+        autoRetry: false,
+        identity: undefined,
+      }),
+    );
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+
+    // Must NOT render as an indistinguishable-from-never-signed-in button
+    // with no explanation.
+    const errorMsg = wrapper.find('[data-testid="error-msg"]');
+    expect(errorMsg.exists()).toBe(true);
+    expect(errorMsg.text()).not.toContain('user_not_provisioned');
+    expect(errorMsg.text()).not.toContain('zitadel_user_id');
+    expect(errorMsg.text()).not.toContain('{');
+
+    const link = wrapper.find('[data-testid="finish-signup-link"]');
+    expect(link.exists()).toBe(true);
+    expect(link.attributes('href')).toBe(prodProfile.fleetBaseUrl);
+  });
 });
+
+describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)', () => {
+  beforeEach(() => _resetFleetSessionForTest());
+
+  it('a failed identity refresh with valid tokens keeps the identity and offers Retry, not Sign in', async () => {
+    const client = buildClient(session('degraded', prodProfile, { reason: 'network' }));
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="signed-in-panel"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="sign-in-btn"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="identity-email"]').text()).toContain('alice@example.com');
+    expect(wrapper.find('[data-testid="account-degraded"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="refresh-btn"]').text()).toBe('Retry');
+  });
+
+  it('reads the shared store: mounting fires no enroll of its own', async () => {
+    const client = buildSignedInClient();
+    mount(AccountPanel, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    expect(client.settings.fleetRefreshIdentity).not.toHaveBeenCalled();
+  });
+
+  it('needs_reauth (token without org claim) → "Update sign-in" runs the sign-in flow', async () => {
+    const client = buildClient(session('degraded', prodProfile, { reason: 'needs_reauth' }));
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="account-degraded"]').text()).toContain('Update your sign-in');
+    await wrapper.find('[data-testid="reauth-btn"]').trigger('click');
+    await flushPromises();
+    expect(client.settings.fleetSignIn).toHaveBeenCalledOnce();
+    expect(wrapper.find('[data-testid="reauth-btn"]').exists()).toBe(false);
+  });
+
+  it('FR-9: roles and name render in the Account body', async () => {
+    const client = buildClient(
+      session('signed_in', prodProfile, {
+        identity: { ...mockIdentity, displayName: 'Alice Cooper', roles: ['org_owner'] },
+      }),
+    );
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="identity-roles"]').text()).toBe('Org owner');
+    expect(wrapper.find('[data-testid="identity-name"]').text()).toBe('Alice Cooper');
+  });
+
+  // Dogfood 2026-10-08 P3: "Name" showed the email (fleet's display-name
+  // fallback). A display name equal to the email is not rendered as a name.
+  it('hides the Name row when the display name is just the email', async () => {
+    const client = buildClient(
+      session('signed_in', prodProfile, {
+        identity: { ...mockIdentity, displayName: 'Alice@Example.com' },
+      }),
+    );
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="identity-name"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="identity-email"]').text()).toBe('alice@example.com');
+  });
+
+  // device-keys-handoff-01DEVKH01 review fix #4.
+  it("shows this device's own handoff-key fingerprint when registered", async () => {
+    const fp = 'sha256:' + 'ab'.repeat(32);
+    const client = buildClient(
+      session('signed_in', prodProfile, { deviceKeys: { status: 'registered', handoffFingerprint: fp } }),
+    );
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="identity-device-fingerprint"]').text()).toBe(fp);
+  });
+
+  it('shows the cannot-receive reason (no fingerprint) when keys did not register', async () => {
+    const msg = "This device can't receive shared sessions: too many devices.";
+    const client = buildClient(
+      session('signed_in', prodProfile, { deviceKeys: { status: 'too_many_devices', message: msg } }),
+    );
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="identity-device-fingerprint"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="error-msg"]').text()).toContain('too many devices');
+  });
+});
+

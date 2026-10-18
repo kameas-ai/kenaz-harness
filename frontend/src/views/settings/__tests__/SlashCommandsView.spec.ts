@@ -10,7 +10,8 @@ import { mount, flushPromises } from '@vue/test-utils';
 import { createRouter, createWebHashHistory } from 'vue-router';
 
 import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
-import { createFakeHarnessClient } from '@/lib/harnessClient';
+import { createFakeHarnessClient, fakeFleetSession } from '@/lib/harnessClient';
+import { _resetFleetSessionForTest, applyFleetSession } from '@/lib/fleetSession';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import { initFeatureFlags } from '@/lib/featureFlags';
 import type { UserCommandSummary, UserCommand, AppInfo } from '@/lib/types';
@@ -234,8 +235,8 @@ describe('SlashCommandsView', () => {
   // ── "Publish to team" (fleet-skills-sync-01NDFSEX18 WP03, FR-101/102) ──
 
   describe('Publish to team (FR-101/102)', () => {
-    it('shows "Publish to team" button when editing an existing command and user has shared_team_graph', async () => {
-      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+    it('shows "Publish to team" button when editing an existing command and user has team_graph_sharing', async () => {
+      initFeatureFlags(makeAppInfo({ team_graph_sharing: true }));
       const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL });
       await flushPromises();
 
@@ -245,7 +246,7 @@ describe('SlashCommandsView', () => {
       expect(wrapper.find('[data-testid="publish-to-team-btn"]').exists()).toBe(true);
     });
 
-    it('shows "Team+ required" note when user lacks shared_team_graph capability', async () => {
+    it('shows "Team+ required" note when user lacks team_graph_sharing capability', async () => {
       initFeatureFlags(makeAppInfo({}));
       const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL });
       await flushPromises();
@@ -257,8 +258,26 @@ describe('SlashCommandsView', () => {
       expect(wrapper.find('[data-testid="publish-to-team-unavailable"]').exists()).toBe(true);
     });
 
+    it('a staff org pause shows the paused line instead of the Team+ upsell', async () => {
+      initFeatureFlags(makeAppInfo({}));
+      applyFleetSession(
+        fakeFleetSession({ state: 'signed_in', tokensUsable: true, paused: true, pausedCategory: 'legal' }),
+      );
+      try {
+        const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL });
+        await flushPromises();
+        await wrapper.find('[data-testid="slashcmd-row-standup"]').trigger('click');
+        await flushPromises();
+        expect(wrapper.find('[data-testid="org-paused-banner"]').exists()).toBe(true);
+        expect(wrapper.find('[data-testid="publish-to-team-unavailable"]').exists()).toBe(false);
+        expect(wrapper.text()).not.toMatch(/Team\+ required/);
+      } finally {
+        _resetFleetSessionForTest();
+      }
+    });
+
     it('does not show publish section when creating a new command', async () => {
-      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+      initFeatureFlags(makeAppInfo({ team_graph_sharing: true }));
       const { wrapper } = mountView({ list: [] });
       await flushPromises();
 
@@ -270,7 +289,7 @@ describe('SlashCommandsView', () => {
     });
 
     it('calls slashcmd.skillPublish with confirmed dialog', async () => {
-      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+      initFeatureFlags(makeAppInfo({ team_graph_sharing: true }));
       const skillPublishFn = vi.fn(async () => undefined);
       const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL, skillPublishFn });
       await flushPromises();
@@ -293,7 +312,7 @@ describe('SlashCommandsView', () => {
     });
 
     it('does not call skillPublish when confirm dialog is cancelled', async () => {
-      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+      initFeatureFlags(makeAppInfo({ team_graph_sharing: true }));
       const skillPublishFn = vi.fn(async () => undefined);
       const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL, skillPublishFn });
       await flushPromises();

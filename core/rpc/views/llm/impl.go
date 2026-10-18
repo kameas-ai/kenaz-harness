@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -112,8 +113,20 @@ type KeychainWriter interface {
 
 // BundleSource exposes the registry's bundle-derived profiles. A nil
 // BundleSource is treated as an empty snapshot.
+//
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — zero non-test implementers of BundleProfiles() anywhere in core/. Pre-existing gap in the llm view, out of scope for this mission; recorded in docs/unwired-ledger.md, needs its own owner)
 type BundleSource interface {
 	BundleProfiles() []corellm.ProviderProfile
+}
+
+// modelInfoMissSampleMax caps how many unresolved model ids the single
+// per-provider llm.model_info.miss line names.
+const modelInfoMissSampleMax = 5
+
+// WindowLookup resolves a model's context window on a provider kind; 0
+// is unknown.
+type WindowLookup interface {
+	ContextWindow(kind, model string) int
 }
 
 // CapCatalog is the capability-lookup seam used to populate ModelInfos
@@ -153,6 +166,7 @@ type AttachmentLimitsResult struct {
 // CredPeeker resolves a credential reference to a display-safe Redacted
 // value (credstore.Peek). Wire via Config.CredPeeker; nil = no
 // redaction in ListProviders responses (Redaction field stays zero).
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — zero non-test implementers of PeekCred() anywhere in core/. Pre-existing gap in the llm view, out of scope for this mission; recorded in docs/unwired-ledger.md, needs its own owner)
 type CredPeeker interface {
 	// PeekCred returns the display string, kind, and locator-safe id for
 	// ref. Display rules: len>12 → "first4…last4"; else "••••••••".
@@ -172,10 +186,51 @@ type CredPeeker interface {
 // uses ContentBlocks verbatim and ignores Content; legacy text-only
 // rows leave ContentBlocks nil so the historical Content path keeps
 // working.
+//
+// ID is the persisted row id. StartStream needs it to hand the chat
+// runner the user turn it is about to run — by reference, never as text
+// to persist (chat-single-writer-01DOGF0G). A reader that leaves it
+// empty (test fakes) degrades to the runner's own TurnSpan lookup.
+//
+// TurnSpanID is the row's turn_span_id (empty for classic rows). StartStream
+// reads it to decide whether a user turn is fresh: a turn whose id some row
+// already spans has been run before.
 type SessionMessage struct {
+	ID            string
+	TurnSpanID    string
 	Role          string
 	Content       string
 	ContentBlocks []corellm.ContentBlock
+}
+
+// UserTurn identifies the user message that opens a chat turn. It
+// describes a row that is ALREADY PERSISTED — by Sessions_AppendMessage /
+// Sessions_SendMessageWithBlocks (the chat surface), by the scheduler's or
+// sub-agent spawner's own append, or by the resume starter. The chat
+// runner never writes it.
+//
+// chat-single-writer-01DOGF0G (dogfood F12): this used to be a bare
+// `userMessage string` that the runner re-appended through its
+// HistoryWriter, so every typed turn landed twice — once from the
+// frontend, once from the runner — and the model read every user message
+// twice on every subsequent request. Passing a reference instead of text
+// makes a second write impossible to express: there is no field here the
+// runner could persist.
+type UserTurn struct {
+	// MessageID is the persisted user row's id — the turn's span, which
+	// every move of the turn carries as turn_span_id. Empty means "the
+	// caller could not resolve it"; the runner then asks its
+	// TurnSpanReader for the session's latest user row.
+	MessageID string
+	// Text is the row's flattened text. It is consumed, never stored:
+	// it pre-seeds the chat graph's ask node and feeds the post_send hook
+	// and the advisors. Empty for an image/document-only send.
+	Text string
+	// Announce is true on a turn's FIRST run: the runner then reports the
+	// row to fleet context-sync exactly once (FR-1d). The keychain
+	// redrive re-runs a turn that was already announced and leaves it
+	// false.
+	Announce bool
 }
 
 // SessionMessageReader is the minimal session-history surface the
@@ -184,6 +239,45 @@ type SessionMessage struct {
 type SessionMessageReader interface {
 	ListMessages(ctx context.Context, sessionID string) ([]SessionMessage, error)
 }
+
+// TurnRunSpanReader is an optional extension of SessionMessageReader:
+// the turn span ids (user message ids) that some chat run has already
+// been dispatched for (session_turn_runs). StartStream uses it so a turn
+// RE-run without a new append — the Retry of a message that was not
+// delivered (undelivered-message-retry) — is not reported to fleet
+// context-sync a second time. A failed-before-the-first-token run writes
+// no spanned row, so the row-based turnAlreadySpanned check alone cannot
+// see that the turn was already announced. Readers that do not implement
+// it (test fakes) keep the row-based check only.
+type TurnRunSpanReader interface {
+	RunTurnSpans(ctx context.Context, sessionID string) (map[string]TurnRunState, error)
+}
+
+// TurnRunState is the NEWEST recorded run of one turn span
+// (session_turn_runs). Outcome "" means in flight, or a run recorded
+// before migration sessions/0344 — i.e. unknown.
+type TurnRunState struct {
+	Outcome   string
+	Delivered bool
+}
+
+// ActiveRunChecker is an optional extension of ChatRunner: whether a run
+// for sessionID is still executing. *chat.ChatRunner implements it.
+type ActiveRunChecker interface {
+	HasActiveRun(sessionID string) bool
+}
+
+// ErrTurnAlreadyDelivered refuses a no-append StartStream (a Retry) whose
+// newest user message already reached the model — e.g. a stale NOT
+// DELIVERED badge clicked in a second window after the first one's
+// Retry succeeded. Re-running it would answer the same message twice.
+// The text is the user-facing copy.
+var ErrTurnAlreadyDelivered = errors.New("This message already reached the model, so there is nothing to retry.")
+
+// ErrTurnRetryInFlight refuses a no-append StartStream (a Retry) while a
+// run for the session is still executing — two clients retrying the same
+// message at once would otherwise start two runs of one turn.
+var ErrTurnRetryInFlight = errors.New("This message is already being sent to the model.")
 
 // SessionContextReader exposes the session's optional starting context
 // (Mission A). buildMessages prepends a system role message when the
@@ -279,14 +373,14 @@ type HookRunner interface {
 // chat package directly (DIRECTIVE_001 — keeps the import direction
 // one-way: chat package can import llm view, not the other way around).
 type ChatRunner interface {
-	StartStream(ctx context.Context, profileID, sessionID, modelOverride, userMessage string) (string, error)
+	StartStream(ctx context.Context, profileID, sessionID, modelOverride string, turn UserTurn) (string, error)
 	StopStream(ctx context.Context, subID string) error
 	// HasPausedSubFor reports whether a paused turn exists for the given
 	// profileID and returns its sub_id token.
 	// (provider-keychain-rotation-01KQ8TD9 WP04)
 	HasPausedSubFor(profileID string) (token string, ok bool)
 	// RedriveLastTurn re-issues a kernel run for the paused turn
-	// identified by profileID without re-appending the user message.
+	// identified by profileID, re-running the same persisted user turn.
 	// (provider-keychain-rotation-01KQ8TD9 WP04)
 	RedriveLastTurn(ctx context.Context, profileID string) (newSubID string, err error)
 }
@@ -299,6 +393,8 @@ type ChatRunner interface {
 // backend (core/secrets.Resolver) does — the rpc wiring passes a thin
 // adapter over secrets.Resolver.Invalidate.
 // (provider-keychain-rotation-01KQ8TD9 WP04)
+//
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — zero non-test implementers of InvalidateCred() anywhere in core/, contrary to this doc comment's claim that "the rpc wiring passes a thin adapter": no such adapter exists in the tree. A second docstring-describes-nothing finding, not just an unwired dep. Pre-existing gap in the llm view, out of scope for this mission; recorded in docs/unwired-ledger.md, needs its own owner)
 type CredentialInvalidator interface {
 	// InvalidateCred evicts the cached credential for (kind, locator).
 	InvalidateCred(kind, locator string)
@@ -308,6 +404,8 @@ type CredentialInvalidator interface {
 // The rpc wiring passes a concrete *audit.Emitter (or equivalent) that
 // implements this via audit.Emit.
 // (provider-keychain-rotation-01KQ8TD9 WP04)
+//
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — zero non-test implementers of EmitRotated() anywhere in core/, contrary to this doc comment's claim of a concrete *audit.Emitter adapter: none exists in the tree. Pre-existing gap in the llm view, out of scope for this mission; recorded in docs/unwired-ledger.md, needs its own owner)
 type AuditEmitter interface {
 	EmitRotated(ctx context.Context, provider, profileID, source string, rotatedAt time.Time) error
 }
@@ -348,6 +446,7 @@ type API struct {
 	// capCatalog, when non-nil, is consulted by ListProviders to populate
 	// Provider.ModelInfos with contextWindow data from the curated table.
 	capCatalog CapCatalog
+	windows    WindowLookup
 	// attachments is the WP03 source of truth for resolved starting
 	// context. nil falls back to the SessionContextReader probe so
 	// Mission A behaviour stays intact during the one-release buffer.
@@ -463,6 +562,11 @@ type Config struct {
 	// Provider.Redaction for each profile. nil = Redaction field
 	// is omitted (zero value) — no breaking change for existing tests.
 	CredPeeker CredPeeker
+	// Windows, when non-nil, is the context-window lookup the chat
+	// request path caps its tool-schema budget with; ListProviders reports
+	// its answer as each model's ContextWindow so the picker and the
+	// budget agree.
+	Windows WindowLookup
 	// CapCatalog, when non-nil, is consulted by ListProviders to populate
 	// Provider.ModelInfos with contextWindow data from the curated table.
 	// nil = ModelInfos fields default to 0 (unknown) — frontend falls
@@ -524,6 +628,7 @@ func New(cfg Config) *API {
 		artifacts:       cfg.Artifacts,
 		credPeeker:      cfg.CredPeeker,
 		capCatalog:      cfg.CapCatalog,
+		windows:         cfg.Windows,
 		credInvalidator: cfg.CredInvalidator,
 		auditRotation:   cfg.AuditRotation,
 		customAdapter:   cfg.CustomAdapter,
@@ -814,12 +919,21 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 				}
 			}
 			infos := make([]ModelInfo, 0, len(v.Models))
+			// Log one summary line per provider (plus at most one miss line
+			// with a capped sample), never one line per model: a provider
+			// can list hundreds of models, and per-model lines flood the
+			// in-app Logs ring on every refresh.
 			missCount := 0
+			dynamicHits := 0
+			catalogHits := 0
+			var missSample []string
 			for _, modelID := range v.Models {
 				info := ModelInfo{ID: modelID, DisplayName: modelID}
 				resolved := false
+				var listed *corellm.ModelInfo
 				if lookup != nil {
 					if mi, ok := lookup.LookupModelInfo(modelID); ok {
+						listed = &mi
 						info.ContextWindow = mi.ContextWindow
 						info.MaxOutputTokens = mi.MaxOutputTokens
 						if mi.DisplayName != "" {
@@ -827,12 +941,7 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 						}
 						info.Description = mi.Description
 						resolved = true
-						logging.L().Debug("llm.model_info.dynamic_hit",
-							"provider_id", v.ID,
-							"kind", v.Kind,
-							"model_id", modelID,
-							"context_window", mi.ContextWindow,
-							"max_output_tokens", mi.MaxOutputTokens)
+						dynamicHits++
 					}
 				}
 				if !resolved && a.capCatalog != nil {
@@ -842,23 +951,37 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 					info.MaxOutputTokens = mot
 					if cw > 0 {
 						resolved = true
-						logging.L().Debug("llm.model_info.catalog_hit",
-							"provider_id", v.ID,
-							"kind", v.Kind,
-							"model_id", modelID,
-							"context_window", cw,
-							"max_output_tokens", mot)
+						catalogHits++
 					}
 				}
+				if a.windows != nil {
+					if cw := a.windows.ContextWindow(v.Kind, modelID); cw > 0 {
+						info.ContextWindow = cw
+					}
+				}
+				info.SupportsPromptCache = modelCachesPrompts(v.Kind, modelID, listed)
 				if !resolved {
 					missCount++
-					logging.L().Info("llm.model_info.miss",
-						"provider_id", v.ID,
-						"kind", v.Kind,
-						"model_id", modelID,
-						"reason", "no dynamic lookup hit and no catalog entry; frontend will use MODEL_CONTEXT_FALLBACK")
+					if len(missSample) < modelInfoMissSampleMax {
+						missSample = append(missSample, modelID)
+					}
 				}
 				infos = append(infos, info)
+			}
+			logging.L().Debug("llm.model_info.resolved",
+				"provider_id", v.ID,
+				"kind", v.Kind,
+				"models", len(v.Models),
+				"dynamic_hits", dynamicHits,
+				"catalog_hits", catalogHits,
+				"misses", missCount)
+			if missCount > 0 {
+				logging.L().Info("llm.model_info.miss",
+					"provider_id", v.ID,
+					"kind", v.Kind,
+					"miss_count", missCount,
+					"model_ids_sample", strings.Join(missSample, ","),
+					"reason", "no dynamic lookup hit and no catalog entry; frontend will use MODEL_CONTEXT_FALLBACK")
 			}
 			v.ModelInfos = infos
 			// On a miss with a refresher available, kick a background
@@ -937,23 +1060,89 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		log.Error("llm.start_stream.failed", "reason", "chat runner not wired")
 		return "", errors.New("llm: chat runner not wired")
 	}
-	// Pull the latest user message — the chat surface posts the user
-	// turn via Sessions_AppendMessage immediately before calling
-	// StartStream, so the trailing user row is the new turn. The
-	// runner re-appends it through the HistoryWriter seam so the kernel
-	// run sees consistent history.
-	var userMessage string
+	// SINGLE WRITER (chat-single-writer-01DOGF0G). The user turn is
+	// already persisted, exactly once, by whoever asked for this stream:
+	// the chat surface posts it via Sessions_AppendMessage /
+	// Sessions_SendMessageWithBlocks immediately before calling
+	// StartStream, and the scheduler and sub-agent spawner append their
+	// prompt the same way. So this resolves the newest user row and hands
+	// the runner a REFERENCE to it — id + text — and nothing it could
+	// write. (This comment used to say "the runner re-appends it through
+	// the HistoryWriter seam so the kernel run sees consistent history";
+	// that re-append was the second writer behind dogfood F12.)
+	//
+	// Announce: the row is a fresh turn — so it is reported to fleet
+	// context-sync once — when NO row spans it yet. Every move a run
+	// writes carries the turn's id as turn_span_id, so a spanned row has
+	// already been run (and announced). This replaced "the user row is
+	// the session's last row", which (a) missed a send that raced the
+	// PREVIOUS turn's deferred writes (journal.Finish landing a held move
+	// after the new user row) and (b) let a retried turn whose failed run
+	// left moves behind announce a second time. Residual: a turn whose
+	// failed run wrote NO spanned row re-announces if re-run without a new
+	// append — no live caller does that (every caller appends first; the
+	// keychain redrive bypasses this path with Announce=false).
+	//
+	// Retry (undelivered-message-retry): re-dispatching a turn whose run
+	// failed before the model accepted it is exactly this call with no
+	// new append — the newest user row is still the undelivered one, so
+	// it is resolved and re-run by reference, with the same span and no
+	// second user row. That closes the residual above: a run is recorded
+	// in session_turn_runs at StartStream, so a turn that was ever
+	// dispatched is not announced again (TurnRunSpanReader).
+	var turn UserTurn
 	if a.history != nil && sessionID != "" {
 		if stored, herr := a.history.ListMessages(ctx, sessionID); herr == nil {
 			for i := len(stored) - 1; i >= 0; i-- {
 				if stored[i].Role == "user" {
-					userMessage = stored[i].Content
+					announce := !turnAlreadySpanned(stored, stored[i].ID)
+					if rr, ok := a.history.(TurnRunSpanReader); ok {
+						if spans, rerr := rr.RunTurnSpans(ctx, sessionID); rerr == nil {
+							if state, ran := spans[stored[i].ID]; ran {
+								// A run was already dispatched for the newest
+								// user row, so this call appended nothing: it
+								// is a Retry. Refuse one that cannot be
+								// right (undelivered-message-retry hardening);
+								// a fresh send — append, then StartStream —
+								// has no run yet and never reaches here.
+								announce = false
+								if state.Outcome != "" && state.Delivered {
+									log.Info("llm.start_stream.refused", "reason", "turn already delivered", "session_id", sessionID)
+									return "", ErrTurnAlreadyDelivered
+								}
+								if ar, ok := a.chatRunner.(ActiveRunChecker); ok && ar.HasActiveRun(sessionID) {
+									log.Info("llm.start_stream.refused", "reason", "run in flight", "session_id", sessionID)
+									return "", ErrTurnRetryInFlight
+								}
+							}
+						}
+					}
+					turn = UserTurn{
+						MessageID: stored[i].ID,
+						Text:      stored[i].Content,
+						Announce:  announce,
+					}
 					break
 				}
 			}
 		}
 	}
-	return a.chatRunner.StartStream(ctx, profileID, sessionID, modelOverride, userMessage)
+	return a.chatRunner.StartStream(ctx, profileID, sessionID, modelOverride, turn)
+}
+
+// turnAlreadySpanned reports whether any row carries id as its
+// turn_span_id — i.e. a run of that turn already wrote moves. An empty id
+// (a reader that carries no ids) is never "spanned".
+func turnAlreadySpanned(stored []SessionMessage, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, m := range stored {
+		if m.TurnSpanID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // StopStream terminates the subscription. Forwards to the ChatRunner
@@ -1073,6 +1262,9 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 	default:
 		return fmt.Errorf("llm: AddProvider requires an indirect credential kind (keychain|aws_profile|env|file), got %q", in.Cred.Kind)
 	}
+	if err := refuseClientFleetBinding(in.Cred); err != nil {
+		return err
+	}
 	// Only keychain creds need a plaintext write — aws_profile points at
 	// ~/.aws/credentials which the AWS SDK reads directly, env / file
 	// resolve via their respective backends with no upfront staging.
@@ -1097,10 +1289,7 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 		Model:  in.Model,
 		Models: in.Models,
 		Region: in.Region,
-		Cred: corellm.CredentialReference{
-			Kind:    in.Cred.Kind,
-			Locator: in.Cred.Locator,
-		},
+		Cred:   toCoreCred(in.Cred),
 	}
 	if err := a.store.Add(profile); err != nil {
 		log.Error("llm.add_provider.failed", "id", in.ID, "stage", "store.Add", "err", err.Error())
@@ -1136,6 +1325,9 @@ func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
 	default:
 		return fmt.Errorf("llm: UpdateProvider requires an indirect credential kind (keychain|aws_profile|env|file), got %q", in.Cred.Kind)
 	}
+	if err := refuseClientFleetBinding(in.Cred); err != nil {
+		return err
+	}
 	if a.bundles != nil {
 		for _, p := range a.bundles.BundleProfiles() {
 			if p.ID == in.ID {
@@ -1164,10 +1356,7 @@ func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
 		Model:  in.Model,
 		Models: in.Models,
 		Region: in.Region,
-		Cred: corellm.CredentialReference{
-			Kind:    in.Cred.Kind,
-			Locator: in.Cred.Locator,
-		},
+		Cred:   toCoreCred(in.Cred),
 	}
 	if err := a.store.Update(profile); err != nil {
 		return err
@@ -1243,16 +1432,45 @@ func (a *API) ListModels(ctx context.Context, kind, plaintextApiKey string) ([]M
 		return nil, err
 	}
 	out := make([]ModelInfo, 0, len(models))
-	for _, m := range models {
+	for i := range models {
+		m := models[i]
 		out = append(out, ModelInfo{
-			ID:              m.ID,
-			DisplayName:     m.DisplayName,
-			Description:     m.Description,
-			ContextWindow:   m.ContextWindow,
-			MaxOutputTokens: m.MaxOutputTokens,
+			ID:                  m.ID,
+			DisplayName:         m.DisplayName,
+			Description:         m.Description,
+			ContextWindow:       m.ContextWindow,
+			MaxOutputTokens:     m.MaxOutputTokens,
+			SupportsPromptCache: modelCachesPrompts(kind, m.ID, &m),
 		})
 	}
 	return out, nil
+}
+
+// modelCachesPrompts mirrors the adapters' request-time decision to send
+// cache_control markers for (kind, modelID), so the "caches prompts"
+// badge never claims more than the wire does. A model-list entry that
+// reports llm.ModelInfo.SupportsPromptCache is believed. Otherwise the
+// curated llm.SupportsPromptCache table decides, except that for
+// OpenRouter — the one adapter that writes the flag, vetoing the table
+// from its /models cache pricing (openrouter cacheLevel) — a listed entry
+// without the flag is a veto. Anthropic direct never writes the flag, so
+// its models fall through to the table. listed is nil when the model has
+// no model-list entry.
+//
+// Constraint: the badge reflects this request-time capability table, not
+// the runtime llm.PromptCacheGuard. When a provider rejects cache_control
+// the guard degrades that (profile, model) to fewer or no markers for the
+// life of the process, and the badge still says "caches prompts"
+// (2026-10-09, owner alec — ledger: "expose the guard level to the
+// badge").
+func modelCachesPrompts(kind, modelID string, listed *corellm.ModelInfo) bool {
+	if listed != nil && listed.SupportsPromptCache {
+		return true
+	}
+	if !corellm.SupportsPromptCache(kind, modelID) {
+		return false
+	}
+	return !(listed != nil && kind == "openrouter")
 }
 
 // UpdateProviderCredential writes a new plaintext API key for profileID
@@ -1287,6 +1505,11 @@ func (a *API) UpdateProviderCredential(ctx context.Context, profileID, plaintext
 	}
 	if profile.Cred.Kind != "keychain" {
 		return fmt.Errorf("llm: UpdateProviderCredential: profile %q uses kind=%q; only keychain credentials are writable via this RPC", profileID, profile.Cred.Kind)
+	}
+	if profile.Cred.Source.IsFleet() || profile.Cred.CredentialID != "" {
+		// A Fleet-delivered key lives in its own keychain namespace and
+		// is never overwritten from this device (ErrFleetKeyReadOnly).
+		return ErrFleetKeyReadOnly
 	}
 	if a.keychain == nil {
 		return errors.New("llm: UpdateProviderCredential: no keychain writer configured")
@@ -1435,10 +1658,7 @@ func profileToProvider(p corellm.ProviderProfile, source string, validated bool)
 		Model:  p.Model,
 		Models: p.AvailableModels(),
 		Region: p.Region,
-		Cred: CredentialReference{
-			Kind:    p.Cred.Kind,
-			Locator: p.Cred.Locator,
-		},
+		Cred:      fromCoreCred(p.Cred),
 		Source:    source,
 		Validated: validated,
 	}
@@ -1527,6 +1747,9 @@ func (a *API) TestAndRotateKey(ctx context.Context, profileID, plaintextApiKey, 
 	profile, err := a.lookupProfile(profileID)
 	if err != nil {
 		return RotationResult{}, err
+	}
+	if profile.Cred.Source.IsFleet() || profile.Cred.CredentialID != "" {
+		return RotationResult{}, ErrFleetKeyReadOnly
 	}
 	if profile.Cred.Kind != "keychain" {
 		if profile.Kind == "bedrock" {
@@ -1982,4 +2205,73 @@ func viewToChain(v FallbackChainView) *fallback.Chain {
 		Description: v.Description,
 		Entries:     entries,
 	}
+}
+
+// ErrFleetKeyReadOnly rejects any client-supplied Fleet binding on
+// AddProvider / UpdateProvider: a Source other than local, or any
+// CredentialID. Only the Fleet delivery paths (WP05 org/team keys, WP06
+// synced user keys) bind a profile to a Fleet key, after the key is
+// actually in this user's keychain namespace. Accepting the binding from
+// the form would let any caller point a profile at an arbitrary
+// credential id — the binding would fail open to whatever that id
+// resolves to.
+var ErrFleetKeyReadOnly = errors.New("llm: keys delivered by Fleet are bound by Fleet, not from the provider form")
+
+// refuseClientFleetBinding enforces ErrFleetKeyReadOnly.
+func refuseClientFleetBinding(c CredentialReference) error {
+	src := corellm.CredentialSource(c.Source)
+	if (src != "" && src != corellm.CredSourceLocal) || c.CredentialID != "" {
+		return ErrFleetKeyReadOnly
+	}
+	return nil
+}
+
+// toCoreCred converts the RPC credential reference to the connector shape,
+// carrying Source and CredentialID so an edit of a Fleet-bound profile keeps
+// its binding.
+func toCoreCred(c CredentialReference) corellm.CredentialReference {
+	return corellm.CredentialReference{
+		Kind:         c.Kind,
+		Locator:      c.Locator,
+		Source:       corellm.CredentialSource(c.Source),
+		CredentialID: c.CredentialID,
+	}
+}
+
+// fromCoreCred is the inverse of toCoreCred.
+func fromCoreCred(c corellm.CredentialReference) CredentialReference {
+	return CredentialReference{
+		Kind:         c.Kind,
+		Locator:      c.Locator,
+		Source:       string(c.Source),
+		CredentialID: c.CredentialID,
+	}
+}
+
+// CredentialKeys projects the listed providers onto the keys they use, one
+// row per distinct key (corellm.BuildKeyList). The org credential policy
+// (defaults, allow_user_selection) and org/team display names come from
+// Fleet, which WP05 delivers; until then the policy is nil, so no default
+// is claimed and no key is user-selectable (fail closed).
+func CredentialKeys(provs []Provider) []CredentialKey {
+	profs := make([]corellm.ProviderProfile, 0, len(provs))
+	for _, p := range provs {
+		profs = append(profs, corellm.ProviderProfile{ID: p.ID, Kind: p.Kind, Cred: toCoreCred(p.Cred)})
+	}
+	keys := corellm.BuildKeyList(profs, nil, nil)
+	out := make([]CredentialKey, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, CredentialKey{
+			ID:             k.ID,
+			Provider:       k.Provider,
+			Source:         string(k.Source),
+			ScopeName:      k.ScopeName,
+			ProfileIDs:     k.ProfileIDs,
+			OrgDefault:     k.OrgDefault,
+			TeamDefault:    k.TeamDefault,
+			Preselected:    k.Preselected,
+			UserSelectable: k.UserSelectable,
+		})
+	}
+	return out
 }

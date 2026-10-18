@@ -1,0 +1,25 @@
+# I20 — adapter↔catalog parity (model-settings-reach-the-model-01PMZ101
+# WP12, spec §7 G-1).
+#
+# Enforced by scripts/ci/check-adapter-catalog-parity.sh /
+# scripts/ci/cmd/checkadaptercatalog. Checks BOTH directions: every
+# registered ProviderAdapter kind (core/llm/registry/registry.go) must
+# resolve to a capability-catalog entry (core/llm/capabilities/data/*.yaml
+# `provider:`, directly or via loader.go's providerAlias table), and every
+# catalog file must be reachable from a registered kind. This is the gate
+# that would have caught this mission's own motivating P0 (spec §1.1:
+# azure-openai and custom-openai were registered with no catalog entry,
+# so every tool-bearing request was silently refused) — its absence
+# reproduces roadmap finding P-7, a landed banner claiming a test that
+# does not exist.
+#
+# EMPTY, AND THAT IS THE POINT as of this gate's introduction
+# (2026-09-15): the scan found 8 registered kinds (anthropic, bedrock,
+# openai, openrouter, azure-openai via alias to openai, gemini,
+# custom-openai, ollama) and 7 catalog files, every one reachable in both
+# directions.
+#
+# Format: one bare provider string per line, followed by a `#` comment
+# naming the DATE, the BLOCKER, and the OWNER. Allowlists shrink
+# monotonically (CLAUDE.md); an entry that no longer corresponds to a
+# live violation is STALE and fails the gate.

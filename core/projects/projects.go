@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // Project is the durable representation of a project entity.
@@ -75,6 +76,14 @@ type Store interface {
 	// GetAutonomyProfile loads the per-project autonomy.Layer. Returns
 	// the empty Layer when both columns are NULL.
 	GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error)
+
+	// SetToolExposure persists the project's tool-exposure override layer
+	// (projects.tool_exposure, migration sessions/0347-tool-exposure). A
+	// zero Exposure clears it (NULL). Callers validate (Manager does).
+	SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error
+	// GetToolExposure loads the project's override layer; the zero
+	// Exposure when none is set.
+	GetToolExposure(ctx context.Context, id string) (toolexposure.Exposure, error)
 }
 
 // IDGen is the project-id generator. Tests override; production uses
@@ -89,6 +98,28 @@ type Manager struct {
 	idGen IDGen
 
 	mu sync.Mutex // serialize id assignment on Create
+
+	// deleteObservers run after Delete removes the project row
+	// (artifacts-as-units-01DOGF0C WP03, spec FR-6): dependants that
+	// reference a project id without a foreign key (core/units scope_id)
+	// clean themselves up here.
+	deleteObserversMu sync.Mutex
+	deleteObservers   []DeleteObserver
+}
+
+// DeleteObserver is called after a project row has been deleted. A
+// returned error is surfaced from Manager.Delete.
+type DeleteObserver func(ctx context.Context, projectID string) error
+
+// AddDeleteObserver registers fn to run after every successful Delete.
+// Append-only, safe for concurrent use. A nil fn is ignored.
+func (m *Manager) AddDeleteObserver(fn DeleteObserver) {
+	if m == nil || fn == nil {
+		return
+	}
+	m.deleteObserversMu.Lock()
+	m.deleteObservers = append(m.deleteObservers, fn)
+	m.deleteObserversMu.Unlock()
 }
 
 // ManagerOption configures a Manager at construction time.
@@ -191,7 +222,22 @@ func (m *Manager) UpdateDescription(ctx context.Context, id, description string)
 // FK is ON DELETE SET NULL so leftover sessions become loose, but the
 // view-level surface coordinates the cascade explicitly.
 func (m *Manager) Delete(ctx context.Context, id string) error {
-	return m.store.Delete(ctx, id)
+	if err := m.store.Delete(ctx, id); err != nil {
+		return err
+	}
+	m.deleteObserversMu.Lock()
+	observers := append([]DeleteObserver(nil), m.deleteObservers...)
+	m.deleteObserversMu.Unlock()
+	var errs []error
+	for _, fn := range observers {
+		if err := fn(ctx, id); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("projects: %s deleted, but dependant cleanup failed: %w", id, errors.Join(errs...))
+	}
+	return nil
 }
 
 // SetAutonomyProfile persists the per-project autonomy.Layer
@@ -207,6 +253,23 @@ func (m *Manager) SetAutonomyProfile(ctx context.Context, id string, layer auton
 func (m *Manager) GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error) {
 	return m.store.GetAutonomyProfile(ctx, id)
 }
+
+// SetToolExposure validates and persists the project's tool-exposure
+// override layer; a zero Exposure clears it.
+func (m *Manager) SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	return m.store.SetToolExposure(ctx, id, e)
+}
+
+// ProjectToolExposure loads the project's override layer. *Manager
+// satisfies toolexposure.ProjectSource with it.
+func (m *Manager) ProjectToolExposure(ctx context.Context, id string) (toolexposure.Exposure, error) {
+	return m.store.GetToolExposure(ctx, id)
+}
+
+var _ toolexposure.ProjectSource = (*Manager)(nil)
 
 // defaultIDGen returns a 16-byte hex id (32 chars). Matches the
 // session manager's id shape so the two namespaces look uniform in

@@ -83,4 +83,54 @@ describe('AuditEventDrawer', () => {
     const nextBtn = w.find('button[aria-label="Next entry"]');
     expect(nextBtn.attributes('disabled')).toBeDefined();
   });
+
+  // risk-rated-autonomy-01PMRA01 WP10: the deciding layer, and for
+  // layer 3 the model + prompt_version + cache hit.
+  it('renders layer-3 tool-confirm-decision detail: model, prompt_version, cache hit', () => {
+    const entry: AuditEntry = {
+      id: '01DDD',
+      timestamp: '2026-09-15T00:00:00Z',
+      category: 'PERMISSION',
+      subject: 'tool.confirm_decision',
+      tool_confirm_decision: {
+        approved: false,
+        layer: 3,
+        threshold: 60,
+        score: 72,
+        tier: 'high',
+        model: 'qwen/qwen-2.5-7b-instruct',
+        prompt_version: 'risk-rater-v1',
+        cache_hit: true,
+      },
+    };
+    const { w } = mountDrawer(entry);
+    const detail = w.find('[data-testid="audit-drawer-tool-confirm"]');
+    expect(detail.exists()).toBe(true);
+    expect(detail.text()).toContain('Layer 3');
+    const rater = w.find('[data-testid="audit-drawer-rater-detail"]');
+    expect(rater.text()).toContain('qwen/qwen-2.5-7b-instruct');
+    expect(rater.text()).toContain('risk-rater-v1');
+    expect(rater.text()).toContain('cache hit');
+    expect(w.text()).toContain('high');
+    expect(w.text()).toContain('72/100');
+    expect(w.text()).toContain('threshold 60');
+  });
+
+  it('renders layer 1/2 decisions without a rater line', () => {
+    const entry: AuditEntry = {
+      id: '01EEE',
+      timestamp: '2026-09-15T00:01:00Z',
+      category: 'PERMISSION',
+      subject: 'tool.confirm_decision',
+      tool_confirm_decision: { approved: true, layer: 2 },
+    };
+    const { w } = mountDrawer(entry);
+    expect(w.text()).toContain('Layer 2');
+    expect(w.find('[data-testid="audit-drawer-rater-detail"]').exists()).toBe(false);
+  });
+
+  it('does not render tool-confirm detail for other audit kinds', () => {
+    const { w } = mountDrawer(seed[0]);
+    expect(w.find('[data-testid="audit-drawer-tool-confirm"]').exists()).toBe(false);
+  });
 });

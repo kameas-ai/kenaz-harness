@@ -6,8 +6,14 @@
 // scope hints, and optional budget information.
 //
 // The tool is default-on (model discovering what it may use is low-risk).
-// Its invocations appear in the audit log as ordinary tool.invoked events.
-// Cedar-gated by Action::"tool.list_secrets".
+// Per-call control is the use_tool resolution every builtin gets (a Cedar
+// forbid on "kenaz__list_secrets" denies it). Two claims this comment used
+// to make were false and are withdrawn (model-harness-toolset-01MHTS001
+// WP03, findings H-3/H-5): Action::"tool.list_secrets" is DECLARED but
+// nothing evaluates it, and builtin invocations are NOT written to the
+// audit log per call (no "tool.invoked" kind exists). Actual secret
+// RESOLUTION is gated and audited separately (secret_reference.resolve,
+// core/credstore/refs).
 //
 // Spec mapping: model-secret-references-01KW7M5A FR-005, §2.0.
 package listsecrets

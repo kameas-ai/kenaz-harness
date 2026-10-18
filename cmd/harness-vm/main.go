@@ -141,15 +141,33 @@ func main() {
 	// singleton every gate site and the served (:7880) permission modal use.
 	// We attach a listener to it; we do not build a second one.
 	//
+	// What granting "approval" actually means: this process is LISTENING to
+	// the gate it owns — the cedar registry THIS process's own chassis built
+	// (readservice.go's core.New -> rpc.New) — not that this process CAN
+	// RAISE an approval today. The in-VM task graph (plan -> run, a bare
+	// model call) has no gate site of its own, and approvalGateFrom — the
+	// one function a task-path call site would use to park a request on
+	// this gate — has zero non-test callers (mission
+	// vm-execution-surface-truth-01PMZD14 HV-01; dated justification in
+	// docs/unwired-ledger.md). The one boot-time gate site this process's
+	// own chassis could otherwise have exercised — the MCP recipe spawn
+	// bootstrap — also never fires here, because this process starts the
+	// chassis before building the rpc layer that would arm it (HV-N1, same
+	// ledger, separate entry). So today the grant is honest but narrow: the
+	// gate exists and this process is attached to it, and nothing in this
+	// process currently raises a request through it. That is a promise
+	// about being attached, not a promise that anything is brokered yet.
+	//
 	// A failed chassis bootstrap means there is no engine in this process and
-	// therefore no gate. The capability is then never granted, and the host
-	// renders its "approvals not brokered on this workbench" state — which is
-	// the honest answer, and specifically not an empty pending list (that is
-	// indistinguishable from "nothing is waiting").
+	// therefore no gate to attach to. The capability is then never granted,
+	// and the host renders its "approvals not brokered on this workbench"
+	// state for THAT branch — which is the honest answer, and specifically
+	// not an empty pending list (that is indistinguishable from "nothing is
+	// waiting").
 	var connOpts []connOption
 	if promptReg := reads.promptRegistry(); promptReg != nil {
 		connOpts = append(connOpts, withApprovalRegistry(promptReg, promptReg))
-		log.Info("kenaz-harness-vm: approval brokering available (negotiate capability \"approval\")")
+		log.Info("kenaz-harness-vm: approval capability granted (listening on the gate; no in-VM task-path call site parks a request on it yet — see docs/unwired-ledger.md)")
 	} else {
 		log.Info("kenaz-harness-vm: approval brokering unavailable (no cedar gate in this process)")
 	}

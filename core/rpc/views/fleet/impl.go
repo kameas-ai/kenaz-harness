@@ -10,6 +10,15 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/units"
 )
 
+// optInPusher is the subset of *corefleet.TelemetryOptInPusher that Impl
+// needs to push a consent tier's implied per-class opt-ins
+// (corefleet.TierOptInUpdates) to the fleet store. Defined as an interface
+// so impl_test.go can substitute a fake instead of spinning up a real fleet
+// HTTP server for every SetTelemetryConsent test.
+type optInPusher interface {
+	Push(ctx context.Context, level corefleet.ConsentLevel) error
+}
+
 // Impl implements FleetAPI backed by core/fleet.TelemetryConsent and the
 // Phase-3 unit-collaboration plumbing (units.Manager + corefleet.UnitSyncer).
 //
@@ -18,6 +27,20 @@ import (
 // gracefully rather than panicking.
 type Impl struct {
 	Consent *corefleet.TelemetryConsent
+
+	// OptIns pushes the per-class opt-in vector a consent tier implies
+	// (corefleet.TierOptInUpdates) to the fleet store whenever the tier
+	// changes — see SetTelemetryConsent. Nil on the test chassis / OSS
+	// build / fleet-disabled path, in which case SetTelemetryConsent stays
+	// local-only (unchanged pre-fix behaviour).
+	OptIns optInPusher
+
+	// OnConsentChanged, when set, runs after a consent level has been saved
+	// (and the opt-in push attempted). Production wires it to
+	// settings.API.ReconcileTelemetry so a tier change activates or
+	// deactivates export immediately instead of at the next enroll. nil on
+	// the test chassis / fleet-disabled path.
+	OnConsentChanged func(ctx context.Context)
 
 	// Units is the fleet-free unified Unit store (resolution + enshrine live
 	// here). Nil on the test chassis.
@@ -33,6 +56,28 @@ var _ FleetAPI = (*Impl)(nil)
 // not wired (test chassis / no DataDir).
 var ErrUnitsUnavailable = errors.New("fleet: unit store unavailable")
 
+// ErrArtifactUnitNotShareable is returned by the Unit_* collaboration RPCs
+// for a kind='artifact' unit. Artifacts became units in
+// artifacts-as-units-01DOGF0C, as a DELEGATED exception: their rows are
+// owned by core/artifacts, are personal, and never leave the device
+// (spec FR-5). Promote-as-merge-request would egress an artifact's title and
+// metadata (message ids, content hash) to fleet, and the merge/enshrine
+// resolutions would rewrite or fork an artifact row behind its owner — so
+// all three refuse it. Sharing an artifact is a future feature with its own
+// consent design (spec §5).
+var ErrArtifactUnitNotShareable = errors.New("fleet: artifact units are local-only and cannot be shared, merged or enshrined")
+
+// refuseArtifactUnit returns ErrArtifactUnitNotShareable when id names a
+// kind='artifact' unit. Lookup errors are left to the caller's own path
+// (which reports a missing unit in its usual way).
+func (f *Impl) refuseArtifactUnit(ctx context.Context, id string) error {
+	u, err := f.Units.Get(ctx, id)
+	if err == nil && u.Kind == units.KindArtifact {
+		return fmt.Errorf("%w (unit %s)", ErrArtifactUnitNotShareable, id)
+	}
+	return nil
+}
+
 // ErrSyncerUnavailable is returned when a method needs the fleet syncer (e.g.
 // promote-as-MR) but it is not wired (fleet disabled).
 var ErrSyncerUnavailable = errors.New("fleet: sync engine unavailable")
@@ -42,9 +87,31 @@ func (f *Impl) GetTelemetryConsent(_ context.Context) (string, error) {
 	return string(f.Consent.EffectiveLevel()), nil
 }
 
-// SetTelemetryConsent validates the level string and delegates to
-// TelemetryConsent.SetLevel, which enforces tier gating.
-func (f *Impl) SetTelemetryConsent(_ context.Context, level string) error {
+// SetTelemetryConsent validates the level string, delegates to
+// TelemetryConsent.SetLevel (which enforces tier gating and is the LOCAL,
+// offline-first source of truth for the consent level), and then pushes the
+// per-class opt-in vector that level implies to the fleet store.
+//
+// # Failure semantics (owner ruling 2026-09-16)
+//
+// The local tier save always happens first and is unaffected by anything
+// below it: this is an offline-first app, and the consent gate itself must
+// never depend on a network round trip. Once SetLevel succeeds:
+//
+//   - fleet unreachable/disabled (corefleet.ErrFleetDisabled, e.g. signed
+//     out or OSS build): treated as "nothing to push right now", not an
+//     error — returns nil. TelemetryOptInPusher's own confirmed-state stays
+//     untouched, so a later Reconcile (fleetEnroll, on next app start) or a
+//     later tier change will retry once fleet becomes reachable.
+//   - any other push failure (offline, 5xx, capability-gated, ...): SURFACED
+//     as a returned error, wrapping the underlying failure, so the caller
+//     (FleetTelemetryPanel.vue's saveConsent, via the existing errorMsg
+//     display) sees it — silently dropping this under a different name is
+//     the exact bug class this fix exists to end. The tier itself is still
+//     saved; retry is durable (TelemetryOptInPusher persists the mismatch to
+//     disk) via the same two triggers: the next tier change, or the next app
+//     start (fleetEnroll calls Reconcile).
+func (f *Impl) SetTelemetryConsent(ctx context.Context, level string) error {
 	cl := corefleet.ConsentLevel(level)
 	switch cl {
 	case corefleet.ConsentNone, corefleet.ConsentAggregate, corefleet.ConsentFull:
@@ -52,14 +119,45 @@ func (f *Impl) SetTelemetryConsent(_ context.Context, level string) error {
 	default:
 		return fmt.Errorf("unknown consent level %q; must be one of none, aggregate, full", level)
 	}
-	return f.Consent.SetLevel(cl)
+	if err := f.Consent.SetLevel(cl); err != nil {
+		// Tier-gating error (e.g. ErrTierInsufficient): local state is
+		// unchanged, nothing to push.
+		return err
+	}
+	// The level is saved. Whatever happens to the opt-in push below, export
+	// must now match it — and an opt-OUT in particular must stop export even
+	// when fleet is unreachable and the push fails. Deferred so it also runs
+	// after the push's OnPushed callback has narrowed the lanes.
+	if f.OnConsentChanged != nil {
+		defer f.OnConsentChanged(ctx)
+	}
+	if f.OptIns == nil {
+		return nil // no fleet client wired — local-only path, unchanged behaviour
+	}
+	if err := f.OptIns.Push(ctx, cl); err != nil {
+		if errors.Is(err, corefleet.ErrFleetDisabled) {
+			return nil
+		}
+		return fmt.Errorf(
+			"telemetry tier %q saved locally, but syncing per-class opt-ins to fleet failed "+
+				"(will retry at the next tier change or app start): %w", level, err)
+	}
+	return nil
 }
 
 // ── Phase-3 unit collaboration ──────────────────────────────────────────────
 
-// Unit_PromoteAsMergeRequest opens a merge request to promote unitID UP to
-// toClassification (WP16). The source unit is left untouched; only the proposal
-// travels (write-up-reviewed).
+// Unit_PromoteAsMergeRequest promotes unitID UP to toClassification
+// (review F2 semantics, owner ruling 2026-10-06):
+//
+//   - personal→team: a STRAIGHT PUSH. The personal unit is left untouched; a
+//     team copy (Units.Promote, with a promoted_from edge) is created and
+//     pushed at team_shared. No merge request — fleet's MR targets an
+//     existing node and refuses a target equal to its classification.
+//     Result: Status "published", ID empty, UnitNodeID the team node.
+//   - team→org: ensure the team node exists on fleet (push it), then open a
+//     merge request to org_shared. Result: the MR.
+//   - personal→org: the straight push at team, then the team→org MR.
 func (f *Impl) Unit_PromoteAsMergeRequest(ctx context.Context, unitID, toClassification, title, body string) (MergeRequestResult, error) {
 	if f.Units == nil {
 		return MergeRequestResult{}, ErrUnitsUnavailable
@@ -75,14 +173,46 @@ func (f *Impl) Unit_PromoteAsMergeRequest(ctx context.Context, unitID, toClassif
 	default:
 		return MergeRequestResult{}, fmt.Errorf("invalid promote target %q; must be team or org", toClassification)
 	}
+	if err := f.refuseArtifactUnit(ctx, unitID); err != nil {
+		return MergeRequestResult{}, err
+	}
 	if f.Syncer == nil {
 		return MergeRequestResult{}, ErrSyncerUnavailable
 	}
 	src, err := f.Units.Get(ctx, unitID)
 	if err != nil {
-		return MergeRequestResult{}, fmt.Errorf("fleet: promote-as-MR: %w", err)
+		return MergeRequestResult{}, fmt.Errorf("fleet: promote: %w", err)
 	}
-	mr, err := f.Syncer.CreateMergeRequestForPromote(ctx, src, toClass, title, body)
+	if !corefleet.IsPromotionUp(src.Classification, toClass) {
+		return MergeRequestResult{}, fmt.Errorf("%w: %s→%s", corefleet.ErrPromoteNotUp, src.Classification, toClass)
+	}
+
+	teamUnit := src
+	from := string(src.Classification)
+	if src.Classification == units.ClassPersonal {
+		copyUnit, _, perr := f.Units.Promote(ctx, src.ID, src.Scope, src.ScopeID, units.ClassTeam)
+		if perr != nil {
+			return MergeRequestResult{}, fmt.Errorf("fleet: promote: team copy: %w", perr)
+		}
+		teamUnit = copyUnit
+	}
+	// Ensure the node exists on fleet at team_shared.
+	nodeID, err := f.Syncer.PushUnit(ctx, teamUnit.ID)
+	if err != nil {
+		return MergeRequestResult{}, fmt.Errorf("fleet: promote: push at team: %w", err)
+	}
+	if toClass == units.ClassTeam {
+		return MergeRequestResult{
+			UnitNodeID:         nodeID,
+			FromClassification: from,
+			ToClassification:   string(corefleet.ClassTeamShared),
+			ProposedVersion:    teamUnit.Version,
+			Title:              teamUnit.Title,
+			Body:               teamUnit.Body,
+			Status:             "published",
+		}, nil
+	}
+	mr, err := f.Syncer.CreateMergeRequestForPromote(ctx, teamUnit, units.ClassOrg, title, body)
 	if err != nil {
 		return MergeRequestResult{}, err
 	}
@@ -123,6 +253,9 @@ func (f *Impl) Unit_ResolveMerge(ctx context.Context, unitID, resolvedBody strin
 	if f.Units == nil {
 		return ErrUnitsUnavailable
 	}
+	if err := f.refuseArtifactUnit(ctx, unitID); err != nil {
+		return err
+	}
 	if _, err := f.Units.ResolveMerge(ctx, unitID, resolvedBody, nil); err != nil {
 		return err
 	}
@@ -138,6 +271,9 @@ func (f *Impl) Unit_ResolveMerge(ctx context.Context, unitID, resolvedBody strin
 func (f *Impl) Unit_ResolveEnshrine(ctx context.Context, srcUnitID, enshrinedTitle, enshrinedBody, reason string) (string, error) {
 	if f.Units == nil {
 		return "", ErrUnitsUnavailable
+	}
+	if err := f.refuseArtifactUnit(ctx, srcUnitID); err != nil {
+		return "", err
 	}
 	newUnit, _, err := f.Units.ResolveEnshrine(ctx, srcUnitID, enshrinedTitle, enshrinedBody, reason)
 	if err != nil {
@@ -194,6 +330,12 @@ func (f *Impl) Unit_SyncStatus(_ context.Context) (UnitSyncStatusView, error) {
 		PushCount:     st.PushCount,
 		PullCount:     st.PullCount,
 		ConflictCount: st.ConflictCount,
+
+		SkippedUnknownKinds: st.SkippedUnknownKinds,
+		SkippedInvalid:      st.SkippedInvalid,
+		PushRefused:         st.PushRefused,
+		PushHeldLoadAlways:  st.PushHeldLoadAlways,
+		StrippedUnitKeys:    st.StrippedUnitKeys,
 	}
 	if !st.LastPullAt.IsZero() {
 		v.LastPullAt = st.LastPullAt.UTC().Format(time.RFC3339)

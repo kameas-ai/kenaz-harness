@@ -396,6 +396,22 @@ func TestGenerate_ModelFieldWinsOverOverride(t *testing.T) {
 			reqModel:      "",
 			wantModel:     "anthropic/claude-sonnet-4-5",
 		},
+		{
+			// The unresolved "default" sentinel (what exec_compute.go's
+			// modelExecutor, reflectExecutor, reviewExecutor,
+			// plannerExecutor, routerAskModel, and both
+			// exec_escalation_ladder.go rungs send when their model attr
+			// is unset) must be treated the same as req.Model=="" — a
+			// concrete model id, never the literal string "default",
+			// must reach corellm.GenerationRequest.Model. See
+			// TestGenerate_DefaultSentinel_RealRegistry_ReproducesLiveFailure
+			// for the full production-path repro against the real
+			// registry's authorisation check this protects.
+			name:          `req.Model == "default": treated as unset, modelOverride is the fallback`,
+			modelOverride: "anthropic/claude-sonnet-4-5",
+			reqModel:      "default",
+			wantModel:     "anthropic/claude-sonnet-4-5",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

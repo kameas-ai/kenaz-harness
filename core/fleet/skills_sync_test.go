@@ -1,13 +1,18 @@
 // skills_sync_test.go — httptest round-trip tests for PublishSkill,
-// InstallSkill, UninstallSkill, and ApplyMandatedSkills.
+// InstallSkill, UninstallSkill, and mandated skills via MandatedApplier.
 //
 // (fleet-skills-sync-01NDFSEX18 WP07)
 package fleet
 
 import (
+	"fmt"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,10 +188,12 @@ func TestInstallSkill_RoundTrip(t *testing.T) {
 		t.Fatalf("PublishSkill: %v", err)
 	}
 
-	// Install via InstallSkill. pubKeyBase64="" means verify is skipped (same
-	// as the catalog install path when the server-side key lookup is pending).
-	if err := InstallSkill(context.Background(), c, store, registry, "", item.ID, item.Version); err != nil {
-		t.Fatalf("InstallSkill: %v", err)
+	// Install the way the install framework's skill provider does:
+	// FetchCatalogItem (Verify) then InstallSkillPayload (Install) on the
+	// same bytes. The signature verdict is the framework's step, pinned in
+	// TestCatalogSignatureVerdict_*.
+	if err := installSkillForTest(t, c, store, registry, item.ID, item.Version); err != nil {
+		t.Fatalf("install: %v", err)
 	}
 
 	// Skill must be registered under its trigger.
@@ -205,18 +212,68 @@ func TestInstallSkill_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestInstallSkill_FleetDisabled verifies that InstallSkill returns
+// TestFetchCatalogItem_FleetDisabled verifies that the fetch step returns
 // ErrFleetDisabled for a nop client.
-func TestInstallSkill_FleetDisabled(t *testing.T) {
+func TestFetchCatalogItem_FleetDisabled(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	store := slashcmd.NewSkillStore(dir)
-	registry, _ := slashcmd.NewRegistry(slashcmd.Deps{})
-
-	err := InstallSkill(context.Background(), nil, store, registry, "", "cat-id", "1.0.0")
-	if err != ErrFleetDisabled {
+	if _, err := FetchCatalogItem(context.Background(), nil, "cat-id", "1.0.0"); err != ErrFleetDisabled {
 		t.Errorf("expected ErrFleetDisabled, got: %v", err)
 	}
+}
+
+// TestInstallSkillPayload_MalformedPayloadIsANamedError pins FR-2's "opaque
+// payload → named install error, never a silent success" for skills.
+func TestInstallSkillPayload_MalformedPayloadIsANamedError(t *testing.T) {
+	t.Parallel()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	registry, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	for _, payload := range [][]byte{[]byte("not json"), []byte(`{"body":"no id"}`)} {
+		err := InstallSkillPayload(store, registry, "cat", "1.0.0", payload)
+		if !errors.Is(err, ErrCatalogPayloadMalformed) {
+			t.Errorf("payload %q: got %v, want ErrCatalogPayloadMalformed", payload, err)
+		}
+	}
+	if skills, _ := store.List(); len(skills) != 0 {
+		t.Errorf("a malformed payload persisted %d skill(s)", len(skills))
+	}
+}
+
+// TestCatalogSignatureVerdict pins the single verification hook's fleet
+// half (register C-2): no key → unverified with the C-2 reason, no error;
+// a real key verifies a good signature and rejects a bad one.
+func TestCatalogSignatureVerdict(t *testing.T) {
+	t.Parallel()
+	ok, reason, err := CatalogSignatureVerdict("", []byte("p"), "sig")
+	if ok || err != nil || !strings.Contains(reason, "C-2") {
+		t.Fatalf("no key: got (%v, %q, %v)", ok, reason, err)
+	}
+	// The reason states the real design (fleet owner, 2026-10-05): only the
+	// config bundle is signed; no per-device/per-org catalog key is coming.
+	if !strings.Contains(reason, "config bundle") || strings.Contains(reason, "per-device") {
+		t.Fatalf("no key: reason %q must say only the config bundle is signed, not promise a per-device key", reason)
+	}
+
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	pubB64 := base64.StdEncoding.EncodeToString(pub)
+	payload := []byte(`{"id":"x"}`)
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(priv, payload))
+	if ok, _, err := CatalogSignatureVerdict(pubB64, payload, sig); !ok || err != nil {
+		t.Fatalf("good signature: got (%v, %v)", ok, err)
+	}
+	if ok, _, err := CatalogSignatureVerdict(pubB64, []byte("tampered"), sig); ok || !errors.Is(err, ErrCatalogSignatureMismatch) {
+		t.Fatalf("tampered payload: got (%v, %v), want ErrCatalogSignatureMismatch", ok, err)
+	}
+}
+
+// installSkillForTest composes the provider's Verify-fetch and Install
+// steps without the framework.
+func installSkillForTest(t *testing.T, c *Client, store *slashcmd.SkillStore, registry *slashcmd.Registry, id, version string) error {
+	t.Helper()
+	item, err := FetchCatalogItem(context.Background(), c, id, version)
+	if err != nil {
+		return err
+	}
+	return InstallSkillPayload(store, registry, id, version, item.PayloadBytes)
 }
 
 // ── UninstallSkill ────────────────────────────────────────────────────────────
@@ -263,7 +320,7 @@ func TestUninstallSkill_NotFound(t *testing.T) {
 	}
 }
 
-// ── ApplyMandatedSkills ───────────────────────────────────────────────────────
+// ── Mandated skills (MandatedApplier, kind=skill) ───────────────────────────────────────────────────────
 
 // TestApplyMandatedSkills_Basic verifies that ApplyMandatedSkills installs
 // read-only mandated skills and registers them live.
@@ -287,7 +344,7 @@ func TestApplyMandatedSkills_Basic(t *testing.T) {
 		t.Fatalf("json.Marshal mandate: %v", err)
 	}
 
-	errs := ApplyMandatedSkills(store, registry, []json.RawMessage{raw})
+	errs := applyMandatedSkillsForTest(store, registry, []json.RawMessage{raw})
 	if len(errs) != 0 {
 		t.Fatalf("ApplyMandatedSkills returned errors: %v", errs)
 	}
@@ -328,7 +385,7 @@ func TestApplyMandatedSkills_MalformedEntry(t *testing.T) {
 	validRaw, _ := json.Marshal(valid)
 	badRaw := json.RawMessage(`{not valid json`)
 
-	errs := ApplyMandatedSkills(store, registry, []json.RawMessage{badRaw, validRaw})
+	errs := applyMandatedSkillsForTest(store, registry, []json.RawMessage{badRaw, validRaw})
 	// One error for the malformed entry.
 	if len(errs) != 1 {
 		t.Errorf("expected 1 error, got %d: %v", len(errs), errs)
@@ -359,7 +416,7 @@ func TestApplyMandatedSkills_ShadowedIsSilent(t *testing.T) {
 	}
 	raw, _ := json.Marshal(mandate)
 
-	errs := ApplyMandatedSkills(store, registry, []json.RawMessage{raw})
+	errs := applyMandatedSkillsForTest(store, registry, []json.RawMessage{raw})
 	// ErrTriggerShadowed is NOT added to errs (informational only).
 	if len(errs) != 0 {
 		t.Errorf("expected 0 errors for shadowed mandated skill, got %d: %v", len(errs), errs)
@@ -372,5 +429,182 @@ func TestApplyMandatedSkills_ShadowedIsSilent(t *testing.T) {
 	}
 	if helpCmd.Description() == "org help" {
 		t.Error("built-in 'help' was overwritten by the mandated skill")
+	}
+}
+
+// TestUninstallSkill_ByCatalogID — install-framework-01DOGF0B WP01. The
+// catalog browse (then the Marketplace, now the Capabilities surface) knows
+// only the catalog_id; the store keys on the payload's
+// skill ID. Pre-fix, UninstallSkill(catalogID) returned ErrSkillNotFound for
+// every SkillPublish'd skill, so the Uninstall button the registry-backed
+// badge shows would always fail.
+func TestUninstallSkill_ByCatalogID(t *testing.T) {
+	fake := &fakeCatalogServer{}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	stubTokens(t, TokenSet{AccessToken: "at-u", RefreshToken: "rt-u", ExpiresAt: time.Now().Add(time.Hour)})
+	c := makeTestClient(t, srv.URL)
+	store, registry, signer, caps := makeSkillTestSetup(t)
+
+	skill := slashcmd.Skill{
+		ID: "by-catalog", Trigger: "bycat", Kind: slashcmd.KindText,
+		Body: "x", Source: slashcmd.SkillSourceCatalog,
+	}
+	item, err := PublishSkill(context.Background(), c, caps, signer, skill, CatalogVisTeam)
+	if err != nil {
+		t.Fatalf("PublishSkill: %v", err)
+	}
+	if item.ID == skill.ID {
+		t.Fatalf("fixture invalid: catalog ID %q equals store ID; the test needs them distinct", item.ID)
+	}
+	if err := installSkillForTest(t, c, store, registry, item.ID, item.Version); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	if err := UninstallSkill(store, registry, item.ID); err != nil {
+		t.Fatalf("UninstallSkill(catalogID): %v", err)
+	}
+	if _, ok := registry.Lookup("bycat"); ok {
+		t.Error("'bycat' still registered after UninstallSkill by catalog ID")
+	}
+	if _, err := store.Get("by-catalog"); err == nil {
+		t.Error("skill still in store after UninstallSkill by catalog ID")
+	}
+}
+
+// TestResolveSkillStoreID_CatalogIDWinsOverCollidingStoreID — review F3.
+// Skill A is stored under ID "shared"; skill B came from the catalog with
+// catalog_id "shared" but is stored under "b-local". The catalog browse sends
+// "shared" meaning B. Exact-store-ID-first resolution deleted A instead.
+func TestResolveSkillStoreID_CatalogIDWinsOverCollidingStoreID(t *testing.T) {
+	t.Parallel()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	registry, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	a := slashcmd.Skill{ID: "shared", Trigger: "skilla", Kind: slashcmd.KindText, Body: "a", Source: slashcmd.SkillSourceCatalog}
+	b := slashcmd.Skill{ID: "b-local", CatalogID: "shared", Version: "2.0.0", Trigger: "skillb", Kind: slashcmd.KindText, Body: "b", Source: slashcmd.SkillSourceCatalog}
+	for _, sk := range []slashcmd.Skill{a, b} {
+		if err := slashcmd.LiveRegister(store, registry, sk); err != nil {
+			t.Fatalf("LiveRegister %s: %v", sk.ID, err)
+		}
+	}
+
+	if got := ResolveSkillStoreID(store, "shared", "2.0.0"); got != "b-local" {
+		t.Errorf("ResolveSkillStoreID(shared, 2.0.0) = %q, want b-local", got)
+	}
+	if err := UninstallSkill(store, registry, "shared"); err != nil {
+		t.Fatalf("UninstallSkill(shared): %v", err)
+	}
+	if _, err := store.Get("shared"); err != nil {
+		t.Errorf("skill A (store ID \"shared\") was deleted by a catalog-id uninstall: %v", err)
+	}
+	if _, err := store.Get("b-local"); err == nil {
+		t.Error("skill B (catalog_id \"shared\") still in store after uninstall by its catalog_id")
+	}
+	if _, ok := registry.Lookup("skilla"); !ok {
+		t.Error("skill A's trigger was unregistered")
+	}
+}
+
+// Re-review low 5: only an org-mandated push may take a skill id another
+// skill holds. ApplyMandatedSkills over a catalog skill and over a local
+// skill swaps BOTH the store row (now mandated / org-managed) and the
+// dispatch (the trigger now runs the mandated body).
+func TestApplyMandatedSkills_ReplacesCatalogAndLocalSkillsCleanly(t *testing.T) {
+	t.Parallel()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	registry, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	for _, sk := range []slashcmd.Skill{
+		{ID: "from-cat", CatalogID: "cat-1", Source: slashcmd.SkillSourceCatalog, Trigger: "catcmd", Kind: slashcmd.KindText, Body: "catalog", Description: "catalog"},
+		{ID: "from-local", Trigger: "localcmd", Kind: slashcmd.KindText, Body: "local", Description: "local"},
+	} {
+		if err := slashcmd.LiveRegister(store, registry, sk); err != nil {
+			t.Fatalf("setup %s: %v", sk.ID, err)
+		}
+	}
+	var raws []json.RawMessage
+	for _, sk := range []slashcmd.Skill{
+		{ID: "from-cat", Trigger: "catcmd", Kind: slashcmd.KindText, Body: "org", Description: "org-cat"},
+		{ID: "from-local", Trigger: "localcmd", Kind: slashcmd.KindText, Body: "org", Description: "org-local"},
+	} {
+		b, _ := json.Marshal(sk)
+		raws = append(raws, b)
+	}
+	if errs := applyMandatedSkillsForTest(store, registry, raws); len(errs) != 0 {
+		t.Fatalf("ApplyMandatedSkills: %v", errs)
+	}
+	for id, trig := range map[string]string{"from-cat": "catcmd", "from-local": "localcmd"} {
+		got, err := store.Get(id)
+		if err != nil || got.Source != slashcmd.SkillSourceMandated || !got.OrgManaged || got.Body != "org" {
+			t.Fatalf("%s stored = %+v, %v — want the mandated copy", id, got, err)
+		}
+		cmd, ok := registry.Lookup(trig)
+		if !ok || !strings.HasPrefix(cmd.Description(), "org-") {
+			t.Fatalf("/%s dispatch = %v (found %v) — still the replaced skill", trig, cmd, ok)
+		}
+	}
+}
+
+// applyMandatedSkillsForTest drives the REAL MandatedApplier with each raw
+// skill payload wrapped in a kind=skill envelope (catalog ids cat-0, cat-1, …)
+// and returns its errors — the successor of the retired ApplyMandatedSkills.
+func applyMandatedSkillsForTest(store *slashcmd.SkillStore, registry *slashcmd.Registry, raws []json.RawMessage) []error {
+	items := make([]BundleMandatedItem, len(raws))
+	for i, raw := range raws {
+		items[i] = BundleMandatedItem{CatalogID: fmt.Sprintf("cat-%d", i), Kind: MandatedKindSkill, Version: "1.0.0", Payload: raw}
+	}
+	m := &MandatedApplier{Skills: store, Registry: registry, Workflows: &recordingMandatedWorkflows{}}
+	_, errs := m.Apply(context.Background(), items)
+	return errs
+}
+
+// AC-5 (skill-library-01SKLIB01 WP05, fleet H5): a skill published with an
+// empty Version (and no Trigger) lands with the SAME version — and slug — in
+// the catalog row and inside the payload bytes the org reviews, read back
+// through a real fetch. Before, the payload said version "" under catalog
+// version "1.0.0".
+func TestPublishSkill_PayloadVersionEqualsCatalogVersion(t *testing.T) {
+	fake := &fakeCatalogServer{}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	stubTokens(t, TokenSet{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
+	c := makeTestClient(t, srv.URL)
+	_, _, signer, caps := makeSkillTestSetup(t)
+
+	for _, tc := range []struct {
+		name, version, trigger, wantVersion, wantSlug string
+	}{
+		{"defaulted", "", "", "1.0.0", "no-trigger"},
+		{"explicit", "2.3.0", "standup", "2.3.0", "standup"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := tc.wantSlug
+			if tc.trigger == "" {
+				id = "no-trigger"
+			}
+			item, err := PublishSkill(context.Background(), c, caps, signer,
+				slashcmd.Skill{ID: id, Trigger: tc.trigger, Version: tc.version, Kind: slashcmd.KindText, Body: "b"}, CatalogVisTeam)
+			if err != nil {
+				t.Fatalf("PublishSkill: %v", err)
+			}
+			pub := fake.published[len(fake.published)-1]
+			if pub.Version != tc.wantVersion || pub.Slug != tc.wantSlug {
+				t.Fatalf("catalog row = %s@%s, want %s@%s", pub.Slug, pub.Version, tc.wantSlug, tc.wantVersion)
+			}
+			got, err := FetchCatalogItem(context.Background(), c, item.ID, item.Version)
+			if err != nil {
+				t.Fatalf("fetch: %v", err)
+			}
+			var sk slashcmd.Skill
+			if err := json.Unmarshal(got.PayloadBytes, &sk); err != nil {
+				t.Fatal(err)
+			}
+			if sk.Version != got.Version || sk.Version != tc.wantVersion {
+				t.Errorf("payload version %q, catalog version %q — they must agree (%q)", sk.Version, got.Version, tc.wantVersion)
+			}
+			if sk.Trigger != got.Slug {
+				t.Errorf("payload trigger %q, catalog slug %q — the slug's source must be in the payload", sk.Trigger, got.Slug)
+			}
+		})
 	}
 }

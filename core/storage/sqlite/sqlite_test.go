@@ -163,11 +163,31 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// model-moves-transcript-01PMCH01 WP06.
 	// 0336 (stream_checkpoints table) lands with
 	// chat-turn-integrity-01PMZ606 WP02.
-	// 0340 (scheduled_chat_runs.created_by + .tool_allowlist) lands with
-	// model-scheduled-jobs-01PMSJ01 WP09. 0337-0339 are reserved for
-	// sibling WPs in this and the chat-turn-integrity mission and were
-	// not registered as of WP09.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 340}
+	// 0337 (repair-checkpoint-rows: the bounded per-session DELETE that
+	// purges pre-0336 checkpoint pollution from session_messages,
+	// gated on the three-condition discriminator, spec.md §5.3) lands
+	// with chat-turn-integrity-01PMZ606 WP05.
+	// 0338 (blocked_permission_requests table) lands with
+	// model-scheduled-jobs-01PMSJ01 WP06. 0339 (scheduled_chat_runs
+	// .trigger_kind + .run_at) lands with the same mission's WP08. 0340
+	// (scheduled_chat_runs.created_by + .tool_allowlist) lands with WP09
+	// and was registered first, chronologically, even though 0338/0339
+	// are numerically lower — see migrations_blocked_permission_requests.go
+	// / migrations_scheduled_chat_runs_trigger.go for why registering
+	// below an already-applied version is safe on this runner.
+	// 0341 (chat-single-writer-01DOGF0G) + 0342 (session_turn_runs,
+	// agentgraph-settings-linkage-01DOGF0D WP03) — order G -> D -> C.
+	// 0343 (agent_graph_run_specs) lands with feat/graph-resolved-spec
+	// WP01: the exact resolved spec each agent-graph run executed.
+	// 0344 (session_turn_runs outcome columns) lands with
+	// undelivered-message-retry: whether each chat run reached the model.
+	// 0345 (scheduled_chat_run_history model/cost columns) lands with the
+	// dogfood 2026-10-08 round 2 scheduled-chat fixes.
+	// 0346 (session_messages cached_tokens / cache_write_tokens) lands
+	// with tool-context-budget-01TCBUD01 WP01.
+	// 0347 (projects/sessions tool_exposure + sessions.tool_activations)
+	// lands with tool-context-budget-01TCBUD01 WP02.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -230,6 +250,7 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 conflict-edge (1103, unified-context-artifacts-01NCTXU01 Phase 3 enshrine marker) +
 	// 1 search_fts_tool_rows (0335, model-moves-transcript-01PMCH01 WP06) +
 	// 1 stream_checkpoints (0336, chat-turn-integrity-01PMZ606 WP02) +
+	// 1 repair_checkpoint_rows (0337, chat-turn-integrity-01PMZ606 WP05) +
 	// 1 trust_anchors_init (bundle/700, bundle-download-and-verify-01PMZ909 UNIT-3) +
 	// 6 event-log/0100-0105 (audit-that-tells-the-truth-01PMZA10 UNIT-2:
 	//   events, event_chain_heads, redaction_rules, retention_config,
@@ -241,15 +262,57 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	//   01PMZB11 UNIT-2: the tasks table backing core/tasks.Registry's
 	//   persistence store) +
 	// 1 scheduled_chat_runs.created_by/.tool_allowlist (0340,
-	//   model-scheduled-jobs-01PMSJ01 WP09) = 54.
+	//   model-scheduled-jobs-01PMSJ01 WP09) +
+	// 1 cedar-policy/1300-policy-decisions (finding-58-cedar-decision-
+	//   persistence: the durable backing table for
+	//   cedar.SQLDecisionStore) +
+	// 1 blocked_permission_requests (0338, model-scheduled-jobs-01PMSJ01
+	//   WP06) +
+	// 1 scheduled_chat_runs.trigger_kind/.run_at (0339, model-scheduled-
+	//   jobs-01PMSJ01 WP08) = 58 +
+	// 1 laya-advisors/1600-advice-labels (laya-advisors-01LAYA001 WP08:
+	//   the advice_labels training-label corpus backing
+	//   core/advice/labels.CaptureAdvisor) = 59 +
+	// 1 laya-advisors/1601-advice-labels-revision (laya-advisors-01LAYA001
+	//   WP14: the revision column + push-cursor table behind the label
+	//   push lane) = 60 +
+	// 1 session_turn_runs (0342, agentgraph-settings-linkage-01DOGF0D
+	//   WP03: the chat turn -> agent-graph run mapping) = 61 +
+	// 1 agent_graph_run_specs (0343, feat/graph-resolved-spec WP01: the
+	//   exact resolved spec per agent-graph run) = 62.
 	//
 	// ZA10's branch asserted 49: it was cut from a base whose count was 43,
 	// before 0336 and bundle/700 landed, so 43+6. The merged tree had all
 	// three sources at 51 (v0.65.0); UNIT-8 adds one more migration on
 	// top, hence 52; UNIT-2 (01PMZB11) adds one more still, hence 53;
-	// WP09 (0340) adds one more, hence 54.
-	if count != 54 {
-		t.Errorf("ledger count = %d, want 54", count)
+	// WP09 (0340) adds one more, hence 54; WP05 (0337) adds one more
+	// still, hence 55; cedar-policy/1300 adds one more, hence 56; WP06
+	// (0338) and WP08 (0339) add one more each, hence 58; laya-advisors/
+	// 1600 adds one more, hence 59; laya-advisors/1601 one more, hence 60;
+	// chat-single-writer-01DOGF0G's sessions/0341 one more, hence 61;
+	// agentgraph-settings-linkage-01DOGF0D's sessions/0342 one more,
+	// hence 62; and units/1104-artifacts-to-units
+	// (artifacts-as-units-01DOGF0C WP04) one more, hence 63; and
+	// units/1105-drop-artifacts-legacy (units-debt-01UNITD01 WP02) and
+	// sessions/0343-agent-graph-run-specs (graph-resolved-spec WP01) one
+	// more EACH, hence 65. (Both branches wrote 64 independently; the
+	// composed truth is 65 — set by hand at the v0.88.0 merge.)
+	// sessions/0344-turn-run-outcome (undelivered-message-retry) one
+	// more, hence 66. If another branch also bumped this pin, the
+	// composed value is the SUM of the bumps, not either branch's number.
+	// sessions/0345-scheduled-chat-history-model-cost (dogfood 2026-10-08
+	// round 2) one more, hence 67.
+	// sessions/0346-session-usage-cache-tokens (tool-context-budget-
+	// 01TCBUD01 WP01) one more, hence 68.
+	// sessions/0347-tool-exposure (tool-context-budget-01TCBUD01 WP02)
+	// one more, hence 69.
+	// ml-producer/1700-ml-outbox-and-tasks (ml-producer-01MLPRD01 WP02,
+	// its own owner block — no sessions pin moves) one more (70), and
+	// model-calls/1800-model-calls (llm-call-telemetry-01LLMTEL01 WP02: the
+	// local model_calls store) one more, hence 71 — summed by hand at the
+	// 2026-10-10 merge of the two branches.
+	if count != 71 {
+		t.Errorf("ledger count = %d, want 71", count)
 	}
 }
 

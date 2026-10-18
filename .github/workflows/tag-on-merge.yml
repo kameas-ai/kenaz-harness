@@ -13,8 +13,19 @@ name: tag-on-merge
 # repo-admin level. Until then this inline copy (the version that tagged through
 # v0.45.0) is the source of truth; keep it in sync with the shared one.
 #
-# Immediately cuts a SemVer tag + GitHub Release on every push to main
-# whose commit subject is a release-worthy conventional commit.
+# Cuts a SemVer tag + GitHub Release from the conventional commits merged
+# since the last release, then dispatches release.yml (prod publish).
+#
+# RELEASE ON MERGE IS OPT-IN (2026-10). Two ways to run:
+#
+#   1. Manual (default): Actions → tag-on-merge → "Run workflow" on main, or
+#        gh workflow run tag-on-merge.yml -R kameas-ai/kenaz-harness --ref main \
+#          [-f bump=auto|patch|minor|major]
+#   2. Automatic: set the repository variable AUTO_RELEASE=true
+#      (Settings → Secrets and variables → Actions → Variables). Every push
+#      to main then tags + releases (and release.yml publishes the rolling
+#      dev build of main), as before. Unset/anything else → pushes to main do
+#      neither.
 #
 # Mapping (squash-merged PR title becomes the commit subject verbatim):
 #   feat(scope)?:        → minor (0.x.0)
@@ -33,6 +44,13 @@ name: tag-on-merge
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump. auto = highest conventional-commit bump since the last tag.'
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
 
 permissions:
   contents: read
@@ -44,7 +62,10 @@ concurrency:
 jobs:
   bump-and-release:
     name: Bump version + cut release
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    # Push-to-main runs only when AUTO_RELEASE=true. Manual runs must be on
+    # main; the classify step fails loudly otherwise.
+    if: github.event_name == 'workflow_dispatch' || vars.AUTO_RELEASE == 'true'
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     permissions:
       contents: write     # tag + release
       actions: write      # workflow_dispatch
@@ -53,70 +74,107 @@ jobs:
         with:
           fetch-depth: 0  # tags + history needed to find the latest tag
 
-      - name: classify commit + compute next version
+      - name: classify commits + compute next version
         id: ver
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          # Empty on push; auto|patch|minor|major on workflow_dispatch.
+          BUMP_INPUT: ${{ inputs.bump }}
         run: |
           set -euo pipefail
-          SUBJECT=$(git log -1 --pretty=%s)
-          BODY=$(git log -1 --pretty=%B | tail -n +3)
-          echo "Commit subject: $SUBJECT"
 
-          # Skip self-tagging-bot commits to avoid loops.
-          AUTHOR=$(git log -1 --pretty=%ae)
-          if [[ "$AUTHOR" == *"github-actions[bot]"* ]]; then
-            echo "Bot commit; skipping."
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::release from main only (this run is on $GITHUB_REF). Re-run with --ref main."
+            exit 1
+          fi
+
+          # Latest semver tag reachable from HEAD (default v0.0.0 if none) — a
+          # hotfix tag on a side branch must not become the base.
+          LAST=$(git tag --merged HEAD --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+          LAST=${LAST:-v0.0.0}
+
+          # HEAD already carries a release tag → nothing to cut (a re-run, or a
+          # manual dispatch right after an automatic tag).
+          if git tag --points-at HEAD | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            EXISTING=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+            echo "::warning::HEAD is already tagged $EXISTING; nothing new to tag. To rebuild it: gh workflow run release.yml --ref $EXISTING -f version=$EXISTING"
             echo "bump=none" >> "$GITHUB_OUTPUT"
+            echo "existing_tag=$EXISTING" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          # Classify EVERY commit since LAST and take the highest bump. On an
+          # automatic (per-merge) run this is just the merged commit plus any
+          # non-releasing commits before it; on a manual run with
+          # AUTO_RELEASE off it is every merge that has accumulated since the
+          # last release. --first-parent walks main's own history, so a
+          # merge-commit PR is classified by its merge subject (the PR title)
+          # and squash/rebase merges by their commits.
+          if git rev-parse -q --verify "refs/tags/$LAST" >/dev/null; then
+            RANGE="$LAST..HEAD"
+          else
+            RANGE="HEAD"
+          fi
           # Parse conventional-commit prefix:
           #   <type>[(scope)][!]: <subject>
           # Hold the regex in a variable — bash's `[[ =~ ]]` parser chokes
           # on nested `[[:space:]]` POSIX classes when the regex is inline
           # (the `[[` is misread as a nested test expression).
           re='^([a-z]+)(\([^)]+\))?(!?):[[:space:]]'
-          if [[ "$SUBJECT" =~ $re ]]; then
+          rank() { case "$1" in major) echo 3 ;; minor) echo 2 ;; patch) echo 1 ;; *) echo 0 ;; esac; }
+          BUMP="none"
+          FORCED=false
+          BREAKING=false
+          COUNT=0
+          while read -r SHA; do
+            COUNT=$((COUNT+1))
+            # Skip self-tagging-bot commits.
+            if [[ "$(git log -1 --pretty=%ae "$SHA")" == *"github-actions[bot]"* ]]; then
+              continue
+            fi
+            SUBJECT=$(git log -1 --pretty=%s "$SHA")
+            BODY=$(git log -1 --pretty=%B "$SHA" | tail -n +3)
+            [[ "$SUBJECT" =~ $re ]] || continue
             TYPE="${BASH_REMATCH[1]}"
             BANG="${BASH_REMATCH[3]}"
-          else
-            echo "Subject is not a conventional commit; skipping release."
-            echo "bump=none" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+            case "$TYPE" in
+              feat)                 B="minor" ;;
+              fix|perf|revert|deps) B="patch" ;;
+              *)                    B="none"  ;;
+            esac
+            # Breaking: trailing `!` after type/scope, or BREAKING CHANGE /
+            # BREAKING-CHANGE token in the commit body.
+            if [ -n "$BANG" ] || echo "$BODY" | grep -qE '^BREAKING[ -]CHANGE:'; then
+              B="major"
+              BREAKING=true
+            fi
+            echo "  ${SHA:0:7} $B  $SUBJECT"
+            if [ "$(rank "$B")" -gt "$(rank "$BUMP")" ]; then BUMP="$B"; fi
+          done < <(git rev-list --first-parent "$RANGE")
+          echo "Classified $COUNT commit(s) in $RANGE → bump=$BUMP"
 
-          # Detect breaking change: trailing `!` after type/scope, or
-          # BREAKING CHANGE / BREAKING-CHANGE token in the commit body.
-          BREAKING=false
-          if [ -n "$BANG" ] || echo "$BODY" | grep -qE '^BREAKING[ -]CHANGE:'; then
-            BREAKING=true
-          fi
-
-          # Map type → bump.
-          case "$TYPE" in
-            feat)                 BUMP="minor" ;;
-            fix|perf|revert|deps) BUMP="patch" ;;
-            *)                    BUMP="none"  ;;
-          esac
-          if [ "$BREAKING" = true ]; then
-            BUMP="major"
+          # A manual dispatch may force the bump level (e.g. to ship an
+          # accumulation of chore/build commits).
+          if [ "$EVENT" = "workflow_dispatch" ] && [ -n "$BUMP_INPUT" ] && [ "$BUMP_INPUT" != "auto" ]; then
+            echo "::notice::bump forced to '$BUMP_INPUT' by workflow_dispatch input (computed: $BUMP)"
+            BUMP="$BUMP_INPUT"
+            FORCED=true
           fi
 
           if [ "$BUMP" = "none" ]; then
-            echo "Type '$TYPE' does not trigger a release."
+            echo "No release-worthy commits in $RANGE."
+            [ "$EVENT" = "workflow_dispatch" ] && echo "::warning::No feat/fix/perf/revert/deps commits since $LAST — nothing tagged. Re-run with bump=patch|minor|major to force one."
             echo "bump=none" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Latest semver tag (default v0.0.0 if none).
-          LAST=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
-          LAST=${LAST:-v0.0.0}
           BASE=${LAST#v}
           IFS=. read -r MAJ MIN PAT <<<"$BASE"
 
           # Pre-1.0 cap: breaking bumps minor instead of major while at 0.x.
-          if [ "$MAJ" = "0" ] && [ "$BUMP" = "major" ]; then
+          # A manually forced bump=major is honoured (that is how 1.0.0 ships).
+          if [ "$MAJ" = "0" ] && [ "$BUMP" = "major" ] && [ "$FORCED" != true ]; then
             BUMP="minor"
             echo "::notice::Pre-1.0 cap — breaking change bumps minor instead of major"
           fi
@@ -133,11 +191,10 @@ jobs:
           echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
           echo "previous_tag=$LAST" >> "$GITHUB_OUTPUT"
           {
-            echo "## tag-on-merge"
+            echo "## tag-on-merge ($EVENT)"
             echo ""
-            echo "- subject: \`$SUBJECT\`"
-            echo "- type: \`$TYPE\` (breaking=$BREAKING)"
-            echo "- bump: \`$BUMP\`"
+            echo "- commits: $COUNT in \`$RANGE\`"
+            echo "- bump: \`$BUMP\` (breaking=$BREAKING)"
             echo "- $LAST → **$NEXT**"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -198,7 +255,15 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
+          # Created as a DRAFT on purpose. release.yml's `release` job flips it
+          # to published (and decides "latest") only after every platform
+          # asset + manifest.json is uploaded. A published-then-filled Release
+          # was visible ~10 min before it had any assets, and any build
+          # failure left a permanent zero-asset Release (see
+          # .github/release-integrity-ignore.txt). A failed build now leaves
+          # an invisible draft that a re-run of release.yml completes.
           gh release create "$TAG" \
+            --draft \
             --title "$TAG" \
             --notes-file notes.md \
             --target "$GITHUB_SHA"

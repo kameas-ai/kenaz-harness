@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import SessionHeader from '@/components/chat/SessionHeader.vue';
+import DeferredAskPill from '@/components/dialogs/AskUserQuestion/deferred/DeferredAskPill.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { Session } from '@/lib/types';
@@ -271,5 +272,22 @@ describe('SessionHeader — move-to-project affordance (relocated from left rail
     await flushPromises();
     expect(moveToProject).toHaveBeenCalledWith('ses-1', 'p-b');
     expect(w.find('[data-testid="move-session-menu"]').exists()).toBe(false);
+  });
+});
+
+// UNIT-15 (automation-actually-runs-01PMZ404, A-12): DeferredAskPill had
+// zero non-test mounts anywhere in the app. SessionHeader is its host,
+// scoped to this session via the sessionId prop (mirroring
+// AutonomyChip/BackgroundTaskChip above it).
+describe('SessionHeader — DeferredAskPill mount (UNIT-15)', () => {
+  it('mounts DeferredAskPill scoped to this session', async () => {
+    const { w } = mountHeader(baseSession);
+    await flushPromises();
+    // DeferredAskPill renders no DOM when there are no pending asks
+    // (root v-if="pendingCount > 0"), so presence must be proven via
+    // the component instance, not a DOM node.
+    const pill = w.findComponent(DeferredAskPill);
+    expect(pill.exists()).toBe(true);
+    expect(pill.props('sessionId')).toBe(baseSession.id);
   });
 });

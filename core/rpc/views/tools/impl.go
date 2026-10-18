@@ -203,7 +203,7 @@ func (a *API) ListRecipes(ctx context.Context) ([]RecipeListing, error) {
 	all := a.cfg.Catalog.List()
 	out := make([]RecipeListing, 0, len(all))
 	for _, r := range all {
-		listing := RecipeListing{Recipe: r}
+		listing := RecipeListing{Recipe: r, Source: r.Source}
 		if a.cfg.Enabled != nil {
 			if _, ok := a.cfg.Enabled.Get(r.ID); ok {
 				listing.Enabled = true

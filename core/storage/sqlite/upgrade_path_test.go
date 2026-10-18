@@ -27,6 +27,7 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -35,6 +36,11 @@ import (
 	"testing"
 	"time"
 
+	advicelabels "github.com/kameas-ai/kenaz-harness/core/advice/labels"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/llm/genaitrace"
+	"github.com/kameas-ai/kenaz-harness/core/mlproducer/mlstore"
+	"github.com/kameas-ai/kenaz-harness/core/modelcalls"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
@@ -78,43 +84,16 @@ const scheduledChatRunsProvenanceNote = "sessions/0340-scheduled-chat-runs-creat
 	"to scheduled_chat_runs (created by 0325, unchanged since)."
 
 var expectedChangedTables = map[string][]string{
-	"v0.72.0": {
-		// ONLY `tasks` this time, NOT the scheduled_chat_runs/tasks pair
-		// v0.70.0 and v0.71.0 needed — v0.72.0 registered no migration at
-		// all (its dump.sql is byte-identical to v0.71.0's), so
-		// sessions/0340's DEFAULT backfill has nothing left to do. What
-		// remains is assertTasksTableMigrated's OWN probe insert, which
-		// is a test artifact, not a schema change.
-		//
-		// That distinction is the whole reason this entry is one element
-		// and not two: listing scheduled_chat_runs here would silently
-		// excuse a real future change to it.
-		//
-		// The durable fix is still owed: stop the probe writing to a
-		// watched table, so a no-migration release needs no entry here at
-		// all. Until then every tag needs this by hand, and a forgotten
-		// entry fails the release rather than hiding a defect — which is
-		// the safe direction, but it is friction, not a design.
-		// Owner: alec. Dated 2026-08-25.
-		"tasks",
-	},
 	"v0.71.0": {
-		// Same two reasons as v0.70.0 below, and this pair will now
-		// repeat for EVERY future tag:
+		// scheduled_chat_runs — sessions/0340's DEFAULT backfill. See
+		// v0.70.0 below for the full rationale.
 		//
-		//   scheduled_chat_runs — sessions/0340's DEFAULT backfill.
-		//   tasks               — assertTasksTableMigrated's own probe
-		//                         insert, not a migration.
-		//
-		// That recurrence is itself the finding. Every release from here
-		// needs both lines added by hand or TestUpgradePath goes red on
-		// a correct snapshot, which trains whoever cuts the next one to
-		// add entries reflexively rather than read them. The durable fix
-		// is to stop the probe writing to a table the digest check
-		// watches — assert an exact row count, or probe a table no
-		// migration touches. Owner: alec. Dated 2026-08-23.
+		// This entry used to also carry "tasks", and its comment recorded
+		// that the pair "will now repeat for EVERY future tag" and that
+		// the durable fix was owed. That fix has now landed: `tasks` is in
+		// the unconditional test-writer set with an exact row-count
+		// assertion, so no tag needs to declare it by hand again.
 		"scheduled_chat_runs",
-		"tasks",
 	},
 	"v0.70.0": {
 		// sessions/0340 (model-scheduled-jobs-01PMSJ01 WP09) ALTERs
@@ -137,25 +116,13 @@ var expectedChangedTables = map[string][]string{
 		// load-bearing, not cosmetic — GateScheduledChatExecute fails
 		// closed only for created_by == "model".
 		"scheduled_chat_runs",
-		// NOT a migration writing rows — this one is the TEST's own
-		// probe. tasks/1200-tasks-init (subagent-control-and-background-
-		// tasks-01PMZB11 UNIT-2) creates the table empty, and then
-		// assertTasksTableMigrated inserts through the production writer
-		// coretasks.NewSQLiteStore(...) to prove the table is actually
-		// usable and not merely present.
-		//
-		// For v0.63.0..v0.69.0 that insert is invisible here: `tasks`
-		// does not exist in those dumps, so there is no before-state to
-		// diff. v0.70.0 is the first snapshot containing the table, so
-		// the probe's row shows up as 0 -> 1 and the test correctly
-		// refuses it until declared.
-		//
-		// Declaring it is right, but note what it costs: a real
-		// migration that writes to `tasks` in a future release will now
-		// be masked for THIS tag. If one lands, split the probe onto a
-		// table nobody migrates, or assert the row count exactly rather
-		// than allowlisting the table.
-		"tasks",
+		// This entry used to also carry "tasks" — the TEST's own probe row
+		// from assertTasksTableMigrated, v0.70.0 being the first snapshot
+		// whose dump contains the table. That comment closed by naming the
+		// durable fix: "assert the row count exactly rather than
+		// allowlisting the table." That is now what happens, so the
+		// per-tag declaration is gone and a real migration writing to
+		// `tasks` is no longer masked for this tag.
 	},
 	"v0.63.0": {
 		// sessions/0333-transcript-moves adds nullable columns to
@@ -203,7 +170,116 @@ var expectedChangedTables = map[string][]string{
 	"v0.67.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
 	"v0.68.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
 	"v0.69.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	// v0.72.0 through v0.78.1: sessions/0340 (WP09) already shipped inside
+	// these snapshots' own dumps, so scheduled_chat_runs previously needed
+	// no entry here. model-scheduled-jobs-01PMSJ01 WP08's sessions/0339
+	// (scheduledChatRunsTriggerKindNote below) ADDs trigger_kind and
+	// run_at to the SAME table, which is newer than every one of these
+	// snapshots, so every tag now sees the row-content digest change on
+	// Open for the same structural reason 0340 did before it shipped.
+	"v0.72.0": {"scheduled_chat_runs"},
+	"v0.73.0": {"scheduled_chat_runs"},
+	"v0.73.1": {"scheduled_chat_runs"},
+	"v0.73.2": {"scheduled_chat_runs"},
+	"v0.73.3": {"scheduled_chat_runs"},
+	"v0.74.0": {"scheduled_chat_runs"},
+	"v0.75.0": {"scheduled_chat_runs"},
+	"v0.75.1": {"scheduled_chat_runs"},
+	"v0.75.2": {"scheduled_chat_runs"},
+	"v0.76.0": {"scheduled_chat_runs"},
+	"v0.76.1": {"scheduled_chat_runs"},
+	"v0.77.0": {"scheduled_chat_runs"},
+	"v0.77.1": {"scheduled_chat_runs"},
+	"v0.78.0": {"scheduled_chat_runs"},
+	"v0.78.1": {"scheduled_chat_runs"},
 }
+
+// artifactsToUnitsNote documents the second per-tag declaration map below.
+// units/1104-artifacts-to-units (artifacts-as-units-01DOGF0C WP04) is
+// newer than every committed snapshot, and on every one of them it:
+//
+//   - copies each `artifacts` row into `units` (kind='artifact') and each
+//     `artifact_versions` row into `unit_versions` (plus a synthesized v1
+//     for version-less artifacts) — so `units` / `unit_versions` gain rows;
+//   - renames `artifacts` -> `artifacts_legacy` and `artifact_versions` ->
+//     `artifact_versions_legacy` — so the two legacy names disappear.
+//
+// Declaring these four tables waives the generic row-count/digest loop for
+// them, which is exactly the masking risk the scheduled_chat_runs comments
+// above warn about. assertArtifactsMigratedToUnits narrows that waiver back
+// down on every tag: the legacy tables' full row content (a name-independent
+// digest) must equal the pre-Open `artifacts` / `artifact_versions` content
+// under their new names; every non-artifact units / unit_versions row must be
+// byte-identical to the pre-Open dump; and the copy is checked for the SEED
+// artifact only (head + both versions) — so a migration that mis-copied some
+// other artifact into units would be caught by migration_1104_test.go's
+// seeded snapshots, not by this loop. That is the residual cost of the
+// waiver, stated so nobody reads this table as fully covered.
+//
+// Kept as its own map (merged in testUpgradeSnapshot) rather than spliced
+// into each expectedChangedTables entry so the one reason reads once. A
+// snapshot taken AFTER the release that ships 1104 already has the legacy
+// names in its dump and needs no entry — do not add one for it.
+const artifactsToUnitsNote = "units/1104-artifacts-to-units (artifacts-as-units-01DOGF0C WP04) " +
+	"copies artifacts/artifact_versions into units/unit_versions and renames the legacy tables."
+
+var artifactsToUnitsTables = []string{"artifacts", "artifact_versions", "units", "unit_versions"}
+
+var expectedChangedTablesArtifactsToUnits = map[string][]string{
+	"v0.63.0": artifactsToUnitsTables,
+	"v0.63.1": artifactsToUnitsTables,
+	"v0.63.2": artifactsToUnitsTables,
+	"v0.64.0": artifactsToUnitsTables,
+	"v0.64.1": artifactsToUnitsTables,
+	"v0.65.0": artifactsToUnitsTables,
+	"v0.65.1": artifactsToUnitsTables,
+	"v0.66.0": artifactsToUnitsTables,
+	"v0.67.0": artifactsToUnitsTables,
+	"v0.68.0": artifactsToUnitsTables,
+	"v0.69.0": artifactsToUnitsTables,
+	"v0.70.0": artifactsToUnitsTables,
+	"v0.71.0": artifactsToUnitsTables,
+	"v0.72.0": artifactsToUnitsTables,
+	"v0.73.0": artifactsToUnitsTables,
+	"v0.73.1": artifactsToUnitsTables,
+	"v0.73.2": artifactsToUnitsTables,
+	"v0.73.3": artifactsToUnitsTables,
+	"v0.74.0": artifactsToUnitsTables,
+	"v0.75.0": artifactsToUnitsTables,
+	"v0.75.1": artifactsToUnitsTables,
+	"v0.75.2": artifactsToUnitsTables,
+	"v0.76.0": artifactsToUnitsTables,
+	"v0.76.1": artifactsToUnitsTables,
+	"v0.77.0": artifactsToUnitsTables,
+	"v0.77.1": artifactsToUnitsTables,
+	"v0.78.0": artifactsToUnitsTables,
+	"v0.78.1": artifactsToUnitsTables,
+	"v0.79.0": artifactsToUnitsTables,
+	"v0.80.0": artifactsToUnitsTables,
+	"v0.80.1": artifactsToUnitsTables,
+	"v0.81.0": artifactsToUnitsTables,
+	"v0.82.0": artifactsToUnitsTables,
+	"v0.82.1": artifactsToUnitsTables,
+	"v0.83.0": artifactsToUnitsTables,
+	"v0.84.0": artifactsToUnitsTables,
+	"v0.85.0": artifactsToUnitsTables,
+	"v0.85.1": artifactsToUnitsTables,
+	"v0.85.2": artifactsToUnitsTables,
+	"v0.86.0": artifactsToUnitsTables,
+}
+
+// scheduledChatRunsTriggerKindNote documents WHY scheduled_chat_runs is
+// in expectedChangedTables for v0.72.0 onward (and, alongside
+// scheduledChatRunsProvenanceNote, for every earlier tag too):
+// sessions/0339-scheduled-chat-runs-trigger-kind
+// (model-scheduled-jobs-01PMSJ01 WP08) ADDs trigger_kind TEXT NOT NULL
+// DEFAULT 'cron' and run_at INTEGER to scheduled_chat_runs (created by
+// 0325, altered again by 0340). Every pre-existing row gains both
+// columns, changing the row-content digest on every tag that predates
+// this migration — i.e. every tag currently committed.
+const scheduledChatRunsTriggerKindNote = "sessions/0339-scheduled-chat-runs-trigger-kind " +
+	"(model-scheduled-jobs-01PMSJ01 WP08) adds trigger_kind + run_at " +
+	"to scheduled_chat_runs (created by 0325, altered again by 0340)."
 
 // fixedProbeTime is used for the item-4 session INSERT probe so the
 // test's own write doesn't introduce nondeterminism into anything that
@@ -221,9 +297,6 @@ func TestUpgradePath(t *testing.T) {
 		if !e.IsDir() {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(root, e.Name(), "dump.sql")); err != nil {
-			continue // e.g. a tag directory recorded as unreplayable, no dump.sql
-		}
 		// Only vX.Y.Z directories are snapshots. scripts/ci/upgrade-
 		// snapshot.sh also accepts the literal "HEAD" to preview an
 		// unreleased tree (docs/upgrade-snapshots.md); that output is a
@@ -231,6 +304,19 @@ func TestUpgradePath(t *testing.T) {
 		// just because someone forgot to delete it.
 		if !upgradesnap.IsSnapshotTag(e.Name()) {
 			continue
+		}
+		// A snapshot directory without dump.sql is never legitimate and
+		// FAILS, it is not skipped. This line used to `continue` ("e.g. a
+		// tag directory recorded as unreplayable") — but no such recorded
+		// case has ever existed, and the skip is what let v0.89.4 ship
+		// (PR #382) as a PROVENANCE.md-only directory: the chain silently
+		// stopped at v0.89.3 while check-upgrade-snapshot-present.sh,
+		// keying on the directory name, reported v0.89.4. Caught by the
+		// v0.90.0 release review (2026-10-06); the gate now fails on a
+		// dump-less directory too.
+		if _, err := os.Stat(filepath.Join(root, e.Name(), "dump.sql")); err != nil {
+			t.Fatalf("testdata/upgrade/%s/ exists but has no dump.sql — a provenance-only directory is not a snapshot; "+
+				"run scripts/ci/upgrade-snapshot.sh %s or delete the directory", e.Name(), e.Name())
 		}
 		tags = append(tags, e.Name())
 	}
@@ -278,6 +364,27 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// snapshot chain is where the constraint becomes decidable. See
 	// assertLedgerHashesUnchanged for the full reasoning.
 	assertLedgerHashesUnchanged(t, ctx, raw, tag)
+	// artifacts-as-units-01DOGF0C: the document rows sharing the units
+	// tables, captured BEFORE units/1104 copies artifacts in beside them.
+	preNonArtifactUnits := snapshotNonArtifactUnits(t, ctx, raw)
+	// units-debt-01UNITD01: every artifact id the snapshot holds, from
+	// whichever storage generation it is on (pre-1104 `artifacts`, a
+	// v0.87.0-era `artifacts_legacy` + artifact units), so the post-Open
+	// assertion can prove the 1105 drop lost no artifact.
+	preArtifactIDs := artifactIDsAnyGeneration(t, ctx, raw)
+	// sessions/0345 adds columns to scheduled_chat_run_history; whether
+	// this snapshot predates it decides the digest waiver below.
+	_, hasSchedHistory := preOpen["scheduled_chat_run_history"]
+	schedHistoryPredates0345 := hasSchedHistory &&
+		!columnExists(t, raw, "scheduled_chat_run_history", "model")
+	// sessions/0346 adds columns to session_messages; same decision.
+	_, hasSessionMessages := preOpen["session_messages"]
+	sessionMessagesPredates0346 := hasSessionMessages &&
+		!columnExists(t, raw, "session_messages", "cached_tokens")
+	// sessions/0347 adds projects.tool_exposure; same question for the
+	// projects digest waiver below.
+	_, hasProjects := preOpen["projects"]
+	projectsPredate0347 := hasProjects && !columnExists(t, raw, "projects", "tool_exposure")
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}
@@ -361,6 +468,35 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// install's high-water mark" case, same shape as event-log above. ----
 	assertTasksTableMigrated(t, ctx, db)
 
+	// ---- laya-advisors-01LAYA001 WP08: advice_labels exists and accepts
+	// a write on THIS upgraded install, AND — the specific risk this WP's
+	// brief calls out by name — the pre-existing `units` table's real
+	// KindDoc seed rows (v0.83.0 onward) survive Open() byte-for-byte.
+	// laya-advisors/1600-advice-labels is the FIRST migration in the tree
+	// to land against a snapshot lineage whose `units` table carries real
+	// rows (v0.83.0's PROVENANCE.md: "units.KindDoc going live means the
+	// next migration touching `units` will replay against REAL document
+	// rows for the first time"). This migration does not touch `units` at
+	// all, but CLAUDE.md blind spot #3 is exactly the failure mode where
+	// an unrelated-looking migration silently cascades — so this asserts
+	// the specific table by name rather than trusting only the generic
+	// per-table loop below. ----
+	assertAdviceLabelsTableMigrated(t, ctx, db)
+	// ---- ml-producer-01MLPRD01 WP02: ml_outbox + ml_tasks exist and
+	// accept a write through the production store on THIS upgraded
+	// install. Every committed snapshot predates ml-producer/1700. ----
+	assertMLProducerTablesMigrated(t, ctx, db)
+
+	// ---- llm-call-telemetry-01LLMTEL01 WP02: model_calls exists on THIS
+	// upgraded install and round-trips a call through the production
+	// store (modelcalls.Store over the storage.DB Open hands out). Every
+	// tag under testdata/upgrade/ predates model-calls/1800, so this is
+	// the "first migration to land below/above an install's high-water
+	// mark" case, same shape as advice_labels above. ----
+	assertModelCallsTableMigrated(t, ctx, db)
+	assertUnitsTableSurvivesUntouched(t, ctx, db, tag)
+	assertArtifactsMigratedToUnits(t, ctx, db, rawPath, tag, preNonArtifactUnits, preArtifactIDs)
+
 	// ---- automation-actually-runs-01PMZ404 UNIT-13 (owner ruling
 	// A-10): rerun_policy is refused on save but tolerated on load. A
 	// row this tag's own release could have written via the old,
@@ -394,9 +530,113 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// workflow_versions), unconditionally on every tag for the same
 	// reason "sessions" is: this test itself is the writer, not a
 	// migration.
-	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true}
+	// "tasks" joins this set for the same reason as "sessions": the
+	// writer is assertTasksTableMigrated's probe insert, not a
+	// migration. It was previously declared per-tag in
+	// expectedChangedTables, which meant every release had to add the
+	// line by hand or TestUpgradePath went red on a correct snapshot —
+	// four tags running (v0.70.0, v0.71.0, v0.72.0, v0.73.0), each with
+	// a comment saying the durable fix was still owed.
+	//
+	// Blanket-exempting the table would mask a real future migration
+	// that writes rows to it, which is precisely what v0.70.0's comment
+	// warned about. So this exemption is paired with an EXACT row-count
+	// assertion below (before+1, the probe's single row), mirroring what
+	// "sessions" already does. A migration that adds or removes a tasks
+	// row still fails the test; only the probe's own write is tolerated.
+	//
+	// COST OF THIS ENTRY — read before assuming `tasks` is covered.
+	// Membership here waives the content-DIGEST check for `tasks`
+	// permanently, on every tag. The row-count assertion below catches a
+	// migration that ADDS or REMOVES rows; it cannot see one that MUTATES
+	// an existing row without changing the count — an UPDATE, or a column
+	// added with a backfilled NOT NULL DEFAULT. That is not hypothetical:
+	// it is exactly the sessions/0340 shape that put `scheduled_chat_runs`
+	// in this map in the first place.
+	//
+	// This blind spot is not new here. `sessions`, `workflows` and
+	// `workflow_versions` have carried the identical row-count-only
+	// treatment since before this change, so `tasks` is being brought into
+	// line with an accepted trade-off rather than given a weaker one — and
+	// the per-tag entries this replaces waived BOTH checks, so nothing
+	// regressed. But "row count is asserted" is not "the table is
+	// covered," and a future reader should not read it that way.
+	//
+	// The honest fix is to compute the post-Open digest with the probe
+	// row's primary key excluded and compare it to the pre-Open digest,
+	// which would close this for all four tables at once. Out of scope for
+	// a chore: snapshot PR. Owner: alec. Dated 2026-09-09.
+	// advice_labels added 2026-09-30: v0.84.0 is the first tag whose
+	// committed dump already contains the table, so
+	// assertAdviceLabelsTableMigrated's probe insert (the tasks-precedent
+	// pattern, same trade-off as documented above) now appears as a
+	// pre-vs-post change on replay.
+	// advice_label_push_cursor added 2026-09-30 (v0.85.0 snapshot PR):
+	// same shape one release later — v0.85.0 is the first tag whose dump
+	// contains the 1601 cursor table, so the probe's production
+	// SaveCursor write (proving the push source works on an upgraded
+	// install) now appears as a 0->1 pre-vs-post change on replay.
+	// model_calls added 2026-10-09 (llm-call-telemetry-01LLMTEL01 WP02),
+	// ahead of the first snapshot that contains it: assertModelCallsTable
+	// Migrated's probe insert is this test's own write (the advice_labels
+	// precedent), and the row count is asserted exactly there.
+	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true, "tasks": true, "advice_labels": true, "advice_label_push_cursor": true, "model_calls": true}
 	for _, tbl := range expectedChangedTables[tag] {
 		changed[tbl] = true
+	}
+	for _, tbl := range expectedChangedTablesArtifactsToUnits[tag] { // see artifactsToUnitsNote
+		changed[tbl] = true
+	}
+	// units/1105-drop-artifacts-legacy (units-debt-01UNITD01) drops the
+	// *_legacy tables on any snapshot taken after 1104 shipped (v0.87.0
+	// onward). Waived here only when the snapshot actually carries them;
+	// assertArtifactsMigratedToUnits replaces the digest check with an
+	// explicit "gone, and every artifact id survives on units" assertion.
+	for _, tbl := range []string{"artifacts_legacy", "artifact_versions_legacy"} {
+		if _, ok := preOpen[tbl]; ok {
+			changed[tbl] = true
+		}
+	}
+	// sessions/0345-scheduled-chat-history-model-cost ADDs model +
+	// cost_usd (both defaulted) to scheduled_chat_run_history, so every
+	// seeded row's digest changes — but only on a snapshot whose table
+	// predates 0345 (no `model` column before Open). The digest is waived
+	// for those snapshots only; the row count is still asserted exactly.
+	// TestMigration0345_* proves the old rows read back intact.
+	if before, ok := preOpen["scheduled_chat_run_history"]; ok && schedHistoryPredates0345 {
+		changed["scheduled_chat_run_history"] = true
+		if after, ok := postOpen["scheduled_chat_run_history"]; !ok {
+			t.Errorf("table scheduled_chat_run_history present before Open, missing after")
+		} else if before.RowCount != after.RowCount {
+			t.Errorf("table scheduled_chat_run_history row count changed: %d -> %d (0345 only adds columns)", before.RowCount, after.RowCount)
+		}
+	}
+	// sessions/0346-session-usage-cache-tokens ADDs cached_tokens +
+	// cache_write_tokens (nullable) to session_messages, so every seeded
+	// row's digest changes on a snapshot whose table predates 0346. Same
+	// treatment as 0345 above: digest waived for those snapshots only,
+	// row count asserted exactly. TestMigration0346_* proves the old rows'
+	// usage columns read back intact.
+	if before, ok := preOpen["session_messages"]; ok && sessionMessagesPredates0346 && !changed["session_messages"] {
+		changed["session_messages"] = true
+		if after, ok := postOpen["session_messages"]; !ok {
+			t.Errorf("table session_messages present before Open, missing after")
+		} else if before.RowCount != after.RowCount {
+			t.Errorf("table session_messages row count changed: %d -> %d (0346 only adds columns)", before.RowCount, after.RowCount)
+		}
+	}
+	// sessions/0347-tool-exposure ADDs projects.tool_exposure (nullable,
+	// no default), which changes every seeded project row's digest on a
+	// snapshot that predates it. Waived for those snapshots only; the row
+	// count is still asserted exactly. TestMigration0347_* proves the old
+	// rows read back intact with no override.
+	if before, ok := preOpen["projects"]; ok && projectsPredate0347 {
+		changed["projects"] = true
+		if after, ok := postOpen["projects"]; !ok {
+			t.Errorf("table projects present before Open, missing after")
+		} else if before.RowCount != after.RowCount {
+			t.Errorf("table projects row count changed: %d -> %d (0347 only adds columns)", before.RowCount, after.RowCount)
+		}
 	}
 	for table, before := range preOpen {
 		if changed[table] {
@@ -412,6 +652,25 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 		}
 		if before.Digest != after.Digest {
 			t.Errorf("table %s content digest changed (not in expectedChangedTables[%q]): a seeded row was altered", table, tag)
+		}
+	}
+	// Same shape as the sessions check below, and the reason "tasks" can
+	// safely sit in `changed` above: the blanket digest check is waived
+	// for this table, but the row count is not. assertTasksTableMigrated
+	// inserts exactly one probe row, so anything other than before+1
+	// means a migration wrote to `tasks` and must be accounted for
+	// deliberately rather than absorbed by an allowlist entry.
+	//
+	// Tags before v0.70.0 have no `tasks` table in their dump, so there
+	// is no before-state to diff — the `ok` guard skips them, exactly as
+	// the sessions check guards itself.
+	if before, ok := preOpen["tasks"]; ok {
+		after, present := postOpen["tasks"]
+		if !present {
+			t.Errorf("tasks table present before Open, missing after")
+		} else if after.RowCount != before.RowCount+1 {
+			t.Errorf("tasks row count = %d after Open+probe-insert, want exactly %d (before + assertTasksTableMigrated's one probe row)",
+				after.RowCount, before.RowCount+1)
 		}
 	}
 	if before, ok := preOpen["sessions"]; ok {
@@ -492,11 +751,18 @@ func assertSurfaceReads(t *testing.T, ctx context.Context, db storage.DB) {
 	if n := count("messages", "SELECT COUNT(*) FROM session_messages WHERE session_id='seed-session-1'"); n < 3 {
 		t.Errorf("session_messages for seed-session-1 = %d, want >= 3", n)
 	}
-	if n := count("artifacts", "SELECT COUNT(*) FROM artifacts WHERE id='seed-artifact-1'"); n != 1 {
-		t.Errorf("artifacts row for seed-artifact-1 = %d, want 1", n)
+	// units/1104 (artifacts-as-units-01DOGF0C) moved artifacts onto units
+	// and retained the legacy tables under *_legacy names for one release;
+	// units/1105 (units-debt-01UNITD01) dropped them. The units half is
+	// the only home now; assertArtifactsMigratedToUnits checks content.
+	if n := count("legacy artifact tables", "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('artifacts','artifact_versions','artifacts_legacy','artifact_versions_legacy')"); n != 0 {
+		t.Errorf("legacy artifact tables after Open = %d, want 0 (dropped by units/1105)", n)
 	}
-	if n := count("artifact_versions", "SELECT COUNT(*) FROM artifact_versions WHERE artifact_id='seed-artifact-1'"); n != 2 {
-		t.Errorf("artifact_versions for seed-artifact-1 = %d, want 2 (the cascade canary)", n)
+	if n := count("artifact unit", "SELECT COUNT(*) FROM units WHERE id='seed-artifact-1' AND kind='artifact'"); n != 1 {
+		t.Errorf("units row for seed-artifact-1 (kind=artifact) = %d, want 1", n)
+	}
+	if n := count("artifact unit versions", "SELECT COUNT(*) FROM unit_versions WHERE unit_id='seed-artifact-1'"); n != 2 {
+		t.Errorf("unit_versions for seed-artifact-1 = %d, want 2 (both legacy versions copied, no synthesized v1)", n)
 	}
 	if n := count("branches", "SELECT COUNT(*) FROM branches WHERE id='seed-branch-1'"); n != 1 {
 		t.Errorf("branches row for seed-branch-1 = %d, want 1", n)
@@ -809,4 +1075,476 @@ func openRawSQLiteAt(t *testing.T, path string) *sql.DB {
 	}
 	db.SetMaxOpenConns(1)
 	return db
+}
+
+// assertModelCallsTableMigrated is llm-call-telemetry-01LLMTEL01 WP02's
+// upgrade evidence, run against every snapshot in the chain: the
+// model-calls/1800 ledger row exists, model_calls is queryable and empty,
+// and a call written through the production store (modelcalls.NewStore
+// over this upgraded DB — the same call core/rpc/model_calls_wiring.go
+// makes) reads back by its session hash. Not a memory fixture (CLAUDE.md
+// blind spot #2), not an empty database (blind spot #3).
+func assertModelCallsTableMigrated(t *testing.T, ctx context.Context, db storage.DB) {
+	t.Helper()
+	r := db.Reader()
+	var n int
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM harness_migrations WHERE id = 'model-calls/1800-model-calls' AND action = 'applied'").Scan(&n); err != nil {
+		t.Fatalf("ledger query: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("model-calls/1800-model-calls applied rows = %d, want 1", n)
+	}
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM model_calls").Scan(&n); err != nil {
+		t.Fatalf("model_calls not queryable after Open (model-calls/1800 did not apply): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("model_calls row count on a fresh upgrade = %d, want 0 (no snapshot seeds a call)", n)
+	}
+	store, err := modelcalls.NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost := 0.001
+	probe := genaitrace.CallRecord{
+		SpanID: "upgrade-path-model-call-probe", TraceID: "t", Start: fixedProbeTime,
+		End: fixedProbeTime.Add(time.Second), OK: true, SessionHash: "00112233445566aa",
+		Provider: "openrouter", RequestModel: "openai/gpt-4o", ResponseID: "gen-upgrade-probe",
+		FinishReasons: []string{"stop"}, InputTokens: 10, OutputTokens: 2, CostUSD: &cost,
+	}
+	if err := store.Insert(ctx, []genaitrace.CallRecord{probe}); err != nil {
+		t.Fatalf("model_calls insert after Open on an upgraded install failed: %v", err)
+	}
+	got, err := store.ListBySessionHash(ctx, probe.SessionHash, 10)
+	if err != nil || len(got) != 1 || got[0].ResponseID != "gen-upgrade-probe" || got[0].DurationMS != 1000 {
+		t.Fatalf("model_calls round trip on an upgraded install: %+v, %v", got, err)
+	}
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM model_calls").Scan(&n); err != nil || n != 1 {
+		t.Fatalf("model_calls row count after the probe = %d, %v; want exactly 1", n, err)
+	}
+}
+
+// assertAdviceLabelsTableMigrated is laya-advisors-01LAYA001 WP08's
+// AC-06 evidence, run against every snapshot in the chain: the
+// advice_labels table exists, is queryable, and accepts a write through
+// the exact production writer (advicelabels.NewSQLStore(rawDB), the same
+// call core/rpc/api.go makes) — not a memory-store fixture (CLAUDE.md
+// blind spot #2). Every tag under testdata/upgrade/ predates
+// laya-advisors/1600's registration, so this is the "first migration to
+// land below an install's high-water mark" case, same shape as
+// assertTasksTableMigrated above.
+func assertAdviceLabelsTableMigrated(t *testing.T, ctx context.Context, db storage.DB) {
+	t.Helper()
+	r := db.Reader()
+
+	var n int
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM advice_labels").Scan(&n); err != nil {
+		t.Fatalf("advice_labels table not queryable after Open (laya-advisors/1600-advice-labels did not apply): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("advice_labels row count on a fresh upgrade = %d, want 0 (no snapshot seeds a label row)", n)
+	}
+
+	type sqlHandle interface{ SQL() *sql.DB }
+	h, ok := db.(sqlHandle)
+	if !ok {
+		t.Fatalf("storage.DB does not expose SQL() *sql.DB — cannot drive the production advice_labels writer")
+	}
+	rawDB := h.SQL()
+	if rawDB == nil {
+		t.Fatalf("db.SQL() returned nil")
+	}
+	store := advicelabels.NewSQLStore(rawDB)
+	probe := advicelabels.Row{
+		KindID:           "branch_now",
+		PromptVersion:    "v1",
+		FeaturesHash:     "upgrade-path-probe-hash",
+		FeaturesJSON:     `{"probe":true}`,
+		FeaturesComplete: true,
+		ModelID:          "heuristic/branch-regex-v1",
+		Rung:             "heuristic",
+		Decision:         true,
+		Confidence:       80,
+		Shown:            true,
+		UserAction:       advicelabels.ActionIgnored,
+		LatencyMS:        1,
+		SessionID:        "upgrade-path-advice-probe",
+		CreatedAt:        fixedProbeTime,
+	}
+	if err := store.Insert(ctx, probe); err != nil {
+		t.Fatalf("advice_labels store insert after Open on an upgraded install failed: %v — "+
+			"this is the exact failure mode of a table that does not exist", err)
+	}
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM advice_labels WHERE session_id = ?", probe.SessionID).Scan(&n); err != nil {
+		t.Fatalf("advice_labels post-insert query: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("advice_labels row count for the probe session = %d, want 1", n)
+	}
+
+	// Placeholder-row discriminator (review promotion, laya-advisors-
+	// 01LAYA001 WP07/WP08 review round, 2026-09-29): features_complete
+	// exists on THIS upgraded install and both polarities are queryable
+	// — not just the column's bare presence via a schema query, but an
+	// actual value written by the production writer.
+	var gotComplete int
+	if err := r.QueryRow(ctx, "SELECT features_complete FROM advice_labels WHERE session_id = ?", probe.SessionID).Scan(&gotComplete); err != nil {
+		t.Fatalf("advice_labels.features_complete not queryable after Open: %v", err)
+	}
+	if gotComplete != 1 {
+		t.Errorf("features_complete for the probe row = %d, want 1 (Row.FeaturesComplete=true)", gotComplete)
+	}
+
+	// laya-advisors-01LAYA001 WP14: migration 1601 (revision column +
+	// push-cursor table) landed on THIS upgraded install — every
+	// committed snapshot predates it (v0.84.0 carries 1600 only), so this
+	// is the "first migration to land below the high-water mark" shape.
+	// Proven through the production writer AND the production push
+	// source, not by a schema query alone.
+	var rev int64
+	if err := r.QueryRow(ctx, "SELECT revision FROM advice_labels WHERE session_id = ?", probe.SessionID).Scan(&rev); err != nil {
+		t.Fatalf("advice_labels.revision not queryable after Open (laya-advisors/1601 did not apply): %v", err)
+	}
+	if rev < 1 {
+		t.Errorf("probe row revision = %d, want >= 1 (Insert must stamp the next table-global revision)", rev)
+	}
+	pending, err := store.PendingSince(ctx, "branch_now", 0, 10)
+	if err != nil || len(pending) != 1 || pending[0].Revision != rev {
+		t.Errorf("PendingSince on the upgraded install = %+v, err %v; want the single probe row at revision %d", pending, err, rev)
+	}
+	if err := store.SaveCursor(ctx, "upgrade-probe", "branch_now", advicelabels.PushCursor{TS: 1, Revision: rev}); err != nil {
+		t.Errorf("advice_label_push_cursor not writable after Open: %v", err)
+	}
+	if err := store.UpdateAction(ctx, probe.SessionID, "branch_now", probe.FeaturesHash, advicelabels.ActionDismissed); err != nil {
+		t.Fatalf("UpdateAction on the upgraded install: %v", err)
+	}
+	var rev2 int64
+	if err := r.QueryRow(ctx, "SELECT revision FROM advice_labels WHERE session_id = ?", probe.SessionID).Scan(&rev2); err != nil {
+		t.Fatalf("revision re-read: %v", err)
+	}
+	if rev2 <= rev {
+		t.Errorf("revision after an action change = %d, want > %d", rev2, rev)
+	}
+}
+
+// assertUnitsTableSurvivesUntouched is the specific, content-anchored
+// proof the WP08 brief calls for by name: laya-advisors/1600-advice-
+// labels is the FIRST migration in the tree to replay against a snapshot
+// lineage whose `units` table already carries real rows (v0.83.0
+// onward: two KindDoc seed rows, per that snapshot's PROVENANCE.md). The
+// generic per-table row-count+digest loop in testUpgradeSnapshot already
+// covers this (units is in neither the unconditional `changed` set nor
+// any per-tag expectedChangedTables entry), but CLAUDE.md blind spot #3
+// / the destructive-migration-cascade history (sessions/0332,
+// sessions/0327) is exactly the case where "an unrelated migration
+// silently touched a table nobody was watching" — so this asserts the
+// specific table and specific seed rows by name, not just via the
+// generic loop. A no-op on any tag whose dump predates `units`
+// (pre-v0.60ish; units/1100 registered well after this snapshot chain
+// began) — SnapshotAll's map simply has no "units" key for those tags.
+// assertMLProducerTablesMigrated is the ml-producer/1700 existence probe:
+// both tables are queryable and empty after Open, and the production
+// mlstore writer can commit an event + task through them.
+func assertMLProducerTablesMigrated(t *testing.T, ctx context.Context, db storage.DB) {
+	t.Helper()
+	r := db.Reader()
+	for _, tbl := range []string{"ml_outbox", "ml_tasks"} {
+		var n int
+		if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM "+tbl).Scan(&n); err != nil {
+			t.Fatalf("%s not queryable after Open (ml-producer/1700-ml-outbox-and-tasks did not apply): %v", tbl, err)
+		}
+		if n != 0 {
+			t.Errorf("%s row count on a fresh upgrade = %d, want 0", tbl, n)
+		}
+	}
+	type sqlHandle interface{ SQL() *sql.DB }
+	h, ok := db.(sqlHandle)
+	if !ok || h.SQL() == nil {
+		t.Fatalf("storage.DB does not expose SQL() *sql.DB — cannot drive the production mlstore writer")
+	}
+	store := mlstore.New(h.SQL())
+	seqs, err := store.Commit(ctx, mlstore.Write{
+		Events: []mlstore.EventDraft{{CreatedAt: 1, Body: func(seq int64) ([]byte, error) {
+			return []byte(fmt.Sprintf(`{"id":%d}`, seq)), nil
+		}}},
+		Task: &mlstore.TaskRow{TaskID: "agent-upgradeprobe", SessionHash: "x", Phase: "idle", StartedAt: 1, LastActive: 1},
+	})
+	if err != nil || len(seqs) != 1 {
+		t.Fatalf("mlstore commit after Open on an upgraded install: seqs=%v err=%v", seqs, err)
+	}
+	if _, ok, err := store.LoadTask(ctx, "agent-upgradeprobe"); err != nil || !ok {
+		t.Fatalf("ml_tasks probe row not readable back: ok=%v err=%v", ok, err)
+	}
+	if err := store.Purge(ctx); err != nil {
+		t.Fatalf("mlstore purge: %v", err)
+	}
+}
+
+func assertUnitsTableSurvivesUntouched(t *testing.T, ctx context.Context, db storage.DB, tag string) {
+	t.Helper()
+	r := db.Reader()
+
+	var exists int
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='units'").Scan(&exists); err != nil {
+		t.Fatalf("%s: check units table existence: %v", tag, err)
+	}
+	if exists == 0 {
+		return // this tag predates the units table — nothing to assert.
+	}
+
+	var n int
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM units").Scan(&n); err != nil {
+		t.Fatalf("%s: units table not queryable after Open: %v", tag, err)
+	}
+
+	// v0.83.0's PROVENANCE.md names exactly two KindDoc seed rows,
+	// scope=session/seed-session-1, ids seed-unit-1/seed-unit-2. Assert
+	// they are still there, by id and title, rather than only a row
+	// count — a migration that deleted and re-inserted rows with new ids
+	// would pass a bare COUNT(*) check but fail this one.
+	wantIDs := map[string]string{
+		"seed-unit-1": "Seed Unit One",
+		"seed-unit-2": "Seed Unit Two",
+	}
+	var seenAny bool
+	for id, wantTitle := range wantIDs {
+		var title string
+		err := r.QueryRow(ctx, "SELECT title FROM units WHERE id = ?", id).Scan(&title)
+		if err != nil {
+			// Not every tag in the chain necessarily seeds these two rows
+			// (only v0.83.0+ does per that snapshot's PROVENANCE.md) —
+			// absence on an older tag is not a failure, only a divergence
+			// on a tag that DOES have the units table (checked above) but
+			// predates the two-doc seed.
+			continue
+		}
+		seenAny = true
+		if title != wantTitle {
+			t.Errorf("%s: units row %s title = %q after Open, want %q (unrelated migration mutated it)", tag, id, title, wantTitle)
+		}
+	}
+	if seenAny && n < len(wantIDs) {
+		t.Errorf("%s: units row count = %d after Open, want at least %d (the two KindDoc seed rows)", tag, n, len(wantIDs))
+	}
+}
+
+// snapshotNonArtifactUnits renders every units / unit_versions row that
+// is NOT an artifact (and every unit_versions row whose parent is not an
+// artifact) as one ordered string per table. units/1104 inserts artifact
+// rows into these same tables; the rows already there — the v0.83.0+
+// KindDoc seed rows — must come out byte-identical (WP-PI AC-PI-3).
+func snapshotNonArtifactUnits(t *testing.T, ctx context.Context, raw *sql.DB) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	var exists int
+	if err := raw.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='units'").Scan(&exists); err != nil {
+		t.Fatalf("probe units table: %v", err)
+	}
+	if exists == 0 {
+		return out
+	}
+	queries := map[string]string{
+		"units": `SELECT id || '|' || kind || '|' || scope || '|' || scope_id || '|' || classification || '|' ||
+		                 version || '|' || load_policy || '|' || title || '|' || body || '|' || metadata || '|' ||
+		                 created_at || '|' || updated_at
+		            FROM units WHERE kind != 'artifact' ORDER BY id`,
+		"unit_versions": `SELECT uv.id || '|' || uv.unit_id || '|' || uv.version || '|' || uv.body || '|' ||
+		                         uv.metadata || '|' || uv.created_at
+		                    FROM unit_versions uv JOIN units u ON u.id = uv.unit_id
+		                   WHERE u.kind != 'artifact' ORDER BY uv.id`,
+	}
+	for table, q := range queries {
+		rows, err := raw.QueryContext(ctx, q)
+		if err != nil {
+			t.Fatalf("snapshot non-artifact %s: %v", table, err)
+		}
+		var b strings.Builder
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				_ = rows.Close()
+				t.Fatalf("scan non-artifact %s: %v", table, err)
+			}
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+		_ = rows.Close()
+		out[table] = b.String()
+	}
+	return out
+}
+
+// assertArtifactsMigratedToUnits is the content-level replacement for the
+// generic digest check that artifactsToUnitsNote waives, run on EVERY
+// committed snapshot (artifacts-as-units-01DOGF0C WP04, pins P-1/P-3):
+//
+//   - 1104 is ledgered as applied;
+//   - the seed artifact reads back through the PRODUCTION store
+//     (artifacts.NewSQLStore, the units-backed store core/rpc wires) with
+//     every field equal to the snapshot's legacy row, and its two versions
+//     equal to the legacy version rows — no synthesized v1, because this
+//     artifact has real versions;
+//   - units/1105 is ledgered as applied, the legacy tables are gone under
+//     both names, and every artifact id the snapshot held (in either
+//     storage generation) is a kind='artifact' unit — the drop lost
+//     nothing (units-debt-01UNITD01; this replaced the one-release
+//     "legacy tables present with their rows" check);
+//   - every non-artifact units / unit_versions row is byte-identical to
+//     the pre-Open dump.
+func assertArtifactsMigratedToUnits(t *testing.T, ctx context.Context, db storage.DB, rawPath, tag string, pre map[string]string, preArtifactIDs string) {
+	t.Helper()
+	r := db.Reader()
+	for _, id := range []string{"units/1104-artifacts-to-units", "units/1105-drop-artifacts-legacy"} {
+		var applied int
+		if err := r.QueryRow(ctx,
+			"SELECT COUNT(*) FROM harness_migrations WHERE id = ? AND action = 'applied'", id).Scan(&applied); err != nil {
+			t.Fatalf("%s: ledger probe for %s: %v", tag, id, err)
+		}
+		if applied != 1 {
+			t.Errorf("%s: %s ledger rows = %d, want 1", tag, id, applied)
+		}
+	}
+
+	store := coreart.NewSQLStore(db)
+	a, err := store.Get(ctx, "seed-artifact-1")
+	if err != nil {
+		t.Fatalf("%s: production artifacts store cannot read the migrated seed artifact: %v", tag, err)
+	}
+	if a.Title != "Seed Artifact" || a.MimeType != "text/plain" || a.ContentHash != "seedhash1" || a.ByteSize != 42 ||
+		a.Source != coreart.SourceUserPin || a.ScopeKind != coreart.ScopeKindSession || a.SessionID != "seed-session-1" ||
+		a.ProjectID != nil || a.CreatedAt.UnixNano() != 1700000000400 {
+		t.Errorf("%s: migrated seed artifact = %+v, want the legacy row's values", tag, a)
+	}
+	vs, err := store.ListVersions(ctx, "seed-artifact-1")
+	if err != nil {
+		t.Fatalf("%s: ListVersions: %v", tag, err)
+	}
+	if len(vs) != 2 || vs[0].Version != 1 || vs[0].ContentHash != "seedhash1v1" || vs[0].ByteSize != 40 ||
+		vs[0].Summary == nil || *vs[0].Summary != "seed v1" || vs[0].Path == nil || *vs[0].Path != "/seed/v1" ||
+		vs[1].Version != 2 || vs[1].ContentHash != "seedhash1v2" || vs[1].CreatedAt.UnixNano() != 1700000000420 {
+		t.Errorf("%s: migrated versions = %+v, want the two legacy version rows", tag, vs)
+	}
+	if list, err := store.List(ctx, coreart.ArtifactFilter{SessionID: "seed-session-1"}); err != nil || len(list) != 1 {
+		t.Errorf("%s: List(session seed-session-1) = %d rows, %v; want 1", tag, len(list), err)
+	}
+
+	post := openRawSQLiteAt(t, rawPath)
+	defer func() { _ = post.Close() }()
+	// The legacy tables are gone (units/1105) and no artifact went with
+	// them: every id the snapshot held is an artifact unit.
+	var legacyTables int
+	if err := post.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('artifacts','artifact_versions','artifacts_legacy','artifact_versions_legacy')").Scan(&legacyTables); err != nil || legacyTables != 0 {
+		t.Errorf("%s: legacy artifact tables after Open = %d, %v; want 0", tag, legacyTables, err)
+	}
+	if got := artifactIDsAnyGeneration(t, ctx, post); got != preArtifactIDs {
+		t.Errorf("%s: artifact ids after Open differ from the snapshot's:\nbefore:\n%s\nafter:\n%s", tag, preArtifactIDs, got)
+	}
+	got := snapshotNonArtifactUnits(t, ctx, post)
+	for table, before := range pre {
+		if got[table] != before {
+			t.Errorf("%s: non-artifact %s rows changed across Open (a document row was altered):\nbefore:\n%s\nafter:\n%s",
+				tag, table, before, got[table])
+		}
+	}
+}
+
+// artifactIDsAnyGeneration returns the sorted, de-duplicated artifact ids
+// the database holds across every storage generation present: `artifacts`
+// (pre-units/1104), `artifacts_legacy` (1104's retained copy),
+// kind='artifact' units, and `artifacts_legacy_orphans` (1105's
+// quarantine). One id per line.
+//
+// Scoping (units-debt-01UNITD01 review L2): on a 1104-era snapshot an id
+// deleted by the user after the copy is in artifacts_legacy but has no
+// unit. 1105 lawfully removes it from the live artifact set — the FR-2
+// deviation — so a units-only "after" set would differ from the "before"
+// set by exactly those ids. They are not lost: 1105 quarantines them, so
+// counting the quarantine as a generation makes before == after exact
+// (every id is still SOMEWHERE) while a genuinely dropped id still fails.
+func artifactIDsAnyGeneration(t *testing.T, ctx context.Context, raw *sql.DB) string {
+	t.Helper()
+	var parts []string
+	for _, src := range []struct{ table, q string }{
+		{"artifacts", "SELECT id FROM artifacts"},
+		{"artifacts_legacy", "SELECT id FROM artifacts_legacy"},
+		{"units", "SELECT id FROM units WHERE kind = 'artifact'"},
+		{"artifacts_legacy_orphans", "SELECT id FROM artifacts_legacy_orphans"},
+	} {
+		var n int
+		if err := raw.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", src.table).Scan(&n); err != nil {
+			t.Fatalf("probe %s: %v", src.table, err)
+		}
+		if n == 1 {
+			parts = append(parts, src.q)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	rows, err := raw.QueryContext(ctx, strings.Join(parts, " UNION ")+" ORDER BY 1")
+	if err != nil {
+		t.Fatalf("artifact ids: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var b strings.Builder
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan artifact id: %v", err)
+		}
+		b.WriteString(id)
+		b.WriteByte('\n')
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("artifact id rows: %v", err)
+	}
+	return b.String()
+}
+
+// rowsDigest renders every row of table (all columns, ordered by rowid) as
+// text, independent of the table's NAME, so a renamed table can be compared
+// to its pre-rename self.
+func rowsDigest(t *testing.T, ctx context.Context, raw *sql.DB, table string) string {
+	t.Helper()
+	rows, err := raw.QueryContext(ctx, "SELECT * FROM "+table+" ORDER BY rowid")
+	if err != nil {
+		t.Fatalf("rowsDigest %s: %v", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatalf("rowsDigest %s columns: %v", table, err)
+	}
+	var b strings.Builder
+	b.WriteString(strings.Join(cols, ",") + "\n")
+	vals := make([]any, len(cols))
+	ptrs := make([]any, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	n := 0
+	for rows.Next() {
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatalf("rowsDigest %s scan: %v", table, err)
+		}
+		for i, v := range vals {
+			if i > 0 {
+				b.WriteByte('|')
+			}
+			switch x := v.(type) {
+			case nil:
+				b.WriteString("NULL")
+			case []byte:
+				b.WriteString(string(x))
+			default:
+				b.WriteString(fmt.Sprint(x))
+			}
+		}
+		b.WriteByte('\n')
+		n++
+	}
+	if n == 0 {
+		t.Fatalf("rowsDigest %s: no rows — every snapshot seeds seed-artifact-1, so an empty table means the comparison is vacuous", table)
+	}
+	return b.String()
 }

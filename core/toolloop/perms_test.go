@@ -2,6 +2,7 @@ package toolloop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -388,4 +389,171 @@ type externalResolverFunc func(ctx context.Context, sessionID, server, tool stri
 
 func (f externalResolverFunc) Resolve(ctx context.Context, sessionID, server, tool string) (Resolution, error) {
 	return f(ctx, sessionID, server, tool)
+}
+
+// --- CHAT-05 writer tests (trust-surfaces-that-fire-01PMZ202 WP24) ---
+//
+// These exercise SetStaticRule / RemoveStaticRule / LoadStaticConfigRules
+// against real disk (t.TempDir(), never a fixture map) and, critically,
+// re-read the written file through a SEPARATE, freshly-constructed
+// resolver — simulating a chassis restart — rather than asking the same
+// in-memory writer state whether it remembers what it wrote.
+
+func TestSetStaticRule_WrittenRuleSurvivesFreshResolver(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := SetStaticRule(dir, StaticRule{
+		Server: "filesystem", Tool: "*", Policy: PolicyConfirmEach, Reason: "fs default",
+	}); err != nil {
+		t.Fatalf("SetStaticRule: %v", err)
+	}
+
+	// AC-24c: a brand-new resolver, constructed exactly the way
+	// production constructs it at boot, must see the write.
+	resolver, err := NewStaticResolverFromDataDir(dir)
+	if err != nil {
+		t.Fatalf("NewStaticResolverFromDataDir: %v", err)
+	}
+	res, err := resolver.Resolve(context.Background(), "sess", "filesystem", "delete_file")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Policy != PolicyConfirmEach {
+		t.Fatalf("policy = %q, want confirm_each — the written rule did not survive a fresh resolver", res.Policy)
+	}
+	if res.Reason != "fs default" {
+		t.Fatalf("reason = %q, want %q", res.Reason, "fs default")
+	}
+
+	// The file itself must be real, parseable JSON on disk — not an
+	// in-memory fixture the test is fooling itself with.
+	raw, err := os.ReadFile(filepath.Join(dir, "mcp_servers.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var cfg staticConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("Unmarshal written file: %v", err)
+	}
+	if len(cfg.Rules) != 1 || cfg.Rules[0].Policy != PolicyConfirmEach {
+		t.Fatalf("on-disk rules = %+v, want one confirm_each rule", cfg.Rules)
+	}
+}
+
+func TestSetStaticRule_ReplacesExistingRuleForSamePair(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := SetStaticRule(dir, StaticRule{Server: "github", Tool: "*", Policy: PolicyConfirmEach}); err != nil {
+		t.Fatalf("SetStaticRule #1: %v", err)
+	}
+	if err := SetStaticRule(dir, StaticRule{Server: "github", Tool: "*", Policy: PolicyDeny, Reason: "revoked"}); err != nil {
+		t.Fatalf("SetStaticRule #2: %v", err)
+	}
+
+	rules, err := LoadStaticConfigRules(dir)
+	if err != nil {
+		t.Fatalf("LoadStaticConfigRules: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("rules = %+v, want exactly one (replace, not append)", rules)
+	}
+	if rules[0].Policy != PolicyDeny || rules[0].Reason != "revoked" {
+		t.Fatalf("rules[0] = %+v, want the replaced deny rule", rules[0])
+	}
+}
+
+func TestSetStaticRule_AppendsDistinctPairs(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := SetStaticRule(dir, StaticRule{Server: "filesystem", Tool: "*", Policy: PolicyConfirmEach}); err != nil {
+		t.Fatalf("SetStaticRule #1: %v", err)
+	}
+	if err := SetStaticRule(dir, StaticRule{Server: "github", Tool: "exec", Policy: PolicyDeny}); err != nil {
+		t.Fatalf("SetStaticRule #2: %v", err)
+	}
+
+	rules, err := LoadStaticConfigRules(dir)
+	if err != nil {
+		t.Fatalf("LoadStaticConfigRules: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("rules = %+v, want two distinct rules", rules)
+	}
+}
+
+func TestSetStaticRule_RejectsUnknownPolicy(t *testing.T) {
+	dir := t.TempDir()
+	err := SetStaticRule(dir, StaticRule{Server: "x", Tool: "y", Policy: "yolo"})
+	if err == nil {
+		t.Fatal("expected a validation error for an unknown policy")
+	}
+	rules, loadErr := LoadStaticConfigRules(dir)
+	if loadErr != nil {
+		t.Fatalf("LoadStaticConfigRules: %v", loadErr)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("rules = %+v, want none written after a rejected policy", rules)
+	}
+}
+
+func TestSetStaticRule_RejectsEmptyServerOrTool(t *testing.T) {
+	dir := t.TempDir()
+	if err := SetStaticRule(dir, StaticRule{Server: "", Tool: "y", Policy: PolicyDeny}); err == nil {
+		t.Fatal("expected an error for empty server")
+	}
+	if err := SetStaticRule(dir, StaticRule{Server: "x", Tool: "", Policy: PolicyDeny}); err == nil {
+		t.Fatal("expected an error for empty tool")
+	}
+}
+
+func TestSetStaticRule_EmptyDataDirErrors(t *testing.T) {
+	if err := SetStaticRule("", StaticRule{Server: "x", Tool: "y", Policy: PolicyDeny}); err == nil {
+		t.Fatal("expected an error for an empty data dir")
+	}
+}
+
+func TestRemoveStaticRule_DeletesAndFreshResolverReturnsToAutoAllow(t *testing.T) {
+	dir := t.TempDir()
+	if err := SetStaticRule(dir, StaticRule{Server: "s", Tool: "t", Policy: PolicyDeny}); err != nil {
+		t.Fatalf("SetStaticRule: %v", err)
+	}
+	if err := RemoveStaticRule(dir, "s", "t"); err != nil {
+		t.Fatalf("RemoveStaticRule: %v", err)
+	}
+	resolver, err := NewStaticResolverFromDataDir(dir)
+	if err != nil {
+		t.Fatalf("NewStaticResolverFromDataDir: %v", err)
+	}
+	res, _ := resolver.Resolve(context.Background(), "sess", "s", "t")
+	if res.Policy != PolicyAutoAllow {
+		t.Fatalf("policy after removal = %q, want auto_allow", res.Policy)
+	}
+}
+
+func TestRemoveStaticRule_MissingRuleIsNotAnError(t *testing.T) {
+	dir := t.TempDir()
+	if err := RemoveStaticRule(dir, "nonexistent", "tool"); err != nil {
+		t.Fatalf("RemoveStaticRule on absent rule: %v", err)
+	}
+}
+
+func TestLoadStaticConfigRules_EmptyDataDirReturnsEmptySliceNotError(t *testing.T) {
+	rules, err := LoadStaticConfigRules("")
+	if err != nil {
+		t.Fatalf("LoadStaticConfigRules: %v", err)
+	}
+	if rules == nil || len(rules) != 0 {
+		t.Fatalf("rules = %+v, want an empty non-nil slice", rules)
+	}
+}
+
+func TestLoadStaticConfigRules_MissingFileReturnsEmptySlice(t *testing.T) {
+	dir := t.TempDir()
+	rules, err := LoadStaticConfigRules(dir)
+	if err != nil {
+		t.Fatalf("LoadStaticConfigRules: %v", err)
+	}
+	if rules == nil || len(rules) != 0 {
+		t.Fatalf("rules = %+v, want an empty non-nil slice for a never-written dir", rules)
+	}
 }

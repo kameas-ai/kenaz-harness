@@ -26,7 +26,7 @@ env:
 jobs:
   lint-go:
     name: Go lint + vet + codegen drift
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
@@ -153,12 +153,87 @@ jobs:
         run: bash scripts/ci/check-declared-output-ports.sh
 
       - name: seam-implementers guard
-        # Every interface in core/agentgraph/seams.go has >=1 non-test
+        # Every interface in core/agentgraph/seams.go, PLUS (G-1a,
+        # automation-actually-runs-01PMZ404 UNIT-17) every exported
+        # interface under core/ that is the type of a field on an
+        # exported *Config/*Options/*Deps struct, has >=1 non-test
         # implementer or a //wiring:deferred directive. Uses the Go type
         # checker (golang.org/x/tools/go/packages), not grep — interface
         # satisfaction is structural and grep cannot answer it soundly.
         # wiring-integrity-01PMAG04 WP06.
         run: bash scripts/ci/check-seam-implementers.sh
+
+      - name: input-kind coverage guard (G-2)
+        # Every declared corewf.InputKind value reaches an explicit
+        # per-kind control in the workflow run form
+        # (frontend/src/views/workflows/WorkflowsView.vue) — the class
+        # that shipped for five of six kinds before automation-actually-
+        # runs-01PMZ404 UNIT-14 (A-11): an `enum` input with a fixed
+        # option list still rendered a free-text box, silently
+        # discarding the author's constraint at run time. A closed Go
+        # enum reaching the frontend as a v-if/v-else-if discriminator,
+        # checked against the ONE exception the code actually uses
+        # (a verified bare v-else fallback for "string").
+        run: bash scripts/ci/check-input-kind-coverage.sh
+
+      - name: nil-optional-dep guard (I18)
+        # An interface field on a struct, documented by its own author as
+        # optional ("nil is allowed" / "nil causes …" / "nil disables …"),
+        # that no production wiring site under core/ or cmd/ ever assigns —
+        # so the type system and the doc comment both say the capability
+        # exists while nothing turns it on. Six confirmed instances shipped
+        # before this gate existed (ChatRunDispatcher, wfsched.Dispatcher,
+        # registry.Options.Cost, a nil cedarPolicyAPI, the fs.Prompter that
+        # denied every kenaz__write_file call, HV-03's registry.Options.Policy
+        # in cmd/harness-vm). Three missions independently specced this gate
+        # (model-scheduled-jobs-01PMSJ01 §7 G-1, model-settings-reach-the-
+        # model-01PMZ101 §7 G-2, fleet-enforcement-truth-01PMZ505 §7 G-1) and
+        # none built it — docs/unwired-ledger.md's 2026-08-20 entry. Uses the
+        # Go type checker (golang.org/x/tools/go/packages), same pattern as
+        # the seam-implementers guard above — see
+        # scripts/ci/cmd/checknilopts/main.go's header for the full design.
+        run: bash scripts/ci/check-nil-optional-deps.sh
+
+      - name: dead-nil-branch guard (I19, UNIT-12)
+        # A zero-value `var x T` immediately followed, in the SAME block,
+        # by `if x != nil { ... }` with no assignment anywhere in between
+        # — x is provably nil at the check, so the if-block is statically
+        # dead. Shipped as core/rpc/builtins_wiring.go's `var subagentSeam
+        # agentgraph.BranchSeam // nil — no child-run spawner yet` beside
+        # its own `if subagentSeam != nil`, which hid the entire
+        # kenaz__subagent_dispatch registration block from every existing
+        # gate (check-builtin-tool-registration.sh only checks for an
+        # *import*, which was present). UNIT-6 of subagent-control-and-
+        # background-tasks-01PMZB11 fixed that one instance; this gate
+        # exists so the CLASS cannot recur silently. A local-variable
+        # dataflow question distinct from I18 above (a struct FIELD
+        # question) — see scripts/ci/cmd/checkdeadnilbranch/main.go's
+        # header for the full design and its false-positive history
+        # (database/sql's Scan(&ptr) idiom and `if x, err = f(); err !=
+        # nil` both false-positived during development; both are now
+        # correctly excluded).
+        run: bash scripts/ci/check-dead-nil-branch.sh
+
+      - name: config-nil-coverage guard (G-1, WP26)
+        # trust-surfaces-that-fire-01PMZ202 spec.md §G-1 / WP26. A
+        # narrower, structurally different sibling of I18 above: every
+        # exported Config/Options/GateOptions/Deps struct under core/
+        # constructed in >=1 production composite literal, with a
+        # pointer/interface/func/map/chan/slice field never set to a
+        # non-nil value ANYWHERE (a composite-literal key or a plain
+        # `x.Field = v` assignment outside the struct's own methods —
+        # not gated on a doc-comment phrase, unlike I18) — plus every
+        # exported With* function/method under core/ whose first
+        # parameter is a non-empty interface (the "injected collaborator"
+        # shape, not a test-only mock-injection knob) with zero non-test
+        # callers. Twenty of the finalizing mission's 29 findings were
+        # this exact class. See scripts/ci/cmd/checkconfig/main.go's
+        # header for the interface-arg restriction's justification and
+        # scripts/ci/allowlists/i16-config-nil-coverage.txt's header for
+        # the 2026-09-12 introduction calibration baseline (63 pre-
+        # existing findings, spot-checked, dated, owner-named — not
+        # individually triaged one by one in this change).
+        run: bash scripts/ci/check-config-nil-coverage.sh
 
       - name: knob-coverage guard
         # Generalises the resolved-config coverage check any dial system
@@ -168,6 +243,90 @@ jobs:
         # further change to this step. wiring-integrity-01PMAG04 WP07 —
         # see core/wiring/knobcoverage's package doc for the contract.
         run: bash scripts/ci/check-knob-coverage.sh
+
+      - name: risk-gate-decides guard
+        # WP08 (risk-rated-autonomy-01PMRA01): fails the build when the
+        # risk gate cannot decide — every cedar.Outcome switch that
+        # branches on Allow/Deny must also handle Confirm explicitly, the
+        # RiskThreshold knob keeps its real consumer, and the family
+        # floor stays strictly above the autonomous tier's threshold. See
+        # scripts/ci/cmd/checkriskgatedecides/main.go's package doc.
+        run: bash scripts/ci/check-risk-gate-decides.sh
+
+      - name: advice-kinds guard
+        # WP03 (laya-advisors-01LAYA001): every registered AdviceKind
+        # carries id/extractor/prompt_version/safety-class, and no
+        # suggest-only kind reaches an advice.RequireCanAutoAct call
+        # site. Zero advice kinds ship until WP04-06 (branch_now /
+        # compact_now / escalate_model) — the seam's own structural
+        # floor (core/advice/kind.go's shape), not a kind-count
+        # threshold, is what keeps this gate non-vacuous in the
+        # meantime. See scripts/ci/cmd/checkadvicekinds/main.go's
+        # package doc.
+        run: bash scripts/ci/check-advice-kinds.sh
+
+      - name: ml-producer minimisation guard
+        # ml-producer-01MLPRD01 WP04 (spec §7, §12 A-10). Static: the
+        # producer's KindTable is exactly the six contract kinds with
+        # exactly their payload keys, and no other kind literal exists in
+        # core/mlproducer. Dynamic: the real recorder over a fixture corpus
+        # (deep paths, secrets, env, URLs, a custom MCP server, git commit,
+        # tests, refusals) yields no raw path, no >2-token cmd, no
+        # credential-looking token and no fixture canary. Planted proofs:
+        # TestMLMinimisationGate_* in scripts/ci/gates_can_fail_test.go.
+        run: bash scripts/ci/check-ml-producer-minimisation.sh
+
+      - name: install-provider-coverage guard
+        # install-framework-01DOGF0B WP03. Every core/fleet CatalogItemKind
+        # maps to an install.Kind; every install.Kind has a production
+        # provider registration under core/rpc/ plus a
+        # TestInstallProvider_<Name>_ConsumerSeesInstall consumer test, or a
+        # dated allowlist line naming its blocker. This is the gate the
+        # badge-only catalog install (docs/unwired-ledger.md, 2026-10-04)
+        # could not have — a provider whose install the consumer never sees.
+        run: bash scripts/ci/check-install-provider-coverage.sh
+
+      - name: structured-output-row-parity guard
+        # A capability row cannot silently desynchronize from its own
+        # wire-encoding (structured-output-is-reachable-01PMZE14
+        # UNIT-6/WP09, gate G-3). go test ./core/llm/... -run '^TestG3_'
+        # drives every registered adapter kind's row through
+        # capabilities.LoadDefault() -> Gate.Check and, where the row
+        # says true, the adapter's own wire-encoding path. Six of eight
+        # kinds route through capability-UNAWARE encoders that emit
+        # response_format regardless of the row, so this catches an
+        # encoder regressing under a row that still claims support —
+        # it does NOT verify real vendor support was ever correct. See
+        # the script's header for the full per-kind boundary.
+        run: bash scripts/ci/check-structured-output-row-parity.sh
+
+      - name: adapter-catalog-parity guard (G-1)
+        # model-settings-reach-the-model-01PMZ101 WP12, spec §7 G-1. Every
+        # registered ProviderAdapter kind (core/llm/registry/registry.go)
+        # must resolve to a core/llm/capabilities/data/*.yaml entry
+        # (directly or via loader.go's providerAlias table), and every
+        # catalog file must be reachable from a registered kind — checked
+        # in BOTH directions. This is the gate that would have caught this
+        # mission's own motivating P0 (azure-openai and custom-openai were
+        # registered with no catalog entry, so every tool-bearing request
+        # was silently refused) — its absence reproduces roadmap finding
+        # P-7, a landed banner claiming a test that does not exist. See
+        # scripts/ci/cmd/checkadaptercatalog/main.go's header for the full
+        # design, including how the three conditionally-registered
+        # adapter kinds (behind runtime feature flags) are handled.
+        run: bash scripts/ci/check-adapter-catalog-parity.sh
+
+      - name: env-switch-coverage guard (G-6)
+        # model-settings-reach-the-model-01PMZ101 WP12/WP14, spec §7 G-6.
+        # A doc comment that documents an env-var VALUE (`Values: "a" |
+        # "b" | "c"`) while the switch that reads it has no matching
+        # `case` silently swallows that value into `default:` — exactly
+        # what happened to HARNESS_LLM_CAPABILITY_CACHE=sqlite before
+        # WP14 (documented, unimplemented; the capability probe cache's
+        # SQLite backend was unreachable in every install that believed
+        # the doc comment). See scripts/ci/cmd/checkenvswitch/main.go's
+        # header for the same-file scope this gate deliberately states.
+        run: bash scripts/ci/check-env-switch-coverage.sh
 
       - name: bindings-name guard
         run: bash scripts/ci/check-binding-names.sh
@@ -198,6 +357,12 @@ jobs:
       - name: no-user-content-in-slog guard
         run: bash scripts/ci/check-no-user-content-in-slog.sh
 
+      - name: no-credential-in-fleet-logs guard
+        # provider-credentials-client-01PCCLI01 WP04: code in the Fleet
+        # credential keychain namespaces never logs a key, a locator or a
+        # secret-typed value (plus uck_auth / pairing nonces, spec §10.4).
+        run: bash scripts/ci/check-no-credential-in-fleet-logs.sh
+
       - name: cedar gate-argument guard (I13)
         # Added by v0.63.1 to stop the six Cedar gate sites being re-pinned
         # to AllowAll{} or a nil engine — the defect that let a user author
@@ -205,6 +370,21 @@ jobs:
         # nothing enforced it. The gate shipped; no workflow ever invoked
         # it, so the regression it exists to prevent was uncaught.
         run: bash scripts/ci/check-cedar-gate-arguments.sh
+
+      - name: BSD/GNU grep-sed escape divergence guard (Finding #96)
+        # Added by the CI-gate-hardening sweep (2026-09-14). Gates are
+        # written and tested on macOS (BSD userland) and enforced HERE,
+        # on the Linux self-hosted runner (GNU userland). Two confirmed
+        # instances of a grep/sed pattern or replacement whose meaning
+        # silently diverges between the two: check-transport-parity.sh:92
+        # (a `\t` grep PATTERN that matched on BSD and matched nothing on
+        # GNU) and a bash-quoting bug in check-cedar-gate-arguments.sh's
+        # clause 4 that failed identically on both platforms but was
+        # masked by `|| true`. This gate is the tripwire that makes the
+        # CLASS — not just those two instances — impossible to
+        # reintroduce silently. Same precedent as the step immediately
+        # above: a gate with no workflow step is a gate that never runs.
+        run: bash scripts/ci/check-bsd-gnu-escape-divergence.sh
 
       - name: cedar engine singleton guard (I15)
         # Added by WP05 of consent-surfaces-truth-01PMTR01 (the hoist to
@@ -216,6 +396,32 @@ jobs:
         # gate site back to its own construction call, silently breaking
         # SavePolicy + ReloadPolicies' reach to that gate.
         run: bash scripts/ci/check-cedar-engine-singleton.sh
+
+      - name: shipped-policy-matchable guard (G-4, WP18)
+        # trust-surfaces-that-fire-01PMZ202 spec.md §G-4 / WP18. The gate
+        # that would have caught F24: filesystem-full-recommended.cedar
+        # shipped, was offered by name in the recipe-install UI, and told
+        # the user its forbid rules protect SSH keys / AWS creds / .git
+        # internals — while every rule was unmatchable for three
+        # independent reasons at once (wrong action name, wrong resource
+        # entity type, an unpopulated context key). For every rule in
+        # every core/policy/cedar/policies/*.cedar file, checks (a) the
+        # action has a real .Evaluate(-calling evaluator, (b) a production
+        # UID builder reachable from that evaluator emits the declared
+        # resource type, (c) that evaluator populates every context key
+        # the rule's when/unless clause reads — using the real cedar-go
+        # parser (not a hand-rolled regex .cedar parser) and function-
+        # level Go-source granularity (file-level would have missed F24:
+        # hooks.go is one file containing two dozen unrelated
+        # action/resource/context triples). Allowlist
+        # (scripts/ci/allowlists/i-shipped-policy-matchable.txt) is
+        # deliberately minimal — see that file's header and
+        # scripts/ci/cmd/checkpolicymatch/main.go's header for why an
+        # unmatchable SHIPPED policy does not get casual allowlist
+        # treatment, and for the one real, already-investigated
+        # pre-existing gap (default_acp_policy.cedar's acp_receive rules)
+        # it is seeded with.
+        run: bash scripts/ci/check-shipped-policy-matchable.sh
 
       - name: no-cred-bytes-in-rpc guard
         # Credential hygiene. CLAUDE.md lists this under "Local dev
@@ -331,6 +537,30 @@ jobs:
         # documents today's single instance.
         run: bash scripts/ci/check-builtin-tool-registration.sh
 
+      - name: tool-exposure gate (FR-E1)
+        # tool-context-budget-01TCBUD01 WP08. Every non-test writer of
+        # llm.GenerationRequest.Tools must be the exposure-partition path
+        # (hot / pinned / activated via chat.exposureTurn.selectTools) or
+        # a dated gap in scripts/ci/allowlists/tool-exposure-writers.txt;
+        # then the FR-E1 seed test and the production-wiring first-turn
+        # test run. Catches the pre-mission shape: the whole discovered
+        # catalog (~220k tokens of schemas) written straight into Tools.
+        env:
+          CGO_ENABLED: "1"
+        run: bash scripts/ci/check-tool-exposure-gate.sh
+
+      - name: gen_ai span no-content gate
+        # llm-call-telemetry-01LLMTEL01 WP01. The gen_ai.chat /
+        # kenaz.chat.turn spans emitted for every model provider call
+        # never carry content: the allowlist (core/llm/genaitrace/attrs.go)
+        # holds no content key and no unbounded string, model-call keys
+        # have one writer, no semconv content keys or span events; then
+        # the per-adapter table tests, the chat-turn test and the Fleet
+        # fence test run. Planted proofs: TestGenAISpanGate_*.
+        env:
+          CGO_ENABLED: "1"
+        run: bash scripts/ci/check-genai-span-no-content.sh
+
       - name: hook-event-fire-sites guard (I17, G-2)
         # trust-surfaces-that-fire-01PMZ202 WP08 (UNIT-7). Catches the
         # event-picker-that-lies defect: before this WP, the hook editor
@@ -366,6 +596,19 @@ jobs:
         # documents today's single instance (mcp:progress).
         run: bash scripts/ci/check-broker-topic-consumers.sh
 
+      - name: served-mode-topic-forwarding guard
+        # PR #336 review item 2. I14 (above) asks "does anything consume
+        # this topic anywhere"; it never asked whether a topic reachable
+        # from a frontend `useEventStream` call is ALSO forwarded by
+        # core/serve/wsstream.go's passthroughTopics — mcp:health-changed
+        # had a real publisher and a real frontend subscriber and was
+        # covered by I14 while silently never reaching a served-mode
+        # client. This narrower gate freezes today's five known gaps
+        # (scripts/ci/allowlists/served-mode-topic-forwarding-gaps.txt —
+        # each needs its own session-scoping decision before it can be
+        # wired) and fails on any NEW topic in that same shape.
+        run: bash scripts/ci/check-served-mode-topic-forwarding.sh
+
       - name: single-move-writer guard
         # kitty-specs/model-moves-transcript-01PMCH01 WP01, spec §4:
         # "One writer: session_write/the chat runner persists moves
@@ -376,6 +619,20 @@ jobs:
         # exporting the fields, and the seam having zero or >1
         # production callers.
         run: bash scripts/ci/check-single-move-writer.sh
+
+      - name: session-message-writers guard (G-1)
+        # chat-turn-integrity-01PMZ606 WP14, spec.md §6 G-1: "no writer to
+        # session_messages outside the sanctioned set." This mission's own
+        # P0 was a durability mechanism (the partial-flush checkpoint path)
+        # writing INTO the transcript unplanned — a class no existing gate
+        # sees. Enumerates every non-test call site of AppendMessage /
+        # AppendContinuation / ApplyCompaction and fails on any growth past
+        # scripts/ci/allowlists/i-session-message-writers.txt, in either
+        # direction (a new call site, or a stale allowlist row for a call
+        # that no longer exists). Planted-violation proof:
+        # scripts/ci/gates_can_fail_test.go
+        # "session-message-writers/second-append-message-call-site".
+        run: bash scripts/ci/check-session-message-writers.sh
 
       - name: no-forbidden-compaction-symbols guard (I4)
         # kitty-specs/agentgraph-total-convergence-01PMGX01 WP01. Exactly
@@ -414,6 +671,14 @@ jobs:
         # scripts/ci/gates_can_fail_test.go
         # "upgrade-snapshot-present/chain-behind-newest-tag".
         run: bash scripts/ci/check-upgrade-snapshot-present.sh
+
+      - name: semver-lib self-test
+        # release.yml's publish-s3 sources scripts/ci/lib/semver.sh to decide
+        # whether a run may move the env's stable manifest.json pointer. That
+        # decision only executes inside a release, so it is pinned here.
+        # Planted-violation proof: scripts/ci/gates_can_fail_test.go
+        # "semver-lib/lexical-compare".
+        run: bash scripts/ci/check-semver-lib.sh
 
       - name: destructive-migration-coverage guard (I14)
         # upgrade-path-coverage-01PMUG01 WP03, spec §FR-2. A migration
@@ -501,6 +766,32 @@ jobs:
         # "secret-lookup-wiring/second-literal-omits-field".
         run: bash scripts/ci/check-secret-lookup-wiring.sh
 
+      - name: transport-parity guard (G-1)
+        # connector-lifecycle-truth-01PMZ303 UNIT-15. Before UNIT-6,
+        # dispatch.Pool.closeOneByTag's http/sse cases were comment-only
+        # and fell through to the function's shared tail (then a bare
+        # `return nil`) — reporting success for a close that never
+        # happened, on every http/sse recipe. This gate derives the
+        # transport-tag set from the switch itself and fails naming any
+        # case whose body has no real .CloseOne(ctx, id) call. Planted-
+        # violation proof: scripts/ci/gates_can_fail_test.go
+        # "TestTransportParityGate_PlantedCommentOnlyArmFails".
+        run: bash scripts/ci/check-transport-parity.sh
+
+      - name: recipe-token-substitution guard (G-2)
+        # connector-lifecycle-truth-01PMZ303 UNIT-15. registry.json
+        # shipped 14 recipes with a "${KAMEAS_*_OAUTH_CLIENT_ID}"
+        # placeholder in auth.client_id (and one auth.client_secret) with
+        # ZERO production Substitute* call site touching either field —
+        # for years. Derives which JSON paths carry a "${...}" token
+        # today from the catalogs themselves and cross-checks each
+        # against scripts/ci/allowlists/g2-recipe-substituted-paths.txt,
+        # requiring a real, still-matching call site. Planted-violation
+        # proofs: scripts/ci/gates_can_fail_test.go
+        # "TestRecipeTokenSubstitutionGate_PlantedUnmanifestedTokenFails"
+        # and "...PlantedStaleManifestEntryFails".
+        run: bash scripts/ci/check-recipe-token-substitution.sh
+
       - name: installer-payload guard
         # entry-points-and-crash-reporting-01PMZD13 UNIT-2. Placed here
         # (not release.yml) in the 2026-08-25 unwired sweep: this is a
@@ -529,9 +820,22 @@ jobs:
     # mid-job (blank step conclusion + BlobNotFound logs) — especially when
     # several PRs run concurrently and saturate the medium pool. ci-large is
     # an on-demand ephemeral tier (autostarter EPHEMERAL_TIERS=ci-medium,ci-large).
-    runs-on: [self-hosted, Linux, ARM64, ci-large]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # The `gate meta-tests` step below runs gates_can_fail_test.go,
+          # which invokes the real gate scripts -- and
+          # check-manifest-version-bump.sh reads its baseline from
+          # `HEAD~1:core/agentgraph/manifest_versions_gen.go`. At the
+          # default depth of 1 there IS no HEAD~1, so the gate saw an empty
+          # baseline, reported every node kind as "new" rather than
+          # "changed", and exited 0 -- so its planted-violation proof
+          # failed with "the gate cannot see an unbumped version". The gate
+          # itself runs in lint-go, which already sets fetch-depth: 0, so
+          # the gate was never blind where it actually runs; only the job
+          # PROVING it could fail was. Same requirement, same fix.
+          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -573,7 +877,14 @@ jobs:
         # was covered by nothing until now. cmd/harness-served has no test
         # files and no effect on this pattern (it also requires -tags serve,
         # exercised separately by the lint-go job's serve-tag build step).
-        run: go test ./core/... ./cmd/... . -race -count=1 -short
+        #
+        # -timeout 20m (2026-10-07, v0.93.0): Go's default is 10m PER PACKAGE.
+        # core/rpc took 580.9s in the v0.91.0 run — within 20s of the
+        # default — and v0.93.0's added real-sqlite tests tipped it over
+        # (the goroutine dump showed one just-started test, no hang).
+        # Splitting / parallelising core/rpc is ledgered; this keeps the
+        # alarm meaningful (a genuine hang still fails, at 20m).
+        run: go test ./core/... ./cmd/... . -race -count=1 -short -timeout 20m
 
       - name: gate meta-tests
         # scripts/ci/gates_can_fail_test.go plants a violation per CI gate
@@ -598,7 +909,7 @@ jobs:
     # Runs all *_WireGolden tests across the LLM adapter + chat view packages.
     # No network keys required — each test drives a real adapter against an
     # httptest.Server that replays recorded fixture responses.
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -629,7 +940,7 @@ jobs:
     # the v0.63.0 P0 proved the rest of the suite structurally cannot
     # provide (spec.md §1.2: every other test starts from an empty
     # database, where the max-based-selection defect cannot occur).
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -660,14 +971,14 @@ jobs:
     # frontend peak past 4 GB and OOM-killed the medium runner mid-job
     # (runner-died / BlobNotFound signature), flaking this job on ~every PR
     # under concurrency — same fix as test-go. ci-large is an on-demand tier.
-    runs-on: [self-hosted, Linux, ARM64, ci-large]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') }}
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'

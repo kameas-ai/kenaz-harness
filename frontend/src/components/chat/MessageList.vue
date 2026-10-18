@@ -32,8 +32,12 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import MessageBubble from './MessageBubble.vue';
 import MoveTrail from './MoveTrail.vue';
-import { foldedTurnCounts, projectTranscript } from '@/lib/transcript';
+import TurnRunLinks from './TurnRunLinks.vue';
+import UndeliveredBadge from './UndeliveredBadge.vue';
+import { foldedTurnCounts, projectTranscript, runIdFromLiveSpan } from '@/lib/transcript';
 import type { Artifact, MemoryScopeKind, Message } from '@/lib/types';
+import type { DeliveryFailure, RequestSizeContext } from '@/lib/delivery';
+import type { AutoRetryState } from '@/lib/useSession';
 
 const props = defineProps<{
   messages: ReadonlyArray<Message>;
@@ -130,6 +134,34 @@ const props = defineProps<{
    * FR-021.)
    */
   initialScrollPosition?: number;
+  /**
+   * Turn span id -> kernel run id for this session's chat turns
+   * (agentgraph-settings-linkage-01DOGF0D WP04, `Sessions_TurnRuns`).
+   * When provided, every assistant answer gets a TurnRunLinks strip:
+   * "View run graph" + "Run details" for a recorded turn, the
+   * disabled-with-reason note for one that predates the mapping.
+   * Undefined (served builds — Graph_* has no serve dispatch, D-701 — and
+   * any caller that does not track runs) renders no strip at all.
+   */
+  turnRuns?: ReadonlyMap<string, string>;
+  /**
+   * User messages that did not reach the model, keyed by message id
+   * (undelivered-message-retry, `useSession().undelivered`). Each gets a
+   * sticky NOT DELIVERED badge under its bubble. Undefined / empty renders
+   * nothing (the classic golden stays byte-exact).
+   */
+  undelivered?: ReadonlyMap<string, DeliveryFailure>;
+  /**
+   * The one message a Retry re-runs — the newest user message. Only its
+   * badge carries the Retry button. Empty = no button anywhere.
+   */
+  retryMessageId?: string;
+  /** Pending automatic retry, shown on the retry target's badge. */
+  autoRetry?: AutoRetryState | null;
+  /** Tool tokens and model window for a request_too_large badge's remedy. */
+  deliverySizeContext?: RequestSizeContext | null;
+  /** Whether a request_too_large badge offers "Open tools". */
+  toolsMenuAvailable?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -175,7 +207,57 @@ const emit = defineEmits<{
    * FR-021.)
    */
   (e: 'scroll-position', pos: number): void;
+  /** Retry on a NOT DELIVERED message: re-run it (no new user row). */
+  (e: 'retry-delivery', messageId: string): void;
+  /** Cancel the pending automatic retry. */
+  (e: 'cancel-retry'): void;
+  /** "Open tools" on a request_too_large badge. */
+  (e: 'open-tools'): void;
 }>();
+
+/**
+ * Zero-or-one NOT DELIVERED badge per row — same `v-for` (not `v-if`)
+ * reasoning as runLinkSlots below: no comment node for the common case.
+ */
+function undeliveredSlots(m: Message): DeliveryFailure[] {
+  if (m.role !== 'user' || !props.undelivered) return [];
+  const f = props.undelivered.get(m.id);
+  return f ? [f] : [];
+}
+
+function runIdFor(m: Message): string {
+  if (!props.turnRuns || !m.turnSpanId) return '';
+  // A live (or just-committed, not yet reloaded) turn carries
+  // `live:<sub id>`, and the sub id IS the run id (review H2) — the
+  // recorded mapping is keyed by the durable span and cannot match it.
+  return runIdFromLiveSpan(m.turnSpanId) || props.turnRuns.get(m.turnSpanId) || '';
+}
+
+/**
+ * Which bubbles carry the turn -> run strip: assistant answers only, and
+ * only when the parent supplied a run map. A live (streaming) answer is
+ * linked as soon as its run is recorded — the backend writes the mapping
+ * before StartStream returns — but is never marked "not recorded" while
+ * that fetch is still in flight. Summary and archived rows are history
+ * scaffolding, not turns.
+ */
+function showsRunLinks(m: Message): boolean {
+  if (!props.turnRuns || m.role !== 'assistant') return false;
+  if (isSummaryRow(m) || isArchivedRow(m)) return false;
+  if (m.streaming === true) return runIdFor(m) !== '';
+  return true;
+}
+
+/**
+ * The strip is mounted through a zero-or-one `v-for` rather than `v-if`
+ * ON PURPOSE: a false `v-if` leaves a `<!--v-if-->` comment node in the
+ * DOM, which would perturb the byte-exact classic-session golden
+ * (MessageList.classic-golden.test.ts) for every caller that passes no
+ * run map. An empty `v-for` leaves only empty-text fragment anchors.
+ */
+function runLinkSlots(m: Message): string[] {
+  return showsRunLinks(m) ? [`run-links-${m.id}`] : [];
+}
 
 function artifactsFor(messageId: string): readonly Artifact[] {
   if (!props.artifactsByMessage) return [];
@@ -419,15 +501,34 @@ defineExpose({ scrollToBottom });
             :completion-tokens="item.message.completionTokens"
             :cost-usd="item.message.costUsd"
             :message-cost-source="item.message.messageCostSource"
+            :cached-tokens="item.message.cachedTokens"
             :streaming-failed-at="item.message.streamingFailedAt"
             :streaming-recoverable="item.message.streamingRecoverable"
             :streaming-failure-kind="item.message.streamingFailureKind"
+            :reasoning="item.message.reasoning"
             @remember="(scope) => emit('remember', item.message, scope)"
             @save-artifact="() => emit('save-artifact', item.message)"
             @open-artifact="(a) => emit('open-artifact', a)"
             @jump-to-summary="onJumpToSummary"
             @branch-from-turn="() => emit('branch-from-turn', item.message)"
             @resume="(mid) => emit('resume', mid)"
+          />
+          <UndeliveredBadge
+            v-for="f in undeliveredSlots(item.message)"
+            :key="`undelivered-${f.turnSpanId}`"
+            :failure="f"
+            :can-retry="retryMessageId === item.message.id"
+            :auto-retry="retryMessageId === item.message.id ? autoRetry ?? null : null"
+            :size-context="deliverySizeContext ?? null"
+            :tools-available="toolsMenuAvailable ?? true"
+            @retry="emit('retry-delivery', item.message.id)"
+            @cancel-retry="emit('cancel-retry')"
+            @open-tools="emit('open-tools')"
+          />
+          <TurnRunLinks
+            v-for="slot in runLinkSlots(item.message)"
+            :key="slot"
+            :run-id="runIdFor(item.message)"
           />
         </div>
       </template>

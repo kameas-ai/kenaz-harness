@@ -19,9 +19,9 @@ import (
 
 // RecipeListing is the per-recipe row returned from ListRecipes. The
 // embedded recipes.Recipe is the catalog metadata (display name, env
-// keys, docs URL); Enabled / Status / KeysPresent are the harness-side
-// overlay derived from the persisted enabled list, the live pool, and
-// the secrets backend respectively.
+// keys, docs URL); Enabled / Status / KeysPresent / Source are the
+// harness-side overlay derived from the persisted enabled list, the live
+// pool, the secrets backend, and the merged catalog respectively.
 //
 // Status is a zero value when the recipe is not enabled. Frontend
 // renderers branch on Enabled to decide whether to surface status
@@ -31,6 +31,25 @@ type RecipeListing struct {
 	Enabled     bool               `json:"enabled"`
 	Status      stdio.RecipeStatus `json:"status"`
 	KeysPresent bool               `json:"keysPresent"`
+	// Source is the catalog layer that produced this row's Recipe:
+	// recipes.SourceShipped | SourceRegistry | SourceUser | SourceImported
+	// | SourceOrg. Populated from recipes.Recipe.Source, which itself
+	// carries `json:"-"` (it must never round-trip through the on-disk
+	// YAML/JSON recipe-definition codecs — see that field's doc comment
+	// in core/mcp/recipes/recipes.go). RecipeListing is a dedicated,
+	// deliberately-small wire type for this one RPC response, so
+	// re-exposing the value here at the top level does not touch that
+	// on-disk contract or any other endpoint that returns a bare
+	// recipes.Recipe (e.g. SaveCustomRecipe).
+	//
+	// fleet-generic-sync-framework-01NSYNC02 WP03: this closes the exact
+	// gap the frontend's KenazToolsPanel.vue sourceBadge() heuristic was
+	// working around ("BACKEND GAP: The wire shape does not yet carry a
+	// `source` discriminator") — most importantly, it lets the UI render
+	// a "Provisioned by your org" read-only badge for SourceOrg rows
+	// (fleet-org-config-inheritance-01NORGX01's org-provisioned MCP
+	// servers), which had no wire path to the frontend before this field.
+	Source string `json:"source"`
 }
 
 // FSAccessResult is the wire shape returned by RequestAdditionalAllowedDir

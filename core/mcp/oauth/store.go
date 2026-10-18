@@ -46,11 +46,15 @@ func UnmarshalCredential(blob []byte) (*StoredCredential, error) {
 }
 
 // expired reports whether the access token is at/past expiry (with skew).
+//
+// connector-lifecycle-truth-01PMZ303 UNIT-5 (MO-09): this used to duplicate
+// Tokens.Expired's logic line for line, which left the exported Tokens.Expired
+// with zero production callers (test-only) while this unexported twin was the
+// only one anything actually consulted. Delegating keeps both symbols (A-0:
+// no delete) but collapses the duplication to one implementation, so a future
+// skew-window change can't fix one twin and miss the other.
 func (c *StoredCredential) expired(now time.Time) bool {
-	if c.ExpiresAt.IsZero() {
-		return false
-	}
-	return !now.Before(c.ExpiresAt.Add(-30 * time.Second))
+	return Tokens{ExpiresAt: c.ExpiresAt}.Expired(now)
 }
 
 // EnsureValid returns a credential whose access token is currently valid,

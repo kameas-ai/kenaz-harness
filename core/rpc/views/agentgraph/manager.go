@@ -254,7 +254,146 @@ func NewManager(opts ...ManagerOption) (*Manager, error) {
 	if err := loadBundledLibrary(m); err != nil {
 		return nil, err
 	}
+	// m.runs is always empty at this point — no run this process
+	// started could have paused yet — so every run PausedRunIDs finds
+	// was orphaned by an EARLIER process (approval-node-01PMZC12 E-002's
+	// "abandoned" fallback for the C-3 durability gap). Reconciling here,
+	// once, at construction, is "at boot" for every caller: production
+	// wiring (core/rpc/api.go) and every test that constructs a Manager
+	// over a pre-populated EventLog alike.
+	if err := m.rehydrateAbandonedRuns(); err != nil {
+		return nil, err
+	}
 	return m, nil
+}
+
+// rehydrateAbandonedRuns scans m.log for runs a PREVIOUS process
+// paused and never resolved. The in-memory run registry (m.runs) and
+// the pending-decision bus (m.asks) both die with the process that
+// held them — the durable event trail is the only surviving record
+// (C-3). Full durable pause (rebuilding a resumable *coreag.Env from
+// the log so the run can actually continue) is UNIT-6 and is cut per
+// E-002; this is the cheaper alternative E-002 sanctions instead:
+// mark the run ABANDONED, with an event recording why, rather than
+// letting GetRunStatus answer "not found" forever for a run whose
+// trace still says a human was asked and never answered (spec.md
+// §5.5, "Silence is the one unacceptable outcome").
+//
+// Idempotent — a run already carrying EventRunAbandoned as its last
+// event (this ran once in an earlier boot) is registered again without
+// re-appending a second abandonment event.
+func (m *Manager) rehydrateAbandonedRuns() error {
+	if m.log == nil {
+		return nil
+	}
+	ids, err := m.log.PausedRunIDs()
+	if err != nil {
+		return fmt.Errorf("agentgraph: rehydrate abandoned runs: %w", err)
+	}
+	for _, runID := range ids {
+		if err := m.rehydrateOneAbandonedRun(runID); err != nil {
+			return fmt.Errorf("agentgraph: rehydrate abandoned run %q: %w", runID, err)
+		}
+	}
+	return nil
+}
+
+// rehydrateOneAbandonedRun replays runID's full trail to recover
+// enough identity (graph id, session id, the node it parked on) to
+// report it truthfully, then registers a synthetic runEntry in
+// RunStateAbandoned. It never touches env or cancel beyond a no-op —
+// an abandoned run cannot be resumed or cancelled, only observed.
+func (m *Manager) rehydrateOneAbandonedRun(runID string) error {
+	var (
+		haveLast         bool
+		sessionID        string
+		graphID          string
+		startedAt        time.Time
+		pendingNode      string
+		pendingKind      coreag.EventKind
+		alreadyAbandoned bool
+		abandonedReason  string
+	)
+	if err := m.log.Replay(runID, func(ev coreag.Event) error {
+		haveLast = true
+		if ev.SessionID != "" {
+			sessionID = ev.SessionID
+		}
+		switch ev.Kind {
+		case coreag.EventRunStart:
+			startedAt = ev.Timestamp
+			var payload struct {
+				GraphID string `json:"graph_id"`
+			}
+			_ = json.Unmarshal(ev.Payload, &payload)
+			if payload.GraphID != "" {
+				graphID = payload.GraphID
+			}
+		case coreag.EventApprovalPending, coreag.EventAskPending:
+			pendingNode = ev.NodeID
+			pendingKind = ev.Kind
+		case coreag.EventRunAbandoned:
+			alreadyAbandoned = true
+			var payload struct {
+				Reason string `json:"reason"`
+			}
+			_ = json.Unmarshal(ev.Payload, &payload)
+			abandonedReason = payload.Reason
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("replay: %w", err)
+	}
+	if !haveLast {
+		return nil
+	}
+
+	now := m.nowFn()
+	entry := &runEntry{
+		id:        runID,
+		graphID:   graphID,
+		sessionID: sessionID,
+		state:     RunStateAbandoned,
+		startedAt: startedAt,
+		updatedAt: now,
+		endedAt:   now,
+		cancel:    func() {},
+	}
+
+	if alreadyAbandoned {
+		if abandonedReason == "" {
+			abandonedReason = "abandoned: process restarted while this run was paused"
+		}
+		entry.err = errors.New(abandonedReason)
+		m.mu.Lock()
+		m.runs[runID] = entry
+		m.mu.Unlock()
+		return nil
+	}
+
+	reason := fmt.Sprintf(
+		"abandoned: process restarted while this run was paused at node %q (pending %s); "+
+			"durable run state is not implemented (approval-node-01PMZC12 E-002), so the "+
+			"pending decision could not survive the restart — resolve manually or re-run the graph",
+		pendingNode, pendingKind)
+	entry.err = errors.New(reason)
+
+	var batch coreag.EventBatch
+	if err := batch.AppendKind(runID, pendingNode, coreag.EventRunAbandoned, map[string]any{
+		"reason":       reason,
+		"pending_node": pendingNode,
+		"pending_kind": string(pendingKind),
+	}); err != nil {
+		return fmt.Errorf("encode abandoned event: %w", err)
+	}
+	if _, err := m.log.Append(batch); err != nil {
+		return fmt.Errorf("append abandoned event: %w", err)
+	}
+
+	m.mu.Lock()
+	m.runs[runID] = entry
+	m.mu.Unlock()
+	return nil
 }
 
 // Catalog exposes the activity catalog so the API can satisfy
@@ -1076,9 +1215,152 @@ func (m *Manager) runStatus(runID string) (RunStatus, error) {
 	entry, ok := m.runs[runID]
 	m.mu.RUnlock()
 	if !ok {
+		// agentgraph-settings-linkage-01DOGF0D (review H1): chat turns run
+		// on the shared kernel but never enter m.runs, so before this
+		// fallback RunView — which every transcript turn now links to —
+		// showed "not found" for every chat run. A run whose events are
+		// in the log exists; derive its status from them.
+		if st, found := m.statusFromLog(runID); found {
+			return st, nil
+		}
 		return RunStatus{}, fmt.Errorf("agentgraph: run %q not found", runID)
 	}
 	return m.snapshotStatus(entry), nil
+}
+
+// errRunInterrupted is the status error for a log-only run that has no
+// terminal record and is not running in this process: it was cut off
+// (process exit, crash) before the kernel could write run_complete.
+const errRunInterrupted = "run ended without a completion record (interrupted, or the app exited mid-run)"
+
+// statusFromLog derives a RunStatus for a run this Manager did not start
+// — today every chat turn — from its recorded events
+// (agentgraph-settings-linkage-01DOGF0D, review H1). The second return
+// is false when the log holds nothing for runID.
+//
+// State, in order of precedence:
+//   - run_complete           -> completed
+//   - run_abandoned          -> abandoned
+//   - last lifecycle run_paused -> paused
+//   - any node_error         -> failed (Error = the last node error)
+//   - still registered by the chat runner in this process -> running
+//   - otherwise              -> failed, interrupted: the kernel writes
+//     no terminal event when a run dies with its process, and a chat
+//     run always registers with TrackExternalRun at start, so an
+//     unregistered, unfinished run cannot be live here.
+//
+// Counters come from llm_call / tool_call / node_complete events.
+func (m *Manager) statusFromLog(runID string) (RunStatus, bool) {
+	if m == nil || m.log == nil || runID == "" {
+		return RunStatus{}, false
+	}
+	var (
+		out                     RunStatus
+		seen, completed, paused bool
+		abandoned               bool
+		lastNodeErr             string
+		first, last             time.Time
+	)
+	out.RunID = runID
+	_ = m.log.Replay(runID, func(ev coreag.Event) error {
+		if !seen {
+			first = ev.Timestamp
+		}
+		seen = true
+		last = ev.Timestamp
+		if out.SessionID == "" && ev.SessionID != "" {
+			out.SessionID = ev.SessionID
+		}
+		switch ev.Kind {
+		case coreag.EventRunStart:
+			var p struct {
+				GraphID   string `json:"graph_id"`
+				SessionID string `json:"session_id"`
+			}
+			if json.Unmarshal(ev.Payload, &p) == nil {
+				if out.GraphID == "" {
+					out.GraphID = p.GraphID
+				}
+				if p.SessionID != "" {
+					out.SessionID = p.SessionID
+				}
+			}
+			// A run_start re-enters the run (Kernel.Resume after a
+			// pause, or the chat overflow-recovery redrive): what came
+			// before it is a previous attempt, not this one's outcome.
+			paused = false
+			lastNodeErr = ""
+		case coreag.EventRunComplete:
+			completed = true
+		case coreag.EventRunAbandoned:
+			abandoned = true
+		case coreag.EventRunPaused:
+			paused = true
+		case coreag.EventNodeError:
+			var p struct {
+				Err string `json:"err"`
+			}
+			if json.Unmarshal(ev.Payload, &p) == nil && p.Err != "" {
+				lastNodeErr = p.Err
+			} else {
+				lastNodeErr = "node " + ev.NodeID + " failed"
+			}
+		case coreag.EventNodeComplete:
+			out.NodesComplete++
+		case coreag.EventLLMCall:
+			out.LLMCalls++
+			var p struct {
+				Tokens  int     `json:"tokens"`
+				CostUSD float64 `json:"cost_usd"`
+			}
+			if json.Unmarshal(ev.Payload, &p) == nil {
+				out.LLMTokens += p.Tokens
+				out.CostUSD += p.CostUSD
+			}
+		case coreag.EventToolCall:
+			out.ToolCalls++
+		}
+		return nil
+	})
+	m.mu.RLock()
+	tracked, live := m.externalRuns[runID]
+	m.mu.RUnlock()
+	if !seen {
+		// The chat runner registers a turn's spec BEFORE StartStream
+		// returns, but the kernel appends run_start from the run's own
+		// goroutine a moment later. A link opened in that window is a
+		// live run with nothing recorded yet — not a missing one.
+		if !live {
+			return RunStatus{}, false
+		}
+		now := m.nowFn().Format(time.RFC3339Nano)
+		out.GraphID = tracked.ID
+		out.State = RunStateRunning
+		out.StartedAt, out.UpdatedAt = now, now
+		return out, true
+	}
+	out.StartedAt = first.Format(time.RFC3339Nano)
+	out.UpdatedAt = last.Format(time.RFC3339Nano)
+	switch {
+	case completed:
+		out.State = RunStateCompleted
+		out.CompletedAt = out.UpdatedAt
+	case abandoned:
+		out.State = RunStateAbandoned
+	case paused:
+		out.State = RunStatePaused
+	case lastNodeErr != "":
+		out.State = RunStateFailed
+		out.Error = lastNodeErr
+		out.CompletedAt = out.UpdatedAt
+	case live:
+		out.State = RunStateRunning
+	default:
+		out.State = RunStateFailed
+		out.Error = errRunInterrupted
+		out.CompletedAt = out.UpdatedAt
+	}
+	return out, true
 }
 
 func (m *Manager) snapshotStatus(entry *runEntry) RunStatus {
@@ -1125,7 +1407,14 @@ func (m *Manager) runTrace(runID string, since int64) ([]RunTraceEvent, error) {
 	m.mu.RLock()
 	_, ok := m.runs[runID]
 	m.mu.RUnlock()
+	// Review H1 (01DOGF0D): a chat run never enters m.runs, but its
+	// trace IS the event log — a run with recorded events exists.
 	if !ok {
+		m.mu.RLock()
+		_, ok = m.externalRuns[runID]
+		m.mu.RUnlock()
+	}
+	if !ok && (m.log == nil || m.log.Len(runID) == 0) {
 		return nil, fmt.Errorf("agentgraph: run %q not found", runID)
 	}
 	out := []RunTraceEvent{}
@@ -1159,9 +1448,11 @@ func (m *Manager) runTrace(runID string, since int64) ([]RunTraceEvent, error) {
 //
 // The registry is bounded: a desktop session can run thousands of chat
 // turns and a resolved chat_default is not small. Oldest entries are
-// evicted once the cap is reached, so "materialize the turn I just ran"
-// always works and "materialize a turn from two hours ago" degrades to
-// the run_start graph_id fallback in materializeRun.
+// evicted once the cap is reached. Eviction no longer degrades
+// materialization: the kernel persists every run's resolved spec
+// (feat/graph-resolved-spec), which runSpecFor reads first. This map
+// covers the instant before the kernel's write, and answers
+// statusFromLog's "is this run live in this process" question.
 func (m *Manager) TrackExternalRun(runID string, g coreag.Graph) {
 	if m == nil || runID == "" {
 		return
@@ -1223,22 +1514,42 @@ func (m *Manager) materializeRun(runID string) (GraphSpec, error) {
 	return GraphSpec{ID: mg.ID, Name: mg.Name, Scope: "materialized", YAML: string(out), SpecProvenance: mg.SpecProvenance}, nil
 }
 
-// runSpecFor resolves the spec a run executed, in decreasing order of
-// fidelity, and REPORTS which tier answered (WP12 review finding F2).
+// runSpecFor resolves the spec a run executed and REPORTS how it was
+// obtained (WP12 review finding F2).
 //
-//  1. a run this manager started — the exact resolved spec;
-//  2. a run the chat runner registered — likewise exact;
-//  3. the library graph named by the run's own run_start event.
+//  1. the spec the kernel persisted for this run at run start
+//     (feat/graph-resolved-spec WP01: the RunSpecStore half of the
+//     shared EventLog) — exact, and cross-checked against the
+//     spec_digest run_start recorded, so a stored row that is not the
+//     spec the run started with is refused rather than served;
+//  2. a run this manager started, or one the chat runner registered —
+//     likewise exact. Only reachable in the instant between
+//     registration and the kernel's write, or on a log without the
+//     store half;
+//  3. runs with NO recorded spec — every run from before the store
+//     existed, or one whose spec was refused as oversized — are
+//     reconstructed from the library graph their run_start names, and
+//     ALWAYS marked SpecProvenanceLibraryFallback.
 //
-// Tier 3 is a degraded answer, not an equivalent one: it recovers the
-// topology after an eviction or a restart, but the routing gate rewrites
-// chat_default in place and the max-turns dial overrides the loop cap
-// before a run starts, so the library file can describe a DIFFERENT
-// graph than the one that executed. Returning it unmarked would let a
-// viewer read a routed run as a classic one and never know, which is why
-// the second return value flows through to Graph.SpecProvenance and into
-// the graph's own description.
+// A run with a persisted spec never reaches step 3: the library file can
+// have been edited since the run, and showing the edited graph as "what
+// ran" is exactly the lie the store exists to end. The former
+// digest-verified tier-3 upgrade (library file hashing to run_start's
+// spec_digest served as exact) is deleted with it — a reconstruction is
+// labelled as one.
 func (m *Manager) runSpecFor(runID string) (coreag.Graph, string, error) {
+	if store, ok := m.log.(coreag.RunSpecStore); ok {
+		g, found, err := store.LoadRunSpec(runID)
+		if err != nil {
+			return coreag.Graph{}, "", fmt.Errorf("agentgraph: run %q: %w", runID, err)
+		}
+		if found {
+			if _, recorded := m.runStartFromLog(runID); recorded != "" && recorded != coreag.SpecDigest(g) {
+				return coreag.Graph{}, "", fmt.Errorf("agentgraph: run %q: stored spec does not match the spec_digest its run_start recorded", runID)
+			}
+			return g, "", nil
+		}
+	}
 	m.mu.RLock()
 	entry, started := m.runs[runID]
 	tracked, external := m.externalRuns[runID]
@@ -1254,7 +1565,16 @@ func (m *Manager) runSpecFor(runID string) (coreag.Graph, string, error) {
 	if external && len(tracked.Nodes) > 0 {
 		return tracked, "", nil
 	}
-	graphID := m.graphIDFromLog(runID)
+	return m.reconstructUnrecordedRunSpec(runID)
+}
+
+// reconstructUnrecordedRunSpec is the only path left for a run whose
+// exact spec was never recorded: the library graph its run_start names,
+// as that file is NOW, marked SpecProvenanceLibraryFallback so the
+// materialized graph's description and the run views say it is a
+// reconstruction (feat/graph-resolved-spec WP02).
+func (m *Manager) reconstructUnrecordedRunSpec(runID string) (coreag.Graph, string, error) {
+	graphID, _ := m.runStartFromLog(runID)
 	if graphID == "" {
 		return coreag.Graph{}, "", fmt.Errorf("agentgraph: run %q not found", runID)
 	}
@@ -1265,22 +1585,25 @@ func (m *Manager) runSpecFor(runID string) (coreag.Graph, string, error) {
 	return g, coreag.SpecProvenanceLibraryFallback, nil
 }
 
-// graphIDFromLog reads the graph id off the run's run_start event.
-func (m *Manager) graphIDFromLog(runID string) string {
-	var out string
+// runStartFromLog reads the graph id and the recorded spec digest off
+// the run's run_start event. The digest is "" for runs started before
+// agentgraph-settings-linkage-01DOGF0D WP03; runSpecFor holds a
+// persisted spec to it.
+func (m *Manager) runStartFromLog(runID string) (graphID, specDigest string) {
 	_ = m.log.Replay(runID, func(ev coreag.Event) error {
-		if ev.Kind != coreag.EventRunStart || out != "" {
+		if ev.Kind != coreag.EventRunStart || graphID != "" {
 			return nil
 		}
 		var p struct {
-			GraphID string `json:"graph_id"`
+			GraphID    string `json:"graph_id"`
+			SpecDigest string `json:"spec_digest"`
 		}
 		if err := json.Unmarshal(ev.Payload, &p); err == nil {
-			out = p.GraphID
+			graphID, specDigest = p.GraphID, p.SpecDigest
 		}
 		return nil
 	})
-	return out
+	return graphID, specDigest
 }
 
 // userLibraryDir returns the on-disk graph library path or "" when

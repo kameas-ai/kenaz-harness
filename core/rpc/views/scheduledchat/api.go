@@ -40,6 +40,27 @@ type ChatRunEntry struct {
 	// CreatedBy=="model" row with an empty ToolAllowlist must never
 	// execute (see core/policy/cedar's GateScheduledChatExecute).
 	ToolAllowlist []string `json:"toolAllowlist,omitempty"`
+	// TriggerKind is "cron" or "once" (model-scheduled-jobs-01PMSJ01
+	// WP08, FR-006). Always populated on read — chatRunEntryFromRecord
+	// resolves the empty/pre-migration case to "cron" via
+	// scheduler.ChatRunRecord.EffectiveTriggerKind.
+	TriggerKind string `json:"triggerKind"`
+	// RunAt is the one-shot fire time (ISO 8601, UTC), populated only
+	// when TriggerKind == "once". Never set for a "cron" row.
+	RunAt string `json:"runAt,omitempty"`
+	// LastRun is the newest persisted run outcome (time, status, error,
+	// session, model, cost), nil when the schedule has never run. Read
+	// from scheduled_chat_run_history on List/Get so the Schedules row
+	// shows how the last run went without a second call.
+	LastRun *RunSummary `json:"lastRun,omitempty"`
+}
+
+// DefaultModel is what a schedule with no model override runs on — the
+// resolution the dispatcher applies at fire time. Empty fields mean no
+// profile is configured.
+type DefaultModel struct {
+	ProfileID string `json:"profileId"`
+	Model     string `json:"model"`
 }
 
 // RunSummary is one row in the History result.
@@ -52,6 +73,10 @@ type RunSummary struct {
 	EndedAt       *time.Time `json:"endedAt,omitempty"`
 	OutputSnippet string     `json:"outputSnippet,omitempty"`
 	Error         string     `json:"error,omitempty"`
+	// Model is the model the run was dispatched with; empty when unknown.
+	Model string `json:"model,omitempty"`
+	// CostUSD is the run's cost; 0 when unknown or free.
+	CostUSD float64 `json:"costUsd,omitempty"`
 }
 
 // CreateInput is the wire shape for Create.
@@ -66,16 +91,26 @@ type RunSummary struct {
 type CreateInput struct {
 	Name           string `json:"name"`
 	PromptTemplate string `json:"promptTemplate"`
-	Cron           string `json:"cron"`
-	Timezone       string `json:"timezone,omitempty"`
-	Model          string `json:"model,omitempty"`
-	OutputSink     string `json:"outputSink,omitempty"`
-	Enabled        bool   `json:"enabled"`
+	// Cron is REQUIRED when TriggerKind == "cron" (the default — see
+	// TriggerKind's doc) and ignored (may be empty) when TriggerKind ==
+	// "once". model-scheduled-jobs-01PMSJ01 WP08, FR-006: "run this once
+	// at T" must not force the caller to fabricate a cron expression.
+	Cron       string `json:"cron"`
+	Timezone   string `json:"timezone,omitempty"`
+	Model      string `json:"model,omitempty"`
+	OutputSink string `json:"outputSink,omitempty"`
+	Enabled    bool   `json:"enabled"`
 	// ToolAllowlist declares the tool-name allowlist enforced against
 	// this schedule's runs. Optional for a user-created schedule
 	// (unrestricted). REQUIRED (non-empty) for CreateAsModel — see that
 	// method's doc.
 	ToolAllowlist []string `json:"toolAllowlist,omitempty"`
+	// TriggerKind is "cron" or "once". Empty defaults to "cron" — every
+	// caller written before this field existed keeps working unchanged.
+	TriggerKind string `json:"triggerKind,omitempty"`
+	// RunAt is the one-shot fire time (ISO 8601). REQUIRED when
+	// TriggerKind == "once"; ignored when TriggerKind == "cron".
+	RunAt string `json:"runAt,omitempty"`
 }
 
 // UpdateInput is the wire shape for Update. ID is required.
@@ -89,6 +124,9 @@ type UpdateInput struct {
 	OutputSink     string   `json:"outputSink,omitempty"`
 	Enabled        bool     `json:"enabled"`
 	ToolAllowlist  []string `json:"toolAllowlist,omitempty"`
+	// TriggerKind / RunAt — see CreateInput's docs on each.
+	TriggerKind string `json:"triggerKind,omitempty"`
+	RunAt       string `json:"runAt,omitempty"`
 }
 
 // Registrar is the cron-arming seam into a chat-run cron engine (mission
@@ -127,13 +165,14 @@ type ScheduledChatAPI interface {
 	// enforces the same rule again at fire time as defense in depth
 	// (a row's allowlist can be emptied by a later Update).
 	//
-	// NOT REACHABLE from any production wiring as of WP09. The model-
-	// facing entry point (harness_write_create_scheduled_run) is WP10,
-	// which is HARD-BLOCKED on harness-self-attach-01PMHS01 WP04+WP06
-	// per owner rulings B-2/B-3 (spec.md §9, §6.1). This method is the
-	// mechanism WP10 wires a tool handler onto; until then it exists,
-	// is tested, and has no caller outside this package's own tests —
-	// a dated, named gap, not a silent one. See docs/unwired-ledger.md.
+	// Production caller: harness_write_create_scheduled_run, through
+	// core/rpc/harness_wiring.go's scheduledRunWriterAdapter (onboarding
+	// sessions only, per the harness-self write policy). When such a row
+	// fires, the run is contained to its allowlist per tool call:
+	// scheduler.ResolveRunContainment decides the boundary, the chat-run
+	// dispatcher binds the run's session to it, and the merged
+	// tool-permission resolver's session arm denies (and records) every
+	// off-list call (model-harness-toolset-01MHTS001 WP02, finding H-1).
 	CreateAsModel(ctx context.Context, in CreateInput) (ChatRunEntry, error)
 
 	// Update replaces all mutable fields of an existing scheduled chat run.
@@ -162,4 +201,8 @@ type ScheduledChatAPI interface {
 	// SetEnabled flips the enabled flag for id.
 	// Returns ErrNotFound when no run with id exists.
 	SetEnabled(ctx context.Context, id string, enabled bool) error
+
+	// DefaultModel reports what "active default" resolves to for a
+	// schedule with no model override.
+	DefaultModel(ctx context.Context) (DefaultModel, error)
 }

@@ -53,17 +53,22 @@ package llm_test
 //     Correction (2026-08-25, Finding 6 of the release/v0.72.0
 //     unwired sweep): "capable of writing" is not "writes on a real
 //     install". core/rpc/api.go's newLLMStack wires this cache via
-//     capabilities.DefaultCache(db), which selects SQLiteCache only
-//     when HARNESS_LLM_CAPABILITY_CACHE=sqlite is set in the process
-//     environment — and nothing in this repo (no launcher, no default
-//     Settings value, no packaging script) ever sets it. So on every
-//     shipped binary today, DefaultCache degrades to MemoryCache and
-//     provider_capabilities stays permanently empty; this landing
-//     removed the STRUCTURAL blocker (DefaultCache(nil) could
-//     previously never select sqlite even with the env var set — see
-//     the Falsifiability note below) but did not make the write path
-//     live. Whether to flip the default is an owner decision, not
-//     this test file's to make.
+//     capabilities.DefaultCache(db), which at the time selected
+//     SQLiteCache only when HARNESS_LLM_CAPABILITY_CACHE=sqlite was set
+//     in the process environment — and nothing in this repo (no
+//     launcher, no default Settings value, no packaging script) ever
+//     set it. So on every shipped binary at the time, DefaultCache
+//     degraded to MemoryCache and provider_capabilities stayed
+//     permanently empty. "Whether to flip the default is an owner
+//     decision, not this test file's to make" — that decision was made
+//     2026-09-15 (model-settings-reach-the-model-01PMZ101 WP12/WP14
+//     closing finding): DefaultCache's own default (unset) now prefers
+//     SQLiteCache whenever db != nil, so the production call site
+//     (which already passes a real db unconditionally) makes the
+//     persistent path live with no launcher/packaging change required.
+//     See core/llm/capabilities/cache.go's DefaultCache doc comment and
+//     TestDefaultCache_UnsetWithRealDBPrefersSQLite
+//     (cache_sqlite_upgrade_test.go) for the falsifiable proof.
 //   - WP-PI (this file) — none; adds only this enumeration and the
 //     falsifiability re-run below.
 //

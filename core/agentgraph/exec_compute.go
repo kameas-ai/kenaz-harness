@@ -265,11 +265,13 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		// the call, bail out.
 		if env.Budget.MaxLLMCallsPerRun > 0 &&
 			env.Counters.LLMCallsMade >= env.Budget.MaxLLMCallsPerRun {
-			_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, map[string]any{
-				"reason": "max_llm_calls_per_run",
-				"limit":  env.Budget.MaxLLMCallsPerRun,
-			})
-			return res, ErrBudgetExceeded
+			marker := PauseMarker{
+				Reason: "max_llm_calls_per_run",
+				Limit:  float64(env.Budget.MaxLLMCallsPerRun),
+				Used:   float64(env.Counters.LLMCallsMade),
+			}
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, marker)
+			return res, &BudgetCapError{Reason: marker.Reason, Limit: marker.Limit, Used: marker.Used}
 		}
 	}
 
@@ -433,11 +435,13 @@ func (b builtinToolExecutor) Execute(ctx context.Context, env *Env, node *Node, 
 
 	if env.Budget.MaxToolCallsPerRun > 0 && env.Counters != nil &&
 		env.Counters.ToolCallsMade >= env.Budget.MaxToolCallsPerRun {
-		_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, map[string]any{
-			"reason": "max_tool_calls_per_run",
-			"limit":  env.Budget.MaxToolCallsPerRun,
-		})
-		return res, ErrBudgetExceeded
+		marker := PauseMarker{
+			Reason: "max_tool_calls_per_run",
+			Limit:  float64(env.Budget.MaxToolCallsPerRun),
+			Used:   float64(env.Counters.ToolCallsMade),
+		}
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, marker)
+		return res, &BudgetCapError{Reason: marker.Reason, Limit: marker.Limit, Used: marker.Used}
 	}
 
 	if !env.Tools.Has(a.Name) {
@@ -463,7 +467,7 @@ func (b builtinToolExecutor) Execute(ctx context.Context, env *Env, node *Node, 
 	// The pre-call gate is shared with tool_dispatch — greedy-memory
 	// hook, canonical EventToolCall, v2 pre_tool_use hooks (block /
 	// rewrite args / inject context). See tool_invocation.go.
-	tc := toolCallContext{NodeID: node.ID, NodeKind: b.kind, ToolName: a.Name}
+	tc := toolCallContext{NodeID: node.ID, NodeKind: b.kind, ToolName: a.Name, StartedAt: time.Now()}
 	args, argsJSON, _, blocked, preEvents := toolPreDispatch(ctx, env, tc, args)
 	res.Events.Events = append(res.Events.Events, preEvents.Events...)
 	if blocked != nil {
@@ -526,6 +530,14 @@ func (b builtinToolExecutor) Execute(ctx context.Context, env *Env, node *Node, 
 			ProjectID:     env.ProjectID,
 			Messages:      []Message{{Role: "tool", Name: a.Name, Content: tr.Content}},
 			CurrentTokens: estimateTokens([]Message{{Content: tr.Content}}),
+			// ContextWindow was omitted here entirely (CK-03), so
+			// pipeline.Run's threshold gate always took the "context
+			// window unknown" skip branch — the post_tool site could
+			// never fire regardless of its Enabled config. This builtin
+			// tool node carries no Provider/Model of its own, so fall
+			// back to the run's active model the same way the manual
+			// compact-node site does.
+			ContextWindow: resolveContextWindow(env, "", ""),
 		}
 		co, cerr := env.Compactor.Compact(ctx, ci)
 		if cerr != nil {
@@ -1024,11 +1036,31 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	if maxIterations <= 0 {
 		maxIterations = maxIterationsForTier(resolveNodeTier(env, a.Provider, model))
 	}
+	// ResponseSchema (structured-output-is-reachable-01PMZE14 WP10): ask
+	// for the exact shape reviewPrompt already demands in prose, on
+	// models whose capability row supports it. D-9: degrade, never
+	// fail — most rows say structured_output: false (spec §1.3), so a
+	// *llm.ErrCapabilityUnsupported naming CapStructuredOutput is
+	// expected on most providers and is handled below by dropping the
+	// schema and re-issuing, not by failing the run. Without this, a
+	// review gate that opted into a schema would break on every
+	// provider that cannot serve one — "the single most likely way this
+	// mission causes a regression" per the mission's own tasks.md.
 	resp, err := env.LLM.Generate(ctx, LLMRequest{
 		Model: model, MaxTokens: 256,
-		SystemPrompt: composePrompt(resolvePromptTemplate(env, a.Provider, model), graphBaseOf(env), a.SystemPrompt),
-		Messages:     []Message{{Role: "user", Content: reviewPrompt(env, draft)}},
+		SystemPrompt:   composePrompt(resolvePromptTemplate(env, a.Provider, model), graphBaseOf(env), a.SystemPrompt),
+		Messages:       []Message{{Role: "user", Content: reviewPrompt(env, draft)}},
+		ResponseSchema: json.RawMessage(reviewVerdictSchema),
 	})
+	if err != nil {
+		if isCapabilityUnsupported(err, corellm.CapStructuredOutput) {
+			resp, err = env.LLM.Generate(ctx, LLMRequest{
+				Model: model, MaxTokens: 256,
+				SystemPrompt: composePrompt(resolvePromptTemplate(env, a.Provider, model), graphBaseOf(env), a.SystemPrompt),
+				Messages:     []Message{{Role: "user", Content: reviewPrompt(env, draft)}},
+			})
+		}
+	}
 	if err != nil {
 		return res, fmt.Errorf("review: node %q: %w", node.ID, err)
 	}
@@ -1108,6 +1140,35 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	res.Outputs["should_retry"] = true
 	res.Outputs["retry_target"] = a.UpstreamNode
 	return res, nil
+}
+
+// reviewVerdictSchema is the JSON-schema mirror of what reviewPrompt
+// already demands in prose (structured-output-is-reachable-01PMZE14
+// WP10, spec §5.6): {"verdict": "pass"|"fail", "reason": "<one line>"}.
+// Set on LLMRequest.ResponseSchema so a model whose capability row
+// supports structured output is actually constrained to this shape,
+// rather than merely asked nicely; parseReviewVerdict's tolerant passes
+// remain the fallback for a model that cannot serve one (D-9: degrade,
+// never fail — see the capability-refusal handling at the call site).
+const reviewVerdictSchema = `{"type":"object","required":["verdict","reason"],"properties":{"verdict":{"type":"string","enum":["pass","fail"]},"reason":{"type":"string"}}}`
+
+// isCapabilityUnsupported reports whether err is (or wraps)
+// *llm.ErrCapabilityUnsupported naming want among its refused
+// capabilities. Used by the review gate and router (WP10) to
+// distinguish "this model cannot serve a schema, drop it and retry"
+// from every other error, which must still propagate — D-9 bounds the
+// degrade path to exactly this one capability, not to every failure.
+func isCapabilityUnsupported(err error, want corellm.Capability) bool {
+	var capErr *corellm.ErrCapabilityUnsupported
+	if !errors.As(err, &capErr) {
+		return false
+	}
+	for _, c := range capErr.Capabilities {
+		if c == want {
+			return true
+		}
+	}
+	return false
 }
 
 // reviewPrompt builds the user-side message for a review call
@@ -1638,7 +1699,18 @@ func (compactExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 		NodeID:    node.ID,
 		SessionID: env.SessionID,
 		ProjectID: env.ProjectID,
-		Messages:  msgs,
+		// Strategy forces the pipeline to dispatch the author's choice
+		// rather than falling through to the resolved cascading config
+		// (CHAT-07) — this is the node's whole reason to carry a
+		// `strategy` attr in the first place.
+		Strategy: a.Strategy,
+		// SystemPrompt was omitted here entirely (CHAT-14/CK-14): the
+		// attr exists on CompactAttrs and the seam has always had a
+		// field for it, but nothing threaded the value through, so a
+		// manual compaction silently dropped the system prompt every
+		// time.
+		SystemPrompt: a.SystemPrompt,
+		Messages:     msgs,
 		// The context-window budget this compaction sizes against —
 		// the denominator for every threshold decision downstream.
 		ContextWindow: resolveContextWindow(env, a.Provider, a.Model),
@@ -1655,7 +1727,11 @@ func (compactExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 
 	res.Outputs["result"] = co.Messages
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventCompactionApplied, map[string]any{
-		"strategy":        a.Strategy,
+		// co.Strategy is what the pipeline actually dispatched — never
+		// a.Strategy, the node's unresolved request. Reporting the
+		// attr here is the exact CHAT-07 defect: an event that
+		// describes a strategy that did not run.
+		"strategy":        co.Strategy,
 		"target_tokens":   target,
 		"input_messages":  len(msgs),
 		"output_messages": len(co.Messages),

@@ -161,6 +161,17 @@ type DeferredAnsweredPayload struct {
 	// SystemReminder is the text the frontend should inject into the next
 	// LLM turn (spec FR-025).
 	SystemReminder string `json:"system_reminder"`
+	// SessionID identifies the session the deferred ask belonged to
+	// (served-mode-topic-forwarding-gaps follow-up, 2026-09). Populated
+	// from the elicitation.Registry entry in AnswerDeferred so core/serve's
+	// WS fan-out (D-705's fail-closed session filter, wsstream.go
+	// frameFor/sessionIDOf) can scope this frame to the connection that
+	// raised the ask, the same way TopicElicitDeferred's ElicitRequest
+	// already carries SessionID. Empty in the rare case the ask was
+	// registered with no session in context — core/serve fails that case
+	// closed rather than guessing, same as every other session-scoped
+	// topic.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // DeferredResult is the immediate result returned to the model when the tool
@@ -342,6 +353,30 @@ func (a *API) OpenDialog(ctx context.Context, q elicitation.Question) (elicitati
 	})
 }
 
+// Defer implements askuserquestion.Delegate (UNIT-15, A-12). Unlike
+// OpenDialog, it calls Registry.Register — never Park — so the calling
+// goroutine is never blocked: this is what makes a deferred ask
+// callable from a run with no attached UI (SJ01's unattended runs
+// depend on that property; see askuserquestion.Delegate's doc). The
+// SAME session-id-from-context read as OpenDialog: the toolloop
+// dispatcher wraps ctx with toolloop.WithSessionID before calling into
+// the built-in tool pool, and this is how the registry entry — and
+// therefore TopicElicitDeferred's ElicitRequest — carries the session
+// that raised it, so DeferredAskPill can filter to its own session and
+// core/serve's WS fan-out can scope the event correctly.
+func (a *API) Defer(ctx context.Context, q elicitation.Question) (string, error) {
+	sessionID := toolloop.SessionIDFromContext(ctx)
+	entry, err := a.registry.Register(elicitation.Request{
+		SessionID: sessionID,
+		Question:  q,
+		Mode:      elicitation.ModeDeferred,
+	})
+	if err != nil {
+		return "", err
+	}
+	return entry.ID, nil
+}
+
 // SubmitAnswer resolves a pending elicitation. Called by the Bindings
 // layer when the frontend submits Elicit_SubmitAnswer.
 func (a *API) SubmitAnswer(_ context.Context, requestID string, answerJSON json.RawMessage, cancelled bool) error {
@@ -430,6 +465,15 @@ func (a *API) AnswerDeferred(_ context.Context, askID string, answer any) (strin
 	}
 	reminder := elicitation.SystemReminderText(askID, answer)
 
+	// Resolve does not delete the entry (see its comment: the answered
+	// record is retained so the `ask` node can read it back), so this
+	// Get is safe after Resolve and gives us the SessionID to stamp onto
+	// the outgoing event — see DeferredAnsweredPayload.SessionID.
+	var sessionID string
+	if entry, ok := a.registry.Get(askID); ok {
+		sessionID = entry.SessionID
+	}
+
 	a.mu.Lock()
 	emitter, wailsCtx := a.emitter, a.wailsCtx
 	a.mu.Unlock()
@@ -438,6 +482,7 @@ func (a *API) AnswerDeferred(_ context.Context, askID string, answer any) (strin
 		emitter.Emit(wailsCtx, TopicElicitDeferredAnswered, DeferredAnsweredPayload{
 			AskID:          askID,
 			SystemReminder: reminder,
+			SessionID:      sessionID,
 		})
 	}
 	return reminder, nil

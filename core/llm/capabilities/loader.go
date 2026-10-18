@@ -456,7 +456,15 @@ func (c *Catalog) MaxOutputTokens(provider, model string) int {
 // question through this method instead of string-matching model
 // families itself.
 func (c *Catalog) Tier(provider, model string) (string, bool) {
-	spec, ok := c.specs[provider]
+	// model-settings-reach-the-model-01PMZ101 UNIT-10 / WP17: Tier is a
+	// FOURTH lookup entry point providerAlias's own doc comment ("applied
+	// in all three lookup entry points") did not name. Before this,
+	// agentgraph.BranchRecommender's tierSourceAdapter — which calls this
+	// method directly with the profile's Kind — had no opinion for
+	// "azure-openai", so a branch off an azure-openai session with no
+	// exact-match ModelInfo always degraded to ModelTierMedium regardless
+	// of the model's real size, unlike every alias-covered lookup.
+	spec, ok := c.specs[resolveProvider(provider)]
 	if !ok {
 		return "", false
 	}
@@ -510,7 +518,13 @@ type KnownModel struct {
 // provider's tiers: table, in file order. Glob rows ("claude-haiku-*")
 // are skipped since they classify a model rather than name one.
 func (c *Catalog) KnownModels(provider string) []KnownModel {
-	spec, ok := c.specs[provider]
+	// Same alias fix as Tier above (model-settings-reach-the-model-
+	// 01PMZ101 UNIT-10 / WP17): without it, KnownModels("azure-openai")
+	// always returned nil (no "azure-openai" key in c.specs), so the
+	// branch recommender's known-model table could never carry an
+	// azure-openai candidate no matter how core/rpc/branches_wiring.go's
+	// provider list was widened.
+	spec, ok := c.specs[resolveProvider(provider)]
 	if !ok {
 		return nil
 	}
@@ -682,12 +696,26 @@ func MultimodalInEnabled() bool {
 	return v != "off"
 }
 
-// MultimodalOutEnabled reports whether the HARNESS_MULTIMODAL_OUT env flag
-// permits the model-generated image output pipeline. Default on: the env var
-// must be explicitly set to "off" (case-insensitive) to disable. When
-// disabled, the auto-capture pipeline skips all StreamGeneratedImage events
-// regardless of the Settings.AutoCaptureGeneratedImages dial.
+// MultimodalOutEnabled reports whether the HARNESS_MULTIMODAL_OUT env
+// flag would permit the model-generated image output pipeline IF one
+// existed. Default on: the env var must be explicitly set to "off"
+// (case-insensitive) to disable.
 // (multimodal-io-extended-01KQ8TD2 WP08)
+//
+// CHAT-06 justify(blocker: "no adapter emits StreamGeneratedImage",
+// owner: alec, date: 2026-08-19; chat-turn-integrity-01PMZ606 WP13,
+// spec.md E-005): this flag currently gates NOTHING — this function's
+// only caller is the Config_GetFlags display projection
+// (core/rpc/bindings.go). The consumer-side plumbing this doc used to
+// describe (auto-capture pipeline, Settings.AutoCaptureGeneratedImages)
+// is real and does check
+// llmcap.MultimodalOutEnabled()-adjacent state at the capture site, but
+// there is nothing for it to gate: zero adapters in the tree construct
+// a StreamGeneratedImage event (`grep -rn "Kind:.*StreamGeneratedImage"
+// core --include="*.go"` is empty), so no such event ever reaches the
+// capturer regardless of this flag's value. Flip this comment back to
+// describing a live gate only once an adapter exists to emit the event
+// it would be gating.
 func MultimodalOutEnabled() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("HARNESS_MULTIMODAL_OUT")))
 	return v != "off"

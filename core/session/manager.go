@@ -12,6 +12,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/event"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // Event kinds emitted by the manager. Naming follows the harness
@@ -131,6 +132,34 @@ type Manager struct {
 	// reach anything that cached the old value).
 	kindObserversMu sync.Mutex
 	kindObservers   []KindTransitionObserver
+
+	// deleteObservers run synchronously after Delete removes the session
+	// row (artifacts-as-units-01DOGF0C WP03, spec FR-6). Storage that
+	// references a session WITHOUT a foreign key — core/units' scope_id is
+	// plain TEXT — has no schema cascade to lean on, so it registers here
+	// instead. Every session delete path funnels through Manager.Delete
+	// (the sessions view, the branch-children cascade in
+	// core/conversation), so an observer sees all of them.
+	deleteObserversMu sync.Mutex
+	deleteObservers   []DeleteObserver
+}
+
+// DeleteObserver is called after a session row has been deleted. A
+// returned error is surfaced from Manager.Delete (the session row is
+// already gone at that point — the error reports that cleanup of
+// FK-less dependants did not finish).
+type DeleteObserver func(ctx context.Context, sessionID string) error
+
+// AddDeleteObserver registers fn to run after every successful Delete.
+// Append-only, safe for concurrent use, intended for boot-time wiring.
+// A nil fn is ignored.
+func (m *Manager) AddDeleteObserver(fn DeleteObserver) {
+	if m == nil || fn == nil {
+		return
+	}
+	m.deleteObserversMu.Lock()
+	m.deleteObservers = append(m.deleteObservers, fn)
+	m.deleteObserversMu.Unlock()
 }
 
 // KindTransitionObserver is notified when SetKind changes a session's
@@ -418,6 +447,21 @@ func (m *Manager) GetLastUsage(ctx context.Context, id string) (LastUsage, error
 	return m.store.GetLastUsage(ctx, id)
 }
 
+// SetKnobsDefault persists the session-level RequestKnobs override
+// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10). Called by
+// Sessions_SetKnobsDefault; nil clears the override.
+func (m *Manager) SetKnobsDefault(ctx context.Context, id string, k *llm.RequestKnobs) error {
+	return m.store.SetKnobsDefault(ctx, id, k)
+}
+
+// GetKnobsDefault loads the session-level RequestKnobs override, or nil
+// when none has been set. Read by Sessions_GetKnobsDefault (the tune
+// panel's initial state) and by the chat send path, which merges the
+// result onto every GenerationRequest.Knobs the session issues.
+func (m *Manager) GetKnobsDefault(ctx context.Context, id string) (*llm.RequestKnobs, error) {
+	return m.store.GetKnobsDefault(ctx, id)
+}
+
 // UpsertStreamCheckpoint persists (or overwrites) the mid-run
 // durability checkpoint for one (sessionID, subID) stream subscription.
 // Called by the chat runner's periodic-flush loop
@@ -445,6 +489,59 @@ func (m *Manager) DeleteStreamCheckpoint(ctx context.Context, sessionID, subID s
 	return m.store.DeleteStreamCheckpoint(ctx, sessionID, subID)
 }
 
+// RecordTurnRun persists which agent-graph run executed a chat turn
+// (agentgraph-settings-linkage-01DOGF0D WP03). The signature matches
+// chat.TurnRunRecorder so production wiring passes *Manager directly.
+// The row's CreatedAt is stamped from the manager clock.
+func (m *Manager) RecordTurnRun(ctx context.Context, sessionID, turnSpanID, runID, graphID, specDigest string) error {
+	if sessionID == "" || runID == "" {
+		return errors.New("session: record turn run: session id and run id required")
+	}
+	return m.store.RecordTurnRun(ctx, TurnRun{
+		RunID:      runID,
+		SessionID:  sessionID,
+		TurnSpanID: turnSpanID,
+		GraphID:    graphID,
+		SpecDigest: specDigest,
+		CreatedAt:  m.now(),
+	})
+}
+
+// RecordTurnOutcome stamps a chat run's terminal outcome onto its
+// recorded turn -> run row (undelivered-message-retry, migration 0344).
+// The signature matches chat.TurnRunRecorder so production wiring passes
+// *Manager directly. FinishedAt is stamped from the manager clock.
+func (m *Manager) RecordTurnOutcome(ctx context.Context, sessionID, runID string, o TurnRunOutcome) error {
+	if sessionID == "" || runID == "" {
+		return errors.New("session: record turn outcome: session id and run id required")
+	}
+	o.FinishedAt = m.now()
+	return m.store.RecordTurnRunOutcome(ctx, sessionID, runID, o)
+}
+
+// turnRunCounter is the store capability that counts turn runs without
+// reading them.
+type turnRunCounter interface {
+	CountTurnRuns(ctx context.Context, sessionID string) (int, error)
+}
+
+// CountTurnRuns returns how many turn runs the session has recorded —
+// every started turn, including ones that failed.
+func (m *Manager) CountTurnRuns(ctx context.Context, sessionID string) (int, error) {
+	if c, ok := m.store.(turnRunCounter); ok {
+		return c.CountTurnRuns(ctx, sessionID)
+	}
+	runs, err := m.store.ListTurnRuns(ctx, sessionID)
+	return len(runs), err
+}
+
+// ListTurnRuns returns a session's recorded turn -> run mappings, oldest
+// first. Read by Sessions_TurnRuns to link transcript turns to their
+// run graphs.
+func (m *Manager) ListTurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error) {
+	return m.store.ListTurnRuns(ctx, sessionID)
+}
+
 // Rename changes a session's display name.
 func (m *Manager) Rename(ctx context.Context, id, name string) error {
 	name = strings.TrimSpace(name)
@@ -469,6 +566,18 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	m.audit.Emit(ctx, EventKindSessionDeleted, map[string]any{
 		"session_id": id,
 	})
+	m.deleteObserversMu.Lock()
+	observers := append([]DeleteObserver(nil), m.deleteObservers...)
+	m.deleteObserversMu.Unlock()
+	var errs []error
+	for _, fn := range observers {
+		if err := fn(ctx, id); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("session: %s deleted, but dependant cleanup failed: %w", id, errors.Join(errs...))
+	}
 	return nil
 }
 

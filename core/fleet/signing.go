@@ -3,7 +3,6 @@ package fleet
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -157,8 +156,17 @@ func writeKeyFile(path string, priv ed25519.PrivateKey) error {
 // pubkeyFingerprint returns "sha256:<hex>" fingerprint of the given public key
 // bytes. This format matches the fleet server's device_pubkey_fingerprint field.
 func pubkeyFingerprint(pub ed25519.PublicKey) string {
-	h := sha256.Sum256(pub)
-	return "sha256:" + hex.EncodeToString(h[:])
+	return KeyFingerprint(pub)
+}
+
+// PublicKey returns the raw 32-byte ed25519 public key — what enroll /
+// PUT /me/nodes/{id}/keys registers as signing_public_key (fleet contract
+// §10.1) so audit batches verify (§8.3).
+func (s *DeviceSigner) PublicKey() []byte {
+	if s == nil || s.privKey == nil {
+		return nil
+	}
+	return append([]byte(nil), s.privKey.Public().(ed25519.PublicKey)...)
 }
 
 // VerifySignature verifies that sig is a valid ed25519 signature over payload

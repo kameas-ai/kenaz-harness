@@ -43,6 +43,11 @@ func TestBootWiresNarrativeSettingsGate(t *testing.T) {
 	if api == nil {
 		t.Fatal("rpc.New returned nil")
 	}
+	// Blocker 2 (review of finding #61, 2026-09-11): New(c) with a real
+	// DataDir now starts a.pruneScheduler's background goroutine
+	// unconditionally; Shutdown must run so it doesn't leak past this
+	// test.
+	t.Cleanup(api.Shutdown)
 	ctx := context.Background()
 
 	if err := api.Settings().SetMemoryNarrativeEnabled(ctx, true); err != nil {

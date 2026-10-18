@@ -48,6 +48,17 @@ func (m *Manager) Update(ctx context.Context, id, body string, metadata json.Raw
 	return m.store.Update(ctx, id, body, []byte(metadata))
 }
 
+// UpdateAtVersion writes only if the persisted version still equals baseVersion.
+func (m *Manager) UpdateAtVersion(ctx context.Context, id string, baseVersion int, body string, metadata json.RawMessage) (Unit, error) {
+	if id == "" {
+		return Unit{}, errors.New("units: empty id")
+	}
+	if baseVersion < 0 {
+		return Unit{}, ErrVersionConflict
+	}
+	return m.store.UpdateAtVersion(ctx, id, baseVersion, body, []byte(metadata))
+}
+
 // AddEdge creates a directed edge between two units.
 func (m *Manager) AddEdge(ctx context.Context, e Edge) (Edge, error) {
 	return m.store.AddEdge(ctx, e)
@@ -87,6 +98,25 @@ func (m *Manager) UpsertSyncState(ctx context.Context, st SyncState) (SyncState,
 		return SyncState{}, errors.New("units: UpsertSyncState: empty UnitID")
 	}
 	return m.store.UpsertSyncState(ctx, st)
+}
+
+// CreateWithSyncState creates a unit pulled from fleet together with its
+// sync sidecar row, atomically (see Store.CreateWithSyncState). The fleet
+// pull path's first-sight create goes through here so a crash can never
+// leave a shared unit without its baseline (units-debt-01UNITD01 FR-4).
+func (m *Manager) CreateWithSyncState(ctx context.Context, u Unit, st SyncState) (Unit, SyncState, error) {
+	return m.store.CreateWithSyncState(ctx, u, st)
+}
+
+// UpdateWithSyncState fast-forwards a unit to a pulled body and advances its
+// sync sidecar, atomically, iff the unit is still at baseVersion (see
+// Store.UpdateWithSyncState; ErrVersionConflict otherwise). metadata may
+// be nil (stored as "{}").
+func (m *Manager) UpdateWithSyncState(ctx context.Context, id string, baseVersion int, body string, metadata json.RawMessage, st SyncState) (Unit, SyncState, error) {
+	if id == "" {
+		return Unit{}, SyncState{}, errors.New("units: empty id")
+	}
+	return m.store.UpdateWithSyncState(ctx, id, baseVersion, body, []byte(metadata), st)
 }
 
 // GetSyncState returns the sidecar for a unit, or ErrSyncStateNotFound when

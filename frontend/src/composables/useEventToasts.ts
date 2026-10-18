@@ -23,11 +23,13 @@ import { useRouter } from 'vue-router';
 import { push, dismiss } from '@/composables/useToastQueue';
 import { useEventStream } from '@/lib/useEventStream';
 import { useHarnessClient } from '@/lib/harnessClientContext';
+import { isServedMode } from '@/lib/useServedMode';
 import { useUpdateStore } from '@/components/updates/useUpdateStore';
 import type {
   CostThresholdCrossedPayload,
   MigrationDriftDetectedPayload,
   RetryAfterRotationFailedPayload,
+  ScheduledChatBannerPayload,
 } from '@/lib/types';
 
 interface MergeSuggestionPayload {
@@ -195,8 +197,11 @@ export function useEventToasts() {
   //    FR-3c) ───────────────────────────────────────────────────────────
   // severity:"error" (id_mismatch) migration-ledger drift used to be
   // visible ONLY at /settings?tab=health, a query-param-gated tab a user
-  // has no reason to know exists. The backend only ever publishes this
-  // topic when hasError is true (code_only / ledger_only-only drift never
+  // has no reason to know exists. settings-cleanup-01SETUX01 WP01 (FR-5)
+  // deleted that tab: the repair now lives in SettingsIssuesBanner, which
+  // SettingsShell renders on every settings page, so the action just opens
+  // Settings. The copy is plain language, like the banner's. The backend
+  // only ever publishes this topic when hasError is true (code_only / ledger_only-only drift never
   // reaches it), but the handler re-checks anyway — trust the payload's
   // own field, not "this topic fired", the same discipline the backend
   // publish site uses.
@@ -204,17 +209,22 @@ export function useEventToasts() {
     'storage.migration.drift-detected',
     (payload) => {
       if (!payload?.hasError || driftToastShown) return;
+      // Served mode: the repair lives in SettingsIssuesBanner, whose
+      // database check is desktop-only (Storage_* has no serve dispatch),
+      // so served Settings cannot repair anything. "Open Settings to repair
+      // it" would be a promise the UI cannot keep — say nothing instead.
+      if (isServedMode()) return;
       driftToastShown = true;
       push(
-        'Migration ledger drift detected — the database may be inconsistent. Review before continuing.',
+        'Kenaz found a problem with its database. Open Settings to repair it.',
         {
           level: 'error',
           durationMs: 0, // Persistent until the user acts.
           actions: [
             {
-              label: 'Review',
+              label: 'Open Settings',
               perform: async () => {
-                await router.push('/settings?tab=health');
+                await router.push('/settings');
               },
             },
           ],
@@ -222,6 +232,30 @@ export function useEventToasts() {
       );
     },
   );
+
+  // ── ScheduledChatBanner (model-scheduled-jobs-01PMSJ01 WP07, FR-007)
+  //    ─────────────────────────────────────────────────────────────────
+  // Delivers the "banner" output_sink (the schema default for a
+  // scheduled chat run) as a toast — a notification, not a modal,
+  // since the run already finished unattended and nobody is waiting on
+  // a response. `scheduled-chat:banner` used to be a string that
+  // appeared exactly once in the whole repository, in a Go comment,
+  // with no emitter and no subscriber at all.
+  useEventStream<ScheduledChatBannerPayload>('scheduled-chat:banner', (payload) => {
+    if (!payload?.chatRunId) return;
+    const label = payload.name || 'Scheduled chat';
+    if (payload.status === 'completed') {
+      const snippet = payload.outputSnippet
+        ? ` — ${payload.outputSnippet.slice(0, 140)}${payload.outputSnippet.length > 140 ? '…' : ''}`
+        : '';
+      push(`${label} finished${snippet}`, { level: 'info', durationMs: 10000 });
+    } else {
+      push(`${label} failed${payload.error ? `: ${payload.error}` : ''}`, {
+        level: 'warn',
+        durationMs: 10000,
+      });
+    }
+  });
 
   // ── MigrationToast ──────────────────────────────────────────────────
   onMounted(async () => {

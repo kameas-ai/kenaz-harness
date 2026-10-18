@@ -12,7 +12,12 @@ import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import NodePalette from '@/views/agentgraph/NodePalette.vue';
 import { __resetManifestStoreCache } from '@/composables/useNodeManifest';
-import type { NodeManifestSummary } from '@/lib/types';
+import type {
+  NodeManifestSummary,
+  NodeDoctorReport,
+  NodeUserOverrideInfo,
+  NodeReloadResult,
+} from '@/lib/types';
 
 const FIXTURE: NodeManifestSummary[] = [
   // Compute archetype + two kinds.
@@ -78,8 +83,29 @@ const FIXTURE: NodeManifestSummary[] = [
   },
 ];
 
-function mountPalette(rows: NodeManifestSummary[] = FIXTURE) {
+interface NodesOverrides {
+  reloadOverrides?: () => Promise<NodeReloadResult>;
+  listUserOverrides?: () => Promise<NodeUserOverrideInfo[]>;
+  doctor?: () => Promise<NodeDoctorReport>;
+}
+
+function mountPalette(rows: NodeManifestSummary[] = FIXTURE, overrides: NodesOverrides = {}) {
   const catalog = vi.fn(async () => rows);
+  const reloadOverrides = vi.fn(
+    overrides.reloadOverrides ?? (async () => ({ added: [], removed: [], modified: [] })),
+  );
+  const listUserOverrides = vi.fn(overrides.listUserOverrides ?? (async () => []));
+  const doctor = vi.fn(
+    overrides.doctor ??
+      (async () => ({
+        shippedCount: 0,
+        userOverrideCount: 0,
+        archetypeCount: 0,
+        callableCount: 0,
+        aliasCount: 0,
+        hotReloadEnabled: false,
+      })),
+  );
   const client = createFakeHarnessClient({
     nodes: {
       catalog,
@@ -90,16 +116,9 @@ function mountPalette(rows: NodeManifestSummary[] = FIXTURE) {
         ports: {},
         provenance: [],
       }),
-      reloadOverrides: async () => ({ added: [], removed: [], modified: [] }),
-      listUserOverrides: async () => [],
-      doctor: async () => ({
-        shippedCount: 0,
-        userOverrideCount: 0,
-        archetypeCount: 0,
-        callableCount: 0,
-        aliasCount: 0,
-        hotReloadEnabled: false,
-      }),
+      reloadOverrides,
+      listUserOverrides,
+      doctor,
     },
   });
   const wrapper = mount(NodePalette, {
@@ -107,7 +126,7 @@ function mountPalette(rows: NodeManifestSummary[] = FIXTURE) {
       provide: { [HarnessClientKey as symbol]: client },
     },
   });
-  return { wrapper, catalog };
+  return { wrapper, catalog, reloadOverrides, listUserOverrides, doctor };
 }
 
 describe('NodePalette', () => {
@@ -194,4 +213,132 @@ describe('NodePalette', () => {
     await flushPromises();
     expect(wrapper.find('[data-testid="palette-empty"]').exists()).toBe(true);
   });
+
+  // ── node-override diagnostics (WP18, FR-027 C2V-15 / AC-046 / AC-047) ──
+
+  it('Doctor button surfaces a fresh per-file parse error without a restart', async () => {
+    const { wrapper, listUserOverrides, doctor, reloadOverrides } = mountPalette(FIXTURE, {
+      listUserOverrides: async () => [
+        {
+          filename: 'broken.yaml',
+          path: '/data/agent_graph/nodes/broken.yaml',
+          status: 'error',
+          error: 'yaml: line 3: did not find expected key',
+        },
+      ],
+    });
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="node-diagnostics-panel"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="palette-doctor"]').trigger('click');
+    await flushPromises();
+
+    // Doctor pulls both the cached health report AND a fresh per-file
+    // parse pass; it must NOT trigger the catalog-swapping reload.
+    expect(doctor).toHaveBeenCalledTimes(1);
+    expect(listUserOverrides).toHaveBeenCalledTimes(1);
+    expect(reloadOverrides).not.toHaveBeenCalled();
+
+    expect(wrapper.get('[data-testid="override-status-broken.yaml"]').text()).toBe('error');
+    expect(wrapper.get('[data-testid="override-error-broken.yaml"]').text()).toContain(
+      'did not find expected key',
+    );
+  });
+
+  it(
+    'Reload runs the real on-disk rescan so a fixed override kind appears ' +
+      'without a restart (mutation: a Reload that only re-fetches the ' +
+      'in-memory catalog instead of calling reloadOverrides must fail this)',
+    async () => {
+      const updatedRows: NodeManifestSummary[] = [
+        ...FIXTURE,
+        {
+          id: 'archived_reader',
+          displayName: 'Archived reader',
+          description: 'A dropped-in user override',
+          category: 'state',
+          archetype: 'read',
+          callable: true,
+        },
+      ];
+
+      let catalogCalls = 0;
+      const catalogFn = vi.fn(async () => (catalogCalls++ === 0 ? FIXTURE : updatedRows));
+
+      let overrideCalls = 0;
+      const listUserOverridesFn = vi.fn(async () =>
+        overrideCalls++ === 0
+          ? [
+              {
+                filename: 'archived_reader.yaml',
+                path: '/data/agent_graph/nodes/archived_reader.yaml',
+                status: 'error' as const,
+                error: 'yaml: line 2: found character that cannot start any token',
+              },
+            ]
+          : [
+              {
+                filename: 'archived_reader.yaml',
+                path: '/data/agent_graph/nodes/archived_reader.yaml',
+                id: 'archived_reader',
+                status: 'ok' as const,
+              },
+            ],
+      );
+
+      const reloadOverridesFn = vi.fn(async () => ({
+        added: ['archived_reader'],
+        removed: [],
+        modified: [],
+      }));
+
+      const client = createFakeHarnessClient({
+        nodes: {
+          catalog: catalogFn,
+          get: async (id) => ({
+            summary: { id, callable: false },
+            chain: [id],
+            attrs: [],
+            ports: {},
+            provenance: [],
+          }),
+          reloadOverrides: reloadOverridesFn,
+          listUserOverrides: listUserOverridesFn,
+          doctor: async () => ({
+            shippedCount: 0,
+            userOverrideCount: 1,
+            archetypeCount: 0,
+            callableCount: 0,
+            aliasCount: 0,
+            hotReloadEnabled: false,
+          }),
+        },
+      });
+      const wrapper = mount(NodePalette, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+
+      // Drop an invalid override file, click Doctor: the parse error shows.
+      await wrapper.get('[data-testid="palette-doctor"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.get('[data-testid="override-status-archived_reader.yaml"]').text()).toBe(
+        'error',
+      );
+      expect(wrapper.find('[data-testid="palette-kind-archived_reader"]').exists()).toBe(false);
+
+      // Fix the file, click Reload: the real re-scan + atomic catalog swap
+      // runs, and the kind appears in the palette without a restart.
+      await wrapper.get('[data-testid="palette-reload"]').trigger('click');
+      await flushPromises();
+
+      expect(reloadOverridesFn).toHaveBeenCalledTimes(1);
+      expect(catalogFn).toHaveBeenCalledTimes(2);
+      expect(wrapper.find('[data-testid="palette-kind-archived_reader"]').exists()).toBe(true);
+      expect(wrapper.get('[data-testid="override-status-archived_reader.yaml"]').text()).toBe(
+        'ok',
+      );
+      expect(wrapper.get('[data-testid="reload-diff-added"]').text()).toContain('added');
+    },
+  );
 });

@@ -124,6 +124,59 @@ func TestSignIn_FullFlow(t *testing.T) {
 	}
 }
 
+// TestSignIn_NoRequestedScopes_FallsBackToProtectedResourceMetadata pins
+// spec.md §1.12 R-5 / connector-lifecycle-truth-01PMZ303 MO-12: the audit
+// that filed MO-12 named "ScopesSupported" as one dead symbol, but there
+// are two fields with that name — AuthServerMetadata.ScopesSupported
+// (dead, oauth.go:71, correctly left alone) and
+// ProtectedResourceMetadata.ScopesSupported (LIVE — the scope fallback
+// every OAuth recipe that declares no requested scopes relies on). This
+// asserts the live fallback actually reaches the authorization request,
+// not just that the field parses (TestDiscover already covers parsing).
+//
+// Mutation: a future "clean up ScopesSupported" pass that removes or stops
+// reading ProtectedResourceMetadata.ScopesSupported (signin.go:94,
+// resolve.go:168, slack_signin.go:203) must fail this test — the
+// authorization URL would carry no scope param at all instead of the
+// fakeRemote-declared "repo read:org".
+func TestSignIn_NoRequestedScopes_FallsBackToProtectedResourceMetadata(t *testing.T) {
+	srv, base := fakeRemote(t)
+
+	var gotScope string
+	openBrowser := func(authURL string) error {
+		u, err := url.Parse(authURL)
+		if err != nil {
+			return err
+		}
+		q := u.Query()
+		gotScope = q.Get("scope")
+		go func() {
+			cb := q.Get("redirect_uri") + "?code=abc&state=" + url.QueryEscape(q.Get("state"))
+			resp, e := http.Get(cb) //nolint:noctx // test
+			if e == nil {
+				_ = resp.Body.Close()
+			}
+		}()
+		return nil
+	}
+
+	// Deliberately no Scopes set — this is the case that must fall back to
+	// prm.ScopesSupported ("repo","read:org" per fakeRemote's protected-
+	// resource metadata) rather than requesting no scope at all.
+	_, err := SignIn(context.Background(), SignInConfig{
+		ServerURL:   base + "/mcp/",
+		ClientID:    "cid-123",
+		OpenBrowser: openBrowser,
+		HTTPClient:  srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("SignIn: %v", err)
+	}
+	if gotScope != "repo read:org" {
+		t.Fatalf("authorization request scope = %q, want the ProtectedResourceMetadata.ScopesSupported fallback %q", gotScope, "repo read:org")
+	}
+}
+
 func TestSignIn_RequiresClientID(t *testing.T) {
 	_, err := SignIn(context.Background(), SignInConfig{ServerURL: "https://x", OpenBrowser: func(string) error { return nil }})
 	if err == nil || !strings.Contains(err.Error(), "client_id") {

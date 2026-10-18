@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
+
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
@@ -247,7 +249,7 @@ func TestTool_Call_ModelInvokableTrue_Runs(t *testing.T) {
 	tool := New(Options{Dispatch: dispatch})
 
 	args := mustMarshal(t, map[string]any{"name": "for-model"})
-	out, err := tool.Call(ctx, args)
+	out, err := tool.Call(toolloop.WithSessionID(ctx, "sess-1"), args)
 	if err != nil {
 		t.Fatalf("Call() should never return a Go error, got: %v", err)
 	}
@@ -280,5 +282,47 @@ func mustUnmarshal(t *testing.T, b []byte, v any) {
 	t.Helper()
 	if err := json.Unmarshal(b, v); err != nil {
 		t.Fatalf("json.Unmarshal: %v — raw: %s", err, b)
+	}
+}
+
+// TestTool_Call_SessionIDArgumentRefused (model-harness-toolset-01MHTS001
+// WP02 security review, H1): the session is never an argument. A
+// session_id in the args is refused as invalid_args — never silently
+// ignored — and nothing is dispatched.
+func TestTool_Call_SessionIDArgumentRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, dir := openSkillTestDB(t)
+	store := coreslashcmd.NewStore(db, dir)
+	if err := store.SaveUser(ctx, coreslashcmd.UserCommand{
+		Name: "for-model", Scope: coreslashcmd.ScopeGlobal, Kind: coreslashcmd.KindText,
+		Description: "d", Body: "eligible output", ModelInvokable: true,
+	}); err != nil {
+		t.Fatalf("SaveUser: %v", err)
+	}
+	tool := New(Options{Dispatch: coreslashcmd.NewDispatch(store, nil)})
+	out, err := tool.Call(toolloop.WithSessionID(ctx, "sess-1"),
+		mustMarshal(t, map[string]any{"name": "for-model", "session_id": "sess-other"}))
+	if err != nil {
+		t.Fatalf("Go error: %v", err)
+	}
+	var e struct {
+		IsError bool   `json:"isError"`
+		Kind    string `json:"kind"`
+	}
+	mustUnmarshal(t, out, &e)
+	if !e.IsError || e.Kind != "invalid_args" || strings.Contains(string(out), "eligible output") {
+		t.Fatalf("session_id argument not refused as invalid_args: %s", out)
+	}
+}
+
+// TestTool_Call_NoSessionRefused: with no session on ctx the tool has no
+// session to run in and says so.
+func TestTool_Call_NoSessionRefused(t *testing.T) {
+	t.Parallel()
+	tool := New(Options{Dispatch: coreslashcmd.NewDispatch(nil, nil)})
+	out, _ := tool.Call(context.Background(), mustMarshal(t, map[string]any{"name": "x"}))
+	if !strings.Contains(string(out), `"kind":"no_session"`) {
+		t.Fatalf("want no_session, got %s", out)
 	}
 }

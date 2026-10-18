@@ -28,6 +28,7 @@
 import { computed, ref } from 'vue';
 import { Archive, Layers, Lock } from 'lucide-vue-next';
 import { isServedMode } from '@/lib/useServedMode';
+import { STOP_CALLED_REASON } from '@/lib/delivery';
 import MarkdownBlock from './MarkdownBlock.vue';
 import PinMenu from './PinMenu.vue';
 import ImageBlock from './ImageBlock.vue';
@@ -132,6 +133,14 @@ const props = defineProps<{
    * server-side row materializes via ListMessages refresh.
    */
   streamingError?: string;
+  /**
+   * Live extended-thinking content (model-settings-reach-the-model-
+   * 01PMZ101 WP16, closing CHAT-09). Renders as a muted, italic block
+   * above the answer text whenever non-empty. Live-only — see
+   * Message.reasoning's docstring in types.ts; a reload never
+   * repopulates this prop.
+   */
+  reasoning?: string;
 
   // ── per-message-token-meter-01KR3PQR ────────────────────────────────
 
@@ -154,6 +163,8 @@ const props = defineProps<{
   costUsd?: number;
   /** Cost source: "provider" | "derived" | "mixed" | "unknown". */
   messageCostSource?: string;
+  /** Part of promptTokens served from the provider's prompt cache. */
+  cachedTokens?: number;
 }>();
 
 const emit = defineEmits<{
@@ -416,8 +427,21 @@ function isLastBlock(idx: number): boolean {
 // keeps working on rows that haven't been persisted server-side yet.
 const isPartialOutputBubble = computed(() => {
   if (!isAssistant.value) return false;
+  if (stoppedByUser.value) return false;
   return Boolean(props.streamingFailedAt) || Boolean(props.streamingError);
 });
+
+// stoppedByUser: the stream closed because the user pressed Stop
+// (useSession commits the partial with the close reason "stop-called").
+// That is not a connection loss and there is nothing to resume — the
+// user asked for it to end. A row the backend persisted as a drop
+// (streamingFailedAt) keeps the drop copy.
+const stoppedByUser = computed(
+  () =>
+    isAssistant.value &&
+    props.streamingError === STOP_CALLED_REASON &&
+    !props.streamingFailedAt,
+);
 
 // partialOutputCopy: tailored failure copy by classification kind.
 // Recoverable rows get the "preserved" framing; non-recoverable rows
@@ -466,6 +490,7 @@ function onResumeClick() {
           :completion-tokens="completionTokens"
           :cost-usd="costUsd"
           :cost-source="messageCostSource"
+          :cached-tokens="cachedTokens"
           class="ml-2 normal-case tracking-normal"
         />
         <span
@@ -587,6 +612,14 @@ function onResumeClick() {
         </button>
       </div>
 
+      <div
+        v-if="reasoning"
+        class="mb-2 font-ui text-[11px] text-ink-subtle italic whitespace-pre-wrap"
+        data-testid="message-reasoning"
+      >
+        {{ reasoning }}
+      </div>
+
       <!-- tool-call rows: namespaced monospace line each -->
       <ul v-if="toolCalls && toolCalls.length > 0" class="space-y-1 mb-2">
         <li
@@ -651,7 +684,14 @@ function onResumeClick() {
            the partial bubble was committed anyway. WP03 will replace
            this with a Resume button. -->
       <div
-        v-if="streamingError"
+        v-if="stoppedByUser"
+        class="mt-2 font-ui text-[11px] text-ink-muted italic"
+        data-testid="message-stopped-by-user"
+      >
+        Stopped by you — partial reply kept.
+      </div>
+      <div
+        v-else-if="streamingError"
         class="mt-2 font-ui text-[11px] text-ink-muted italic"
         data-testid="message-streaming-error"
       >

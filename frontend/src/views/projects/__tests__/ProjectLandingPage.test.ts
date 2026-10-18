@@ -261,7 +261,7 @@ describe('ProjectLandingPage', () => {
       routes: [
         { path: '/projects/:id', name: 'project', component: ProjectLandingPage },
         { path: '/sessions/:id?', name: 'sessions', component: { template: '<div />' } },
-        { path: '/memory', name: 'memory', component: { template: '<div />' } },
+        { path: '/knowledge/learned', name: 'knowledge', component: { template: '<div />' } },
       ],
     });
     await router.push('/projects/p1');
@@ -285,7 +285,7 @@ describe('ProjectLandingPage', () => {
     expect(updateDescription).toHaveBeenCalledWith('p1', 'rewritten description');
   });
 
-  it('renders project-scope memory count and a deep-link to /memory (WP07 T002)', async () => {
+  it('renders project-scope memory count and a deep-link to Knowledge › Learned (WP07 T002)', async () => {
     const project: Project = {
       id: 'p1',
       name: 'Foo',
@@ -322,7 +322,7 @@ describe('ProjectLandingPage', () => {
       routes: [
         { path: '/projects/:id', name: 'project', component: ProjectLandingPage },
         { path: '/sessions/:id?', name: 'sessions', component: { template: '<div />' } },
-        { path: '/memory', name: 'memory', component: { template: '<div />' } },
+        { path: '/knowledge/learned', name: 'knowledge', component: { template: '<div />' } },
       ],
     });
     await router.push('/projects/p1');
@@ -341,7 +341,7 @@ describe('ProjectLandingPage', () => {
     expect(listChunks).toHaveBeenCalledWith({ scopeKind: 'project', scopeId: 'p1' });
     await w.find('[data-testid=project-memory-link]').trigger('click');
     await flushPromises();
-    expect(router.currentRoute.value.path).toBe('/memory');
+    expect(router.currentRoute.value.path).toBe('/knowledge/learned');
     expect(router.currentRoute.value.query.scopeKind).toBe('project');
     expect(router.currentRoute.value.query.scopeId).toBe('p1');
   });

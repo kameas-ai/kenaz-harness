@@ -32,7 +32,7 @@ func newTestStore(t *testing.T) settingsview.SettingsStore {
 func TestRegisterSyncCategories_NilSyncer(t *testing.T) {
 	store := newTestStore(t)
 	// Must not panic.
-	registerSyncCategories(context.Background(), nil, store, nil)
+	registerSyncCategories(context.Background(), nil, store, nil, nil)
 }
 
 // TestRegisterSyncCategories_NilStore verifies that calling with a nil store
@@ -40,7 +40,7 @@ func TestRegisterSyncCategories_NilSyncer(t *testing.T) {
 func TestRegisterSyncCategories_NilStore(t *testing.T) {
 	syncer := corefleet.NewSyncer(nil)
 	// Must not panic; mcp_category is nil too — tests the full nil-guard path.
-	registerSyncCategories(context.Background(), syncer, nil, nil)
+	registerSyncCategories(context.Background(), syncer, nil, nil, nil)
 	syncer.Stop()
 }
 
@@ -54,7 +54,7 @@ func TestRegisterSyncCategories_CategoriesRegistered(t *testing.T) {
 	syncer := corefleet.NewSyncer(nil) // nil client → network calls are short-circuited
 	t.Cleanup(syncer.Stop)
 
-	registerSyncCategories(context.Background(), syncer, store, nil)
+	registerSyncCategories(context.Background(), syncer, store, nil, nil)
 
 	// With nil mcpCategory, installed_mcp is not wired.
 	const wantCount = 4 // ui_theme + model_prefs + provider_profiles + mcp_recipes
@@ -80,11 +80,14 @@ func TestRegisterSyncCategories_CategoriesRegistered(t *testing.T) {
 // ── Credential-free collector assertions ─────────────────────────────────────
 
 // TestUIThemeCollector_CredentialFree verifies the ui_theme collector
-// returns only theme + accent — no credential bytes.
+// returns only theme — no credential bytes, and (fleet-enforcement-truth-
+// 01PMZ505 WP12, AC-023/D-7) no longer Accent: Settings.Accent has no
+// reader anywhere in the repo, so it must not travel to other devices.
 func TestUIThemeCollector_CredentialFree(t *testing.T) {
 	store := newTestStore(t)
 
-	// Seed a theme value.
+	// Seed a theme value (and Accent, to prove it is NOT collected even
+	// though it is set locally).
 	s, _ := store.LoadAll()
 	s.Theme = "dark"
 	s.Accent = "#ff6600"
@@ -92,7 +95,7 @@ func TestUIThemeCollector_CredentialFree(t *testing.T) {
 
 	syncer := corefleet.NewSyncer(nil)
 	t.Cleanup(syncer.Stop)
-	registerSyncCategories(context.Background(), syncer, store, nil)
+	registerSyncCategories(context.Background(), syncer, store, nil, nil)
 
 	raw, err := syncer.CollectCategory(context.Background(), corefleet.SyncCategoryUITheme)
 	if err != nil {
@@ -107,13 +110,14 @@ func TestUIThemeCollector_CredentialFree(t *testing.T) {
 	if payload["theme"] != "dark" {
 		t.Errorf("theme=%q, want dark", payload["theme"])
 	}
-	if payload["accent"] != "#ff6600" {
-		t.Errorf("accent=%q, want #ff6600", payload["accent"])
+	if _, present := payload["accent"]; present {
+		t.Errorf("ui_theme payload carries %q=%v — Accent has no reader anywhere "+
+			"in the repo and must not be pushed to other devices (AC-023)", "accent", payload["accent"])
 	}
 
-	// Ensure no unexpected keys (no credential fields).
+	// Ensure no unexpected keys (no credential fields, no Accent).
 	for k := range payload {
-		if k != "theme" && k != "accent" {
+		if k != "theme" {
 			t.Errorf("unexpected key in ui_theme payload: %q", k)
 		}
 	}
@@ -134,7 +138,7 @@ func TestModelPrefsCollector_CredentialFree(t *testing.T) {
 
 	syncer := corefleet.NewSyncer(nil)
 	t.Cleanup(syncer.Stop)
-	registerSyncCategories(context.Background(), syncer, store, nil)
+	registerSyncCategories(context.Background(), syncer, store, nil, nil)
 
 	raw, err := syncer.CollectCategory(context.Background(), corefleet.SyncCategoryModelPrefs)
 	if err != nil {
@@ -181,7 +185,7 @@ func TestModelPrefsApplier_RoundTrip(t *testing.T) {
 
 	syncer := corefleet.NewSyncer(nil)
 	t.Cleanup(syncer.Stop)
-	registerSyncCategories(context.Background(), syncer, store, nil)
+	registerSyncCategories(context.Background(), syncer, store, nil, nil)
 
 	// Apply a partial update: only CompactionAggressiveness + MaxAgentTurns.
 	incoming, _ := json.Marshal(modelPrefsPayload{
@@ -207,7 +211,7 @@ func TestProviderProfilesCollector_EmptyPayload(t *testing.T) {
 	store := newTestStore(t)
 	syncer := corefleet.NewSyncer(nil)
 	t.Cleanup(syncer.Stop)
-	registerSyncCategories(context.Background(), syncer, store, nil)
+	registerSyncCategories(context.Background(), syncer, store, nil, nil)
 
 	raw, err := syncer.CollectCategory(context.Background(), corefleet.SyncCategoryProviderProfiles)
 	if err != nil {
@@ -224,7 +228,7 @@ func TestMCPRecipesCollector_EmptyPayload(t *testing.T) {
 	store := newTestStore(t)
 	syncer := corefleet.NewSyncer(nil)
 	t.Cleanup(syncer.Stop)
-	registerSyncCategories(context.Background(), syncer, store, nil)
+	registerSyncCategories(context.Background(), syncer, store, nil, nil)
 
 	raw, err := syncer.CollectCategory(context.Background(), corefleet.SyncCategoryMCPRecipes)
 	if err != nil {
@@ -242,7 +246,7 @@ func TestNoopApplier_NoError(t *testing.T) {
 	store := newTestStore(t)
 	syncer := corefleet.NewSyncer(nil)
 	t.Cleanup(syncer.Stop)
-	registerSyncCategories(context.Background(), syncer, store, nil)
+	registerSyncCategories(context.Background(), syncer, store, nil, nil)
 
 	before, _ := store.LoadAll()
 	for _, cat := range []corefleet.SyncCategory{

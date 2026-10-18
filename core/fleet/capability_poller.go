@@ -69,10 +69,12 @@ type CapabilityPoller struct {
 	backoff  *backoffState
 	sf       singleflight.Group
 
-	mu       sync.RWMutex
-	current  Capabilities
+	mu      sync.RWMutex
+	current Capabilities
 	// listeners holds OnChange callbacks, appended under mu.
 	listeners []func(Capabilities)
+	// notifyMu serialises listener delivery (see setCurrent).
+	notifyMu sync.Mutex
 
 	// cancel shuts down the background goroutine.
 	cancel context.CancelFunc
@@ -88,7 +90,6 @@ func NewCapabilityPoller(client *Client, dataDir string) *CapabilityPoller {
 		dataDir:  dataDir,
 		interval: pollInterval,
 		backoff:  &backoffState{},
-		done:     make(chan struct{}),
 		// Initialize with default-deny so Current() is never nil.
 		current: DefaultDenyCapabilities(),
 	}
@@ -103,8 +104,9 @@ func (p *CapabilityPoller) Current() Capabilities {
 }
 
 // OnChange registers fn to be called whenever the enabled capability set
-// changes (a key is added or removed). fn is invoked synchronously under
-// the write lock, so implementations must be fast and non-blocking.
+// changes (a key is added or removed). fn is invoked synchronously on the
+// refreshing goroutine, after the poller's lock is released — it may read
+// the poller back (Current) — and should still be fast.
 // Multiple listeners are supported; they are called in registration order.
 func (p *CapabilityPoller) OnChange(fn func(Capabilities)) {
 	p.mu.Lock()
@@ -114,15 +116,44 @@ func (p *CapabilityPoller) OnChange(fn func(Capabilities)) {
 
 // setCurrent replaces the in-memory snapshot and fires OnChange listeners
 // when the enabled-capability set has changed.
+//
+// Listeners run AFTER the lock is released (fleet-session-truth-01DOGF0A
+// WP02). They used to run under the write lock, so any listener that read
+// the poller back — ReconcileTelemetry does, via TelemetryConsent →
+// FleetOrgTier → Current(); the fleet:session-changed publisher does, via
+// the session snapshot — re-entered p.mu and deadlocked the poller on the
+// first capability change. Copying the slice keeps registration-order
+// delivery; the snapshot passed is the one this call installed.
+//
+// Delivery is serialised by notifyMu and passes Current() AT DELIVERY TIME
+// (review F6): with the lock released, two concurrent refreshes could
+// otherwise deliver in the wrong order and leave a listener (e.g. the
+// SitesReconciler) holding the stale set last.
 func (p *CapabilityPoller) setCurrent(c Capabilities) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	prev := p.current
 	p.current = c
-	if enabledSetChanged(prev, c) && len(p.listeners) > 0 {
-		for _, fn := range p.listeners {
-			fn(c)
-		}
+	var fns []func(Capabilities)
+	changed := enabledSetChanged(prev, c) || prev.Paused != c.Paused || prev.PausedCategory != c.PausedCategory
+	if changed && len(p.listeners) > 0 {
+		fns = append(fns, p.listeners...)
+	}
+	p.mu.Unlock()
+	// The capability poll is the authoritative pause signal (org_paused.go):
+	// a fresh or cached snapshot reports it to the client, whose true→false
+	// transition fans out OnOrgUnpaused. A default-deny snapshot (signed
+	// out, endpoint absent) says nothing about the pause and is ignored.
+	if c.Source == "fleet" || c.Source == "cache" {
+		p.client.ObserveCapabilitiesPause(c.Paused, c.PausedCategory)
+	}
+	if len(fns) == 0 {
+		return
+	}
+	p.notifyMu.Lock()
+	defer p.notifyMu.Unlock()
+	cur := p.Current()
+	for _, fn := range fns {
+		fn(cur)
 	}
 }
 
@@ -150,12 +181,12 @@ func enabledSetChanged(a, b Capabilities) bool {
 func (p *CapabilityPoller) Start(ctx context.Context) {
 	innerCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
-
-	// Load the disk cache as the initial state so we have something to serve
-	// before the first network fetch completes.
-	if cached, err := LoadCapabilities(p.dataDir); err == nil && cached.Source == "cache" {
-		p.setCurrent(cached)
-	}
+	// done is allocated HERE, not in the constructor, so that a
+	// constructed-but-never-started poller leaves it nil and Stop has a
+	// reliable way to tell "no goroutine to wait for" from "running".
+	// See Stop for why that distinction is load-bearing. This matches
+	// AuditArchiver and AuditRetentionSweeper, which already do it this way.
+	p.done = make(chan struct{})
 
 	go func() {
 		defer close(p.done)
@@ -170,6 +201,23 @@ func (p *CapabilityPoller) Start(ctx context.Context) {
 				)
 			}
 		}()
+
+		// Load the disk cache as the initial state so we have something to
+		// serve before the first network fetch completes. This MUST happen
+		// on the poller's own goroutine, never inline in Start: setCurrent
+		// fires OnChange listeners synchronously, and Start's callers may
+		// hold locks the listeners need. startFleetBackgroundLocked calls
+		// Start under settings' fleet.mu write lock while the registered
+		// listener (ReconcileTelemetry) read-locks the same mutex — with a
+		// warm capability cache on disk, an inline setCurrent here
+		// deadlocked every enrolled install at boot (caught in the v0.87.0
+		// release dogfood, 2026-10-05). No unit test executes this path
+		// (production code gates Start off under go test), so the invariant
+		// is pinned by
+		// TestCapabilityPollerStart_ListenersDoNotFireOnCallersGoroutine.
+		if cached, err := LoadCapabilities(p.dataDir); err == nil && cached.Source == "cache" {
+			p.setCurrent(cached)
+		}
 
 		// Decide whether to fetch immediately or wait.
 		cur := p.Current()
@@ -227,7 +275,18 @@ func (p *CapabilityPoller) Stop() {
 	if p.cancel != nil {
 		p.cancel()
 	}
-	<-p.done
+	// Only Start spawns the goroutine that closes done, so a poller that was
+	// constructed but never started has nothing to wait for -- and because
+	// done used to be allocated in the constructor, the bare receive below
+	// blocked FOREVER in exactly that case. That is not hypothetical: the
+	// construct-without-start state is documented on NewCapabilityPoller and
+	// is what settings.SetFleetClient produces under `go test`, where the
+	// Start call is guarded but the poller is still assigned (the lockdown
+	// watcher needs the instance). The result was a 10-minute hang in
+	// API.Shutdown -> StopFleetBackground -> here.
+	if p.done != nil {
+		<-p.done
+	}
 }
 
 // ForceSetCurrentForTesting calls setCurrent directly, bypassing the
@@ -243,6 +302,9 @@ type capabilitiesWireResponse struct {
 	Tier         string          `json:"tier"`
 	Capabilities map[string]bool `json:"capabilities"`
 	FetchedAt    time.Time       `json:"fetched_at"`
+	// Paused / PausedCategory: the staff pause hold (kenaz-fleet #206).
+	Paused         bool   `json:"paused"`
+	PausedCategory string `json:"paused_category"`
 }
 
 // Refresh calls GET /api/v1/me/capabilities on the fleet server via
@@ -323,6 +385,10 @@ func (p *CapabilityPoller) fetch(ctx context.Context) (Capabilities, error) {
 		Enabled:   enabled,
 		FetchedAt: wire.FetchedAt,
 		Source:    "fleet",
+		Paused:    wire.Paused,
+	}
+	if wire.Paused {
+		caps.PausedCategory = NormalizePausedCategory(wire.PausedCategory)
 	}
 	if caps.FetchedAt.IsZero() {
 		caps.FetchedAt = time.Now()

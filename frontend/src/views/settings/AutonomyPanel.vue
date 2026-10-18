@@ -58,6 +58,77 @@ const advancedOpen = ref(false);
 const loading = ref(false);
 const saveError = ref<string | null>(null);
 
+// ── Legacy fallback + permission-posture dials ────────────────────────
+//
+// These two are NOT AutonomyLayer overrides — they persist through the
+// plain Settings store (Settings_{Get,Set}MaxAgentTurns /
+// Settings_{Get,Set}FSRequestAccessEnabled), not getAutonomy/setAutonomy.
+// Surfaced here per owner ruling (trust-surfaces-that-fire-01PMZ202
+// WP25 C2V-04): MaxAgentTurns is the legacy numeric fallback the chat
+// graph's LoopNode iteration cap falls back to only when the "Max
+// iterations" knob above has no explicit override
+// (core/rpc/api.go resolveAutonomyKnobsWithSettingsFallback); the more
+// specific "Max iterations" override above always wins when set.
+// FSRequestAccessEnabled gates whether the model's tool catalog
+// includes kenaz__request_filesystem_access at all
+// (core/rpc/builtins_wiring.go builtinEnabledPredicate).
+const maxAgentTurns = ref(0);
+const maxAgentTurnsBusy = ref(false);
+const maxAgentTurnsError = ref<string | null>(null);
+
+const fsRequestAccessEnabled = ref(true);
+const fsRequestAccessBusy = ref(false);
+const fsRequestAccessError = ref<string | null>(null);
+
+async function refreshLegacyControls() {
+  if (props.skipFetch) return;
+  try {
+    maxAgentTurns.value = await client.settings.getMaxAgentTurns();
+  } catch (err) {
+    maxAgentTurnsError.value = err instanceof Error ? err.message : String(err);
+  }
+  try {
+    fsRequestAccessEnabled.value = await client.settings.getFSRequestAccessEnabled();
+  } catch (err) {
+    fsRequestAccessError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function persistMaxAgentTurns(raw: string) {
+  const n = Number(raw);
+  const next = Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+  if (maxAgentTurnsBusy.value) return;
+  maxAgentTurnsBusy.value = true;
+  maxAgentTurnsError.value = null;
+  const previous = maxAgentTurns.value;
+  maxAgentTurns.value = next;
+  try {
+    await client.settings.setMaxAgentTurns(next);
+  } catch (err) {
+    maxAgentTurns.value = previous;
+    maxAgentTurnsError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    maxAgentTurnsBusy.value = false;
+  }
+}
+
+async function toggleFSRequestAccess(event: Event) {
+  if (fsRequestAccessBusy.value) return;
+  const next = (event.target as HTMLInputElement).checked;
+  fsRequestAccessBusy.value = true;
+  fsRequestAccessError.value = null;
+  const previous = fsRequestAccessEnabled.value;
+  fsRequestAccessEnabled.value = next;
+  try {
+    await client.settings.setFSRequestAccessEnabled(next);
+  } catch (err) {
+    fsRequestAccessEnabled.value = previous;
+    fsRequestAccessError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    fsRequestAccessBusy.value = false;
+  }
+}
+
 const selectedTier = computed<AutonomyTier | null>(() => layer.value.level);
 const overrideKeys = computed<AutonomyKnob[]>(
   () =>
@@ -154,6 +225,13 @@ function parseKnob(k: AutonomyKnob, raw: string): unknown | undefined {
       if (!Number.isFinite(n)) return undefined;
       return Math.max(0, Math.trunc(n));
     }
+    case 'riskThreshold': {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return undefined;
+      // 0-100 (spec FR-002's score range); clamp rather than reject so a
+      // stray 150 doesn't silently no-op the override.
+      return Math.min(100, Math.max(0, Math.trunc(n)));
+    }
     case 'autoApproveFamilies': {
       // Accept a comma-separated list.
       const families = raw
@@ -183,8 +261,9 @@ watch(
 );
 
 onMounted(refresh);
+onMounted(refreshLegacyControls);
 
-defineExpose({ refresh });
+defineExpose({ refresh, refreshLegacyControls });
 </script>
 
 <template>
@@ -316,6 +395,71 @@ defineExpose({ refresh });
       data-testid="autonomy-error"
     >
       {{ saveError }}
+    </div>
+
+    <div class="mt-5 border-t border-border-muted pt-4">
+      <h3 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        Fallback &amp; permission dials
+      </h3>
+
+      <div class="mt-3 rounded-sm border border-border-muted bg-surface-1 px-3 py-2">
+        <label class="block font-ui text-[12px] text-ink" for="autonomy-max-agent-turns">
+          Default iteration cap
+        </label>
+        <p class="mt-1 font-ui text-[11px] text-ink-muted max-w-prose">
+          Legacy fallback for the chat graph's iteration cap. Only takes
+          effect when the "Max iterations" override above is unset — a
+          value there always wins. 0 means "use the built-in default".
+        </p>
+        <input
+          id="autonomy-max-agent-turns"
+          type="number"
+          min="0"
+          class="mt-2 w-32 rounded-sm border border-border bg-surface-2 px-2 py-1 font-mono text-[12px] text-ink"
+          :value="maxAgentTurns"
+          :disabled="maxAgentTurnsBusy"
+          data-testid="autonomy-max-agent-turns"
+          @change="(e) => persistMaxAgentTurns((e.target as HTMLInputElement).value)"
+        />
+        <div
+          v-if="maxAgentTurnsError"
+          class="mt-2 font-ui text-[11px] text-signal-danger"
+          role="alert"
+        >
+          {{ maxAgentTurnsError }}
+        </div>
+      </div>
+
+      <label
+        class="mt-3 flex items-start justify-between gap-3 rounded-sm border border-border-muted bg-surface-1 px-3 py-2 cursor-pointer"
+      >
+        <span>
+          <span class="block font-ui text-[12px] text-ink">
+            Allow requesting filesystem access
+          </span>
+          <span class="mt-1 block font-ui text-[11px] text-ink-muted max-w-prose">
+            When off, the model's tool catalog omits
+            kenaz__request_filesystem_access entirely — it cannot ask to
+            expand its filesystem allowlist during a run.
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          class="accent-accent mt-0.5 h-4 w-4 shrink-0"
+          :checked="fsRequestAccessEnabled"
+          :disabled="fsRequestAccessBusy"
+          aria-label="Allow requesting filesystem access"
+          data-testid="autonomy-fs-request-access-toggle"
+          @change="toggleFSRequestAccess"
+        />
+      </label>
+      <div
+        v-if="fsRequestAccessError"
+        class="mt-2 font-ui text-[11px] text-signal-danger"
+        role="alert"
+      >
+        {{ fsRequestAccessError }}
+      </div>
     </div>
   </section>
 </template>

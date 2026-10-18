@@ -20,7 +20,10 @@ import type { Hook, BuiltinDescriptor, DryRunResult } from '@/lib/types';
 const FAKE_HOOK: Hook = {
   id: 'hk-test',
   name: 'Test hook',
-  event: 'pre_send',
+  // ledger #46: post_send is the firing chat-pipeline event now (pre_send
+  // was found to be dead code — see hooks.ts's FIRING_HOOK_EVENTS doc
+  // comment), so this generic "valid saved hook" fixture uses it.
+  event: 'post_send',
   kind: 'shell',
   enabled: true,
   match: {},
@@ -209,14 +212,16 @@ describe('HookEditor', () => {
     // FIRING_HOOK_EVENTS entry (asserted against the real exported const,
     // not a hardcoded count, so this test tracks the array rather than
     // needing a manual bump on every future producer WP), a fresh
-    // (create-mode) draft's event is 'pre_send' — still the first entry
-    // and already in the firing set — and there is no inert badge.
+    // (create-mode) draft's event is 'post_send' — still the first entry
+    // and already in the firing set (ledger #46 swapped pre_send out and
+    // post_send in — see hooks.ts's FIRING_HOOK_EVENTS doc comment) — and
+    // there is no inert badge.
     it('shows one <option> per FIRING_HOOK_EVENTS entry in the event picker', () => {
       const wrapper = mountEditor(null);
       const options = wrapper.find('[data-testid="hook-editor-event"]').findAll('option');
       expect(options.length).toBe(FIRING_HOOK_EVENTS.length);
       expect(options.map((o) => o.element.value)).toEqual([...FIRING_HOOK_EVENTS]);
-      expect(options[0].element.value).toBe('pre_send');
+      expect(options[0].element.value).toBe('post_send');
       expect(wrapper.find('[data-testid="hook-editor-event-inert-badge"]').exists()).toBe(false);
     });
 
@@ -335,9 +340,17 @@ describe('HookEditor', () => {
   // FIRING_HOOK_EVENTS before this change still loads, still validates,
   // and renders with the inert badge naming the mission that will light
   // it — instead of the picker silently hiding the gap.
+  //
+  // ledger #46 (2026-09-10) swapped the exemplars: post_send used to be
+  // the "does not fire yet" case and pre_send the "fires" case (via
+  // FAKE_HOOK). It is now the other way around — post_send is wired onto
+  // the real ChatRunner path, and pre_send's only call site
+  // (core/rpc/views/llm/impl.go:638, inside a method with zero production
+  // callers) turned out to have never been reachable. See hooks.ts's
+  // FIRING_HOOK_EVENTS doc comment.
   describe('firing-events honesty floor (AC-08b)', () => {
     it('renders the inert badge for a saved hook whose event does not fire yet', () => {
-      const legacyHook: Hook = { ...FAKE_HOOK, event: 'post_send' };
+      const legacyHook: Hook = { ...FAKE_HOOK, event: 'pre_send' };
       const wrapper = mountEditor(legacyHook);
       const badge = wrapper.find('[data-testid="hook-editor-event-inert-badge"]');
       expect(badge.exists()).toBe(true);
@@ -346,21 +359,21 @@ describe('HookEditor', () => {
       // The select still shows the real event name selected — not blank —
       // via the dynamically-injected current-value <option>.
       const select = wrapper.find('[data-testid="hook-editor-event"]');
-      expect((select.element as HTMLSelectElement).value).toBe('post_send');
+      expect((select.element as HTMLSelectElement).value).toBe('pre_send');
     });
 
     it('does not render the inert badge for a saved hook whose event fires', () => {
-      const wrapper = mountEditor(FAKE_HOOK); // event: 'pre_send'
+      const wrapper = mountEditor(FAKE_HOOK); // event: 'post_send'
       expect(wrapper.find('[data-testid="hook-editor-event-inert-badge"]').exists()).toBe(false);
     });
 
     it('still emits save for a hook whose event does not fire yet (server-side validation is unaffected)', async () => {
-      const legacyHook: Hook = { ...FAKE_HOOK, event: 'post_send' };
+      const legacyHook: Hook = { ...FAKE_HOOK, event: 'pre_send' };
       const wrapper = mountEditor(legacyHook);
       await wrapper.find('[data-testid="hook-editor-save"]').trigger('click');
       expect(wrapper.emitted('save')).toBeTruthy();
       const saved = (wrapper.emitted('save') as Hook[][])[0][0];
-      expect(saved.event).toBe('post_send');
+      expect(saved.event).toBe('pre_send');
     });
   });
 

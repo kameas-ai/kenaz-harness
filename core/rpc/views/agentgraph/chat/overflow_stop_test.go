@@ -81,7 +81,7 @@ func buildOverflowStopRunner(t *testing.T, llm coreag.LLMProvider, budget int) (
 		Registry:              stubRegistry{},
 		Broker:                broker,
 		HistoryWriter:         &recordingHistoryWriter{},
-		History:               staticHistoryReader{},
+		History:               staticHistoryReader{msgs: conversationFillingWindow()},
 		GraphLoader:           func() (coreag.Graph, error) { return graph, nil },
 		MaxTurns:              func() int { return 25 },
 		Compaction:            &CompactionDeps{Engine: engine},
@@ -109,7 +109,7 @@ func TestChatRunner_StopStream_ReachesOverflowRedrive(t *testing.T) {
 	llm := &stopDuringRedriveLLM{redriving: make(chan struct{})}
 	runner, broker := buildOverflowStopRunner(t, llm, 1)
 
-	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "model-1", "hello")
+	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "model-1", testTurn("hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestChatRunner_OverflowRedrive_NotStoppedStillCompletes(t *testing.T) {
 	llm := &succeedingRedriveLLM{}
 	runner, broker := buildOverflowStopRunner(t, llm, 1)
 
-	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "model-1", "hello")
+	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "model-1", testTurn("hello"))
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}

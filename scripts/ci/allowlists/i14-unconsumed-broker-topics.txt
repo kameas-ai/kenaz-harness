@@ -48,3 +48,12 @@
 # mcp-connector-lifecycle-01PMMC01 is the closest slot. Whoever builds
 # the surface deletes this line in the same change.
 "mcp:progress"
+# 2026-10-04 fleet-session-truth-01DOGF0A review F8 — consumed in-process,
+# by a mechanism this gate cannot see: fleet.Client emits it on its
+# BrokerSink, and the sink the settings view installs is sessionExpiredTap
+# (core/rpc/views/settings/fleet_session_events.go), which folds it into
+# the FleetSession snapshot and deliberately does NOT forward it to the bus.
+# The UI learns of an expiry only through fleet:session-changed (the
+# SessionExpiredBanner reads the shared store). Owner: alec. Delete this
+# line if the tap ever subscribes through the broker instead.
+"fleet:session:expired"

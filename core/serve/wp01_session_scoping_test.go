@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -30,6 +31,7 @@ import (
 
 	"golang.org/x/net/websocket"
 
+	"github.com/kameas-ai/kenaz-harness/core/serve"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
@@ -37,21 +39,39 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
-// assertNoFrame reads with a short deadline and requires the read to time
-// out — i.e. that nothing arrives on ws within wait. Any frame at all
-// (even an unrelated one) is a hard failure: for these tests, silence is
-// the assertion.
+// assertNoFrame requires that no session-scoped frame arrives on ws within
+// wait: silence is the assertion. Frames on processWideTopics are
+// legitimate broadcasts to EVERY connection (e.g. the first
+// fleet:session-changed, which MemorySync's first RunOnce emits at boot and
+// which on a starved runner can land inside the window), so they are skipped
+// and reading continues until the deadline. These tests check that one
+// SESSION's events do not leak to another, not that the socket is mute.
 func assertNoFrame(t *testing.T, ws *websocket.Conn, wait time.Duration, context string) {
 	t.Helper()
-	_ = ws.SetReadDeadline(time.Now().Add(wait))
-	var f wsTestFrame
-	err := websocket.JSON.Receive(ws, &f)
-	if err == nil {
-		t.Fatalf("%s: expected no frame within %s, but received event=%q data=%s", context, wait, f.Event, f.Data)
+	if msg := noFrameViolation(ws, wait); msg != "" {
+		t.Fatalf("%s: %s", context, msg)
 	}
-	var netErr net.Error
-	if !errors.As(err, &netErr) || !netErr.Timeout() {
-		t.Fatalf("%s: expected a read timeout (no frame), got a different error: %v", context, err)
+}
+
+// noFrameViolation is assertNoFrame's testable core: "" means the window
+// elapsed with no non-broadcast frame.
+func noFrameViolation(ws *websocket.Conn, wait time.Duration) string {
+	deadline := time.Now().Add(wait)
+	_ = ws.SetReadDeadline(deadline)
+	for {
+		var f wsTestFrame
+		err := websocket.JSON.Receive(ws, &f)
+		if err == nil {
+			if serve.IsProcessWideTopic(f.Event) {
+				continue
+			}
+			return fmt.Sprintf("expected no frame within %s, but received event=%q data=%s", wait, f.Event, f.Data)
+		}
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			return fmt.Sprintf("expected a read timeout (no frame), got a different error: %v", err)
+		}
+		return ""
 	}
 }
 
@@ -409,8 +429,9 @@ func TestWP01_ElicitPendingSnapshot_ForeignSessionSeesNothing(t *testing.T) {
 // (usage.ThresholdCrossedPayload) is a calendar-month account aggregate
 // with no session id at all, unlike every other passthrough topic. A
 // connected client must never receive it — not because the topic was
-// dropped from the subscription (it stays subscribed, or
-// TestPassthroughTopics_MatchServedStreamTopicsTS would fail), but
+// dropped from the subscription (it stays subscribed — see the
+// passthroughTopics comment on it — because removing it would also drop
+// it from the generated SERVED_STREAM_TOPICS the frontend gates on), but
 // because frameFor's sessionIDOf probe always returns ok=false for it and
 // D-705 says an unscopable payload is not forwarded, not "forwarded to
 // everyone because it's probably account-wide."

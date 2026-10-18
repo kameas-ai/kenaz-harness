@@ -470,6 +470,76 @@ func TestConnectionStderrTailOnHTTPError(t *testing.T) {
 	}
 }
 
+// TestConnectionOn401_FiresOnStreamOpen is AC-026's transport-level
+// proof for the SSE GET path (fleet-enforcement-truth-01PMZ505 WP14):
+// a 401 opening the stream must invoke Spec.On401.
+func TestConnectionOn401_FiresOnStreamOpen(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		stdhttp.Error(w, "unauthorized", stdhttp.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	fired := 0
+	conn := sse.NewConnection(sse.Spec{
+		ID:         "needs-auth",
+		URL:        srv.URL + "/stream",
+		PostURL:    srv.URL + "/rpc",
+		HTTPClient: srv.Client(),
+		On401: func() {
+			mu.Lock()
+			fired++
+			mu.Unlock()
+		},
+	}, nil)
+	if err := conn.Open(context.Background()); err == nil {
+		t.Fatal("Open with 401 stream = nil; want error")
+	}
+
+	mu.Lock()
+	got := fired
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("On401 fired %d times, want 1", got)
+	}
+}
+
+// TestConnectionOn401_DoesNotFireOn500 is the negative half: a 500 must
+// not invalidate a cached token — only 401 means "the token itself was
+// rejected."
+func TestConnectionOn401_DoesNotFireOn500(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		stdhttp.Error(w, "boom", stdhttp.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	fired := 0
+	conn := sse.NewConnection(sse.Spec{
+		ID:         "flaky",
+		URL:        srv.URL + "/stream",
+		PostURL:    srv.URL + "/rpc",
+		HTTPClient: srv.Client(),
+		On401: func() {
+			mu.Lock()
+			fired++
+			mu.Unlock()
+		},
+	}, nil)
+	if err := conn.Open(context.Background()); err == nil {
+		t.Fatal("Open with 500 stream = nil; want error")
+	}
+
+	mu.Lock()
+	got := fired
+	mu.Unlock()
+	if got != 0 {
+		t.Errorf("On401 fired %d times on a 500, want 0", got)
+	}
+}
+
 func TestConnectionFactoryRequiresURL(t *testing.T) {
 	t.Parallel()
 	f := &sse.ConnectionFactory{

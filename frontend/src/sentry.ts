@@ -62,9 +62,11 @@ export async function initSentry(opts: SentryInitOptions): Promise<boolean> {
     return false;
   }
   try {
-    // Dynamic import — deferred until this function is called.
+    // Dynamic import — deferred until this function is called. Through
+    // ./sentrySdk, not '@sentry/vue' directly: see that file for why the
+    // package namespace must not be imported here.
     const [Sentry, { redactString, redactObject, redactStringDeep }] = await Promise.all([
-      import('@sentry/vue'),
+      import('./sentrySdk'),
       import('./sentry-redactor'),
     ]);
 

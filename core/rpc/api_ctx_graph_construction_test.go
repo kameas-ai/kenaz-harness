@@ -37,6 +37,11 @@ func TestContextGraphSyncer_AuditEmitterWired(t *testing.T) {
 	// FR-4a): without it this boots against the developer's real
 	// settings.json via settings.NewFileStoreFromEnv().
 	api := New(c, WithSettingsStore(newTestStore(t)))
+	// Blocker 2 (review of finding #61, 2026-09-11): New(c) with a real
+	// DataDir now starts api.pruneScheduler's background goroutine
+	// unconditionally; Shutdown must run so it doesn't leak past this
+	// test.
+	t.Cleanup(api.Shutdown)
 
 	if api.ctxGraphSyncer == nil {
 		t.Fatal("ctxGraphSyncer is nil — ContextGraphSyncer was not wired; check the contextsAPI type-assertion gate in api.go")

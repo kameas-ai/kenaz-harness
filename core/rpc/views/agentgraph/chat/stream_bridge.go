@@ -61,6 +61,34 @@ type StreamClosedPayload struct {
 	// string-matching Message on the frontend: the copy is a sentence
 	// meant for humans and it will be reworded.
 	ErrorKind string `json:"error_kind,omitempty"`
+
+	// TurnSpanID is the id of the persisted user message this run
+	// answered (undelivered-message-retry). It lets the surface put the
+	// NOT DELIVERED state on the right message without a reload.
+	TurnSpanID string `json:"turn_span_id,omitempty"`
+	// Delivered reports whether the model accepted the request: true
+	// once any model output streamed, or on a clean completion. False on
+	// a failure before the first token (a 402 on the response line) — the
+	// user's message never reached the model. Always present on the wire.
+	Delivered bool `json:"delivered"`
+	// FailureClass is llm.FailureClass for a failed run:
+	// "user_actionable" (never auto-retry), "transient" (auto-retry with
+	// backoff is allowed), "unknown". Empty for a non-failure close.
+	FailureClass string `json:"failure_class,omitempty"`
+	// FailureCode is the stable sub-discriminator (llm.FailureCode*:
+	// "payment_required", "auth_invalid", "rate_limited", …). Key UI
+	// affordances off this, never off Message.
+	FailureCode string `json:"failure_code,omitempty"`
+	// FailureStatus is the provider's HTTP status, when it sent one.
+	FailureStatus int `json:"failure_status,omitempty"`
+	// FailureProvider is the adapter kind the request went to.
+	FailureProvider string `json:"failure_provider,omitempty"`
+	// FailureSummary is one-line copy, e.g. "Out of credits with
+	// OpenRouter".
+	FailureSummary string `json:"failure_summary,omitempty"`
+	// FailureMessage is the provider's own explanation, sanitized
+	// (llm.SanitizeProviderMessage: credential shapes redacted, capped).
+	FailureMessage string `json:"failure_message,omitempty"`
 }
 
 // StreamClosedErrorKindSessionFull marks a terminal close caused by the
@@ -71,16 +99,34 @@ type StreamClosedPayload struct {
 // same situation for the user and get the same copy.
 const StreamClosedErrorKindSessionFull = "session_full"
 
+// StreamClosedReasonUnknown is what Close() (as opposed to
+// EmitClosed/EmitClosedFull) reports, because Close() genuinely does
+// not know why the stream ended (CHAT-13, chat-turn-integrity-
+// 01PMZ606 WP13). It intentionally matches the frontend's own
+// pre-existing fallback string for an unrecognised reason
+// (useSession.ts's "closed-without-finish", used when payload.reason
+// is anything other than "completed") so a Close()-driven close reads
+// as "ended, no finish signal" rather than falsely as success.
+const StreamClosedReasonUnknown = "closed-without-finish"
+
 // StreamBridge implements agentgraph.StreamSink by translating each
 // kernel-bound StreamEvent into a corellm.StreamEvent and emitting
 // it on the broker's "llm:stream-chunk" topic.
 //
 // Per-LLMNode dispatch the kernel pins one StreamBridge onto the
 // run's Env via withStreamSink; a single chat run reuses the bridge
-// across multiple LLM dispatches inside the LoopNode body. Close is
-// idempotent — the runner's terminal-emit path calls it explicitly so
-// the chat surface always sees an "llm:stream-closed" payload even
-// when the kernel exits via a non-paused path.
+// across multiple LLM dispatches inside the LoopNode body.
+//
+// CHAT-13 (chat-turn-integrity-01PMZ606 WP13): the sentence that used
+// to sit here — "the runner's terminal-emit path calls [Close]
+// explicitly so the chat surface always sees a close signal" — is
+// false. Production never calls Close(); the runner's terminal path
+// always goes through EmitClosed / EmitClosedFull instead, which carry
+// the REAL reason ("completed" / "stop-called" / "backend-error" / …).
+// Close() exists only to satisfy the agentgraph.StreamSink interface
+// contract for a kernel that calls it directly with no reason
+// available — see Close's own doc for why it does not claim
+// "completed" either.
 type StreamBridge struct {
 	broker    Broker
 	subID     string
@@ -88,6 +134,12 @@ type StreamBridge struct {
 
 	mu     sync.Mutex
 	closed bool
+	// stopped is set when the user stopped the run. From then on error
+	// chunks are dropped: a provider reports the cancellation it was
+	// asked for as a stream error ("context canceled"), and forwarding it
+	// would paint an error bar over a Stop the close will report as
+	// stop-called.
+	stopped bool
 
 	// partialText accumulates every text-delta the bridge sees so the
 	// chat-runner driveRun terminal path can persist a partial assistant
@@ -111,6 +163,13 @@ type StreamBridge struct {
 	// is the un-persisted tail, which is what an interrupted move
 	// actually contains.
 	segmentStart int
+	// modelResponded flips true on the first event that only the model
+	// can produce — text, reasoning, a tool call, usage, finish. It is
+	// the "delivered" signal (undelivered-message-retry): a run that
+	// fails while it is still false failed before the model accepted the
+	// request. Move boundaries do NOT count — the journal announces them
+	// before the provider is called.
+	modelResponded bool
 	// hasToolEvent flips true on the first StreamEventTool so the
 	// runner knows tool_use already executed; a continuation prompt
 	// would then double-bill, so the resume button is suppressed and
@@ -148,6 +207,15 @@ func (b *StreamBridge) Emit(ev coreag.StreamEvent) {
 	// that guards the closed flag so a concurrent close doesn't race
 	// with a final batch of deltas.
 	b.mu.Lock()
+	if b.stopped && ev.Kind == coreag.StreamEventError {
+		b.mu.Unlock()
+		return
+	}
+	switch ev.Kind {
+	case coreag.StreamEventText, coreag.StreamEventReasoning, coreag.StreamEventTool,
+		coreag.StreamEventUsage, coreag.StreamEventFinish:
+		b.modelResponded = true
+	}
 	switch ev.Kind {
 	case coreag.StreamEventText:
 		if ev.Text != "" {
@@ -177,6 +245,30 @@ func (b *StreamBridge) Emit(ev coreag.StreamEvent) {
 		SessionID: b.sessionID,
 		Chunk:     chunk,
 	})
+}
+
+// MarkStopped records a user Stop: subsequent error chunks are dropped
+// (see the stopped field). Safe on a nil bridge.
+func (b *StreamBridge) MarkStopped() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.stopped = true
+	b.mu.Unlock()
+}
+
+// ModelResponded reports whether any model-produced event has streamed
+// through this bridge — i.e. whether the provider accepted the turn's
+// request (undelivered-message-retry). Safe to call concurrently with
+// Emit.
+func (b *StreamBridge) ModelResponded() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.modelResponded
 }
 
 // PartialState snapshots the accumulated text + tool-seen flag for the
@@ -238,9 +330,28 @@ func (b *StreamBridge) SeenToolCalls() []coreag.ToolCallRequest {
 }
 
 // Close satisfies agentgraph.StreamSink. Emits a terminal
-// llm:stream-closed payload exactly once. The chat runner's terminal
-// path calls Close after the kernel run exits so the chat surface
-// always sees a close signal.
+// llm:stream-closed payload exactly once, sharing the same idempotency
+// flag as EmitClosedFull.
+//
+// CHAT-13 (chat-turn-integrity-01PMZ606 WP13): this used to hardcode
+// Reason: "completed" unconditionally. Close() carries no information
+// about whether the turn actually succeeded — the interface contract
+// (agentgraph.StreamSink) gives it no arguments — so claiming
+// "completed" was a guess dressed as a fact. Nothing in production
+// calls Close() today; the chat runner's terminal path always goes
+// through EmitClosed / EmitClosedFull with the real reason instead
+// (chat_runner.go:1352, :1744-ish). But Close() and EmitClosedFull
+// share the SAME `closed` flag and idempotency ("subsequent calls are
+// no-ops"): if a future kernel path ever called the generic
+// agentgraph.StreamSink.Close() directly — which its own interface doc
+// says is expected — arriving BEFORE the runner's EmitClosedFull, the
+// old "completed" would have both lied about a failed turn AND
+// silently suppressed the runner's real close payload (EmitClosedFull
+// would see b.closed already true and no-op). Reporting
+// StreamClosedReasonUnknown instead of "completed" removes the lie;
+// the frontend's useSession.ts already treats any non-"completed"
+// reason as "not a clean finish" (commitStreamingMoves), so this does
+// not require a frontend change.
 func (b *StreamBridge) Close() {
 	if b == nil || b.broker == nil {
 		return
@@ -255,7 +366,7 @@ func (b *StreamBridge) Close() {
 	b.broker.Emit("llm:stream-closed", StreamClosedPayload{
 		SubID:     b.subID,
 		SessionID: b.sessionID,
-		Reason:    "completed",
+		Reason:    StreamClosedReasonUnknown,
 	})
 }
 
@@ -278,6 +389,11 @@ type StreamClosed struct {
 	PartialFailureKind string
 	PartialRecoverable bool
 	ErrorKind          string
+	// TurnSpanID, Delivered and Failure carry the delivery outcome
+	// (undelivered-message-retry) — see StreamClosedPayload.
+	TurnSpanID string
+	Delivered  bool
+	Failure    corellm.RunFailure
 }
 
 // EmitClosedFull emits a terminal close described by c. EmitClosed and
@@ -303,6 +419,14 @@ func (b *StreamBridge) EmitClosedFull(c StreamClosed) {
 		PartialFailureKind: c.PartialFailureKind,
 		PartialRecoverable: c.PartialRecoverable,
 		ErrorKind:          c.ErrorKind,
+		TurnSpanID:         c.TurnSpanID,
+		Delivered:          c.Delivered,
+		FailureClass:       string(c.Failure.Class),
+		FailureCode:        c.Failure.Code,
+		FailureStatus:      c.Failure.Status,
+		FailureProvider:    c.Failure.Provider,
+		FailureSummary:     c.Failure.Summary,
+		FailureMessage:     c.Failure.Message,
 	})
 }
 

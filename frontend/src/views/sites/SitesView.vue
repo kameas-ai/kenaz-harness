@@ -15,7 +15,7 @@
 import { onMounted, onBeforeUnmount, ref } from 'vue';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import type { SiteSummary, DeployProgressEvent } from '@/lib/types';
+import type { SiteSummary, DeployProgressEvent, SiteEnvEntry } from '@/lib/types';
 
 const client = useHarnessClient();
 
@@ -124,6 +124,68 @@ async function openLogs(site: string) {
 function closeLogs() {
   logsModalSite.value = null;
   logsContent.value = null;
+}
+
+// ── env vars modal (fleet-enforcement-truth-01PMZ505 WP09) ─────────────────
+//
+// Values are write-only: Sites_EnvList never returns a value (only names +
+// metadata), and the form field below is cleared immediately after a
+// successful Sites_EnvSet call — this component never holds a submitted
+// value in state past that point.
+const envModalSite = ref<string | null>(null);
+const envEntries = ref<SiteEnvEntry[]>([]);
+const envLoading = ref(false);
+const envListError = ref<string | null>(null);
+const envDrafts = ref<Record<string, string>>({});
+const envSaving = ref<string | null>(null);
+const envSaveError = ref<string | null>(null);
+
+async function openEnvModal(site: string) {
+  envModalSite.value = site;
+  envEntries.value = [];
+  envListError.value = null;
+  envSaveError.value = null;
+  envDrafts.value = {};
+  envLoading.value = true;
+  try {
+    envEntries.value = await client.sites.envList(site);
+  } catch (e) {
+    envListError.value = e instanceof Error ? e.message : 'Failed to load env vars.';
+  } finally {
+    envLoading.value = false;
+  }
+}
+
+function closeEnvModal() {
+  envModalSite.value = null;
+  envEntries.value = [];
+  envDrafts.value = {};
+  envSaveError.value = null;
+}
+
+async function saveEnvVar(name: string) {
+  const site = envModalSite.value;
+  const value = envDrafts.value[name];
+  if (!site || !value) return;
+  envSaving.value = name;
+  envSaveError.value = null;
+  try {
+    await client.sites.envSet(site, { [name]: value });
+    // Clear the draft immediately — never hold a submitted value in state.
+    delete envDrafts.value[name];
+    envEntries.value = await client.sites.envList(site);
+  } catch (e) {
+    envSaveError.value = e instanceof Error ? e.message : `Failed to set ${name}.`;
+  } finally {
+    envSaving.value = null;
+  }
+}
+
+function envSetDisplay(entry: SiteEnvEntry): string {
+  if (!entry.setAt) return 'Not set';
+  const d = new Date(entry.setAt);
+  if (isNaN(d.getTime())) return 'Set';
+  return `Set ${relativeTime(entry.setAt)}`;
 }
 
 // ── delete confirm ────────────────────────────────────────────────────────
@@ -294,6 +356,14 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
+              class="text-[11px] text-ink-muted hover:text-ink"
+              :data-testid="`site-env-${s.name}`"
+              @click="openEnvModal(s.name)"
+            >
+              Env vars
+            </button>
+            <button
+              type="button"
               class="text-[11px] text-signal-danger hover:text-ink"
               :data-testid="`site-delete-${s.name}`"
               @click="promptDelete(s.name)"
@@ -411,6 +481,104 @@ onBeforeUnmount(() => {
           class="overflow-auto max-h-[50vh] font-mono text-[11px] text-ink bg-surface-1 rounded p-3 whitespace-pre-wrap"
           data-testid="logs-content"
         >{{ logsContent || '(no log output)' }}</pre>
+      </div>
+    </div>
+
+    <!-- env vars modal -->
+    <div
+      v-if="envModalSite !== null"
+      class="fixed inset-0 z-50 flex items-center justify-center"
+      role="dialog"
+      aria-modal="true"
+      data-testid="env-modal"
+    >
+      <div class="absolute inset-0 bg-modal-overlay" @click="closeEnvModal" />
+      <div
+        class="relative z-10 w-[520px] max-w-[90vw] rounded-md border border-border-muted bg-surface-0 shadow-lg p-5"
+      >
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-ui text-base font-semibold text-ink">
+            Env vars: {{ envModalSite }}
+          </h2>
+          <button
+            type="button"
+            class="font-ui text-xs text-ink-dim hover:text-ink"
+            data-testid="env-modal-close"
+            @click="closeEnvModal"
+          >
+            Close
+          </button>
+        </div>
+        <p class="text-[11px] text-ink-muted mb-3 max-w-prose">
+          Values are write-only — once set, they are never shown here again.
+          This is the only way secrets reach a site; they never ride in a
+          deploy manifest.
+        </p>
+        <div v-if="envLoading" class="text-sm text-ink-muted font-ui">
+          Loading env vars…
+        </div>
+        <div
+          v-else-if="envListError"
+          class="text-sm text-signal-danger font-ui"
+          role="alert"
+          data-testid="env-list-error"
+        >
+          {{ envListError }}
+        </div>
+        <div
+          v-else-if="envEntries.length === 0"
+          class="text-sm text-ink-muted font-ui"
+          data-testid="env-empty"
+        >
+          This site's manifest declares no environment variables.
+        </div>
+        <ul v-else class="space-y-3" data-testid="env-entries">
+          <li
+            v-for="entry in envEntries"
+            :key="entry.name"
+            class="space-y-1"
+            :data-testid="`env-entry-${entry.name}`"
+          >
+            <div class="flex items-baseline justify-between">
+              <span class="font-mono text-xs text-ink">{{ entry.name }}</span>
+              <span
+                class="text-[10px] uppercase tracking-[0.1em]"
+                :class="entry.setAt ? 'text-signal-ok' : 'text-ink-subtle'"
+                :data-testid="`env-status-${entry.name}`"
+              >{{ envSetDisplay(entry) }}</span>
+            </div>
+            <p v-if="entry.description" class="text-[11px] text-ink-muted">
+              {{ entry.description }}
+            </p>
+            <div class="flex gap-2">
+              <input
+                v-model="envDrafts[entry.name]"
+                type="password"
+                autocomplete="off"
+                class="flex-1 px-2 py-1 text-xs font-mono rounded border border-border-muted bg-surface-1 text-ink"
+                :placeholder="entry.setAt ? 'Replace value…' : 'Set value…'"
+                :data-testid="`env-input-${entry.name}`"
+              />
+              <button
+                type="button"
+                class="px-2 py-1 text-[11px] bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
+                :disabled="!envDrafts[entry.name] || envSaving === entry.name"
+                :data-testid="`env-save-${entry.name}`"
+                @click="saveEnvVar(entry.name)"
+              >
+                {{ envSaving === entry.name ? 'Saving…' : 'Save' }}
+              </button>
+            </div>
+          </li>
+        </ul>
+        <div
+          v-if="envSaveError"
+          class="mt-3 text-xs text-signal-danger font-ui"
+          role="alert"
+          data-testid="env-save-error"
+        >
+          {{ envSaveError }}
+        </div>
       </div>
     </div>
 

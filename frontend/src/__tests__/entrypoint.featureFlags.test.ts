@@ -38,14 +38,35 @@ vi.mock('@/App.vue', () => ({
 vi.mock('@/lib/harnessClient', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@/lib/harnessClient')>();
-  const make = () => ({
-    ...actual.createFakeHarnessClient(),
-    appInfo: async () => {
-      boot.calls += 1;
-      if (boot.result instanceof Error) throw boot.result;
-      return boot.result;
-    },
-  });
+  const make = () => {
+    const base = actual.createFakeHarnessClient();
+    return {
+      ...base,
+      appInfo: async () => {
+        boot.calls += 1;
+        if (boot.result instanceof Error) throw boot.result;
+        return boot.result;
+      },
+      // fleet-session-truth-01DOGF0A WP05: the gates read the fleet-session
+      // store, which boot also reads. Model the backend: the snapshot's
+      // capability set is the same poller set AppInfo carries.
+      settings: {
+        ...base.settings,
+        fleetSession: async () => {
+          if (boot.result instanceof Error) throw boot.result;
+          const caps = (boot.result as AppInfo | undefined)?.capabilities;
+          return actual.fakeFleetSession(
+            caps && Object.keys(caps).length > 0
+              ? {
+                  state: 'signed_in',
+                  capabilities: { tier: 'team', enabled: { ...caps }, fetchedAt: '', source: 'fleet' },
+                }
+              : { state: 'signed_out' },
+          );
+        },
+      },
+    };
+  };
   return {
     ...actual,
     // Both entry points get the same stub; each test imports only one.

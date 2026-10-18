@@ -95,7 +95,7 @@
 # CLASS: gated -- the affordance carries !isServedMode() (or, for
 # PermissionDialsPanel's pair, WP05's equivalent explicit-failure-state
 # pattern, noted per-entry). WP04's + WP07's own output.
-# 27 entries.
+# 31 entries.
 
 # Caller(s) ChatInput.vue carry the WP04 served-mode gate.
 "Attachments_AddMedia"
@@ -172,6 +172,27 @@
 # ServedUnsupportedError, hide the paperclip. Gated, not panelled.
 "Settings_GetMultimodalInput"
 
+# agentgraph-settings-linkage-01DOGF0D WP03/WP04, 2026-10-04. The turn ->
+# run mapping exists only to link transcript turns to
+# /agentgraph/run/:runId[/graph], which are Graph_* surfaces with no serve
+# dispatch (D-701). Its only caller (SessionsView.vue's turn-run fetch for
+# MessageList's TurnRunLinks strip) is gated on !isServedMode(), so a
+# served build neither calls it nor renders a link that would dead-end.
+# Ports together with Graph_MaterializeRun if Graph_* is ever served.
+"Sessions_TurnRuns"
+
+# settings-cleanup-01SETUX01 WP01, 2026-10-09. Moved here from
+# boundary-panelled: their old callers (LogsPanel.vue, MigrationDriftPanel.vue)
+# were deleted by owner ruling. The sole caller is now lib/settingsIssues.ts's
+# `database` issue provider, which is declared desktopOnly and skipped by
+# collectSettingsIssues() when isServedMode() is true -- so
+# SettingsIssuesBanner (mounted by SettingsShell, which served-mode routes
+# such as /providers DO render) never calls these in a served build. Pinned
+# by SettingsIssuesBanner.spec.ts's served-mode case.
+"Logs_Tail"
+"Storage_ApplyDriftFix"
+"Storage_GetMigrationDriftReport"
+
 # CLASS: boundary-panelled -- the only caller (or callers, ALL of them)
 # is/are inside a view that renders NotAvailableInServedMode. Grown by
 # WP03/WP05's panels; classified here by walking actual caller sites
@@ -181,7 +202,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 188 entries.
+# 186 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -189,13 +210,6 @@
 "ACP_ListTraces"
 "ACP_RevokePeer"
 "ACP_TrustPeer"
-
-# Caller(s) AgentsView.vue only reachable from a view that renders
-# NotAvailableInServedMode.
-"Agents_DeleteProfile"
-"Agents_ListProfiles"
-"Agents_LoadProfile"
-"Agents_SaveProfile"
 
 # Caller(s) GlobalContextPanel.vue, ProjectLandingPage.vue, SettingsView.vue
 # only reachable from a view that renders NotAvailableInServedMode.
@@ -219,16 +233,15 @@
 "Bundle_List"
 "Bundle_Remove"
 
-# Caller(s) CatalogPreviewDrawer.vue, MarketplaceView.vue span multiple views,
-# ALL of which are inaccessible in served mode (boundary-panelled and/or
-# unrouted and/or gated) -- no single caller reaches this in a served build via
-# any path.
-"Catalog_Install"
-
-# Caller(s) CatalogView.vue, MarketplaceView.vue span multiple views, ALL of
-# which are inaccessible in served mode (boundary-panelled and/or unrouted
-# and/or gated) -- no single caller reaches this in a served build via any path.
+# Caller(s) CapabilitySurface.vue only (the fleet-catalog browse folded in
+# from the deleted MarketplaceView.vue -- install-framework-01DOGF0B Phase 4
+# WP08, 2026-10-05), reachable only from ToolsView.vue, which renders
+# NotAvailableInServedMode. Catalog_Uninstall moved here from `unrouted`
+# (its old only caller, MarketplaceView, was the unrouted view; its new one
+# is boundary-panelled). Catalog_Install left this group for `unrouted`
+# (zero callers now -- see there).
 "Catalog_List"
+"Catalog_Uninstall"
 
 # Caller(s) CedarEditor.vue, PolicyView.vue only reachable from a view that
 # renders NotAvailableInServedMode.
@@ -283,10 +296,6 @@
 "Contexts_RootPath"
 "Contexts_Save"
 
-# views/settings/FleetTelemetryPanel.vue (nested under SettingsView.vue) --
-# caller confirmed by hand (multi-line client.fleet.getTelemetryConsent() chain
-# this mapper's single-line regex missed).
-"Fleet_GetTelemetryConsent"
 
 # Caller(s) RunView.vue only reachable from a view that renders
 # NotAvailableInServedMode. approval-node-01PMZC12 UNIT-3 added the verb;
@@ -333,13 +342,31 @@
 # NotAvailableInServedMode.
 "Hooks_DryRun"
 
-# Caller(s) HooksSettingsView.vue, KenazToolsPanel.vue only reachable from a
-# view that renders NotAvailableInServedMode.
+# Caller(s) HooksSettingsView.vue, MemoryCaptureToggle.vue only reachable
+# from a view that renders NotAvailableInServedMode.
 "Hooks_InstallStarterMemory"
 
-# Caller(s) KenazToolsPanel.vue only reachable from a view that renders
-# NotAvailableInServedMode.
+# Caller(s) MemoryCaptureToggle.vue (inside MemoryView.vue, Knowledge ›
+# Learned) only reachable from a view that renders NotAvailableInServedMode.
+# Moved from KenazToolsPanel.vue by knowledge-home-01DOGF0E WP03.
 "Hooks_RemoveStarterMemory"
+"Settings_SetMemory"
+
+# Caller(s) CapabilitySurface.vue + its plugins (install-framework-01DOGF0B
+# WP04, 2026-10-05) only reachable from ToolsView.vue, which renders
+# NotAvailableInServedMode. Phase 4 WP09 (2026-10-05) decided the served
+# disposition with the rail entry: the "Capabilities" entry stays in the
+# served rail and lands on that boundary panel (as does a /marketplace
+# bookmark -- main-served.ts redirects it to /tools); the surface stays
+# desktop-only until a served port of the Capability_* family is requested.
+"Capability_Install"
+"Capability_List"
+"Capability_Uninstall"
+"Capability_Update"
+
+# Caller(s) BuiltinToolsPlugin (views/capabilities/plugins/builtinTools.ts,
+# install-framework-01DOGF0B WP04; formerly KenazToolsPanel.vue) only
+# reachable from ToolsView.vue, which renders NotAvailableInServedMode.
 "Settings_GetBash"
 "Settings_GetFSReadEnabled"
 "Settings_GetFSWriteEnabled"
@@ -350,7 +377,6 @@
 "Settings_SetBash"
 "Settings_SetFSReadEnabled"
 "Settings_SetFSWriteEnabled"
-"Settings_SetMemory"
 "Settings_SetSaveArtifactEnabled"
 "Settings_SetTodoEnabled"
 "Settings_SetWebFetchEnabled"
@@ -362,10 +388,6 @@
 "LLM_ListFallbackChains"
 "LLM_LoadChain"
 "LLM_SaveChain"
-
-# Caller(s) LogsPanel.vue only reachable from a view that renders
-# NotAvailableInServedMode.
-"Logs_Tail"
 
 # Caller(s) PasteConfigTab.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -388,6 +410,7 @@
 "Settings_GetChatCustomInstructions"
 "Settings_GetEmbedderConfig"
 "Settings_GetMaxGeneratedImageBytes"
+"Settings_GetRiskRaterBenchmark"
 "Settings_GetShowPerMessageTokenMeter"
 "Settings_SetAutoCaptureGeneratedImages"
 "Settings_SetAutoResumeOnKeyRotation"
@@ -436,11 +459,17 @@
 "Projects_SetAutonomy"
 
 # Called through scheduledChatClient.ts, a separate bridge module (not part of
-# HarnessClient/harnessClient.ts). All UI callers are
-# views/settings/scheduledchat/* (nested under SettingsView.vue) and
-# views/workflows/* (RunsHistoryTab.vue, ScheduledInbox.vue, WorkflowsView.vue
-# itself), both boundary-panelled.
+# HarnessClient/harnessClient.ts). All UI callers are views/workflows/*
+# (scheduledchat/* via SchedulesTab.vue, RunsHistoryTab.vue,
+# ScheduledInbox.vue, WorkflowsView.vue itself), boundary-panelled by
+# WorkflowsView. (Moved out of Settings by nav-ia-sweep-01DOGF0F, 2026-10-04.)
 "ScheduledChat_Create"
+# ScheduledChat_DefaultModel -- dogfood 2026-10-08 round 2 (dated
+# 2026-10-08, owner: alec): the New-schedule form's "active default
+# resolves to" hint. Same family, same posture as its siblings; its only
+# caller is ScheduledChatFormModal.vue under the boundary-panelled
+# WorkflowsView. Ports with the ScheduledChat_* family or not at all.
+"ScheduledChat_DefaultModel"
 "ScheduledChat_Delete"
 "ScheduledChat_Get"
 "ScheduledChat_History"
@@ -500,18 +529,19 @@
 "Slashcmd_SkillList"
 "Slashcmd_SkillRenameLocalTrigger"
 
-# Caller(s) MarketplaceView.vue, SkillsPanel.vue span multiple views, ALL of
-# which are inaccessible in served mode (boundary-panelled and/or unrouted
-# and/or gated) -- no single caller reaches this in a served build via any path.
+# Caller(s) SkillsPanel.vue only (MarketplaceView.vue, the other caller, was
+# deleted by install-framework-01DOGF0B Phase 4 WP08, 2026-10-05), reachable
+# only from SettingsView, which renders NotAvailableInServedMode.
 "Slashcmd_SkillUninstall"
-
-# Caller(s) MigrationDriftPanel.vue only reachable from a view that renders
-# NotAvailableInServedMode.
-"Storage_ApplyDriftFix"
-"Storage_GetMigrationDriftReport"
 
 # Caller(s) SyncPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
+# Sync_ConfirmUploads added 2026-10-15 (provider-credentials-client-01PCCLI01
+# A2, owner ruling H1). Its other caller, the settings-sync-confirm provider
+# in lib/settingsIssues.ts, is desktopOnly, so the banner skips it in a
+# served build. Same disposition as the rest of the Sync_* family; owner:
+# whichever mission ports Sync_* to served mode deletes the whole block.
+"Sync_ConfirmUploads"
 "Sync_ForcePull"
 "Sync_ForcePush"
 "Sync_PendingMCPSecrets"
@@ -526,15 +556,19 @@
 
 # Called through workflowsClient.ts, a separate bridge module (not part of
 # HarnessClient/harnessClient.ts). All UI callers are views/workflows/*
-# (WorkflowsView.vue itself, CatalogView.vue, CatalogPreviewDrawer.vue,
-# RunsHistoryTab.vue, ScheduledInbox.vue, WorkflowEditor.vue,
-# SimpleTemplateEditor.vue) and components/workflows/WorkflowGraphEditor.vue
-# plus views/settings/WorkflowsSettingsPanel.vue (nested under SettingsView.vue)
-# -- all boundary-panelled.
+# (WorkflowsView.vue itself, RunsHistoryTab.vue, ScheduledInbox.vue,
+# WorkflowEditor.vue, SimpleTemplateEditor.vue,
+# WorkflowSchedulesSection.vue), components/workflows/WorkflowGraphEditor.vue
+# and views/capabilities/plugins/WorkflowDetail.vue (Workflows_CatalogGet /
+# _CatalogInstall, the "Add capability" workflow plugin) -- all
+# boundary-panelled. (views/settings/WorkflowsSettingsPanel.vue was deleted
+# by nav-ia-sweep-01DOGF0F, 2026-10-04; CatalogView.vue /
+# CatalogPreviewDrawer.vue and the Workflows_CatalogList binding by
+# install-framework-01DOGF0B WP05, 2026-10-05 — Capability_List is the live
+# substitute.)
 "Workflows_CancelRun"
 "Workflows_CatalogGet"
 "Workflows_CatalogInstall"
-"Workflows_CatalogList"
 "Workflows_Delete"
 "Workflows_Get"
 "Workflows_List"
@@ -664,9 +698,17 @@
 # not register.
 "Catalog_Publish"
 
-# Caller(s) MarketplaceView.vue only reachable from a route main-served.ts does
-# not register.
-"Catalog_Uninstall"
+# NO caller anywhere in EITHER build (RAN: zero hits for catalog.install( and
+# skillInstall( outside __tests__, 2026-10-05). The only caller of both was
+# MarketplaceView.vue, deleted by install-framework-01DOGF0B Phase 4 WP08
+# when its catalog browse folded into the Capabilities surface: catalog
+# skills install through Capability_Install, and bundle / agent_pack Install
+# is disabled-with-reason there (no call). Kept, not deleted: Catalog_Install
+# is the backend refusal (defence in depth) the Phase 3 bundle / agent_pack
+# providers replace, and Slashcmd_SkillInstall is a framework-routed
+# per-kind binding -- both dispositions are recorded in docs/unwired-ledger.md
+# (install-framework Phase 4 entry). Vacuously unrouted.
+"Catalog_Install"
 "Slashcmd_SkillInstall"
 
 # A-14 orphan binding (WP09 research/a14-served-dispositions.md): zero TS client
@@ -739,7 +781,7 @@
 # TRANSPORT superseded by a different served-mode mechanism providing the
 # identical user-facing behaviour (Sessions_StartStream/StopStream vs the
 # Sessions_Stream WebSocket) -- noted per-entry which applies.
-# 13 entries.
+# 18 entries.
 
 # lib/eventLog.ts calls this exclusively via the raw window.go.rpc.Bindings
 # bridge (bypassing harnessClient.ts's overlay entirely) and explicitly no-ops
@@ -786,6 +828,20 @@
 "Update_Status"
 "Update_UnskipVersion"
 
+# laya-advisors-01LAYA001 WP13 (2026-09-30): the local ML engine install
+# surface. The engine is a notarized macOS arm64 .dmg mounted with hdiutil
+# and run as a detached process on the operator's own machine — a served
+# harness runs on a VM with neither, so there is nothing for a served
+# dispatch case to drive. SettingsView's Recommendations panel gates on
+# isServedMode() and renders an honest "runs in the desktop app" note
+# instead of a dead Enable button (RecommendationsPanel.vue; mounted-view
+# proof in RecommendationsPanel.spec.ts). Capability class, not a gap.
+"Sidecar_Enable"
+"Sidecar_Repair"
+"Sidecar_Status"
+"Sidecar_Uninstall"
+"Sidecar_Update"
+
 
 # CLASS: untriaged -- dated 2026-08-21, owner named per entry (alec unless
 # noted). This is NOT a repeat of WP02's bulk note: every group below
@@ -796,7 +852,7 @@
 # genuine escalation. This class must shrink release over release (spec
 # AC-717); the next sweep should re-walk these against the tree it finds,
 # not assume this list still holds.
-# 78 entries.
+# 80 entries.
 
 # Reachable from the LIVE routed chat surface (MarkdownBlock.vue /
 # CodeBlock.vue's "save as artifact" + artifact-chip flow, and SessionsView.vue
@@ -851,7 +907,6 @@
 "ContextBootstrap_Health"
 "ContextBootstrap_Start"
 "Elicit_AnswerDeferred"
-"Fleet_SetTelemetryConsent"
 "LLM_ResumeAfterKeyRotation"
 "LLM_TestAndRotateKey"
 "LoadRoute"
@@ -876,8 +931,9 @@
 "Settings_FleetRefreshCapabilities"
 "Settings_FleetRefreshIdentity"
 "Settings_FleetSignIn"
+# 2026-10-04 fleet-session-truth-01DOGF0A review F1 — desktop-only-by-nature: the served session is owned by the host auth broker, so there is no served sign-in flow to cancel; the UserMenu Cancel renders only !isServedMode() and AccountPanel lives under SettingsView, which is boundary-panelled (NotAvailableInServedMode) in served mode. Owner: alec. (Settings_FleetSignedIn removed from this list the same day: binding deleted, Settings_FleetSession is the live substitute.)
+"Settings_FleetSignInCancel"
 "Settings_FleetSignOut"
-"Settings_FleetSignedIn"
 "Settings_Get"
 "Settings_GetAutoResumeOnKeyRotation"
 "Settings_GetMemory"
@@ -908,6 +964,11 @@
 "Handoff_Inbox"
 "Handoff_ListTeam"
 "Handoff_Share"
+# Added 2026-10-07 (device-keys-handoff-01DEVKH01 WP06), same class and
+# reasoning as the three above: reached from ShareSessionDialog.vue (device
+# fingerprints) and the SessionsView inbox panel (dismiss). Owner: alec.
+"Handoff_Delete"
+"Handoff_RecipientDevices"
 
 # MemoryCaptureRatePill.vue polls this every 5s unconditionally from
 # LegendBar/shell chrome, with no isServedMode() check. Unlike MemoryBadge it is
@@ -1029,3 +1090,335 @@
 "Planmode_Approve"
 "Planmode_Discard"
 "Planmode_Edit"
+
+# Still CLASS: untriaged (see the header above) — new binding,
+# chat-turn-integrity-01PMZ606 WP12 (owner ruling X-7 / CK-08):
+# CompactionOverhead reads the previously-unread
+# compactionLLM.Overhead() / compactionAudit.Recent() running tally and
+# feeds the SessionsView.vue compaction-overhead header row. Same live,
+# served-routed chat surface as the Planmode_* trio directly above (no
+# NotAvailableInServedMode guard on SessionsView), so it needs the same
+# port-or-gate call — deliberately NOT made here. WP12's spec (spec.md §4
+# Non-goals) scopes "Touching core/serve/**" out of this mission by name:
+# "Served-mode chat findings belong to served-mode-is-a-real-mode-01PMZ707."
+# Dated 2026-08-29. Owner: alec.
+"CompactionOverhead"
+
+# CLASS: boundary-panelled -- release/v0.78.0 integration sweep,
+# 2026-09-11.
+# 2 entries.
+#
+# MCP_SetToolPolicy / MCP_ListToolPolicies were added by
+# trust-surfaces-that-fire-01PMZ202 WP24 (finding CHAT-05;
+# core/rpc/bindings.go:552-573) as the writer/reader for the static MCP
+# tool-permission source (<DataDir>/mcp_servers.json). WP24's tasks.md
+# entry does not mention served mode at all -- the spec is silent on this
+# binding's served-mode disposition, so this is not a cited mission
+# ruling, it is this sweep's own read of the only caller.
+#
+# Sole caller is frontend/src/views/tools/ToolsView.vue (client.mcp.
+# listToolPolicies() / setToolPolicy(), :52 and :68). The ENTIRE view is
+# guarded: ToolsView.vue:105 `<NotAvailableInServedMode v-if="servedMode"
+# feature="Tools" .../>` with a `<div v-else>` wrapping every control,
+# including the per-server policy <select> that calls setToolPolicy. A
+# served user cannot reach either RPC through any rendered affordance.
+#
+# FIXED 2026-09-11 (test-honesty-trio #66): onMounted() called refresh()
+# and refreshPolicies() (which calls listToolPolicies()) unconditionally
+# -- the v-if guard was template-only and did not gate the lifecycle
+# hook, so every served-mode /tools visit fired one unservable
+# MCP_ListToolPolicies call (error caught, assigned to policyError,
+# never rendered since the v-else branch isn't mounted -- no visible
+# breakage, but the "the panel blocks the UI" half of the class
+# justification below was not yet true of the CALL). onMounted() now
+# starts with `if (servedMode.value) return;` before either fetch
+# (ToolsView.vue), so a served build issues neither MCP_ListToolPolicies
+# nor MCP_ListServers. Regression-pinned by
+# frontend/src/views/tools/__tests__/ToolsView.test.ts's
+# "does not call listServers or listToolPolicies when served" case.
+# setToolPolicy was never reachable from onMounted (only from the
+# guarded v-else branch's onPolicyChange) and remains so -- boundary-
+# panelled was and is the honest class for both entries; this note
+# updates the evidence, not the classification.
+"MCP_ListToolPolicies"
+"MCP_SetToolPolicy"
+
+# CLASS: untriaged -- release/v0.78.0 integration sweep, 2026-09-11.
+# 4 entries.
+#
+# Four Subagent_* control verbs added by
+# subagent-control-and-background-tasks-01PMZB11 UNIT-8 (PRs #331 abort/
+# steer, #334 pause/resume; core/rpc/bindings.go:2570-2607). The mission's
+# own spec.md §7 Non-goals states this in terms, not by omission:
+# "Served-mode parity for Tasks_* or the control verbs. Zero Tasks_ and
+# zero Graph_ entries exist in core/serve/methods.go; under E-1 each new
+# binding needs a served answer, and this mission's answer is a recorded
+# boundary decision in UNIT-12, not a dispatch table entry. Escalated as
+# E-003." Spec.md:697-703 (escalation E-003) names the blocker precisely:
+# "do the background-task and sub-agent surfaces get served dispatch, or a
+# boundary panel? ... served-mode-is-a-real-mode-01PMZ707 is the mission
+# that owns the answer; this mission must not invent a third mechanism."
+#
+# Verified, not assumed: `grep -c 'case "Subagent_' core/serve/server.go`
+# and `core/serve/methods.go` both confirm zero Subagent_* dispatch cases,
+# and `go build -tags serve ./core/...` exits 0 — this is an honest
+# compile-time absence (no route exists to fail at), not a case that
+# silently no-ops at runtime.
+#
+# Blocker: served-mode-is-a-real-mode-01PMZ707's UNIT-12 boundary decision
+# (port vs. boundary panel) for Tasks_*/Subagent_* control surfaces —
+# not yet specced as of this release. Dated 2026-09-11. Owner: alec.
+# Delete this entry (or convert to gated/boundary-panelled) the moment
+# UNIT-12 lands.
+"Subagent_Abort"
+"Subagent_Pause"
+"Subagent_Resume"
+"Subagent_Steer"
+
+# CLASS: untriaged -- model-settings-reach-the-model-01PMZ101 UNIT-6
+# (WP10/WP11), 2026-09-12.
+# 2 entries.
+#
+# Sessions_GetKnobsDefault / Sessions_SetKnobsDefault (core/rpc/
+# bindings.go) give SessionTunePanel.vue a real backend: the session-level
+# RequestKnobs override persisted to sessions.knobs_default (migration
+# sessions/0330-knobs) and merged onto every GenerationRequest.Knobs the
+# session issues. Same untriaged posture as CompactionOverhead above: a
+# live desktop chat-surface control with no NotAvailableInServedMode
+# guard on SessionsView, and this mission's spec (model-settings-reach-
+# the-model-01PMZ101) does not scope core/serve/** work in or out by
+# name the way 01PMZ707/01PMZB11 do above -- port-or-gate is a real open
+# question, deliberately not resolved here.
+#
+# Also true today, and load-bearing for whoever resolves the port
+# question: this worktree could not run `wails generate module` (see
+# CLAUDE.md tooling footguns; this session's dispatch forbade it
+# outright), so the two bindings exist only in core/rpc/bindings.go +
+# a hand-declared frontend/src/lib/harnessClient.ts WailsBindingsLike
+# entry, not yet in the generated frontend/wailsjs/go/rpc/Bindings.{js,d.ts}
+# — a desktop build cannot reach them yet either. Landing the served
+# route and regenerating wailsjs are two independent follow-ups; do not
+# conflate them.
+#
+# Blocker: served-mode-is-a-real-mode-01PMZ707's port-or-boundary-panel
+# ruling for this surface (not yet requested as of this entry). Dated
+# 2026-09-12. Owner: alec.
+"Sessions_GetKnobsDefault"
+"Sessions_SetKnobsDefault"
+
+# CLASS: untriaged -- release/v0.78.2 integration, 2026-09-13.
+# 7 entries.
+#
+# Seven new bindings across four families; each inherits its OWN FAMILY's
+# posture rather than a blanket call.
+#
+# All seven are new desktop bindings landed by this release whose OWN
+# FAMILY is already allowlisted here. The disposition below is per family,
+# not blanket: each new method takes the same posture as its siblings,
+# because a family half-ported would be worse than a family consistently
+# deferred.
+#
+# BlockedRequests_{ListPending,Grant,Dismiss} -- model-scheduled-jobs-
+# 01PMSJ01 WP07. The blocked-permission-request surface is the companion
+# to ScheduledChat_*, which has 8 entries above; the mission's own report
+# states the two new broker topics are absent from served mode's
+# passthroughTopics and dispatch switch "matching existing precedent
+# (scheduled-chat's own ScheduledChat_* bindings are absent from both
+# too)". Porting these three without porting ScheduledChat_* would give
+# served mode a way to SEE a blocked request and grant it, but no way to
+# re-run the scheduled job it blocked -- a worse surface than none.
+# Port them together with the ScheduledChat_* family or not at all.
+#
+# Catalog_Unpublish -- joins Catalog_{Install,List,Installed,Publish}
+# already here (5 entries). Publish is deferred; unpublish must not be
+# reachable where publish is not.
+#
+# Compliance_SkipToID -- joins Compliance_{ArchiveNow,SetRetention,
+# Status} (3 entries).
+#
+# Sites_{EnvList,EnvSet} -- join Sites_{Status,Delete,Deploy,List} (5
+# entries). EnvSet writes site environment values; it must not outrun the
+# Sites_* family's own port decision, and it is the most credential-
+# adjacent of the four, so a premature served route is the wrong risk to
+# take first.
+#
+# Blocker: served-mode-is-a-real-mode-01PMZ707's port-or-boundary-panel
+# ruling for each family, none of which has been requested. Dated
+# 2026-09-13. Owner: alec.
+"BlockedRequests_ListPending"
+"BlockedRequests_Grant"
+"BlockedRequests_Dismiss"
+"Catalog_Unpublish"
+"Compliance_SkipToID"
+"Sites_EnvList"
+"Sites_EnvSet"
+
+# CLASS: untriaged -- laya-advisors-01LAYA001 WP07, 2026-09-29.
+# 1 entries.
+#
+# Advice_Respond backs the advisor-seam chip's accept/dismiss buttons
+# (AdviceChip.vue) and the auto-act banner's "View branch" action
+# (AdviceAutoActedBanner.vue), both mounted in SessionsView.vue with no
+# NotAvailableInServedMode guard -- the chip and banner DO render in
+# served mode: TopicAdviceRecommendation/TopicAdviceAutoActed are in
+# core/serve/wsstream.go's passthroughTopics and delivery is verified end
+# to end (wsstream_advice_topic_test.go). Only the interactive round trip
+# is unported: harnessClient.ts's served overlay deliberately does NOT
+# override `advice.respond` the way ConfirmClient's served override does
+# for Confirm_Resolve/ResolveAlways/ApproveBatch/CancelBatch/ListPending
+# (all four have real serve dispatch cases, hence no entry here) --
+# createUnsupportedServedClient's reflection leaves it on the generic
+# ServedUnsupportedError path, so a served user who clicks accept/dismiss/
+# View branch gets an honest rejection today rather than a hang or a
+# silent no-op. Same shape as the Planmode_{Approve,Discard,Edit} trio
+# above: a live, served-routed chat-surface affordance whose action
+# buttons reject with ServedUnsupportedError, needing the same port-or-
+# gate call -- deliberately NOT made here; this WP's scope was the
+# desktop round trip end to end.
+#
+# Blocker: a served dispatch case for Advice_Respond (or a served-mode
+# gate on the two components' accept/dismiss/open handlers). Dated
+# 2026-09-29. Owner: alec.
+"Advice_Respond"
+
+# CLASS: desktop-only-by-nature -- memory-sync-01MEMSY01 WP08, 2026-10-07.
+# 3 entries.
+#
+# The learned-memory sync panel (MemorySyncPanel.vue) is mounted only in
+# SettingsView's Sync sub-tab, and SettingsView is boundary-panelled
+# (NotAvailableInServedMode) in served mode — the same disposition as the
+# Settings_Fleet* entries above. The served overlay spreads base.fleet, so a
+# served caller gets the honest ServedUnsupportedError, never a silent
+# no-op. The lane itself is a desktop-process background loop with its own
+# on-disk state under the profile's data dir.
+#
+# Blocker: a served settings surface (none exists for any Settings_Fleet*
+# panel). Dated 2026-10-07. Owner: alec.
+"Fleet_MemorySyncDisable"
+"Fleet_MemorySyncEnable"
+"Fleet_MemorySyncStatus"
+
+# CLASS: desktop-only-by-nature -- ml-producer-01MLPRD01 WP01, 2026-10-09.
+# 3 entries.
+#
+# The Cloud ML consent panel (CloudMLPanel.vue) is mounted only in
+# SettingsView's Sync sub-tab next to MemorySyncPanel, and SettingsView is
+# boundary-panelled (NotAvailableInServedMode) in served mode — the same
+# disposition as the Fleet_MemorySync* entries above (spec §12 A-9: no
+# served RPCs are added). The served overlay spreads base.fleet, so a served
+# caller gets the honest ServedUnsupportedError. The ML producer whose
+# consent this panel records is a desktop-process lane.
+#
+# Blocker: a served settings surface (none exists for any Settings_Fleet*
+# panel). Dated 2026-10-09. Owner: alec.
+"Fleet_MLAckNotice"
+"Fleet_MLStatus"
+"Fleet_SetWorkflowEventsOptIn"
+
+# CLASS: gated -- ml-producer-01MLPRD01 WP06, 2026-10-09.
+# 3 entries.
+#
+# The pending-approvals hub. Callers: lib/settingsIssues.ts's
+# `pending-approvals` issue provider, declared desktopOnly and skipped by
+# collectSettingsIssues() when isServedMode() is true (the same disposition
+# as the `database` provider's Storage_* entries above); the
+# PendingApprovalsModal it opens (reachable only from that provider's fix
+# button); and CloudMLPanel.vue's hub-notice Acknowledge, which sits in the
+# boundary-panelled Settings › Sync tab like the Fleet_ML* entries above. So
+# a served build never calls either. Spec §12 A-9: no served RPCs are added.
+#
+# Blocker: a served settings surface. Dated 2026-10-09. Owner: alec.
+"Fleet_ApproveItem"
+"Fleet_PendingApprovals"
+# Fleet_DismissItemLocally: the same modal's "Not now" (legal, kameas-ai-11,
+# 2026-10-16: a decline is never recorded, so it is a local-only memory).
+# Same surface, same blocker. Dated 2026-10-16. Owner: alec.
+"Fleet_DismissItemLocally"
+
+# CLASS: gated -- tool-context-budget-01TCBUD01 WP06, 2026-10-09.
+# 7 entries.
+#
+# The tool-exposure bindings the composer Tools menu calls
+# (components/chat/ToolsMenu.vue, spec §2.2/§2.6). WP02/WP03 landed them
+# untriaged pending the surface. The menu sits in the served chat surface
+# (SessionsView's status bar), so — per the 2026-08-22 correction above
+# (Settings_GetMultimodalInput: ChatInput.vue IS the served chat surface,
+# so its callers are gated, not panelled) — these are gated: with
+# servedMode set the menu renders NotAvailableInServedMode in place of its
+# panel and refresh() returns before any call, and SessionsView passes
+# servedMode and hides the request_too_large "Open tools" remedy and skips
+# its Tools_SchemaCosts read in served mode. The same bindings' other
+# callers (views/tools/ToolExposurePanel.vue under ToolsView's boundary
+# panel; ScheduledChatFormModal.vue under the boundary-panelled
+# WorkflowsView) are inaccessible in served mode. Tools_SchemaCosts is
+# WP06's one new read binding. Ports together if the exposure family is
+# ever served.
+"Projects_GetToolExposure"
+"Projects_SetToolExposure"
+"Sessions_GetToolExposure"
+"Sessions_LoadTools"
+"Sessions_SetToolExposure"
+"Settings_GetToolExposure"
+"Tools_SchemaCosts"
+
+# CLASS: boundary-panelled -- tool-context-budget-01TCBUD01 WP06, 2026-10-09.
+# 1 entries.
+#
+# Settings_SetToolExposure: the user layer, budget and TTL writer. Its only
+# caller is views/tools/ToolExposurePanel.vue, mounted only by
+# views/tools/ToolsView.vue, which renders NotAvailableInServedMode.
+"Settings_SetToolExposure"
+
+# CLASS: gated -- llm-call-telemetry-01LLMTEL01 WP02, 2026-10-09.
+# 1 entries.
+#
+# Sessions_ModelCalls: the read-only "Model calls" list of the local
+# model-call store. Its only caller is
+# components/chat/ModelCallsDisclosure.vue, mounted in SessionsView's
+# status bar next to the cost readout — the served chat surface — so it is
+# gated, not panelled (the ToolsMenu precedent above): with servedMode set
+# the disclosure renders NotAvailableInServedMode and load() returns
+# before any call (ModelCallsDisclosure.test.ts pins "fetches nothing").
+# The store lives on the host's Kenaz; ports if the served build ever
+# reads it.
+"Sessions_ModelCalls"
+
+# CLASS: boundary-panelled -- llm-call-telemetry-01LLMTEL01 WP02, 2026-10-09.
+# 2 entries.
+#
+# Settings_GetModelCallTelemetry / Settings_SetModelCallTelemetry: the
+# stats-pull, retention and "Share model-call telemetry with Fleet"
+# settings. Their only caller is views/settings/ModelCallTelemetryPanel.vue,
+# mounted only in SettingsView's desktop SettingsShell (the Account pane);
+# in served mode SettingsView renders FleetTelemetryPanel, AgentsView and
+# NotAvailableInServedMode instead.
+"Settings_GetModelCallTelemetry"
+"Settings_SetModelCallTelemetry"
+
+# CLASS: desktop-only-by-nature -- settings-sync review round, 2026-10-16.
+# 1 entries.
+#
+# Settings_ResetUnreadable: the "Reset settings" recovery for an unreadable
+# settings.json (moves it to settings.json.corrupt-<UTC timestamp>, writes
+# the defaults). The file is the desktop host's own; a served client has no
+# business resetting it. Its only caller is the "Settings sync is paused"
+# issue in lib/settingsIssues.ts, whose provider is desktopOnly, so the
+# banner skips it in a served build. Owner: alec; this line goes when the
+# Sync_* family ports to served mode and brings the recovery with it.
+"Settings_ResetUnreadable"
+
+# CLASS: boundary-panelled -- ml-producer-01MLPRD01 WP11, 2026-10-16.
+# 3 entries.
+#
+# Settings_GetMLLocalActivity / Settings_SetMLLocalActivityRetention /
+# Settings_DeleteMLLocalActivity: the "Local activity" block of the Cloud ML
+# panel (local activity store status, retention, "Delete local activity
+# data"). Their only caller is views/settings/CloudMLPanel.vue, mounted
+# only in SettingsView's Sync sub-tab, which is boundary-panelled
+# (NotAvailableInServedMode) in served mode — the Fleet_ML* disposition
+# above. The store is the desktop process's own file.
+#
+# Blocker: a served settings surface. Dated 2026-10-16. Owner: alec.
+"Settings_DeleteMLLocalActivity"
+"Settings_GetMLLocalActivity"
+"Settings_SetMLLocalActivityRetention"

@@ -90,7 +90,8 @@ type ForkOptions struct {
 	// Kind defaults to BranchKindFork.
 	Kind BranchKind
 	// CreationPath discriminates how the branch was created:
-	// "edit_resend" | "explicit" | "unknown". Defaults to "unknown".
+	// "explicit" | "edit_resend" | "unknown" | "auto_act" (advice hook)
+	// | "model_tool" (kenaz__fork_conversation). Defaults to "unknown".
 	// (branching-ux-polish-01KQ8TD7 WP01)
 	CreationPath string
 	// Subagent-enriched fields (branch-as-subagent-recommendation WP04).
@@ -105,7 +106,8 @@ type ForkOptions struct {
 // records a branches row pointing at it. Returns the populated Branch
 // + the child session record. Callers (Bundle B kernel) write the
 // compacted handoff prompt as the first message on the returned child
-// session.
+// session. The child inherits the parent's tool-exposure override and
+// activated tool set (session.Manager.InheritToolExposure).
 //
 // Requires the Manager to have been constructed with a non-nil
 // session.Manager. CreateRaw is the alternate entry point for callers
@@ -128,6 +130,9 @@ func (m *Manager) CreateBranch(ctx context.Context, opts ForkOptions) (Branch, s
 	child, err := m.sessions.CreateInProject(ctx, childName, parent.ProjectID)
 	if err != nil {
 		return Branch{}, session.Record{}, fmt.Errorf("conversation: create child session: %w", err)
+	}
+	if err := m.sessions.InheritToolExposure(ctx, opts.ParentSessionID, child.ID); err != nil {
+		return Branch{}, session.Record{}, fmt.Errorf("conversation: inherit tool exposure: %w", err)
 	}
 
 	id, err := m.idGen()
@@ -253,11 +258,17 @@ type ForkAtMessageOptions struct {
 	// ProviderID + ModelID for the branch row.
 	ProviderID string
 	ModelID    string
+	// CreationPath is recorded on the branch row. Defaults to "explicit"
+	// (the "Branch from this turn" menu item) when empty; the model's
+	// kenaz__fork_conversation tool passes "model_tool".
+	CreationPath string
 }
 
 // CreateBranchAtMessage allocates a child session whose message history
-// is exactly the parent's messages [0..ParentMessageID] (inclusive).
-// Returns the populated Branch + the child session.Record.
+// is exactly the parent's messages [0..ParentMessageID] (inclusive) and
+// whose tool-exposure override and activated tool set are the parent's
+// (session.Manager.InheritToolExposure). Returns the populated Branch
+// + the child session.Record.
 //
 // Requires the Manager to have been constructed with a non-nil session.Manager.
 func (m *Manager) CreateBranchAtMessage(ctx context.Context, opts ForkAtMessageOptions) (Branch, session.Record, error) {
@@ -310,14 +321,16 @@ func (m *Manager) CreateBranchAtMessage(ctx context.Context, opts ForkAtMessageO
 		return Branch{}, session.Record{}, fmt.Errorf("conversation: create child session: %w", err)
 	}
 
-	// Replay messages into child.
-	for _, msg := range slice {
-		if _, err := m.sessions.AppendMessage(ctx, child.ID, session.Message{
-			Role:    msg.Role,
-			Content: msg.Content,
-		}); err != nil {
-			return Branch{}, session.Record{}, fmt.Errorf("conversation: replay message: %w", err)
-		}
+	// Replay messages into child FAITHFULLY (tool calls, move metadata,
+	// model-layer tool args, content blocks) through the session package's
+	// transcript replay seam. A Role+Content-only copy used to turn every
+	// tool move into an id-less role:"tool" row — a provider 400 on the
+	// branch's first turn. See session.Manager.ReplayTranscript.
+	if _, err := m.sessions.ReplayTranscript(ctx, child.ID, slice); err != nil {
+		return Branch{}, session.Record{}, fmt.Errorf("conversation: replay message: %w", err)
+	}
+	if err := m.sessions.InheritToolExposure(ctx, opts.ParentSessionID, child.ID); err != nil {
+		return Branch{}, session.Record{}, fmt.Errorf("conversation: inherit tool exposure: %w", err)
 	}
 
 	// Create branch row.
@@ -326,6 +339,10 @@ func (m *Manager) CreateBranchAtMessage(ctx context.Context, opts ForkAtMessageO
 		return Branch{}, session.Record{}, fmt.Errorf("conversation: id gen: %w", err)
 	}
 	now := m.now()
+	creationPath := strings.TrimSpace(opts.CreationPath)
+	if creationPath == "" {
+		creationPath = "explicit"
+	}
 	br := Branch{
 		ID:                 id,
 		ParentSessionID:    opts.ParentSessionID,
@@ -337,7 +354,7 @@ func (m *Manager) CreateBranchAtMessage(ctx context.Context, opts ForkAtMessageO
 		Title:              opts.Title,
 		ParentMessageID:    opts.ParentMessageID,
 		BranchTitle:        opts.Title,
-		CreationPath:       "explicit",
+		CreationPath:       creationPath,
 		ParentSessionTitle: parent.Name,
 		CreatedAt:          now,
 		UpdatedAt:          now,

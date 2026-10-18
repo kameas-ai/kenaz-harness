@@ -17,6 +17,7 @@ package agentgraph_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -487,5 +488,80 @@ func TestSeamFanout_Attachment_ResolverCalled(t *testing.T) {
 	}
 	if block.MIME != "image/png" {
 		t.Errorf("block.MIME = %q, want image/png", block.MIME)
+	}
+}
+
+// ---- approval kind ----
+
+// TestSeamFanout_Approval_ParksThenResolvesOnAskBus is
+// approval-node-01PMZC12 FR-013/AC-12: the executor's own testdata
+// fixture (testdata/seam_fanout/approval.yaml) claims specific
+// behaviour, and until now nothing drove the kind through a real
+// kernel to check the claim was true — the completeness gate
+// (TestSeamFanout_AllKindsHaveFixture) only checks a fixture EXISTS,
+// and the fixture's own `Required` field is parsed and never read (the
+// exact CLAUDE.md blind-spot-#2 shape: "a fixture that documents the
+// layer under test instead of exercising it").
+//
+// This test drives both fires: the first registers the pending
+// decision on AskBus.Pending and parks the run (ErrPaused, no port
+// written — the load-bearing half of §5.1); the second, with a
+// verdict pre-loaded on the SAME AskBus fake, resolves through
+// AskBus.LookupAnswer and writes exactly one output port. That is
+// "Required: true" for AskBus.Pending made real, and it is also this
+// kind's convergence exerciser (see the marker below) — the
+// `check-agentgraph-convergence.sh` I3 anti-launder rules require the
+// file to contain `NewKernel` and `.Run(` (true here — two fires) and
+// that no shipped graph/library/activity YAML also declares
+// `kind: approval` (true as of this commit; §1.5 of the mission spec).
+//
+// convergence:exercised approval
+func TestSeamFanout_Approval_ParksThenResolvesOnAskBus(t *testing.T) {
+	t.Parallel()
+	g := buildOneNodeGraph("a1", agentgraph.NodeKindApproval, agentgraph.ApprovalAttrs{
+		ApproverRole: "user",
+		Prompt:       "Ship it?",
+	})
+	env, rb := newRecorderEnv(g, "sess-approval")
+	k := agentgraph.NewKernel()
+
+	// First fire: registers on AskBus.Pending and parks. No output port
+	// may be written — a park that pre-writes a port is the same
+	// fabrication with a delay (spec.md §5.1).
+	err := k.Run(context.Background(), env)
+	if !errors.Is(err, agentgraph.ErrPaused) {
+		t.Fatalf("first fire: Run err = %v, want %v", err, agentgraph.ErrPaused)
+	}
+	rb.Ask.RequirePendingQuestion(t, "Ship it?")
+	outputs := env.State.Outputs("a1")
+	if _, ok := outputs["approved"]; ok {
+		t.Errorf("first fire must not write 'approved'; outputs=%+v", outputs)
+	}
+	if _, ok := outputs["rejected"]; ok {
+		t.Errorf("first fire must not write 'rejected'; outputs=%+v", outputs)
+	}
+
+	// Second fire: pre-load a human verdict on the SAME AskBus fake and
+	// resume. The executor must read it back via LookupAnswer and write
+	// EXACTLY ONE port.
+	ans, err := agentgraph.EncodeApprovalAnswer(agentgraph.ApprovalVerdict{
+		Approved: true,
+		Approver: "user",
+	})
+	if err != nil {
+		t.Fatalf("EncodeApprovalAnswer: %v", err)
+	}
+	rb.Ask.SetAnswerValue(env.RunID, "a1", ans)
+
+	if err := k.Resume(context.Background(), env); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	rb.Ask.RequireLookupCalled(t)
+	outputs = env.State.Outputs("a1")
+	if _, ok := outputs["approved"]; !ok {
+		t.Errorf("resumed fire must write 'approved' for an Approved:true verdict; outputs=%+v", outputs)
+	}
+	if _, ok := outputs["rejected"]; ok {
+		t.Errorf("resumed fire must NOT write 'rejected' alongside 'approved'; outputs=%+v", outputs)
 	}
 }

@@ -252,6 +252,48 @@ func TestWebFetch_BlockList_RedirectToPrivate(t *testing.T) {
 	}
 }
 
+// TestWebFetch_HardenedClient_HappyPath proves the fix's pinned dialer
+// completes a genuine, full, successful HTTP round trip when the resolved
+// address passes validation — not just "does not error." It drives the
+// real *http.Client built by newHardenedClient (no HTTPClient override,
+// so the actual pinnedDialContext + net.DefaultResolver + *net.Dialer wiring
+// is exercised end to end), via the same SkipBlockList exemption
+// TestWebFetch_BlockList_RedirectToPrivate already relies on to reach its
+// loopback origin.
+func TestWebFetch_HardenedClient_HappyPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	tool := webfetch.New(webfetch.Options{SkipBlockList: true})
+	args := map[string]any{"url": srv.URL}
+	argsJSON, _ := json.Marshal(args)
+
+	raw, err := tool.Call(context.Background(), argsJSON)
+	if err != nil {
+		t.Fatalf("Call should not return a Go error, got %v", err)
+	}
+	var result struct {
+		Status  int    `json:"status"`
+		Body    string `json:"body"`
+		IsError bool   `json:"is_error"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected a successful round trip through the hardened client's pinned dialer, got error result: %+v", result)
+	}
+	if result.Status != http.StatusOK {
+		t.Errorf("status = %d, want 200", result.Status)
+	}
+	if result.Body != "ok" {
+		t.Errorf("body = %q, want %q", result.Body, "ok")
+	}
+}
+
 // TestWebFetch_CedarDenial_BlocksRequest verifies that a Cedar Deny on the
 // network gate blocks the request before any HTTP dispatch.
 func TestWebFetch_CedarDenial_BlocksRequest(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 	"github.com/kameas-ai/kenaz-harness/core/sessions/export"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 	"github.com/kameas-ai/kenaz-harness/core/usage"
 )
 
@@ -109,6 +110,15 @@ type managerAPI struct {
 	// session-level + tier-default chain still resolves correctly.
 	// (autonomy-dial-01KR3M2A WP03)
 	autonomyCtx AutonomyContextProvider
+	// toolLoader and exposureGuard back LoadTools and SetToolExposure's
+	// write guard (tool-context-budget-01TCBUD01). nil toolLoader makes
+	// LoadTools return ErrToolLoadingNotConfigured; nil exposureGuard
+	// checks nothing beyond validation.
+	toolLoader    ToolLoader
+	exposureGuard toolexposure.WriteGuard
+	// orgPins fills GetToolExposure's read-only Org projection; nil
+	// reports no organisation entries.
+	orgPins toolexposure.PinSource
 	// deleteHook is the optional per-session teardown hook wired by
 	// WithDeleteHookOpt; runs after a successful delete.
 	deleteHook func(sessionID string)
@@ -365,7 +375,28 @@ func (a *managerAPI) Get(ctx context.Context, id string) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
-	return recordToView(r), nil
+	out := recordToView(r)
+	// chat-turn-integrity-01PMZ606 WP11: rehydrate the per-turn usage
+	// snapshot on every read, not just on the live session.usage.updated
+	// broker event. GetLastUsage already existed and already read the
+	// persisted sessions.last_usage_json column (migration
+	// sessions/0322-last-usage-json) — nothing on this read path called
+	// it, so the composer footer and context-window meter reset to
+	// 0 tok · $0.0000 on every session reopen and every app restart. A
+	// lookup failure here must not fail the whole Get — the session
+	// itself was already resolved successfully above, so we degrade to
+	// "no usage data" (nil) rather than surface an error the caller has
+	// no session-integrity reason to see.
+	if u, uerr := a.mgr.GetLastUsage(ctx, id); uerr == nil && u != (session.LastUsage{}) {
+		out.LastUsage = &LastUsage{
+			PromptTokens:     u.PromptTokens,
+			CompletionTokens: u.CompletionTokens,
+			TotalTokens:      u.TotalTokens,
+			CostUSD:          u.CostUSD,
+			CostSource:       u.CostSource,
+		}
+	}
+	return out, nil
 }
 
 // Create implements SessionsAPI.
@@ -629,6 +660,7 @@ func messageToView(m session.Message) Message {
 	out.PromptTokens = m.PromptTokens
 	out.CompletionTokens = m.CompletionTokens
 	out.CostUSD = m.CostUSD
+	out.CachedTokens = m.CachedTokens
 	out.MessageCostSource = m.MessageCostSource
 	// Move metadata (model-moves-transcript-01PMCH01 WP01). Read through
 	// the accessors — the durable fields are unexported precisely so no
@@ -909,6 +941,18 @@ func (a *managerAPI) ClearTitle(ctx context.Context, id string) error {
 	return nil
 }
 
+// GetKnobsDefault implements SessionsAPI (model-settings-reach-the-model-
+// 01PMZ101 UNIT-6 / WP10).
+func (a *managerAPI) GetKnobsDefault(ctx context.Context, id string) (*SessionKnobs, error) {
+	return a.mgr.GetKnobsDefault(ctx, id)
+}
+
+// SetKnobsDefault implements SessionsAPI (model-settings-reach-the-model-
+// 01PMZ101 UNIT-6 / WP10).
+func (a *managerAPI) SetKnobsDefault(ctx context.Context, id string, knobs *SessionKnobs) error {
+	return a.mgr.SetKnobsDefault(ctx, id, knobs)
+}
+
 // WithUsageManager wires a usage.Manager into the sessions view so
 // GetUsage can return real aggregates (token-cost-telemetry WP03).
 // Safe to call at boot before any request arrives.
@@ -917,6 +961,38 @@ func WithUsageManager(api SessionsAPI, mgr usage.Manager) SessionsAPI {
 		m.usageMgr = mgr
 	}
 	return api
+}
+
+// TurnRuns implements SessionsAPI (agentgraph-settings-linkage-01DOGF0D
+// WP03): the persisted turn -> run mappings from session_turn_runs.
+func (a *managerAPI) TurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error) {
+	if sessionID == "" {
+		return nil, errors.New("rpc/sessions: TurnRuns: session id required")
+	}
+	rows, err := a.mgr.ListTurnRuns(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("rpc/sessions: TurnRuns: %w", err)
+	}
+	out := make([]TurnRun, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, TurnRun{
+			RunID:      r.RunID,
+			TurnSpanID: r.TurnSpanID,
+			GraphID:    r.GraphID,
+			SpecDigest: r.SpecDigest,
+			CreatedAt:  r.CreatedAt.UTC().Format(time.RFC3339Nano),
+
+			Outcome:         r.Outcome.Outcome,
+			Delivered:       r.Outcome.Delivered,
+			FailureClass:    r.Outcome.FailureClass,
+			FailureCode:     r.Outcome.FailureCode,
+			FailureStatus:   r.Outcome.FailureStatus,
+			FailureProvider: r.Outcome.FailureProvider,
+			FailureSummary:  r.Outcome.FailureSummary,
+			FailureMessage:  r.Outcome.FailureMessage,
+		})
+	}
+	return out, nil
 }
 
 // GetUsage implements SessionsAPI. Returns the per-session cumulative
@@ -932,7 +1008,7 @@ func (a *managerAPI) GetUsage(ctx context.Context, id string) (SessionUsage, err
 	if err != nil {
 		return SessionUsage{}, fmt.Errorf("rpc/sessions: GetUsage: %w", err)
 	}
-	return SessionUsage{
+	out := SessionUsage{
 		PromptTokens:     agg.PromptTokens,
 		CompletionTokens: agg.CompletionTokens,
 		TotalTokens:      agg.TotalTokens,
@@ -940,7 +1016,32 @@ func (a *managerAPI) GetUsage(ctx context.Context, id string) (SessionUsage, err
 		CostSource:       agg.CostSource,
 		MessageCount:     agg.MessageCount,
 		PricingDataDate:  pricingDate,
-	}, nil
+		CachedTokens:     agg.CachedTokens,
+	}
+	// The composition is the last call's, not a sum: it reads the
+	// last-usage snapshot. A failed read leaves it nil — the aggregate
+	// above is still the answer to what this RPC was asked.
+	if a.mgr != nil {
+		if last, lerr := a.mgr.GetLastUsage(ctx, id); lerr == nil && last.Composition != nil {
+			c := last.Composition
+			out.Composition = &UsageComposition{
+				System:       c.System,
+				Tools:        c.Tools,
+				History:      c.History,
+				Attachments:  c.Attachments,
+				Memory:       c.Memory,
+				Cached:       c.Cached,
+				ToolsFull:    c.ToolsFull,
+				ToolsSummary: c.ToolsSummary,
+
+				SchemaBudget:       c.SchemaBudget,
+				ToolsEvicted:       c.ToolsEvicted,
+				PinnedOverBudgetBy: c.PinnedOverBudgetBy,
+				HotOverBudgetBy:    c.HotOverBudgetBy,
+			}
+		}
+	}
+	return out, nil
 }
 
 // ResumeMessage implements SessionsAPI. Validates the partial row's

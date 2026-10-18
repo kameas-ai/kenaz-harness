@@ -52,6 +52,10 @@ type Config struct {
 	Engine Registrar
 	// Cedar is the policy gate. nil short-circuits to allow (default-allow).
 	Cedar cedar.Gate
+	// DefaultModel resolves what a schedule with no model override runs
+	// on — the SAME resolution the dispatcher applies at fire time. nil
+	// reports an unresolved default.
+	DefaultModel func() DefaultModel
 }
 
 // API is the concrete ScheduledChatAPI.
@@ -89,8 +93,9 @@ func (a *API) CreateAsModel(ctx context.Context, in CreateInput) (ChatRunEntry, 
 // taken from caller input": in has no created_by field to smuggle a
 // value through in the first place.
 func (a *API) createInternal(ctx context.Context, in CreateInput, createdBy string) (ChatRunEntry, error) {
-	if in.Cron == "" {
-		return ChatRunEntry{}, fmt.Errorf("%w: cron is required", ErrInvalidInput)
+	triggerKind, runAt, verr := resolveTrigger(in.TriggerKind, in.Cron, in.RunAt)
+	if verr != nil {
+		return ChatRunEntry{}, verr
 	}
 	if a.cfg.Store == nil {
 		return ChatRunEntry{}, ErrStoreUnavailable
@@ -120,6 +125,8 @@ func (a *API) createInternal(ctx context.Context, in CreateInput, createdBy stri
 		UpdatedAt:      now,
 		CreatedBy:      createdBy,
 		ToolAllowlist:  in.ToolAllowlist,
+		TriggerKind:    triggerKind,
+		RunAt:          runAt,
 	}
 	if err := a.cfg.Store.Create(ctx, rec); err != nil {
 		return ChatRunEntry{}, fmt.Errorf("scheduledchat: create: %w", err)
@@ -128,13 +135,52 @@ func (a *API) createInternal(ctx context.Context, in CreateInput, createdBy stri
 	return chatRunEntryFromRecord(rec), nil
 }
 
+// resolveTrigger validates and normalises the TriggerKind/Cron/RunAt
+// triple shared by CreateInput and UpdateInput (model-scheduled-jobs-
+// 01PMSJ01 WP08, FR-006).
+//
+//   - triggerKind == "" defaults to scheduler.TriggerKindCron — every
+//     caller written before this field existed keeps its old "cron is
+//     required" validation unchanged.
+//   - TriggerKindCron requires a non-empty cron expression (the
+//     pre-existing rule); rawRunAt is ignored.
+//   - TriggerKindOnce requires a parseable, non-empty rawRunAt (RFC3339);
+//     cron is ignored (may be empty — FR-006's whole point is not forcing
+//     the caller to fabricate one).
+//   - Any other triggerKind value is ErrInvalidInput.
+func resolveTrigger(triggerKind, cron, rawRunAt string) (kind string, runAt *time.Time, err error) {
+	if triggerKind == "" {
+		triggerKind = scheduler.TriggerKindCron
+	}
+	switch triggerKind {
+	case scheduler.TriggerKindCron:
+		if cron == "" {
+			return "", nil, fmt.Errorf("%w: cron is required", ErrInvalidInput)
+		}
+		return scheduler.TriggerKindCron, nil, nil
+	case scheduler.TriggerKindOnce:
+		if rawRunAt == "" {
+			return "", nil, fmt.Errorf("%w: runAt is required when triggerKind is 'once'", ErrInvalidInput)
+		}
+		t, perr := time.Parse(time.RFC3339, rawRunAt)
+		if perr != nil {
+			return "", nil, fmt.Errorf("%w: runAt is not a valid RFC3339 timestamp: %v", ErrInvalidInput, perr)
+		}
+		t = t.UTC()
+		return scheduler.TriggerKindOnce, &t, nil
+	default:
+		return "", nil, fmt.Errorf("%w: unrecognised triggerKind %q (want \"cron\" or \"once\")", ErrInvalidInput, triggerKind)
+	}
+}
+
 // Update implements ScheduledChatAPI.
 func (a *API) Update(ctx context.Context, in UpdateInput) (ChatRunEntry, error) {
 	if in.ID == "" {
 		return ChatRunEntry{}, fmt.Errorf("%w: id is required", ErrInvalidInput)
 	}
-	if in.Cron == "" {
-		return ChatRunEntry{}, fmt.Errorf("%w: cron is required", ErrInvalidInput)
+	triggerKind, runAt, verr := resolveTrigger(in.TriggerKind, in.Cron, in.RunAt)
+	if verr != nil {
+		return ChatRunEntry{}, verr
 	}
 	if a.cfg.Store == nil {
 		return ChatRunEntry{}, ErrStoreUnavailable
@@ -168,6 +214,8 @@ func (a *API) Update(ctx context.Context, in UpdateInput) (ChatRunEntry, error) 
 		Enabled:        in.Enabled,
 		UpdatedAt:      now,
 		ToolAllowlist:  in.ToolAllowlist,
+		TriggerKind:    triggerKind,
+		RunAt:          runAt,
 	}
 	if err := a.cfg.Store.Update(ctx, rec); err != nil {
 		if errors.Is(err, scheduler.ErrChatRunNotFound) {
@@ -215,9 +263,33 @@ func (a *API) List(ctx context.Context) ([]ChatRunEntry, error) {
 	}
 	out := make([]ChatRunEntry, 0, len(recs))
 	for _, r := range recs {
-		out = append(out, chatRunEntryFromRecord(r))
+		out = append(out, a.withLastRun(ctx, chatRunEntryFromRecord(r)))
 	}
 	return out, nil
+}
+
+// withLastRun attaches the newest persisted history row as LastRun. A
+// history read failure leaves LastRun nil rather than failing the list:
+// the schedule itself is still real.
+func (a *API) withLastRun(ctx context.Context, e ChatRunEntry) ChatRunEntry {
+	if a.cfg.Store == nil {
+		return e
+	}
+	recs, err := a.cfg.Store.History(ctx, e.ID, 1)
+	if err != nil || len(recs) == 0 {
+		return e
+	}
+	last := runSummaryFromRecord(recs[0])
+	e.LastRun = &last
+	return e
+}
+
+// DefaultModel implements ScheduledChatAPI.
+func (a *API) DefaultModel(_ context.Context) (DefaultModel, error) {
+	if a.cfg.DefaultModel == nil {
+		return DefaultModel{}, nil
+	}
+	return a.cfg.DefaultModel(), nil
 }
 
 // Get implements ScheduledChatAPI.
@@ -232,7 +304,7 @@ func (a *API) Get(ctx context.Context, id string) (ChatRunEntry, error) {
 		}
 		return ChatRunEntry{}, fmt.Errorf("scheduledchat: get: %w", err)
 	}
-	return chatRunEntryFromRecord(rec), nil
+	return a.withLastRun(ctx, chatRunEntryFromRecord(rec)), nil
 }
 
 // RunNow implements ScheduledChatAPI.
@@ -276,6 +348,10 @@ func (a *API) RunNow(ctx context.Context, id string) (RunSummary, error) {
 			PromptTemplate: rec.PromptTemplate,
 			Model:          rec.Model,
 			OutputSink:     rec.OutputSink,
+			// model-harness-toolset-01MHTS001 WP02 (H-1): the run is
+			// contained to the allowlist the gate above evaluated.
+			CreatedBy:     createdBy,
+			ToolAllowlist: append([]string(nil), rec.ToolAllowlist...),
 		},
 		Trigger: scheduler.Trigger{Cron: rec.Cron, TZ: rec.Timezone},
 	}
@@ -360,7 +436,7 @@ func chatRunEntryFromRecord(r scheduler.ChatRunRecord) ChatRunEntry {
 	if createdBy == "" {
 		createdBy = scheduler.ScheduledRunCreatedByUser
 	}
-	return ChatRunEntry{
+	entry := ChatRunEntry{
 		ID:             r.ID,
 		Name:           r.Name,
 		PromptTemplate: r.PromptTemplate,
@@ -373,7 +449,12 @@ func chatRunEntryFromRecord(r scheduler.ChatRunRecord) ChatRunEntry {
 		UpdatedAt:      r.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		CreatedBy:      createdBy,
 		ToolAllowlist:  r.ToolAllowlist,
+		TriggerKind:    r.EffectiveTriggerKind(),
 	}
+	if r.RunAt != nil {
+		entry.RunAt = r.RunAt.UTC().Format(time.RFC3339)
+	}
+	return entry
 }
 
 func runSummaryFromRecord(r scheduler.ChatRunHistoryRecord) RunSummary {
@@ -385,6 +466,8 @@ func runSummaryFromRecord(r scheduler.ChatRunHistoryRecord) RunSummary {
 		StartedAt:     r.StartedAt,
 		OutputSnippet: r.OutputSnippet,
 		Error:         r.Error,
+		Model:         r.Model,
+		CostUSD:       r.CostUSD,
 	}
 	if r.EndedAt != nil {
 		t := *r.EndedAt

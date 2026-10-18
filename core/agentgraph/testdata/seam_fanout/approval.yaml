@@ -1,11 +1,37 @@
 # Seam fanout fixture for kind=approval
-# approval-node-01PMZC12 UNIT-2: the pending decision is registered on
-# AskBus.Pending on the SAME (first, pausing) fire, mirroring `ask`;
-# the run then parks via ErrPaused. UNIT-3 has not landed a resolve
-# verb yet, so there is no resumed-fire lookup today — every fire
-# registers-and-parks again.
+# approval-node-01PMZC12: the pending decision is registered on
+# AskBus.Pending on the first (pausing) fire, mirroring `ask`; the run
+# then parks via ErrPaused, writing no output port. UNIT-3 landed the
+# resolve verb (Graph_ResolveApproval) and the executor now checks
+# AskBus.LookupAnswer FIRST on every fire, mirroring the `ask` node's
+# LookupAnswer-before-Pending ordering: a resumed fire with a verdict
+# already on the bus decodes it and writes EXACTLY ONE of "approved" /
+# "rejected", instead of re-registering and re-parking.
+#
+# This fixture's own claims are exercised by a real kernel, not just
+# declared: core/agentgraph/seam_fanout_test.go's
+# TestSeamFanout_Approval_ParksThenResolvesOnAskBus drives both fires
+# (first fire → AskBus.Pending + ErrPaused + no port; second fire, with
+# a verdict pre-loaded on the same AskBus fake → AskBus.LookupAnswer +
+# exactly one port written) — see that test's doc comment for the
+# CLAUDE.md blind-spot-#2 history (a fixture that had described the
+# layer under test, unfalsifiably, since the `Required` field below is
+# parsed by seam_fanout_test.go and never programmatically read).
+#
+# `required: true` is still not read as a gate condition by
+# seam_fanout_test.go — see the struct-tag-only note in that file. This
+# is the dated justification CLAUDE.md's rule requires instead of
+# wiring a reader: the fixture's TRUTHFULNESS is now enforced by
+# TestSeamFanout_Approval_ParksThenResolvesOnAskBus asserting the exact
+# claim (AskBus.Pending is called, and is required for the pause to
+# mean anything); a separate mechanical reader of `required` would
+# duplicate that assertion rather than add coverage. Owner: whoever
+# next adds a kind whose fixture declares `required: false` should
+# revisit whether a generic reader is worth building then — until a
+# second real case exists, a per-kind kernel test is cheaper and
+# harder to fool. (approval-node-01PMZC12, 2026-09-12)
 kind: approval
 seams:
   - seam: AskBus.Pending
     required: true
-notes: "approval node registers the pending decision on AskBus.Pending, then parks the run (ErrPaused), on its first fire; no resolve verb exists yet (UNIT-3), so it re-parks on any subsequent fire"
+notes: "approval node registers the pending decision on AskBus.Pending, then parks the run (ErrPaused) writing no output port, on its first fire; on a resumed fire with a verdict already on the bus (Graph_ResolveApproval, or the no-watcher/auto-approve-window timeout), it reads AskBus.LookupAnswer and writes exactly one of approved/rejected"

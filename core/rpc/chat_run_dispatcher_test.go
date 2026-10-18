@@ -63,12 +63,19 @@ type fakeModel struct {
 	mu       sync.Mutex
 	requests []coreag.LLMRequest
 	response string
+	// fail, when set, is returned from every Generate call instead of a
+	// response (a provider rejection before any output).
+	fail error
 }
 
 func (f *fakeModel) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
 	f.mu.Lock()
 	f.requests = append(f.requests, req)
+	fail := f.fail
 	f.mu.Unlock()
+	if fail != nil {
+		return coreag.LLMResponse{}, fail
+	}
 	if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
 		sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: f.response})
 	}

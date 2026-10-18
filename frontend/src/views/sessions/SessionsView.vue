@@ -21,14 +21,23 @@ import CanvasHead from '@/shell/CanvasHead.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
 import SessionHeader from '@/components/chat/SessionHeader.vue';
+import {
+  SYNC_UNSUPPORTED_REASON,
+  describeSyncReason,
+  fleetSessionSyncFailure,
+  fleetSessionSyncUnsupported,
+} from '@/lib/fleetSession';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ComposerError from '@/components/chat/ComposerError.vue';
+import DeliveryBanner from '@/components/chat/DeliveryBanner.vue';
+import { STOPPED_CODE, offersToolsMenu, type DeliveryFailure } from '@/lib/delivery';
+import { sendableTokens } from '@/lib/toolExposure';
 import ReasoningControl from '@/components/chat/ReasoningControl.vue';
 import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
-import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
 import PlanApprovalModal from '@/views/sessions/PlanApprovalModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
+import SubagentTab from '@/components/chat/SubagentTab.vue';
 import BranchBreadcrumb from '@/components/chat/BranchBreadcrumb.vue';
 import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
 import AuthFailureToast from '@/components/chat/AuthFailureToast.vue';
@@ -43,14 +52,22 @@ import ToolPermissionModal from '@/components/permissions/ToolPermissionModal.vu
 import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import CostCell from '@/components/chat/CostCell.vue';
+import ModelCallsDisclosure from '@/components/chat/ModelCallsDisclosure.vue';
 import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
+import ContextCompositionPopover from '@/components/chat/ContextCompositionPopover.vue';
+import ToolsMenu from '@/components/chat/ToolsMenu.vue';
+import type { RequestSizeContext } from '@/lib/delivery';
+import AdviceChip from '@/components/chat/AdviceChip.vue';
+import AdviceAutoActedBanner from '@/components/chat/AdviceAutoActedBanner.vue';
 import ShareSessionDialog from '@/views/sessions/ShareSessionDialog.vue';
+import HandoffInboxPanel from '@/views/sessions/HandoffInboxPanel.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession, streamTruncatedCopy } from '@/lib/useSession';
 import { useEventStream } from '@/lib/useEventStream';
 import { useLongSessionNudge } from '@/lib/useLongSessionNudge';
+import { useAdviceChips } from '@/lib/useAdviceChips';
 import { countTurns } from '@/lib/transcript';
 import { usePlanMode } from '@/lib/planmode';
 import type {
@@ -68,10 +85,13 @@ import type {
   SessionUsage,
   Settings,
   SlashExecuteResult,
+  SubagentBranch,
   UserCommand,
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
 import { parseUnsupportedFeatureError } from '@/lib/errors';
+import { mergeTransientByTime } from '@/lib/mergeTransient';
+import { readSessionModel, writeSessionModel } from '@/lib/sessionModelStash';
 
 const route = useRoute();
 const router = useRouter();
@@ -312,34 +332,6 @@ const otherFamilyChoices = computed(() =>
   allChoices.value.filter((c) => c.family !== activeFamily.value),
 );
 
-// Read the new-session-dialog's localStorage stash for this session,
-// if present. NewSessionDialog writes the user's chosen
-// (providerId, modelId) under "kenaz.session.config.<id>" so we
-// can honour cross-family choices that the mid-conversation switcher
-// would otherwise block.
-function readSessionConfig(sessionID: string): {
-  providerId: string;
-  modelId: string;
-} | null {
-  if (!sessionID) return null;
-  try {
-    const raw = window.localStorage.getItem(
-      `kenaz.session.config.${sessionID}`,
-    );
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as {
-      providerId?: string;
-      modelId?: string;
-    };
-    if (parsed.providerId && parsed.modelId) {
-      return { providerId: parsed.providerId, modelId: parsed.modelId };
-    }
-  } catch {
-    /* malformed stash — ignore */
-  }
-  return null;
-}
-
 // On session id or provider list change, seed the active selection.
 // Priority: stashed dialog config > previously-set value > provider
 // primary model.
@@ -348,7 +340,11 @@ watch(
   ([newSid]) => {
     // Reset prior selection when switching sessions.
     if (newSid) {
-      const stashed = readSessionConfig(newSid);
+      // The session's stashed (provider, model): written by
+      // NewSessionDialog and by every switch (pickModel), so a
+      // cross-family choice the switcher would block, and the latest
+      // switch, both survive a re-seed.
+      const stashed = readSessionModel(newSid);
       if (stashed) {
         activeProviderId.value = stashed.providerId;
         activeModelId.value = stashed.modelId;
@@ -366,14 +362,67 @@ watch(
   { immediate: true },
 );
 
+// Hydrate the session-level reasoning-knob default on session switch
+// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11). Without this,
+// activeReasoningConfig only ever reflected the CURRENT process's /effort
+// calls and tune-panel saves — a session reopened (or the app restarted)
+// showed no reasoning-effort chip / tune-panel state even though the
+// stored default was already reaching the model on the send path
+// (chat.LLMProviderAdapter.Generate merges it server-side regardless of
+// whether this ref is populated). Soft-fail on error, matching every
+// other best-effort per-session read in this file (refreshCompactionOverhead
+// et al.) — a resolver hiccup should not block opening the session.
+watch(
+  sessionId,
+  async (newSid) => {
+    activeReasoningConfig.value = undefined;
+    if (!newSid) return;
+    try {
+      const knobs = await client.sessions.getKnobsDefault(newSid);
+      activeReasoningConfig.value = knobs ?? undefined;
+    } catch {
+      // Soft-fail: leave activeReasoningConfig unset, matching the
+      // "no override" state — the tune panel will simply show blank
+      // until the user re-saves, and the stored default (if any)
+      // still reaches the model independently of this ref.
+    }
+  },
+  { immediate: true },
+);
+
 const switcherOpen = ref(false);
 function toggleSwitcher() {
   switcherOpen.value = !switcherOpen.value;
+  if (switcherOpen.value) toolsMenuOpen.value = false;
 }
+
+// Composer Tools menu (tool-context-budget-01TCBUD01 WP06, FR-K2). Opened
+// from the status bar or from a request_too_large remedy.
+const toolsMenuOpen = ref(false);
+function openToolsMenu() {
+  switcherOpen.value = false;
+  toolsMenuOpen.value = true;
+}
+
+/**
+ * True when the model's catalog entry says requests carry prompt-cache
+ * markers (ModelInfo.supportsPromptCache, set by LLM_ListProviders from
+ * the adapter's flag or the curated table). Absent renders nothing.
+ */
+function modelCachesPrompts(providerId: string, modelId: string): boolean {
+  const p = providers.value.find((x) => x.id === providerId);
+  return p?.modelInfos?.find((m) => m.id === modelId)?.supportsPromptCache === true;
+}
+const activeModelCachesPrompts = computed(() =>
+  modelCachesPrompts(activeProvider.value?.id ?? '', activeModelId.value),
+);
 function pickModel(providerId: string, modelId: string) {
   activeProviderId.value = providerId;
   activeModelId.value = modelId;
   switcherOpen.value = false;
+  // Persist the switch where the session's selection is seeded from, so
+  // a later re-seed (session switch, branch Merge) keeps it.
+  writeSessionModel(sessionId.value ?? '', { providerId, modelId });
 }
 
 const sessionTitle = computed(() => {
@@ -453,8 +502,14 @@ const breadcrumbAncestorCount = computed(
   () => session.session.value?.branchDepth,
 );
 
+// A Retry being dispatched counts as streaming: until its startStream
+// resolves there is no subscription id yet, and a send in that window
+// would start a second, concurrent run instead of queueing
+// (undelivered-message-retry review fix).
 const isStreaming = computed(
-  () => session.streamSubscriptionId.value !== null,
+  () =>
+    session.streamSubscriptionId.value !== null ||
+    session.retryInFlight.value,
 );
 
 // "Thinking…" — stream is open but no chunks have arrived yet.
@@ -495,6 +550,33 @@ const contextDenominator = computed((): number => {
 // hasContextWindow: true when the backend has supplied a non-zero cap.
 const hasContextWindow = computed(() => contextDenominator.value > 0);
 
+// The request_too_large remedy names the tool definitions the NEXT
+// request would send (Tools_SchemaCosts' sendable tokens for this session,
+// before budget) against the active model's window. A failed first turn
+// has no measured composition, so the last call's numbers cannot be used.
+// Either number 0 = unknown, and the remedy falls back to plain copy.
+const nextToolTokens = ref(0);
+const tooLargePending = computed(() =>
+  [...session.undelivered.value.values()].some((f) => offersToolsMenu(f)),
+);
+async function refreshNextToolTokens() {
+  const sid = sessionId.value;
+  if (!tooLargePending.value || servedMode || !sid) {
+    nextToolTokens.value = 0;
+    return;
+  }
+  try {
+    const costs = await client.tools.schemaCosts(sid, '');
+    if (sid === sessionId.value) nextToolTokens.value = sendableTokens(costs);
+  } catch {
+    if (sid === sessionId.value) nextToolTokens.value = 0;
+  }
+}
+const deliverySizeContext = computed<RequestSizeContext>(() => ({
+  toolsTokens: nextToolTokens.value,
+  windowTokens: contextDenominator.value,
+}));
+
 // contextNumerator: the cumulative input-token count for the session.
 // Reads from session.lastUsage which is updated in near-real-time via
 // the `session.usage.updated` broker event after each LLM turn
@@ -530,18 +612,16 @@ const contextBarTone = computed<'ok' | 'warn' | 'danger'>(() => {
   return 'ok';
 });
 
-// composerUsageEstimate: the ChatInput footer's token/cost readout
-// ("N tok · $M"). Reads from the SAME session.lastUsage snapshot the
-// context-window meter above already consumes (populated in near-real-time
-// via the `session.usage.updated` broker event after each LLM turn —
-// backend-context-window-length-01KQ8TD3 WP03). Previously this was a
-// hardcoded `{ tokens: 0, usd: 0 }` stub (a documented placeholder that
-// never got wired to real accounting), which is why the footer always
-// read "0 tok · $0.0000" during and after every turn even though the
-// backend usage pipeline (OpenRouter usage SSE frame → LLMProviderAdapter
-// → UsageHook → session.usage.updated) was already delivering real
-// numbers — the same numbers the context meter renders correctly.
+// Dogfood 2026-10-05: the footer is CUMULATIVE for the conversation
+// (Sessions_GetUsage aggregate, refreshed per turn). It previously read
+// the per-turn lastUsage snapshot, whose cost legitimately rises and
+// falls with caching and prompt size — which read as "the cost readout
+// is broken". The context meter still reads lastUsage (per-turn prompt
+// size is the right numerator there). Falls back to the per-turn
+// snapshot only while the aggregate has not loaded yet.
 const composerUsageEstimate = computed<CostEstimate>(() => {
+  const cu = session.cumulativeUsage.value;
+  if (cu) return { tokens: cu.totalTokens ?? 0, usd: cu.costUsd ?? 0 };
   const usage = session.lastUsage.value;
   if (!usage) return { tokens: 0, usd: 0 };
   return { tokens: usage.totalTokens ?? 0, usd: usage.costUsd ?? 0 };
@@ -597,11 +677,71 @@ async function onSendBlocks(contentBlocks: import('@/lib/types').ContentBlock[])
   );
 }
 
+// ── undelivered-message-retry ──────────────────────────────────────
+//
+// A user message whose run failed before the model accepted it is NOT
+// DELIVERED: a sticky badge on the message (persisted, survives reload)
+// plus the composer banner, both offering Retry. Retry re-runs the SAME
+// message through the same LLM_StartStream dispatch a send uses — no new
+// user row, so the owner's 2026-10-07 workaround (retype + resend after
+// topping up OpenRouter credits) is no longer needed.
+
+const EMPTY_UNDELIVERED: ReadonlyMap<string, DeliveryFailure> = new Map();
+
+/** Badges are hidden while a turn streams: that run is delivering them. */
+const undeliveredForList = computed<ReadonlyMap<string, DeliveryFailure>>(() =>
+  isStreaming.value ? EMPTY_UNDELIVERED : session.undelivered.value,
+);
+
+/**
+ * The message Retry re-runs: the newest persisted user message, and only
+ * when it is undelivered. Retry dispatches LLM_StartStream, which resolves
+ * the newest user row server-side — so offering it on any older message
+ * would re-run the wrong one. Older undelivered messages ride along in
+ * history with the next delivered turn.
+ */
+const retryMessageId = computed<string>(() => {
+  const msgs = session.messages.value;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role !== 'user') continue;
+    return session.undelivered.value.has(msgs[i].id) ? msgs[i].id : '';
+  }
+  return '';
+});
+
+/** The composer banner: why the newest message did not reach the model. */
+const deliveryBannerFailure = computed<DeliveryFailure | null>(() => {
+  if (isStreaming.value || !retryMessageId.value) return null;
+  const f = session.undelivered.value.get(retryMessageId.value) ?? null;
+  return f && f.code !== STOPPED_CODE ? f : null;
+});
+
+async function onRetryDelivery(messageId?: string) {
+  if (!hasSession.value || !activeProvider.value) return;
+  if (messageId !== undefined && messageId !== retryMessageId.value) return;
+  if (isStreaming.value) return;
+  await session.retry(activeProvider.value.id, activeModelId.value);
+}
+
+async function onCancelDeliveryRetry() {
+  await session.cancel();
+}
+
+function onOpenProviderSettings() {
+  void router.push('/providers');
+}
+
 // Drain one queued turn each time the stream ends. Recursively re-fires
 // itself via the watch — one streaming turn at a time, in FIFO order.
+//
+// Held while the newest message is NOT DELIVERED or an automatic retry is
+// pending: draining would dispatch the queued turn into the same failure
+// (or race the automatic retry). The queue resumes on the next stream end
+// after a delivered Retry, so a retry never double-sends a queued turn.
 watch(isStreaming, async (now, prev) => {
   if (!prev || now) return; // only act on true → false transitions
   if (sendQueue.value.length === 0) return;
+  if (session.autoRetry.value || deliveryBannerFailure.value) return;
   if (!hasSession.value || !activeProvider.value) return;
   const [next, ...rest] = sendQueue.value;
   sendQueue.value = rest;
@@ -702,14 +842,61 @@ async function onArgFillSubmit(args: Record<string, string>) {
   if (!fill) return;
   const sid = sessionId.value;
   if (!sid) return;
+  await runUserSlashCommand(sid, fill.command, args, '');
+}
+
+/**
+ * runUserSlashCommand runs a user-defined slash command. A PROMPT-kind
+ * command's rendered body is an instruction for the model, so it is sent
+ * as the user's turn, with any text typed after the command appended.
+ * Text and tool commands render their result as a slash bubble.
+ */
+async function runUserSlashCommand(
+  sid: string,
+  cmd: UserCommand,
+  args: Record<string, string>,
+  rest: string,
+) {
   let result;
   try {
-    result = await client.slashcmd.run(fill.command.name, args, sid, fill.command.projectId ?? '', '', '');
+    result = await client.slashcmd.run(cmd.name, args, sid, cmd.projectId ?? '', '', '');
   } catch (err) {
     appendSlashResult(sid, 'error', err instanceof Error ? err.message : String(err));
     return;
   }
+  if (result.kind !== 'error' && result.metadata?.['prompt_rendered'] === true) {
+    const prompt = rest ? `${result.text}\n\n${rest}` : result.text;
+    await onSend(prompt);
+    return;
+  }
   appendSlashResult(sid, result.kind, result.text);
+}
+
+// Built-in slash command names (fleet skills excluded — they rank below
+// user commands), fetched once per view. A failed fetch reads as "no
+// built-ins" for this command only and is retried next time.
+let builtinSlashNames: Promise<Set<string>> | null = null;
+async function isBuiltinSlash(token: string): Promise<boolean> {
+  if (!builtinSlashNames) {
+    builtinSlashNames = client.slash
+      .list()
+      .then((list) => new Set(list.filter((c) => !c.isUser && !c.isSkill).map((c) => c.name)));
+  }
+  try {
+    return (await builtinSlashNames).has(token);
+  } catch {
+    builtinSlashNames = null;
+    return false;
+  }
+}
+
+/**
+ * Copy for a slash token that matches neither registry. Keyed on the
+ * registry's "unknown command" text: Slash_Execute exposes no typed code
+ * for it, only the message.
+ */
+function unknownSlashMessage(token: string): string {
+  return `No user or built-in command named "/${token}". Type /help to list commands.`;
 }
 
 async function onSlashCommand(raw: string) {
@@ -723,12 +910,19 @@ async function onSlashCommand(raw: string) {
   // If it resolves to a user-defined command with declared inputs, open
   // the SlashArgFill panel rather than dispatching immediately.
   const trimmedRaw = raw.trim();
+  let slashToken = '';
   if (trimmedRaw.startsWith('/')) {
     const token = trimmedRaw.slice(1).split(/\s+/)[0] ?? '';
-    if (token) {
+    slashToken = token;
+    // Built-ins take precedence over a user command of the same name
+    // (/model, /clear, /help … keep their meaning whatever the user
+    // saves), so a built-in token never consults the user store.
+    if (token && !(await isBuiltinSlash(token))) {
       let userCmd: UserCommand | null = null;
       try {
-        userCmd = await client.slashcmd.get(token, '');
+        // The session's project, so a project-scoped command resolves
+        // too; LoadUserOne still finds global commands under any id.
+        userCmd = await client.slashcmd.get(token, session.session.value?.projectId ?? '');
       } catch {
         // not a user command — fall through to built-in dispatch
       }
@@ -736,20 +930,33 @@ async function onSlashCommand(raw: string) {
         pendingArgFill.value = { command: userCmd, raw };
         return;
       }
+      if (userCmd) {
+        // A user command without declared inputs runs as a user command;
+        // the built-in registry below knows only built-ins.
+        const rest = trimmedRaw.slice(1 + token.length).trim();
+        await runUserSlashCommand(sid, userCmd, {}, rest);
+        return;
+      }
     }
   }
 
-  // ── Built-in / no-input dispatch ─────────────────────────────────────
+  // ── Built-in dispatch ─────────────────────────────────────────────────
   let result: SlashExecuteResult;
   try {
     result = await client.slash.execute(sid, raw);
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     appendSlashResult(
       sid,
       'error',
-      err instanceof Error ? err.message : String(err),
+      // The registry's own text ("slashcmd: unknown command: …") reads
+      // as if user commands were never consulted. They were.
+      /unknown command/i.test(msg) && slashToken ? unknownSlashMessage(slashToken) : msg,
     );
     return;
+  }
+  if (result.kind === 'error' && /^unknown command/i.test(result.text) && slashToken) {
+    result = { ...result, text: unknownSlashMessage(slashToken) };
   }
   appendSlashResult(sid, result.kind, result.text);
 
@@ -833,9 +1040,8 @@ const visibleMessages = computed<readonly Message[]>(() => {
     content: t.content,
     createdAt: t.createdAt,
   }));
-  // Append after persisted; v1 doesn't reorder by createdAt — the
-  // user just submitted the slash command, so it's freshest.
-  return [...persisted, ...synthetic];
+  // Merged by time so a slash result sits where it happened.
+  return mergeTransientByTime(persisted, synthetic);
 });
 
 function gotoProviders() {
@@ -874,6 +1080,76 @@ function closeCreateBranchModal() {
 function onBranchOpen(childSessionId: string) {
   if (!childSessionId) return;
   void router.push(`/sessions/${childSessionId}`);
+}
+
+// ── sub-agent live-worker view (subagent-control-and-background-
+// tasks-01PMZB11 UNIT-10) ──────────────────────────────────────────
+//
+// activeSubagentBranch is derived from BranchSidebar's OWN
+// Branches_List rows (defineExpose'd as `branches`) — the same real
+// data the sidebar renders, not a second fetch and not a placeholder.
+// A branch qualifies when its childSessionId matches the session
+// currently open AND UNIT-9 populated subagentStatus (Go omits that
+// field for every branch that was not created by
+// kenaz__subagent_dispatch — see branches/impl.go's
+// enrichSubagentFields), so this check is exactly "is the tab I'm
+// looking at a dispatched sub-agent's own transcript".
+const branchSidebarRef = ref<InstanceType<typeof BranchSidebar> | null>(null);
+const activeSubagentBranch = computed<SubagentBranch | null>(() => {
+  if (servedMode) return null;
+  const rows = branchSidebarRef.value?.branches ?? [];
+  const match = rows.find(
+    (b) => b.childSessionId === sessionId.value && !!b.subagentStatus,
+  );
+  if (!match) return null;
+  return {
+    ...match,
+    isSubagent: true,
+    profileId: match.profileId ?? '',
+    subagentStatus: match.subagentStatus,
+  } as SubagentBranch;
+});
+
+const subagentControlError = ref<string | null>(null);
+
+async function onSubagentAbort(branchId: string) {
+  subagentControlError.value = null;
+  try {
+    await client.branches.abortSubagent(branchId);
+  } catch (err) {
+    subagentControlError.value = err instanceof Error ? err.message : String(err);
+  }
+  await branchSidebarRef.value?.refresh();
+}
+
+async function onSubagentSteer(branchId: string, message: string) {
+  subagentControlError.value = null;
+  try {
+    await client.branches.steerSubagent(branchId, message);
+  } catch (err) {
+    subagentControlError.value = err instanceof Error ? err.message : String(err);
+  }
+  await branchSidebarRef.value?.refresh();
+}
+
+async function onSubagentPause(branchId: string) {
+  subagentControlError.value = null;
+  try {
+    await client.branches.pauseSubagent(branchId);
+  } catch (err) {
+    subagentControlError.value = err instanceof Error ? err.message : String(err);
+  }
+  await branchSidebarRef.value?.refresh();
+}
+
+async function onSubagentResume(branchId: string) {
+  subagentControlError.value = null;
+  try {
+    await client.branches.resumeSubagent(branchId);
+  } catch (err) {
+    subagentControlError.value = err instanceof Error ? err.message : String(err);
+  }
+  await branchSidebarRef.value?.refresh();
 }
 
 // ── "Branch from this turn" handler (branching-ux-polish-01KQ8TD7 WP05) ─────
@@ -915,6 +1191,17 @@ const hasAnyProvider = computed(() => providers.value.length > 0);
  * cannot submit.
  */
 const servedMode = isServedMode();
+
+// Re-read the remedy's tool tokens when a request_too_large failure
+// appears, the session changes, or the Tools menu closes (its writes
+// change what the next request sends).
+watch(
+  [tooLargePending, sessionId, toolsMenuOpen],
+  ([, , menuOpen]) => {
+    if (!menuOpen) void refreshNextToolTokens();
+  },
+  { immediate: true },
+);
 
 const noProviderHelp = computed(() =>
   servedMode
@@ -962,25 +1249,58 @@ const contextWindowOverrides = ref<Settings['contextWindowOverrides']>({});
 // Default true on a fresh install.
 const autoResumeOnKeyRotation = ref(true);
 
-// Compaction overhead surface (mission compaction-strategy-ui-01KQ8TDI
-// WP08 / plan §2.11). The backend tags every compaction-driven LLM
-// call with cost.kind = "compaction" and accumulates a running total
-// (see core/agentgraph/compaction/wiring/llm.go OverheadTotals). The frontend
-// surface here renders a compact "Compaction overhead: $X.XX of $Y.YY
-// total" line on the chat header when the overhead is non-zero so
-// users can see the cost of compaction without opening a dedicated
-// panel.
+// Compaction overhead surface (chat-turn-integrity-01PMZ606 WP12, owner
+// ruling X-7 / CK-08 — docs/escalation-register-2026-08-19.md:331-346,
+// "compaction silently spends the user's tokens and money"). The backend
+// tags every compaction-driven LLM call with cost.kind = "compaction" and
+// accumulates a running total (core/agentgraph/compaction/wiring/llm.go
+// OverheadTotals via compactionLLM.Overhead()). Both compactionLLM and
+// compactionAudit were already constructed at boot before this WP — the
+// only missing piece was a caller: nothing read Overhead() or Recent(),
+// so this row was permanently hidden behind a hardcoded-zero placeholder
+// (compaction-strategy-ui-01KQ8TDI WP08's original TODO).
 //
-// TODO(compaction-strategy-ui WP08+): wire an RPC method that returns
-// the per-session OverheadTotals shape (Total / Currency / Calls /
-// Indeterminate / InputTokens / OutputTokens — defined in
-// core/agentgraph/compaction/wiring/llm.go). Until the RPC lands the values
-// stay at zero and the row is hidden by compactionOverheadVisible.
+// Process-wide, not per-session (see core/rpc.CompactionOverheadInfo's
+// Go-side doc comment: the backend counter accumulates for the whole
+// process's lifetime, not keyed by session id). Rendered as "$X.XX
+// across N compactions" rather than the originally-planned "$X of
+// session total $Y" — that framing would have compared two different
+// populations (all-process compaction spend vs. one session's spend) and
+// misled the exact user this ruling exists to be honest with.
 const compactionOverheadUSD = ref<number>(0);
-const compactionOverheadTotalUSD = ref<number>(0);
+const compactionOverheadCalls = ref<number>(0);
+const compactionOverheadIndeterminate = ref<number>(0);
 const compactionOverheadVisible = computed(
-  () => compactionOverheadUSD.value > 0,
+  () => compactionOverheadCalls.value > 0,
 );
+
+// Auto-title overhead surface (model-settings-reach-the-model-01PMZ101
+// WP07). Same process-wide, not-per-session shape as the compaction
+// readout immediately above — both are projected off the SAME
+// CompactionOverheadInfo response (core/rpc.API.CompactionOverhead),
+// which is why they share refreshCompactionOverhead() below rather than
+// each polling its own RPC.
+const autoTitleOverheadUSD = ref<number>(0);
+const autoTitleOverheadCalls = ref<number>(0);
+const autoTitleOverheadIndeterminate = ref<number>(0);
+const autoTitleOverheadVisible = computed(
+  () => autoTitleOverheadCalls.value > 0,
+);
+
+async function refreshCompactionOverhead() {
+  try {
+    const overhead = await client.compactionOverhead();
+    compactionOverheadUSD.value = overhead.total;
+    compactionOverheadCalls.value = overhead.calls;
+    compactionOverheadIndeterminate.value = overhead.indeterminateCalls;
+    autoTitleOverheadUSD.value = overhead.autoTitleTotal ?? 0;
+    autoTitleOverheadCalls.value = overhead.autoTitleCalls ?? 0;
+    autoTitleOverheadIndeterminate.value = overhead.autoTitleIndeterminateCalls ?? 0;
+  } catch {
+    // Soft-fail: leave the hidden default in place, matching
+    // refreshCompactionSettings' existing soft-fail convention below.
+  }
+}
 
 async function refreshMemoryFlag() {
   try {
@@ -1017,10 +1337,12 @@ async function refreshCompactionSettings() {
 onMounted(() => {
   void refreshMemoryFlag();
   void refreshCompactionSettings();
+  void refreshCompactionOverhead();
 });
 window.addEventListener('focus', () => {
   void refreshMemoryFlag();
   void refreshCompactionSettings();
+  void refreshCompactionOverhead();
 });
 
 // ── search-focus pulse (cross-session-search WP05) ─────────────────────
@@ -1234,7 +1556,7 @@ function formatSize(bytes: number): string {
 //
 // The nudge banner fires when the session crosses either threshold:
 //   - 30 human turns (counted by countTurns — NOT a row count), OR
-//   - 50,000 cumulative prompt tokens
+//   - 50,000 conversation-history tokens (last request's composition)
 // Both thresholds are configurable via Settings → Display.
 //
 // Per-session dismiss: the user can click "Dismiss for this session" and
@@ -1248,36 +1570,57 @@ function formatSize(bytes: number): string {
 // (model-moves-transcript-01PMCH01 WP04).
 const _nudgeTurnCount = computed(() => countTurns(visibleMessages.value));
 
-// controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
-// FR-020): session.lastUsage.promptTokens is a PER-TURN snapshot,
-// overwritten on every session.usage.updated event (see useSession.ts
-// — correct for the context-window meter above, which wants "how full
-// is the model's context right now"). useLongSessionNudge's threshold
-// is documented as CUMULATIVE prompt tokens; against a per-turn value
-// it essentially never crosses the 50,000 default. Sessions_GetUsage
-// returns the real cumulative aggregate — refetch it whenever a turn
-// completes or the session switches.
-const _nudgeCumulativePromptTokens = ref(0);
-async function refreshNudgeCumulativeUsage() {
+// The nudge measures how long the CONVERSATION is: the history part of
+// the last request's composition (Sessions_GetUsage). Prompt tokens —
+// per-turn or cumulative — also count the system prompt and every tool
+// definition, so a one-message session with ~220k tokens of tool schemas
+// would read as "long" on turn 1. Refetched whenever a turn completes or
+// the session switches. A session whose last call predates the
+// composition has no history figure and is judged on turn count alone.
+const _nudgeHistoryTokens = ref(0);
+async function refreshNudgeHistoryTokens() {
   const id = sessionId.value;
   if (!id) {
-    _nudgeCumulativePromptTokens.value = 0;
+    _nudgeHistoryTokens.value = 0;
     return;
   }
   try {
     const usage = await client.sessions.getUsage(id);
-    _nudgeCumulativePromptTokens.value = usage.promptTokens ?? 0;
+    _nudgeHistoryTokens.value = usage.composition?.history ?? 0;
   } catch {
     // Transient RPC failure: keep the last known value rather than
     // flapping the nudge visibility to zero.
   }
 }
-watch(() => session.lastUsage.value, () => { void refreshNudgeCumulativeUsage(); });
+watch(() => session.lastUsage.value, () => { void refreshNudgeHistoryTokens(); });
 
 const longSessionNudge = useLongSessionNudge({
   turnCount: _nudgeTurnCount,
-  promptTokens: _nudgeCumulativePromptTokens,
+  historyTokens: _nudgeHistoryTokens,
 });
+
+// laya-advisors-01LAYA001 WP07: the advisor seam's passive chip.
+// sessionId is the same reactive ref every other per-session composable
+// on this view reads (useSession, the nudge above) — session-scoping
+// happens inside useAdviceChips itself (payload.session_id === sessionId).
+const adviceChips = useAdviceChips({ sessionID: sessionId });
+async function onAdviceChipAccept() {
+  await adviceChips.accept();
+}
+async function onAdviceChipDismiss() {
+  await adviceChips.dismiss();
+}
+// spec §3: "auto-act AND notify (banner + audit event)". Before
+// AdviceAutoActedBanner.vue existed, autoActedBanner/clearAutoActedBanner
+// were computed by useAdviceChips with zero .vue consumers — the app
+// silently branched a session with no visible notice.
+function onAdviceAutoActedOpen(childSessionId: string) {
+  adviceChips.clearAutoActedBanner();
+  onBranchOpen(childSessionId);
+}
+function onAdviceAutoActedDismiss() {
+  adviceChips.clearAutoActedBanner();
+}
 
 // Reset dismiss state when navigating to a different session.
 // FR-020: SessionsView lives inside Shell.vue's <KeepAlive> with no
@@ -1289,7 +1632,7 @@ const longSessionNudge = useLongSessionNudge({
 // composable, restoring correct per-session behaviour.
 watch(sessionId, () => {
   longSessionNudge.reset();
-  void refreshNudgeCumulativeUsage();
+  void refreshNudgeHistoryTokens();
 }, { immediate: true });
 
 // ── Scroll position (controls-and-readouts-that-tell-the-truth-01PMZ808
@@ -1316,6 +1659,45 @@ async function loadInitialScrollPosition() {
   }
 }
 watch(sessionId, () => { void loadInitialScrollPosition(); }, { immediate: true });
+
+// agentgraph-settings-linkage-01DOGF0D WP04 (FR-3 / FR-5): the turn ->
+// run links that let every chat turn open the graph of what the agent
+// actually did (/agentgraph/run/:runId/graph) and its RunView. Keyed by
+// turn span id, from Sessions_TurnRuns (migration sessions/0342).
+//
+// Refetched on session switch AND whenever the stream subscription
+// changes: the backend records a turn's run before StartStream returns,
+// so the fetch that follows a new sub id already carries the live turn,
+// and the fetch after the stream closes settles the completed one.
+//
+// Served builds never fetch and pass `undefined` — Graph_* has no serve
+// dispatch (D-701), so a link would dead-end; MessageList then renders no
+// strip at all. A failed fetch also yields `undefined` (no strip) rather
+// than an empty map, which would wrongly mark every turn "not recorded".
+const turnRunsBySpan = ref<ReadonlyMap<string, string> | undefined>(undefined);
+async function loadTurnRuns() {
+  const id = sessionId.value;
+  if (servedMode || !id) {
+    turnRunsBySpan.value = undefined;
+    return;
+  }
+  try {
+    const runs = await client.sessions.turnRuns(id);
+    if (sessionId.value !== id) return; // switched away mid-fetch
+    const bySpan = new Map<string, string>();
+    for (const r of runs) {
+      if (r.turnSpanId) bySpan.set(r.turnSpanId, r.runId);
+    }
+    turnRunsBySpan.value = bySpan;
+  } catch {
+    if (sessionId.value === id) turnRunsBySpan.value = undefined;
+  }
+}
+watch(
+  [sessionId, () => session.streamSubscriptionId.value],
+  () => { void loadTurnRuns(); },
+  { immediate: true },
+);
 
 function onMessageListScrollPosition(pos: number) {
   const id = sessionId.value;
@@ -1389,7 +1771,49 @@ onMounted(() => {
   void loadInbox();
 });
 
+/** Inbox panel (device-keys-handoff-01DEVKH01 WP06): open / dismiss. */
+const inboxOpen = ref(false);
+function onInboxOpened(localSessionID: string) {
+  inboxOpen.value = false;
+  void router.push(`/sessions/${localSessionID}`);
+}
+
 const isSyncEnabled = computed(() => syncStatus.value?.enabled ?? false);
+
+/**
+ * fleet-session-truth-01DOGF0A FR-6 (dogfood F7): this session's context-sync
+ * appends are failing — the toolbar says "Synced to fleet" while nothing is
+ * syncing. Read from the shared fleet-session store (the backend's append
+ * breaker reports per-session state into it); null when syncing fine.
+ */
+const syncFailure = computed(() => fleetSessionSyncFailure(sessionId.value));
+/**
+ * The fleet server has no session-sync route (latched by the backend after a
+ * plain 404). The toggle may have persisted "enabled", but nothing leaves the
+ * device — say so instead of "Synced to fleet", and don't offer to enable.
+ */
+const syncUnsupported = computed(() => fleetSessionSyncUnsupported.value);
+const syncFailureText = computed(() => {
+  if (syncFailure.value) return `Not syncing — ${describeSyncReason(syncFailure.value.reason)}`;
+  if (syncUnsupported.value) return `Not syncing — ${describeSyncReason(SYNC_UNSUPPORTED_REASON)}`;
+  return '';
+});
+const syncToggleLabel = computed(() => {
+  if (syncUnsupported.value) return isSyncEnabled.value ? 'Sync on — kept local' : 'Sync unavailable';
+  return isSyncEnabled.value ? 'Synced to fleet' : 'Sync to fleet';
+});
+const syncFailureTitle = computed(() => {
+  const f = syncFailure.value;
+  if (!f) {
+    return syncUnsupported.value
+      ? 'The connected fleet server has no session-sync endpoint. Sign in again after fleet ships it to retry.'
+      : '';
+  }
+  const parts = [f.lastError ?? ''];
+  if (f.open) parts.push('Automatic retries stopped; toggle sync off and on to retry.');
+  if (f.dropped > 0) parts.push(`${f.dropped} message(s) were not synced.`);
+  return parts.filter(Boolean).join(' ');
+});
 
 async function onToggleSync() {
   const id = sessionId.value;
@@ -1488,8 +1912,9 @@ async function onShared() {
           :class="isSyncEnabled
             ? 'bg-accent/15 text-accent border border-accent/40'
             : 'bg-surface-2 text-ink-muted border border-border-muted hover:bg-surface-3'"
-          :disabled="syncToggling"
+          :disabled="syncToggling || (syncUnsupported && !isSyncEnabled)"
           :aria-pressed="isSyncEnabled"
+          :title="syncUnsupported ? describeSyncReason(SYNC_UNSUPPORTED_REASON) : undefined"
           data-testid="session-sync-toggle"
           @click="onToggleSync"
         >
@@ -1497,8 +1922,18 @@ async function onShared() {
             class="inline-block w-1.5 h-1.5 rounded-full"
             :class="isSyncEnabled ? 'bg-accent' : 'bg-ink-subtle'"
           />
-          {{ isSyncEnabled ? 'Synced to fleet' : 'Sync to fleet' }}
+          {{ syncToggleLabel }}
         </button>
+        <!-- Context-sync failure badge (fleet-session-truth-01DOGF0A FR-6) -->
+        <span
+          v-if="syncFailure || syncUnsupported"
+          class="rounded px-2 py-0.5 font-ui text-[11px] text-signal-warn border border-signal-warn/40 bg-surface-2"
+          role="status"
+          :title="syncFailureTitle"
+          data-testid="session-sync-degraded"
+        >
+          {{ syncFailureText }}
+        </span>
         <!-- Share button (only shown when session is loaded) -->
         <button
           type="button"
@@ -1521,14 +1956,27 @@ async function onShared() {
         >
           Purge remote
         </button>
-        <!-- Inbox badge (shown when there are pending handoff items) -->
-        <span
-          v-if="inboxItems.length > 0"
-          class="ml-auto rounded-full bg-accent px-2 py-0.5 font-ui text-[10px] text-white"
-          data-testid="session-inbox-badge"
-        >
-          {{ inboxItems.length }} shared
-        </span>
+        <!-- Inbox badge (shown when there are pending handoff items); opens
+             the inbox panel (device-keys-handoff-01DEVKH01 WP06). -->
+        <div v-if="inboxItems.length > 0" class="relative ml-auto">
+          <button
+            type="button"
+            class="rounded-full bg-accent px-2 py-0.5 font-ui text-[10px] text-white"
+            data-testid="session-inbox-badge"
+            :aria-expanded="inboxOpen"
+            @click="inboxOpen = !inboxOpen"
+          >
+            {{ inboxItems.length }} shared
+          </button>
+          <HandoffInboxPanel
+            v-if="inboxOpen"
+            class="absolute right-0 top-full z-30 mt-1"
+            :items="inboxItems"
+            @opened="onInboxOpened"
+            @changed="loadInbox"
+            @close="inboxOpen = false"
+          />
+        </div>
       </div>
     </div>
 
@@ -1765,26 +2213,46 @@ async function onShared() {
           >
             Context
           </button>
-          <!-- Compaction overhead readout (compaction-strategy-ui WP08
-               / plan §2.11). Hidden until at least one compaction call
-               has run; renders the running total tagged with
-               cost.kind = "compaction" alongside the session's grand
-               total so users can see what fraction of their spend
-               compaction is responsible for. -->
+          <!-- Compaction overhead readout (chat-turn-integrity-01PMZ606
+               WP12, owner ruling X-7 / CK-08). Hidden until at least one
+               compaction call has run anywhere in this process; renders
+               the running total tagged with cost.kind = "compaction".
+               Deliberately NOT "$X of session total $Y" — the backend
+               counter is process-wide, not per-session (see
+               core/rpc.CompactionOverheadInfo's doc comment), so a
+               session-scoped denominator would misstate what the number
+               means. -->
           <span
             v-if="compactionOverheadVisible"
             class="ml-auto px-3 py-1 font-ui text-[11px] tracking-[0.05em] text-ink-muted"
             data-testid="compaction-overhead-line"
+            :title="`Running total across this app session; not specific to the conversation you're viewing.${compactionOverheadIndeterminate > 0 ? ` ${compactionOverheadIndeterminate} call(s) had no matching price entry and are excluded from the dollar total.` : ''}`"
           >
             Compaction overhead:
             <span class="text-ink font-mono">
               ${{ compactionOverheadUSD.toFixed(2) }}
             </span>
-            of
+            across
+            <span class="text-ink font-mono">{{ compactionOverheadCalls }}</span>
+            {{ compactionOverheadCalls === 1 ? 'compaction' : 'compactions' }}
+          </span>
+          <!-- Auto-title overhead readout (model-settings-reach-the-model-
+               01PMZ101 WP07). Same process-wide-not-per-session shape as
+               the compaction row above; hidden until at least one
+               auto-title call has run anywhere in this process. -->
+          <span
+            v-if="autoTitleOverheadVisible"
+            class="ml-auto px-3 py-1 font-ui text-[11px] tracking-[0.05em] text-ink-muted"
+            data-testid="autotitle-overhead-line"
+            :title="`Running total across this app session; not specific to the conversation you're viewing.${autoTitleOverheadIndeterminate > 0 ? ` ${autoTitleOverheadIndeterminate} call(s) had no matching price entry and are excluded from the dollar total.` : ''}`"
+          >
+            Auto-title overhead:
             <span class="text-ink font-mono">
-              ${{ compactionOverheadTotalUSD.toFixed(2) }}
+              ${{ autoTitleOverheadUSD.toFixed(2) }}
             </span>
-            total
+            across
+            <span class="text-ink font-mono">{{ autoTitleOverheadCalls }}</span>
+            {{ autoTitleOverheadCalls === 1 ? 'call' : 'calls' }}
           </span>
           <!-- Show full history toggle (compaction-strategy-ui WP07).
                Per-session UI state (NOT persisted) — flips the
@@ -1796,7 +2264,7 @@ async function onShared() {
             type="button"
             class="px-3 py-1 rounded-sm font-ui text-[11px] uppercase tracking-[0.18em] border"
             :class="[
-              compactionOverheadVisible ? '' : 'ml-auto',
+              compactionOverheadVisible || autoTitleOverheadVisible ? '' : 'ml-auto',
               session.showFullHistory.value
                 ? 'border-accent text-accent bg-surface-1'
                 : 'border-border-muted text-ink-muted hover:text-ink hover:bg-surface-2',
@@ -1838,7 +2306,65 @@ async function onShared() {
           class="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_auto]"
           style="grid-template-rows: minmax(0, 1fr)"
         >
+          <!-- Sub-agent live-worker view (subagent-control-and-background-
+               tasks-01PMZB11 UNIT-10): when the session currently open IS
+               a dispatched sub-agent's child session (activeSubagentBranch
+               is non-null — computed off BranchSidebar's real
+               Branches_List rows, not a placeholder), SubagentTab owns
+               this cell instead of a bare MessageList: same transcript
+               (passed through its #transcript slot, unchanged props), plus
+               the real status pill / budget meter / Abort-Steer-Pause-
+               Resume controls wired to the UNIT-8 RPCs. The standalone
+               ChatInput below is hidden in this mode (see its own
+               v-if) — SubagentTab's composer is the one steering surface. -->
+          <SubagentTab
+            v-if="activeSubagentBranch"
+            :branch="activeSubagentBranch"
+            :child-session-id="sessionId"
+            data-testid="session-subagent-tab"
+            @abort="onSubagentAbort"
+            @steer="onSubagentSteer"
+            @pause="onSubagentPause"
+            @resume="onSubagentResume"
+          >
+            <template #transcript>
+              <MessageList
+                :key="sessionId"
+                :messages="visibleMessages"
+                :focus-message-id="searchFocusMessageId"
+                :streaming-messages="session.streamingMoves.value"
+                :waiting="isWaitingForFirstChunk"
+                :error-message="session.error.value"
+                :error-kind="session.errorKind.value"
+                :rememberable="memoryEnabled"
+                :saveable="true"
+                :project-id="session.session.value?.projectId ?? ''"
+                :artifacts-by-message="artifactsByMessage"
+                :swept-count="session.sweptCount.value"
+                :archive-days="compactionArchiveDays"
+                :show-token-meter="showPerMessageTokenMeter"
+                :initial-scroll-position="messageListInitialScrollPosition"
+                :turn-runs="turnRunsBySpan"
+                :undelivered="undeliveredForList"
+                :retry-message-id="retryMessageId"
+                :auto-retry="session.autoRetry.value"
+                :delivery-size-context="deliverySizeContext"
+                :tools-menu-available="!servedMode"
+                @open-tools="openToolsMenu"
+                @retry-delivery="onRetryDelivery"
+                @cancel-retry="onCancelDeliveryRetry"
+                @new-session="onNudgeNewSession"
+                @remember="onRemember"
+                @save-artifact="onSaveArtifactFromMessage"
+                @open-artifact="openArtifactPreview"
+                @branch-from-turn="onBranchFromTurn"
+                @resume="onResumeMessage"
+                @scroll-position="onMessageListScrollPosition"
+              />
+            </template>
+          </SubagentTab>
           <MessageList
+            v-else
             :key="sessionId"
             :messages="visibleMessages"
             :focus-message-id="searchFocusMessageId"
@@ -1854,6 +2380,15 @@ async function onShared() {
             :archive-days="compactionArchiveDays"
             :show-token-meter="showPerMessageTokenMeter"
             :initial-scroll-position="messageListInitialScrollPosition"
+            :turn-runs="turnRunsBySpan"
+            :undelivered="undeliveredForList"
+            :retry-message-id="retryMessageId"
+            :auto-retry="session.autoRetry.value"
+            :delivery-size-context="deliverySizeContext"
+            :tools-menu-available="!servedMode"
+            @open-tools="openToolsMenu"
+            @retry-delivery="onRetryDelivery"
+            @cancel-retry="onCancelDeliveryRetry"
             @new-session="onNudgeNewSession"
             @remember="onRemember"
             @save-artifact="onSaveArtifactFromMessage"
@@ -1862,6 +2397,18 @@ async function onShared() {
             @resume="onResumeMessage"
             @scroll-position="onMessageListScrollPosition"
           />
+          <!-- Sub-agent control-verb failure (UNIT-10) — Abort/Steer/
+               Pause/Resume calls can be denied by Cedar or fail at the
+               task registry; this surfaces that instead of leaving the
+               click silently do nothing. -->
+          <div
+            v-if="subagentControlError"
+            class="mx-4 mb-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+            role="alert"
+            data-testid="subagent-control-error"
+          >
+            {{ subagentControlError }}
+          </div>
           <!-- Branch-from-turn failure — rendered below the chat thread
                (FR-003: the error ref was set but never displayed). -->
           <div
@@ -1912,6 +2459,7 @@ async function onShared() {
           </div>
           <BranchSidebar
             v-if="hasSession && !servedMode"
+            ref="branchSidebarRef"
             :parent-session-id="sessionId"
             class="hidden lg:flex"
             @open="onBranchOpen"
@@ -2001,6 +2549,12 @@ async function onShared() {
             <span class="font-mono text-ink-muted">
               {{ activeModelId || '—' }}
             </span>
+            <span
+              v-if="activeModelCachesPrompts"
+              class="rounded-sm border border-border-muted px-1 text-[10px] text-ink-subtle"
+              title="Requests to this model mark the system prompt and loaded tools for the provider's prompt cache."
+              data-testid="session-model-caches-prompts"
+            >caches prompts</span>
             <span aria-hidden="true">▾</span>
           </button>
           <div
@@ -2030,7 +2584,7 @@ async function onShared() {
             >
               <div class="font-mono text-xs">{{ c.modelId }}</div>
               <div class="text-[10px] text-ink-dim">
-                {{ c.providerName }}
+                {{ c.providerName }}<template v-if="modelCachesPrompts(c.providerId, c.modelId)"> · caches prompts</template>
               </div>
             </button>
             <div
@@ -2054,21 +2608,43 @@ async function onShared() {
               </div>
             </div>
           </div>
+          <ToolsMenu
+            v-if="hasSession"
+            v-model:open="toolsMenuOpen"
+            :session-id="sessionId"
+            :project-id="session.session.value?.projectId ?? ''"
+            :composition="sessionUsage?.composition ?? null"
+            :window-tokens="contextDenominator"
+            :served-mode="servedMode"
+          />
           <!-- Cost pill (token-cost-telemetry-01KQ8TD7 WP04) -->
           <CostCell
             :usage="sessionUsage"
             :loading="sessionUsageLoading"
           />
+          <!-- llm-call-telemetry-01LLMTEL01 WP02: read-only "Model calls"
+               disclosure under the cost readout (local model-call store). -->
+          <ModelCallsDisclosure
+            v-if="hasSession"
+            :session-id="sessionId"
+            :served-mode="servedMode"
+          />
           <!-- Context window meter.
                Known window (hasContextWindow): bar + pct + used/max label.
                Unknown window (!hasContextWindow): greyed label only — no bar,
                no percentage, no misleading 200k fallback. -->
-          <div
+          <ContextCompositionPopover
+            v-slot="{ open: compositionOpen }"
+            :composition="sessionUsage?.composition ?? null"
+          >
+          <span
             class="flex items-center gap-2"
             data-testid="session-context-meter"
-            :title="hasContextWindow
-              ? `Context use — ${contextNumerator.toLocaleString()} of ${contextDenominator.toLocaleString()} tokens`
-              : 'Context window size unknown for this model'"
+            :title="compositionOpen
+              ? undefined
+              : hasContextWindow
+                ? `Context use — ${contextNumerator.toLocaleString()} of ${contextDenominator.toLocaleString()} tokens`
+                : 'Context window size unknown for this model'"
           >
             <span
               class="uppercase tracking-[0.14em]"
@@ -2077,17 +2653,17 @@ async function onShared() {
               context
             </span>
             <template v-if="hasContextWindow">
-              <div class="h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
-                <div
-                  class="h-full transition-[width] duration-300"
+              <span class="block h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
+                <span
+                  class="block h-full transition-[width] duration-300"
                   :class="{
                     'bg-signal-ok': contextBarTone === 'ok',
                     'bg-signal-warn': contextBarTone === 'warn',
                     'bg-signal-danger': contextBarTone === 'danger',
                   }"
                   :style="{ width: contextWindowPct + '%' }"
-                ></div>
-              </div>
+                ></span>
+              </span>
               <span class="font-mono text-ink-muted tabular-nums">
                 {{ contextWindowPct }}%
               </span>
@@ -2102,7 +2678,8 @@ async function onShared() {
             >
               unknown
             </span>
-          </div>
+          </span>
+          </ContextCompositionPopover>
         </div>
         <!-- Long-session nudge banner (v0.5.6 memory-trust-signals).
              Appears once per session when message/token thresholds are crossed.
@@ -2113,6 +2690,25 @@ async function onShared() {
           @branch="onNudgeBranch"
           @new-session="onNudgeNewSession"
           @dismiss="onNudgeDismiss"
+        />
+        <!-- Advisor seam chip (laya-advisors-01LAYA001 WP07). Passive
+             inline chip; accept/dismiss round-trips through
+             Advice_Respond via useAdviceChips. -->
+        <AdviceChip
+          v-if="adviceChips.activeChip.value"
+          :chip="adviceChips.activeChip.value"
+          @accept="onAdviceChipAccept"
+          @dismiss="onAdviceChipDismiss"
+        />
+        <!-- Advisor seam auto-act notice (laya-advisors-01LAYA001 WP07,
+             spec §3: "auto-act AND notify"). Fires when branch_now
+             auto-acts at the Autonomous tier — the ONLY visible signal
+             the user gets that a branch was created on their behalf. -->
+        <AdviceAutoActedBanner
+          v-if="adviceChips.autoActedBanner.value"
+          :notice="adviceChips.autoActedBanner.value"
+          @open="onAdviceAutoActedOpen"
+          @dismiss="onAdviceAutoActedDismiss"
         />
         <!-- SlashArgFill panel (WP06): shown when the user picks a
              user-defined slash command that declares input args.
@@ -2129,6 +2725,19 @@ async function onShared() {
         />
         <!-- ComposerError: surfaced when a knob-policy rejection (ErrUnsupportedFeature)
              stops the last message (provider-implementation-uniformity-01KQ8V4F WP08). -->
+        <DeliveryBanner
+          v-if="deliveryBannerFailure && !activeSubagentBranch"
+          :failure="deliveryBannerFailure"
+          :auto-retry="session.autoRetry.value"
+          :settings-available="!servedMode"
+          :size-context="deliverySizeContext"
+          :tools-available="!servedMode"
+          class="mx-3 mb-2"
+          @open-tools="openToolsMenu"
+          @retry="onRetryDelivery()"
+          @cancel-retry="onCancelDeliveryRetry"
+          @open-settings="onOpenProviderSettings"
+        />
         <ComposerError
           v-if="composerErrorText"
           :error="composerErrorText"
@@ -2136,6 +2745,7 @@ async function onShared() {
           @dismiss="onComposerErrorDismiss"
         />
         <ChatInput
+          v-if="!activeSubagentBranch"
           v-model="session.draft.value"
           :streaming="isStreaming"
           :queue-depth="sendQueue.length"
@@ -2166,12 +2776,13 @@ async function onShared() {
       :open="newSessionDialogOpen"
       @close="onNewSessionDialogClose"
     />
-    <!-- Confirm-each tool confirmations. The queue is deliberately
-         cross-session (a background session's tool call must still be
-         answerable), so the modal is told which session is in front in
-         order to LABEL foreign rows rather than to filter them.
-         (confirm-each-enforcement-01PMAG05) -->
-    <ConfirmToolModal :active-session-id="sessionId" />
+    <!-- Confirm-each tool confirmations moved to App.vue
+         (workflow-tool-permission-gate hang fix): the queue is
+         process-global (ConfirmBus.HasChannel() is not per-session/per-view),
+         so mounting the modal only here meant navigating to /workflows
+         unsubscribed the one surface that could answer a parked
+         confirm_each call, hanging any workflow tool dispatch that
+         parked. See App.vue for the live mount. -->
     <!-- Plan approval modal (p0-wiring-fixes WP01) — renders when the model
          has exited plan_mode and the toolloop is awaiting user approval. -->
     <PlanApprovalModal

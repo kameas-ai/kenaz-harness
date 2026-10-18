@@ -6,19 +6,32 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"sync"
 	"testing"
 	"time"
 
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
+
+// auditEmitter is the minimal interface compositeConfigApplier needs to
+// record config-bundle-applied audit events (fleet-org-config-inheritance-
+// 01NORGX01 WP05, FR-010). Mirrors the identical small local interface
+// declared by core/rpc/views/catalog and core/rpc/views/cedar — each view
+// package declares its own copy rather than depending on a shared emitter
+// type, so this is consistent with the existing pattern, not a new one.
+type auditEmitter interface {
+	EmitFleetEvent(ctx context.Context, kind contextaudit.Kind, payload any) error
+}
 
 // fleetState holds the fleet client, dataDir, capability poller, config
 // poller, and the emergency-lockdown watcher
@@ -38,11 +51,41 @@ type fleetState struct {
 	cedarEngine *cedarpolicy.Engine
 
 	// skillStore + skillRegistry are wired at boot time via SetSkillRefs so the
-	// compositeConfigApplier can call fleet.ApplyMandatedSkills when a bundle
-	// carries the mandated_skills section (fleet-skills-sync-01NDFSEX18 WP05).
+	// compositeConfigApplier's fleet.MandatedApplier can install / remove
+	// kind=skill mandated items (owner ruling 2026-10-06, WP02).
 	// Both may be nil when fleet skill sync is not configured.
 	skillStore    *slashcmd.SkillStore
 	skillRegistry *slashcmd.Registry
+
+	// mandatedWorkflows is the kind=workflow mandated-item consumer, wired
+	// via SetMandatedWorkflows (an adapter over the workflows view's
+	// InstallDocument path). nil → workflow items fail with
+	// fleet.ErrMandatedConsumerUnwired, never a silent drop.
+	mandatedWorkflows fleet.MandatedWorkflows
+
+	// mandatedApplier is the ONE per-process mandated-items applier (it
+	// remembers whether a state-file error was reported — review F5).
+	mandatedApplier *fleet.MandatedApplier
+
+	// toolExposurePins holds the organisation's tool-exposure policy from
+	// the last verified bundle (tool-context-budget-01TCBUD01 WP07). Loaded
+	// from disk by SetFleetClient; nil when fleet is disabled.
+	toolExposurePins *fleet.ToolExposurePins
+
+	// revocationWorkflows / revocationAnnounce / revocationSweeper: the
+	// catalog revocation sweep (skill-library-01SKLIB01 WP03). The sweeper
+	// is ONE per process (it carries the 401/403/404 backoff) and runs
+	// after every config poll — no timer of its own.
+	revocationWorkflows fleet.RevocationWorkflows
+	revocationAnnounce  func(fleet.RevocationTarget)
+	revocationSweeper   *fleet.RevocationSweeper
+
+	// configConsumersWired gates the config poller's start (review F4):
+	// the poller must not apply its first bundle before the mandated-item
+	// consumers (skill refs, workflows) are wired, or the boot-race
+	// bundle reads every skill/workflow item as unwired. Set by
+	// MarkConfigConsumersWired from rpc.New after the wiring block.
+	configConsumersWired bool
 
 	// otlpPipeline is the post-login OTLP export pipeline
 	// (harness-fleet-otlp-export-01NTLMEX01). Set via SetFleetOTLPPipeline;
@@ -66,11 +109,126 @@ type fleetState struct {
 	// (harness-fleet-otlp-export-01NTLMEX01 tp-nil timing fix)
 	tpFunc func() *sdktrace.TracerProvider
 
+	// resFunc lazily resolves the startup OTel resource. telemetryRes is
+	// captured at rpc.New time, before c.Start runs telemetry.Init, so in
+	// production it is always nil; resFunc is consulted at activation time
+	// instead, when the resource exists. Optional.
+	resFunc func() *resource.Resource
+
+	// usageTracker turns runtime turns / tool calls into the consent-gated
+	// usage lifecycle (fleet.ConversationTracker over a fleet.UsageEmitter).
+	// Built in SetFleetOTLPPipeline; nil when the pipeline is not wired.
+	usageTracker *fleet.ConversationTracker
+
+	// enrolled* is the identity of the last successful enroll, kept so
+	// ReconcileTelemetry can (re)activate export after a consent change
+	// without another enroll round trip. Cleared on sign-out.
+	enrolledOrgID  string
+	enrolledNodeID string
+	enrolledTier   string
+	enrolled       bool
+
 	// telemetryOptIns is the per-class telemetry opt-in set last fetched from
 	// the fleet store (harness-fleet-sync-activation-01NSYNC01 gap #4). The
 	// fleet store is authoritative; this is the harness-side cache populated at
 	// enroll. nil before the first successful fetch.
 	telemetryOptIns []fleet.TelemetryOptInItem
+	// optInsFetchedAt is when telemetryOptIns was last confirmed by Fleet (a
+	// GET, or a push Fleet acknowledged). Zero = never.
+	optInsFetchedAt time.Time
+
+	// optInPusher pushes the per-class opt-in vector a consent tier implies
+	// (fleet.TierOptInUpdates) to the fleet store, wired via
+	// SetTelemetryOptInPusher. Used here only to retry a push that failed in
+	// a previous session — the "next app start" half of its retry contract
+	// (see fleetEnroll). The tier-change half is handled directly by
+	// core/rpc/views/fleet.Impl.SetTelemetryConsent, which holds its own
+	// reference to the same pusher. nil on the test chassis / fleet-disabled
+	// path.
+	optInPusher *fleet.TelemetryOptInPusher
+
+	// syncKindRegistry is the SyncKind registry wired at SetSyncKindRegistry
+	// time (fleet-generic-sync-framework-01NSYNC02 WP02). Used by the
+	// composite ConfigApplier to dispatch a bundle's org_config keyed
+	// section to each entry's registered kind. nil when sync registration
+	// has not run (fleet disabled) — the org_config branch skips cleanly.
+	syncKindRegistry *fleet.KindRegistry
+
+	// mcpCatalog is the shared *recipes.MergedCatalog wired at
+	// SetMCPCatalog time (fleet-org-config-inheritance-01NORGX01 WP02).
+	// Used by the compositeConfigApplier to install/clear the org-
+	// provisioned recipe overlay when a bundle carries a provisioned_mcp
+	// section. nil in the rpc.New(nil) test harness path — the
+	// provisioned_mcp branch turns a missing catalog into a named apply
+	// error rather than a silently-discarded org config (same posture as
+	// the cedar_delta "engine not wired" branch below).
+	mcpCatalog *recipes.MergedCatalog
+
+	// auditEmitter is wired at SetAuditEmitter time (fleet-org-config-
+	// inheritance-01NORGX01 WP05, FR-010). Used by compositeConfigApplier
+	// to record a fleet.config.applied event naming the bundle_id, org,
+	// and provisioned recipe ids after a fully-clean ApplyBundle. nil
+	// means audit events are silently dropped — the rpc.New(nil) test
+	// harness path and any build where SetAuditEmitter is never called
+	// (mirrors every other optional Set* field on this struct).
+	auditEmitter auditEmitter
+
+	// lanes is the shared background-sync status board FleetSession.sync
+	// reads (fleet-session-truth-01DOGF0A FR-6). Never nil after
+	// newFleetState.
+	lanes *fleet.SyncLanes
+
+	// sess records the fleet session's recent transitions — the last enroll
+	// outcome, backoff, sign-in in flight — that the FleetSession snapshot
+	// derives degraded / signed-out from (fleet-session-truth-01DOGF0A).
+	sess sessionTrack
+
+	// emitMu serialises snapshot publication so the dedupe key and the
+	// emitted order agree; lastEmitKey is the transition key of the last
+	// snapshot published (fleet-session-truth-01DOGF0A WP02).
+	emitMu      sync.Mutex
+	lastEmitKey string
+
+	// clientVersion is the harness build version enroll reports to Fleet
+	// (SetFleetClientVersion; "dev" when unset). It was a hard-coded
+	// "0.18.0" (fleet-session-truth-01DOGF0A FR-9 / P-11).
+	clientVersion string
+
+	// signIn is the in-flight sign-in flow (nil when none); signInFlow is
+	// the browser flow, fleet.DeviceCodeFlow unless a test injects a fake
+	// (fleet-session-truth-01DOGF0A WP07).
+	signIn     *signInCall
+	signInFlow func(context.Context, fleet.EnvProfile) (fleet.TokenSet, error)
+
+	// sessionResetHooks run when one fleet session ends and another may
+	// begin (sign-in success, sign-out): per-session state held outside this
+	// package — the context-sync append breaker — forgets the old session.
+	sessionResetHooks []func()
+
+	// enrolledHooks run after EVERY successful enroll — sign-in, the boot
+	// enroll and the session supervisor's periodic re-enroll alike
+	// (OnFleetEnrolled). sessionResetHooks deliberately do not fire on a
+	// plain re-enroll (they purge per-session state); a consumer that only
+	// needs to re-read "am I enrolled now" registers here instead.
+	enrolledHooks []func()
+
+	// orgUnpausedHooks run when the org pause lifts (OnOrgUnpaused): the
+	// circuits / latches org_paused set outside this package — the append
+	// breaker, the audit archiver — reopen in the same fan-out as this
+	// package's config poller, memory lane and revocation sweep.
+	orgUnpausedHooks []func()
+	// orgPauseHooked is the client whose pause callbacks are registered
+	// (registration is per client, once).
+	orgPauseHooked *fleet.Client
+
+	// lanesHooked / supervisorStarted make their one-time wiring idempotent.
+	lanesHooked       bool
+	supervisorStarted bool
+}
+
+// newFleetState returns a fleetState with its always-present members built.
+func newFleetState() *fleetState {
+	return &fleetState{lanes: fleet.NewSyncLanes()}
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -78,31 +236,74 @@ type fleetState struct {
 // called, fleet methods return fleet.ErrFleetDisabled.
 func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
 	a.fleet.client = c
 	a.fleet.dataDir = dataDir
-	// Wire the session-expired broker into the client if already set.
-	if a.fleet.lockdownBroker != nil && c != nil {
-		c.SetSessionBroker(a.fleet.lockdownBroker)
+	if a.fleet.toolExposurePins == nil && c != nil && !c.IsNop() {
+		a.fleet.toolExposurePins = fleet.LoadToolExposurePins(dataDir)
 	}
+	// Wire the session-expired broker into the client if already set. The
+	// tap folds the event into the session track and republishes the
+	// FleetSession snapshot (fleet-session-truth-01DOGF0A WP02).
+	if c != nil {
+		// Always tap: the session-expired event is consumed in-process even
+		// before a broker is wired.
+		c.SetSessionBroker(sessionExpiredTap{api: a, inner: a.fleet.lockdownBroker})
+		c.SetAuthOKHook(a.onFleetAuthOK)
+		if a.fleet.orgPauseHooked != c {
+			a.fleet.orgPauseHooked = c
+			// A refusal observed on any request goroutine — which may hold
+			// locks of its own — republishes asynchronously.
+			c.OnOrgPauseChange(func(fleet.OrgPauseStatus) { go a.publishFleetSession("org_pause") })
+			c.OnOrgUnpaused(a.onOrgUnpaused)
+		}
+	}
+	// Lane-health changes republish the snapshot (registered once).
+	if !a.fleet.lanesHooked {
+		a.fleet.lanesHooked = true
+		a.fleet.lanes.OnChange(func() { a.publishFleetSession("sync_lane") })
+	}
+	a.startFleetBackgroundLocked()
+	// Backend-owned identity refresh cadence: replaces the per-component
+	// five-minute enroll poll the UI used to run (FR-2). Not under go test.
+	if !a.fleet.supervisorStarted && c != nil && !c.IsNop() && !testing.Testing() {
+		a.fleet.supervisorStarted = true
+		go a.runSessionSupervisor(context.Background())
+	}
+}
+
+// startFleetBackgroundLocked (re)creates whichever of the capability
+// poller, config poller and lockdown watcher are missing. Caller holds
+// a.fleet.mu. Called from SetFleetClient at boot and again after a
+// successful sign-in: StopFleetBackground (sign-out) nils all three, and
+// before fleet-session-truth-01DOGF0A nothing ever recreated them, so a
+// sign-out followed by a sign-in in the same process left capabilities
+// default-deny and the lockdown watcher dead until restart.
+func (a *API) startFleetBackgroundLocked() {
+	c := a.fleet.client
+	dataDir := a.fleet.dataDir
 	// Start the capability poller lazily. When c is a nop client the poller
 	// will degrade gracefully on every Refresh call.
-	if a.fleet.poller == nil {
-		p := fleet.NewCapabilityPoller(c, dataDir)
-		a.fleet.poller = p
-		p.Start(context.Background())
-	}
+	//
 	// Background network workers do not run under `go test`.
 	//
-	// The ConfigPoller calls fleet.LoadTokens -> keyring.Get() on a ticker.
-	// go-keyring's mock backend is a package-level global whose provider
-	// pointer AND whose internal map are both unsynchronised, so a poller
-	// alive during a test race any test touching the keyring. That surfaced
-	// for weeks as "TestKeychainDelete/Set...: race detected", which reads
-	// like a keychain flake and is not one.
+	// The CapabilityPoller and the ConfigPoller both call fleet.LoadTokens ->
+	// keyring.Get() — the CapabilityPoller does an immediate Refresh on
+	// Start when its cache is empty/stale (which it always is for a
+	// freshly-constructed test poller), so it hits the keychain even
+	// sooner than the ConfigPoller's first ticker fire. go-keyring's mock
+	// backend is a package-level global whose provider pointer AND whose
+	// internal map are both unsynchronised, so a poller alive during a
+	// test races any test touching the keyring. That surfaced for weeks
+	// as "TestKeychainDelete/Set...: race detected", which reads like a
+	// keychain flake and is not one — and blocked PR #342 on a real CI
+	// run because only the ConfigPoller half of this had been guarded
+	// (keyring-poller-race, WARNING: DATA RACE between
+	// CapabilityPoller.Start -> fetch -> LoadTokens -> keyring.Get and any
+	// sibling test's keyring.Set/keychainSet).
 	//
 	// Three earlier attempts fixed real but insufficient things:
 	//   - t.Cleanup(api.Shutdown) at all 13 construction sites (v0.66.0)
@@ -111,17 +312,50 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	// None could work. Cleanup runs when a test ENDS, but tests run in
 	// PARALLEL — one test's poller is alive exactly while another test
 	// touches the keyring. And MockInit hoisting removed the pointer race
-	// only to expose the map race beneath it.
+	// only to expose the map race beneath it. The ConfigPoller below got
+	// the right fix (not starting it in tests) but the CapabilityPoller a
+	// few lines up did not, leaving this exact class of leak alive under
+	// its own name.
 	//
-	// The poller has no business running in a unit test at all: it is a
-	// network worker on a ticker. Not starting it removes the whole class
+	// Neither poller has any business running in a unit test at all: both
+	// are network workers on a ticker (or an immediate-fetch-then-ticker,
+	// for the CapabilityPoller). Not starting them removes the whole class
 	// rather than another instance of it. Production is unaffected —
 	// testing.Testing() is false in the shipped binary.
-	if a.fleet.configPoller == nil && !testing.Testing() {
+	if a.fleet.poller == nil {
+		p := fleet.NewCapabilityPoller(c, dataDir)
+		a.fleet.poller = p
+		// One listener per poller: a capability arriving or leaving
+		// re-evaluates export (a tier change can move effective consent)
+		// and republishes the session snapshot so every gate re-renders in
+		// the same tick (FR-8). ReconcileTelemetry no-ops without a
+		// pipeline. Listeners run outside the poller's lock (WP02).
+		p.OnChange(func(fleet.Capabilities) {
+			a.ReconcileTelemetry(context.Background())
+			a.publishFleetSession("capabilities")
+		})
+		if !testing.Testing() {
+			p.Start(context.Background())
+		}
+	}
+	if a.fleet.configPoller == nil && a.fleet.configConsumersWired && !testing.Testing() {
 		applier := &compositeConfigApplier{state: a.fleet}
 		cp := fleet.NewConfigPoller(c, dataDir, applier)
+		cp.SetBuildVersion(a.fleet.clientVersion)
+		// The catalog revocation sweep rides this cadence (WP03): right
+		// after the bundle poll that also delivers revoke-of-pinned.
+		cp.SetAfterPoll(a.runRevocationSweep)
+		if a.fleet.revocationSweeper != nil {
+			a.fleet.revocationSweeper.ResetBackoff() // a (re)started poller is a fresh session
+		}
 		a.fleet.configPoller = cp
 		cp.Start(context.Background())
+	}
+	// Restart the learned-memory sync lane a prior StopFleetBackground
+	// stopped (no-op at boot, before SetMemorySync, and while it runs —
+	// core/rpc's buildMemorySync starts it the first time).
+	if ms := a.memorySync.Load(); ms != nil {
+		ms.Start(context.Background())
 	}
 	// Start the emergency-lockdown watcher. The watcher self-gates on
 	// CapEmergencyLockdown so it exits immediately when the capability
@@ -142,7 +376,7 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 // (fleet-emergency-lockdown-01NDFSEX12 WP02)
 func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -153,7 +387,7 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 	}
 	// Wire the broker into the fleet client for session-expired events (FR-005).
 	if a.fleet.client != nil {
-		a.fleet.client.SetSessionBroker(sink)
+		a.fleet.client.SetSessionBroker(sessionExpiredTap{api: a, inner: sink})
 	}
 }
 
@@ -170,7 +404,7 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 // bundle applied afterward — even the very next poll — sees it.
 func (a *API) SetCedarEngine(engine *cedarpolicy.Engine) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
@@ -200,32 +434,472 @@ func (a *API) SetFleetOTLPPipeline(
 	consent *fleet.TelemetryConsent,
 ) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
 	a.fleet.otlpPipeline = p
+	// "Share model-call telemetry with Fleet" (default OFF): the persisted
+	// value reaches the span lane the moment the pipeline is wired.
+	if p != nil && a.store != nil {
+		if s, err := a.store.LoadAll(); err == nil {
+			p.SetModelCallSharing(s.modelCallSharingEffective())
+		}
+	}
 	a.fleet.telemetryRes = startupRes
 	a.fleet.tpFunc = tpFunc
 	a.fleet.consent = consent
+
+	// The usage lifecycle: one emitter (consent-routed, closed vocabulary)
+	// and one tracker over it. A nil pipeline or consent yields a nil
+	// tracker, which every call site treats as a no-op.
+	if a.fleet.usageTracker != nil {
+		a.fleet.usageTracker.Close()
+		a.fleet.usageTracker = nil
+	}
+	if p != nil && consent != nil {
+		tracker := fleet.NewConversationTracker(fleet.NewUsageEmitter(p, consent))
+		a.fleet.usageTracker = tracker
+		if tracker != nil && !testing.Testing() {
+			// The idle janitor is a background ticker; like the pollers
+			// above it has no business running inside a unit test.
+			tracker.Start(context.Background())
+		}
+	}
+	// A tier change can move EFFECTIVE consent (a downgrade fails closed,
+	// an upgrade un-clamps a stored level), so export is re-evaluated
+	// whenever the capability snapshot changes — by the single listener
+	// startFleetBackgroundLocked registers on every poller it creates
+	// (fleet-session-truth-01DOGF0A WP02 moved it there so a poller
+	// recreated after sign-in carries it too).
+}
+
+// applyModelCallSharing hands the "Share model-call telemetry with Fleet"
+// setting to the live span lane (llm-call-telemetry-01LLMTEL01 WP02). No
+// pipeline (fleet disabled / not configured) means nothing can be shared,
+// so there is nothing to apply.
+func (a *API) applyModelCallSharing(on bool) {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	p := a.fleet.otlpPipeline
+	a.fleet.mu.RUnlock()
+	if p != nil {
+		p.SetModelCallSharing(on)
+	}
+}
+
+// SetFleetTelemetryResourceFunc supplies a lazy accessor for the startup OTel
+// resource (service.name / service.version). See fleetState.resFunc.
+func (a *API) SetFleetTelemetryResourceFunc(fn func() *resource.Resource) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	a.fleet.resFunc = fn
+	a.fleet.mu.Unlock()
+}
+
+// TelemetryPreferencesMaxAge bounds how long a cached per-user opt-in snapshot
+// may keep admitting export without Fleet re-confirming it. Past this, the
+// snapshot is dropped (nothing admitted) until a fetch succeeds: a preference
+// revoked in Fleet's web UI must not be outlived by an unreachable Fleet.
+const TelemetryPreferencesMaxAge = 15 * time.Minute
+
+// RefreshTelemetryPreferences re-reads the signed-in USER's per-class opt-ins
+// from Fleet and reconciles export. It is how a change made in Fleet's web UI
+// reaches a running harness; the served supervisor calls it on its slow tick
+// (about once a minute — never per tool call).
+//
+// Fetch failure never broadens consent: the cached snapshot is kept only
+// while it is younger than TelemetryPreferencesMaxAge, then fails closed.
+func (a *API) RefreshTelemetryPreferences(ctx context.Context) {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	enrolled := a.fleet.enrolled
+	a.fleet.mu.RUnlock()
+	if enrolled {
+		a.refreshTelemetryOptIns(ctx) // keeps the cache on error
+		a.fleet.mu.Lock()
+		stale := !a.fleet.optInsFetchedAt.IsZero() &&
+			time.Since(a.fleet.optInsFetchedAt) > TelemetryPreferencesMaxAge
+		pipeline := a.fleet.otlpPipeline
+		if stale {
+			a.fleet.telemetryOptIns = nil
+			a.fleet.optInsFetchedAt = time.Time{}
+		}
+		a.fleet.mu.Unlock()
+		if stale && pipeline != nil {
+			logging.L().Warn("fleet.telemetry_optins.stale_failing_closed")
+			pipeline.SetTelemetryOptIns(nil)
+		}
+	}
+	a.ReconcileTelemetry(ctx)
+}
+
+// FleetSessionEnded is the served-mode sign-out: the host broker session is
+// gone. It forgets the enrolled identity and stops export (discarding the
+// queue) but leaves the pollers alone — unlike FleetSignOut there is no token
+// store to clear, and the session may come back.
+func (a *API) FleetSessionEnded(ctx context.Context) {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	a.fleet.enrolled = false
+	a.fleet.enrolledOrgID, a.fleet.enrolledNodeID, a.fleet.enrolledTier = "", "", ""
+	a.fleet.sess = sessionTrack{}
+	a.fleet.telemetryOptIns = nil
+	a.fleet.optInsFetchedAt = time.Time{}
+	pipeline := a.fleet.otlpPipeline
+	a.fleet.mu.Unlock()
+	if pipeline != nil {
+		pipeline.SetTelemetryOptIns(nil)
+	}
+	a.ReconcileTelemetry(ctx) // not enrolled ⇒ DropAll + Deactivate
+	a.publishFleetSession("served_session_ended")
+}
+
+// SetFleetExportUnauthorizedHook wires the pipeline's 401 callback (served
+// mode: the broker session's NotifyOn401).
+func (a *API) SetFleetExportUnauthorizedHook(fn func()) {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	pipeline := a.fleet.otlpPipeline
+	a.fleet.mu.RUnlock()
+	if pipeline != nil {
+		pipeline.SetOnUnauthorized(fn)
+	}
+}
+
+// FlushFleetTelemetryForShutdown is the CLEAN-shutdown path: the session is
+// still valid, so open conversation segments are ended (their totals are the
+// most useful numbers the lifecycle produces) and both usage lanes are flushed
+// before StopFleetBackground tears export down. Contrast sign-out, which
+// discards. Bounded so a dead network cannot hold up process exit.
+func (a *API) FlushFleetTelemetryForShutdown() {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	pipeline := a.fleet.otlpPipeline
+	tracker := a.fleet.usageTracker
+	a.fleet.mu.RUnlock()
+	if pipeline == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tracker.EndAll(ctx)
+	tracker.Close()
+	pipeline.Flush(ctx)
+}
+
+// FleetUsageTracker returns the usage lifecycle tracker, or nil when fleet
+// telemetry is not wired. The runtime seams (agentgraph.ToolUsageObserver,
+// chat.TurnUsageObserver, the chat UsageHook) resolve it through this
+// accessor on every call rather than capturing it, because the pipeline is
+// wired after the chat and graph stacks are constructed.
+func (a *API) FleetUsageTracker() *fleet.ConversationTracker {
+	if a == nil || a.fleet == nil {
+		return nil
+	}
+	a.fleet.mu.RLock()
+	defer a.fleet.mu.RUnlock()
+	return a.fleet.usageTracker
+}
+
+// FleetOrgTier returns the org tier the consent gate should clamp against.
+//
+// The capability poller is the primary source. It is not sufficient on its
+// own: in a workbench the poller's first refresh runs during rpc.New, BEFORE
+// the broker token source is installed, so it fails and backs off — and at
+// enroll time, seconds later, the poller still reports no tier. Consent then
+// clamps to "none" and export was skipped, permanently, with a debug line as
+// the only trace. The enroll response carries the same server-asserted tier,
+// so it is the fallback until the poller catches up.
+func (a *API) FleetOrgTier() string {
+	if a == nil || a.fleet == nil {
+		return "free"
+	}
+	a.fleet.mu.RLock()
+	poller := a.fleet.poller
+	enrolledTier := a.fleet.enrolledTier
+	a.fleet.mu.RUnlock()
+	if poller != nil {
+		if t := poller.Current().Tier; t != "" {
+			return t
+		}
+	}
+	if enrolledTier != "" {
+		return enrolledTier
+	}
+	return "free"
+}
+
+// FleetTelemetryStatus returns a payload-free snapshot of the export pipeline
+// for Settings and for diagnosis: whether it is active, the effective consent,
+// and accepted/dropped/export counters. No identifiers, no bodies.
+func (a *API) FleetTelemetryStatus(_ context.Context) (FleetTelemetryStatusView, error) {
+	view := FleetTelemetryStatusView{EffectiveConsent: string(fleet.ConsentNone)}
+	if a == nil || a.fleet == nil {
+		return view, nil
+	}
+	a.fleet.mu.RLock()
+	pipeline := a.fleet.otlpPipeline
+	consent := a.fleet.consent
+	tracker := a.fleet.usageTracker
+	view.Enrolled = a.fleet.enrolled
+	for _, item := range a.fleet.telemetryOptIns {
+		if item.OptedIn {
+			view.OptedInClasses = append(view.OptedInClasses, item.Class)
+		}
+	}
+	if !a.fleet.optInsFetchedAt.IsZero() {
+		view.PreferencesFetchedAt = a.fleet.optInsFetchedAt.UTC().Format(time.RFC3339)
+	}
+	a.fleet.mu.RUnlock()
+	sort.Strings(view.OptedInClasses)
+	if consent != nil {
+		view.EffectiveConsent = string(consent.EffectiveLevel())
+		view.StoredConsent = string(consent.Level())
+	}
+	view.OrgTier = a.FleetOrgTier()
+	if pipeline != nil {
+		view.Wired = true
+		view.Pipeline = pipeline.Status()
+	}
+	view.OpenConversations = tracker.OpenSegments()
+	return view, nil
+}
+
+// FleetTelemetryStatusView is the wire shape of FleetTelemetryStatus.
+type FleetTelemetryStatusView struct {
+	Wired             bool                 `json:"wired"`
+	Enrolled          bool                 `json:"enrolled"`
+	StoredConsent     string               `json:"stored_consent"`
+	EffectiveConsent  string               `json:"effective_consent"`
+	OrgTier           string               `json:"org_tier"`
+	OpenConversations int                  `json:"open_conversations"`
+	// OptedInClasses are THIS USER's per-class preferences as last confirmed
+	// by Fleet (per user, not an org default). Class names only.
+	OptedInClasses       []string `json:"opted_in_classes"`
+	PreferencesFetchedAt string   `json:"preferences_fetched_at,omitempty"`
+	Pipeline          fleet.PipelineStatus `json:"pipeline"`
+}
+
+// SetTelemetryOptInPusher wires the tier→opt-ins pusher (fleet telemetry
+// tier fix, core/fleet/telemetry_optins_pusher.go) so fleetEnroll can retry,
+// at the next app start, a push that failed (or was never attempted, e.g.
+// fleet was unreachable) in a previous session. Called from rpc.New()
+// alongside the fleetview.Impl construction that holds the same pusher for
+// the "next tier change" half of the retry contract.
+func (a *API) SetTelemetryOptInPusher(p *fleet.TelemetryOptInPusher) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.optInPusher = p
+}
+
+// AdoptTelemetryOptIns caches an already-known per-class opt-in snapshot —
+// e.g. one TelemetryOptInPusher just confirmed pushing — and feeds it to the
+// OTLP log lane's narrowing snapshot, without a redundant GET round trip to
+// the fleet store. Mirrors the tail of refreshTelemetryOptIns (cache +
+// pipeline.SetTelemetryOptIns) but skips the fetch. Safe to call with nil
+// items (e.g. to clear).
+func (a *API) AdoptTelemetryOptIns(items []fleet.TelemetryOptInItem) {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	a.fleet.telemetryOptIns = items
+	if items != nil {
+		a.fleet.optInsFetchedAt = time.Now()
+	} else {
+		a.fleet.optInsFetchedAt = time.Time{}
+	}
+	pipeline := a.fleet.otlpPipeline
+	a.fleet.mu.Unlock()
+	if pipeline != nil {
+		pipeline.SetTelemetryOptIns(items)
+	}
+}
+
+// retryPendingTelemetryOptInPush re-attempts a tier-implied opt-in push that
+// failed (or was skipped, e.g. fleet unreachable) in a previous session —
+// the "next app start" half of TelemetryOptInPusher's retry contract. Called
+// from fleetEnroll. Best-effort: errors are logged, not returned, so a
+// pending sync issue never blocks sign-in/enroll.
+func (a *API) retryPendingTelemetryOptInPush(ctx context.Context) {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	pusher := a.fleet.optInPusher
+	consent := a.fleet.consent
+	a.fleet.mu.RUnlock()
+	if pusher == nil || consent == nil {
+		return
+	}
+	if err := pusher.Reconcile(ctx, consent.Level()); err != nil {
+		logging.L().Debug("fleet.telemetry_optins.reconcile.failed", "err", err.Error())
+	}
 }
 
 // SetSkillRefs wires the fleet-skill store and slash registry into the fleet
-// state so that the compositeConfigApplier can call fleet.ApplyMandatedSkills
-// when a config bundle carries a mandated_skills section.
-// (fleet-skills-sync-01NDFSEX18 WP05)
+// state so that the compositeConfigApplier can install and remove
+// kind=skill items of a bundle's mandated_items section (WP02).
 //
 // Called from rpc.New() after both the skillStore and slashRegistry are
-// constructed. Safe to skip — when nil, ApplyBundle silently skips the
-// mandated_skills section.
+// constructed. When never called, a skill item fails with a named
+// fleet.ErrMandatedConsumerUnwired error in the ACK.
 func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Registry) {
 	if a.fleet == nil {
-		a.fleet = &fleetState{}
+		a.fleet = newFleetState()
 	}
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
 	a.fleet.skillStore = store
 	a.fleet.skillRegistry = registry
+}
+
+// MarkConfigConsumersWired is called once rpc.New has wired every
+// config-bundle consumer (skill refs, mandated workflows, Cedar engine, MCP
+// catalog…). Only then may the config poller start (review F4); when the
+// fleet client is already set, the poller starts now.
+func (a *API) MarkConfigConsumersWired() {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.configConsumersWired = true
+	if a.fleet.client != nil {
+		a.startFleetBackgroundLocked()
+	}
+}
+
+// SetMandatedWorkflows wires the kind=workflow mandated-item consumer
+// (owner ruling 2026-10-06, WP02). Called from rpc.New() once the workflows
+// view exists.
+func (a *API) SetMandatedWorkflows(w fleet.MandatedWorkflows) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.mandatedWorkflows = w
+}
+
+// SetRevocationWorkflows wires the workflow half of the catalog revocation
+// sweep (skill-library-01SKLIB01 WP03): the workflows view's catalog-install
+// enumeration and its provenance-checked removal. Safe to skip — the sweep
+// then covers skills only.
+func (a *API) SetRevocationWorkflows(w fleet.RevocationWorkflows) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.revocationWorkflows = w
+}
+
+// SetRevocationAnnouncer wires a callback told about every revocation
+// uninstall (the rpc layer publishes capability:uninstalled so an open
+// Capabilities surface repaints).
+func (a *API) SetRevocationAnnouncer(fn func(fleet.RevocationTarget)) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.revocationAnnounce = fn
+}
+
+// runRevocationSweep is the config poller's after-poll hook: one catalog
+// revocation sweep with the consumers as currently wired.
+func (a *API) runRevocationSweep(ctx context.Context) {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	if a.fleet.revocationSweeper == nil {
+		a.fleet.revocationSweeper = &fleet.RevocationSweeper{}
+	}
+	sw := a.fleet.revocationSweeper
+	client, skills, reg := a.fleet.client, a.fleet.skillStore, a.fleet.skillRegistry
+	wf, lanes, em, announce := a.fleet.revocationWorkflows, a.fleet.lanes, a.fleet.auditEmitter, a.fleet.revocationAnnounce
+	a.fleet.mu.Unlock()
+	sw.Rewire(func(s *fleet.RevocationSweeper) {
+		s.Client, s.Skills, s.Registry, s.Workflows, s.Lanes, s.OnUninstalled = client, skills, reg, wf, lanes, announce
+		s.Emitter = em
+	})
+	if _, err := sw.Sweep(ctx); err != nil {
+		logging.L().Warn("fleet.revocation.sweep_failed", "err", err.Error())
+	}
+}
+
+// SetMCPCatalog wires the shared *recipes.MergedCatalog into the fleet
+// state so the compositeConfigApplier can install org-provisioned recipes
+// when a bundle carries a provisioned_mcp section
+// (fleet-org-config-inheritance-01NORGX01 WP02).
+//
+// Called from rpc.New() after mergedCat is constructed. Safe to skip —
+// when nil, ApplyBundle's provisioned_mcp branch turns a non-empty
+// section into a named apply error (mirrors SetCedarEngine / SetSkillRefs
+// never being called) rather than silently discarding a signed org
+// config, per fleet-enforcement-truth-01PMZ505 WP02's "must not ack
+// applied:true for a section this device cannot apply" rule.
+func (a *API) SetMCPCatalog(cat *recipes.MergedCatalog) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.mcpCatalog = cat
+}
+
+// SetAuditEmitter wires the audit emitter into the fleet state so
+// compositeConfigApplier can record a fleet.config.applied event on every
+// fully-clean ApplyBundle (fleet-org-config-inheritance-01NORGX01 WP05,
+// FR-010). Call anywhere relative to SetFleetClient — ApplyBundle reads
+// a.state.auditEmitter fresh (under a.state.mu) on every call, same
+// posture as SetCedarEngine. Safe to skip: nil means the event is never
+// emitted (the pre-WP05 state for every build that predates this wiring).
+func (a *API) SetAuditEmitter(em auditEmitter) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.auditEmitter = em
+}
+
+// SetSyncKindRegistry wires the SyncKind registry into the fleet state so
+// the compositeConfigApplier can dispatch a bundle's org_config keyed
+// section to each entry's registered kind
+// (fleet-generic-sync-framework-01NSYNC02 WP02).
+//
+// Called from rpc.New() after registerSyncCategories (and, in whichever
+// order, registerSlashCommandsSyncKind — both mutate the same *fleet.
+// KindRegistry pointer in place, so call order relative to this setter does
+// not matter; SetSyncKindRegistry only needs to run once with that pointer).
+// Safe to skip — when nil, ApplyBundle's org_config branch logs and skips
+// every entry rather than applying nothing silently as a false "success".
+func (a *API) SetSyncKindRegistry(registry *fleet.KindRegistry) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.syncKindRegistry = registry
 }
 
 func (a *API) fleetClient() *fleet.Client {
@@ -270,9 +944,89 @@ func (a *API) CapabilityPoller() *fleet.CapabilityPoller {
 	return a.fleetPoller()
 }
 
+// signInCall is one in-flight sign-in flow that concurrent callers join
+// (fleet-session-truth-01DOGF0A FR-5 / P-6).
+type signInCall struct {
+	done   chan struct{}
+	cancel context.CancelFunc
+	id     FleetIdentity
+	err    error
+}
+
 // FleetSignIn kicks off the PKCE loopback OAuth flow. On success it
 // calls FleetRefreshIdentity to populate the cached identity.
+//
+// Single-flight (FR-5): a second call while a flow is in flight JOINS it
+// instead of opening a second browser window — dogfood B3's redundant flow
+// came from a bogus "Sign in" offered while a session existed. The flow runs
+// on its own context so that FleetSignInCancel (the UI's "Cancel") is what
+// stops it, not whichever caller's context happens to end first; a joining
+// caller whose own context ends just stops waiting.
 func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
+	if a.fleet == nil {
+		return FleetIdentity{}, fleet.ErrFleetDisabled
+	}
+	a.fleet.mu.Lock()
+	if call := a.fleet.signIn; call != nil {
+		a.fleet.mu.Unlock()
+		logging.L().Info("fleet.rpc.sign_in.joined_in_flight")
+		select {
+		case <-call.done:
+			return call.id, call.err
+		case <-ctx.Done():
+			return FleetIdentity{}, ctx.Err()
+		}
+	}
+	flowCtx, cancel := context.WithCancel(context.Background())
+	call := &signInCall{done: make(chan struct{}), cancel: cancel}
+	a.fleet.signIn = call
+	a.fleet.sess.signingIn = true
+	a.fleet.sess.signInReason, a.fleet.sess.signInErr = "", ""
+	a.fleet.mu.Unlock()
+	a.publishFleetSession("sign_in_start")
+
+	id, err := a.runSignIn(flowCtx)
+	cancel()
+
+	a.fleet.mu.Lock()
+	a.fleet.signIn = nil
+	a.fleet.sess.signingIn = false
+	if err != nil {
+		reason, msg := FleetReasonSignInFailed, err.Error()
+		switch {
+		case errors.Is(err, context.Canceled):
+			reason = FleetReasonSignInCancelled
+		case errors.Is(err, fleet.ErrNodeRemoved):
+			reason, msg = FleetReasonNodeRemoved, fleetNodeRemovedCopy
+		}
+		a.fleet.sess.signInReason, a.fleet.sess.signInErr = reason, msg
+	}
+	a.fleet.mu.Unlock()
+	call.id, call.err = id, err
+	close(call.done)
+	a.publishFleetSession("sign_in_end")
+	return id, err
+}
+
+// FleetSignInCancel cancels the in-flight sign-in flow, if any, through
+// DeviceCodeFlow's ctx.Done() branch (FR-5). Idempotent; a no-op when no
+// flow is running. The pending FleetSignIn returns context.Canceled.
+func (a *API) FleetSignInCancel(_ context.Context) error {
+	if a == nil || a.fleet == nil {
+		return nil
+	}
+	a.fleet.mu.RLock()
+	call := a.fleet.signIn
+	a.fleet.mu.RUnlock()
+	if call != nil {
+		logging.L().Info("fleet.rpc.sign_in.cancel_requested")
+		call.cancel()
+	}
+	return nil
+}
+
+// runSignIn is one sign-in flow: browser PKCE flow, token save, enroll.
+func (a *API) runSignIn(ctx context.Context) (FleetIdentity, error) {
 	logging.L().Info("fleet.rpc.sign_in.start")
 	c := a.fleetClient()
 	if c == nil || fleet.Disabled() {
@@ -289,8 +1043,19 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 		)
 		return FleetIdentity{}, fleet.ErrProfileNotConfigured
 	}
-	ts, err := fleet.DeviceCodeFlow(ctx, profile)
+	a.fleet.mu.RLock()
+	flow := a.fleet.signInFlow
+	a.fleet.mu.RUnlock()
+	if flow == nil {
+		flow = fleet.DeviceCodeFlow
+	}
+	ts, err := flow(ctx, profile)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			// The user pressed Cancel: an outcome, not a failure (P-5).
+			logging.L().Info("fleet.rpc.sign_in.cancelled")
+			return FleetIdentity{}, err
+		}
 		logging.L().Error("fleet.rpc.sign_in.device_code_flow_failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}
@@ -299,11 +1064,41 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 		return FleetIdentity{}, err
 	}
 	logging.L().Info("fleet.rpc.sign_in.tokens_saved")
+	// A fresh sign-in clears whatever ended or stalled the previous session
+	// (expiry, not-provisioned stop) and restarts the background workers a
+	// prior sign-out tore down (fleet-session-truth-01DOGF0A WP02).
+	a.fleet.mu.Lock()
+	a.fleet.sess.expired = false
+	a.fleet.sess.autoRetryStopped = false
+	// An explicit sign-in is the "re-authorized sign-in" fleet requires
+	// after an admin removal; node_id.txt was cleared, so this enroll
+	// mints a fresh node id.
+	a.fleet.sess.nodeRemoved = false
+	dataDirForMarker := a.fleet.dataDir
+	a.startFleetBackgroundLocked()
+	a.fleet.mu.Unlock()
+	if err := fleet.ClearNodeRemoved(dataDirForMarker); err != nil {
+		logging.L().Warn("fleet.rpc.sign_in.clear_node_removed_failed", "err", err.Error())
+	}
 	id, err := a.fleetEnroll(ctx)
 	if err != nil {
 		logging.L().Error("fleet.rpc.sign_in.enroll_failed", "err", err.Error())
 		return id, err
 	}
+	// The capability poller still holds the signed-out answer; fetch now so
+	// the snapshot (and every gate reading it) opens on the next push rather
+	// than at the poller's next tick, whichever surface the sign-in came
+	// from (fleet-session-truth-01DOGF0A FR-8 — a menu sign-in left the rail
+	// stale). Its OnChange republishes the session. Not under go test (the
+	// pollers' network work never runs there).
+	if p := a.fleetPoller(); p != nil && !testing.Testing() {
+		go func() {
+			rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = p.Refresh(rctx)
+		}()
+	}
+	a.runSessionResetHooks()
 	logging.L().Info("fleet.rpc.sign_in.success",
 		"org_id", id.OrgID,
 		"team_id", id.TeamID,
@@ -315,7 +1110,7 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 }
 
 // StopFleetBackground stops all fleet background goroutines (capability
-// poller, config poller, lockdown watcher) and clears the in-memory
+// poller, config poller, lockdown watcher, memory sync lane) and clears the in-memory
 // lockdown flag + model-pref cache. It is idempotent and safe to call
 // from sign-out or app shutdown.
 //
@@ -341,14 +1136,52 @@ func (a *API) StopFleetBackground() {
 	// allow-list or default model pushed before sign-out.
 	llmview.ClearFleetModelPrefs()
 	a.fleet.telemetryOptIns = nil
+	a.fleet.enrolled = false
+	a.fleet.enrolledOrgID = ""
+	a.fleet.enrolledNodeID = ""
+	a.fleet.enrolledTier = ""
+	// A stopped background is a session that no longer exists: forget its
+	// transitions and lane health so nothing from it is shown afterwards.
+	a.fleet.sess = sessionTrack{}
 	pipeline := a.fleet.otlpPipeline
+	tracker := a.fleet.usageTracker
+	mcpCatalog := a.fleet.mcpCatalog
+	syncKindRegistry := a.fleet.syncKindRegistry
 	a.fleet.mu.Unlock()
+	// Lane health is reset by FleetSignOut AFTER the tokens are cleared
+	// (review F8), not here.
+
+	// Clear the org-provisioned recipe overlay (fleet-org-config-
+	// inheritance-01NORGX01 WP02 / spec §5's "removing fleet cleanly
+	// reverts to local-only" success criterion). Outside the lock, same
+	// as the OTLP pipeline clear below: SetOrgRecipes takes its own lock
+	// on the catalog, not fleetState's.
+	if mcpCatalog != nil {
+		mcpCatalog.SetOrgRecipes(nil)
+	}
+
+	// Clear the generic org-provenance tracker (fleet-generic-sync-
+	// framework-01NSYNC02 WP03) — the kind-agnostic counterpart to
+	// SetOrgRecipes(nil) above. Without this, a signed-out device's
+	// Settings → Sync surface (WP06) would keep reporting a kind as
+	// "provisioned by your org" from a stale timestamp forever, even
+	// though FR-008 requires org layers to drop cleanly on sign-out.
+	if syncKindRegistry != nil {
+		syncKindRegistry.ClearOrgProvenance()
+	}
 
 	// Drop the OTLP log lane's narrowing snapshot too: an empty snapshot
 	// admits nothing, so a signed-out harness cannot keep exporting against a
 	// stale opt-in set.
 	if pipeline != nil {
 		pipeline.SetTelemetryOptIns(nil)
+		// ...and stop exporting. Clearing the opt-in snapshot narrows the
+		// lanes to nothing, but the span processor, the providers and their
+		// queues were left running under the signed-out identity. Deactivate
+		// tears them down and DISCARDS what is queued; open conversation
+		// segments are dropped, not reported, for the same reason.
+		tracker.DropAll()
+		pipeline.Deactivate(context.Background())
 	}
 
 	// Stop goroutines outside the lock.
@@ -360,6 +1193,11 @@ func (a *API) StopFleetBackground() {
 	}
 	if watcher != nil {
 		watcher.Stop()
+	}
+	// The memory sync lane too: it would otherwise keep cycling against the
+	// signed-out client (startFleetBackgroundLocked restarts it on sign-in).
+	if ms := a.memorySync.Load(); ms != nil {
+		ms.Stop()
 	}
 	// Clear the package-level lockdown flag so a re-login starts clean.
 	fleet.ForceSetLockdownForTest(false) // production-safe: the symbol is exported for exactly this use
@@ -374,15 +1212,32 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 		logging.L().Warn("fleet.rpc.sign_out.disabled_by_env")
 		return fleet.ErrFleetDisabled
 	}
+	// Self-unenroll while the tokens still authenticate: fleet revokes
+	// this node's device keys, so a signed-out device stops counting
+	// toward the 16-active-handoff-key cap (fleet answers 2026-10-07:
+	// dormant devices count until unenrolled). Best-effort and bounded —
+	// sign-out never fails or stalls on it. Explicit sign-out only; not
+	// on app quit (device-keys-handoff-01DEVKH01 OQ-9).
+	a.selfUnenroll(ctx)
+
 	// Stop pollers + watcher + clear caches before removing tokens so
 	// in-flight requests have a chance to complete.
 	a.StopFleetBackground()
+	a.clearToolExposurePins("sign_out")
+	// Fleet-delivered provider keys go while the token still says whose
+	// they are (provider-credentials-client-01PCCLI01 WP04).
+	purgeFleetCredentialsForSignOut("sign_out")
 
 	// Aggregate keyring errors: a missing token is not an error on sign-out.
 	var signOutErr error
 	if err := fleet.ClearTokens(); err != nil {
 		logging.L().Warn("fleet.rpc.sign_out.clear_tokens_partial", "err", err.Error())
 		signOutErr = err // surface to caller; sign-out proceeds regardless
+	}
+	// Lane health is reset only now that the tokens are gone, so the
+	// reset's publish cannot emit a transient signed_in snapshot (review F8).
+	if a.fleet != nil {
+		a.fleet.lanes.Reset()
 	}
 	dataDir := a.fleetDataDir()
 	if dataDir != "" {
@@ -396,7 +1251,130 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 	} else {
 		logging.L().Info("fleet.rpc.sign_out.success")
 	}
+	a.runSessionResetHooks()
+	a.publishFleetSession("sign_out")
 	return signOutErr
+}
+
+// selfUnenrollTimeout bounds the sign-out DELETE /me/nodes/{id}.
+const selfUnenrollTimeout = 5 * time.Second
+
+// selfUnenroll revokes this device's fleet registration (and with it its
+// device keys) on explicit sign-out. Never mints a node id; skipped when
+// there is no enrolled node or no usable session.
+func (a *API) selfUnenroll(ctx context.Context) {
+	c := a.fleetClient()
+	if c == nil || c.IsNop() {
+		return
+	}
+	nodeID := fleet.ReadNodeID(a.fleetDataDir())
+	if nodeID == "" {
+		return
+	}
+	if ok, _ := c.SignedIn(ctx); !ok {
+		return
+	}
+	uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), selfUnenrollTimeout)
+	defer cancel()
+	if err := c.UnenrollNode(uctx, nodeID); err != nil {
+		logging.L().Warn("fleet.rpc.sign_out.unenroll_failed", "err", err.Error())
+		return
+	}
+	logging.L().Info("fleet.rpc.sign_out.unenrolled")
+}
+
+// handleNodeRemoved is the terminal sign-out for 403 node_removed (fleet
+// contract §10.1, device-keys-handoff-01DEVKH01 WP02): stop the background
+// lanes, clear the tokens, the cached identity AND node_id.txt (so the next
+// sign-in enrolls under a fresh node id — wire-id-safe, wire ids derive
+// from wire_id_salt which is NOT touched), and leave a signed-out snapshot
+// whose reason is node_removed. No self-unenroll: the node is already gone.
+func (a *API) handleNodeRemoved() {
+	// Durable marker FIRST: whatever fails below (keychain delete, file
+	// removal) or however the process restarts, enroll stays refused until
+	// an explicit sign-in (review fix #5).
+	// The identity is read while the tokens still exist; a served guest
+	// compares it with what its host presents later (FleetHostIdentityPresented).
+	if err := fleet.MarkNodeRemoved(a.fleetDataDir(), fleet.TokenIdentityKey()); err != nil {
+		logging.L().Warn("fleet.node_removed.mark_failed", "err", err.Error())
+	}
+	a.StopFleetBackground()
+	a.clearToolExposurePins("node_removed")
+	purgeFleetCredentialsForSignOut("node_removed")
+	if err := fleet.ClearTokens(); err != nil {
+		logging.L().Warn("fleet.node_removed.clear_tokens_partial", "err", err.Error())
+	}
+	if a.fleet != nil {
+		a.fleet.lanes.Reset()
+	}
+	if dataDir := a.fleetDataDir(); dataDir != "" {
+		if err := os.Remove(fleet.IdentityFilePath(dataDir)); err != nil && !os.IsNotExist(err) {
+			logging.L().Warn("fleet.node_removed.remove_identity_failed", "err", err.Error())
+		}
+		if err := fleet.ClearNodeID(dataDir); err != nil {
+			logging.L().Warn("fleet.node_removed.clear_node_id_failed", "err", err.Error())
+		}
+	}
+	if a.fleet != nil {
+		a.fleet.mu.Lock()
+		a.fleet.sess.nodeRemoved = true
+		a.fleet.sess.autoRetryStopped = true
+		a.fleet.sess.signInReason = FleetReasonNodeRemoved
+		a.fleet.sess.signInErr = fleetNodeRemovedCopy
+		a.fleet.mu.Unlock()
+	}
+	a.runSessionResetHooks()
+	a.publishFleetSession("node_removed")
+}
+
+// FleetHostIdentityPresented is the served-mode re-authorization for
+// node_removed. A served/brokered guest has no sign-in of its own, so
+// before this nothing cleared <dataDir>/fleet/node_removed and a removed
+// guest stayed blocked until someone deleted the file by hand
+// (unwired-ledger device-keys residual 7). The served enroll supervisor
+// calls this with the identity its host's token asserts before every
+// enroll attempt: when it differs from the identity recorded at removal,
+// the marker and the in-memory node_removed state are cleared so the
+// enroll proceeds under a fresh node id. Same identity (or either side
+// unknown) stays blocked. Only acts while the token source is external;
+// the desktop flow is unchanged (FleetSignIn clears). Reports whether the
+// block was lifted.
+func (a *API) FleetHostIdentityPresented(identity string) bool {
+	if a == nil || a.fleet == nil || !fleet.ExternalTokenSourceActive() {
+		return false
+	}
+	dataDir := a.fleetDataDir()
+	cleared, err := fleet.ClearNodeRemovedForNewIdentity(dataDir, identity)
+	if err != nil {
+		logging.L().Warn("fleet.served.clear_node_removed_failed", "err", err.Error())
+		return false
+	}
+	if !cleared {
+		return false
+	}
+	a.fleet.mu.Lock()
+	a.fleet.sess.nodeRemoved = false
+	a.fleet.sess.autoRetryStopped = false
+	// Drop the "removed by admin" reason too, as the desktop sign-in does;
+	// otherwise a later token failure would still show it.
+	a.fleet.sess.signInReason, a.fleet.sess.signInErr = "", ""
+	// handleNodeRemoved stopped the background workers; restart them the
+	// way FleetSignIn does for the desktop re-authorization.
+	a.startFleetBackgroundLocked()
+	a.fleet.mu.Unlock()
+	logging.L().Info("fleet.served.node_removed_cleared_new_identity")
+	return true
+}
+
+// FleetNodeRemoved applies the node_removed terminal sign-out for a 403
+// that arrived OUTSIDE enroll — PUT /me/nodes/{id}/keys after a
+// recovery-code import (core/rpc wiring). Same handling as enroll.
+func (a *API) FleetNodeRemoved() {
+	if a == nil || a.fleet == nil {
+		return
+	}
+	logging.L().Warn("fleet.rpc.node_removed")
+	a.handleNodeRemoved()
 }
 
 // FleetSignedIn reports whether a valid (non-expired) fleet session exists.
@@ -445,6 +1423,16 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		logging.L().Warn("fleet.rpc.enroll.no_client")
 		return FleetIdentity{}, fleet.ErrFleetDisabled
 	}
+	if a.fleet != nil {
+		a.fleet.mu.RLock()
+		removed := a.fleet.sess.nodeRemoved || fleet.NodeRemovedMarked(a.fleet.dataDir)
+		a.fleet.mu.RUnlock()
+		if removed {
+			// Stop enrolling after node_removed until an explicit sign-in
+			// (fleet contract §10.1) — no network, no fresh node id.
+			return FleetIdentity{}, fleet.ErrNodeRemoved
+		}
+	}
 	dataDir := a.fleetDataDir()
 	nodeID, nodeIDErr := fleet.NodeID(dataDir)
 	if nodeIDErr != nil {
@@ -455,11 +1443,25 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		"platform", runtime.GOOS,
 		"fleet_base_url", c.Profile().FleetBaseURL,
 	)
-	id, err := c.RefreshIdentity(ctx, nodeID, runtime.GOOS, "0.18.0")
+	id, err := c.RefreshIdentity(ctx, nodeID, runtime.GOOS, a.fleetClientVersion())
+	// Fold the outcome into the session track BEFORE returning either way:
+	// a failed enroll while tokens are usable is "degraded", not "signed
+	// out" (fleet-session-truth-01DOGF0A FR-3), and the snapshot can only
+	// say so if the failure is recorded.
 	if err != nil {
+		if errors.Is(err, fleet.ErrNodeRemoved) {
+			// Terminal for this node id: sign out, clear identity +
+			// node_id.txt, show "removed by admin" (fleet contract §10.1).
+			logging.L().Warn("fleet.rpc.enroll.node_removed")
+			a.handleNodeRemoved()
+			return FleetIdentity{}, err
+		}
+		a.recordEnrollOutcome(nil, err)
+		a.publishFleetSession("enroll_failed")
 		logging.L().Error("fleet.rpc.enroll.failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}
+	a.recordEnrollOutcome(&id, nil)
 	logging.L().Info("fleet.rpc.enroll.success",
 		"org_id", id.OrgID,
 		"team_id", id.TeamID,
@@ -467,20 +1469,45 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		"tier", id.Tier,
 	)
 
-	// Activate the fleet OTLP export pipeline post-enroll.
-	// This is the post-login trigger point (FR-003): identity attrs are now
-	// known (user.id = JWT sub resolved via enroll response, org.id =
-	// enroll org_id, machine.id = nodeID), so we can build the identity
-	// resource and register the OTLP processors/exporters.
-	a.activateOTLPPipeline(ctx, id, nodeID)
+	// Remember who we enrolled as. ReconcileTelemetry needs the org + machine
+	// ids to (re)activate export later — after a consent change, a tier
+	// change, or a token renewal — without another enroll round trip, and
+	// FleetOrgTier uses the tier until the capability poller has one.
+	if a.fleet != nil {
+		a.fleet.mu.Lock()
+		a.fleet.enrolledOrgID = id.OrgID
+		a.fleet.enrolledNodeID = nodeID
+		a.fleet.enrolledTier = id.Tier
+		a.fleet.enrolled = true
+		a.fleet.mu.Unlock()
+	}
 
 	// Reconcile per-class telemetry opt-ins from the fleet store post-enroll
 	// (harness-fleet-sync-activation-01NSYNC01 gap #4). The fleet store is the
 	// source of truth for the seven classes (replacing local-only JSON). This
 	// is best-effort and consent-gated: it caches the fleet-resolved opt-ins
 	// but never relaxes the TelemetryConsent.EffectiveLevel export gate.
+	//
+	// Runs BEFORE activation so the lanes start already narrowed: the span
+	// lane's class gate and the usage lanes' admission both read this
+	// snapshot, and an Activate that precedes it would open with "nothing
+	// admitted" and silently drop the first events of the session.
 	a.refreshTelemetryOptIns(ctx)
 
+	// Retry a tier-implied opt-in push that failed (or was never attempted)
+	// in a previous session — the "next app start" half of
+	// TelemetryOptInPusher's retry contract (fleet telemetry tier fix). Runs
+	// after the GET above so a successful push's onPushed callback is the
+	// last writer of the local cache, not the (possibly stale) GET.
+	a.retryPendingTelemetryOptInPush(ctx)
+
+	// Bring export in line with (identity, effective consent). This is the
+	// post-login trigger point (FR-003): identity attrs are now known
+	// (user.id = JWT sub, org.id = enroll org_id, machine.id = nodeID).
+	a.ReconcileTelemetry(ctx)
+
+	a.publishFleetSession("enroll_ok")
+	a.runEnrolledHooks()
 	return fleetIdentityToView(id), nil
 }
 
@@ -504,6 +1531,7 @@ func (a *API) refreshTelemetryOptIns(ctx context.Context) {
 	}
 	a.fleet.mu.Lock()
 	a.fleet.telemetryOptIns = items
+	a.fleet.optInsFetchedAt = time.Now()
 	pipeline := a.fleet.otlpPipeline
 	a.fleet.mu.Unlock()
 
@@ -516,42 +1544,112 @@ func (a *API) refreshTelemetryOptIns(ctx context.Context) {
 	logging.L().Info("fleet.telemetry_optins.refreshed", "classes", len(items))
 }
 
-// activateOTLPPipeline calls FleetOTLPPipeline.Activate post-enroll.
-// Gates on: pipeline wired, consent != "none", profile configured.
-// Best-effort: errors are logged at warn and do not fail the enroll flow.
-func (a *API) activateOTLPPipeline(ctx context.Context, id fleet.Identity, nodeID string) {
-	if a.fleet == nil {
+// ReconcileTelemetry makes the fleet export pipeline match the current
+// (signed-in identity, effective consent) — activating, re-activating under a
+// new identity, or deactivating as needed. It is THE decision point; nothing
+// else calls Activate or Deactivate.
+//
+// It is idempotent and cheap when nothing changed, so it is called liberally:
+// after enroll, after a consent change, when the capability snapshot (tier)
+// changes, on sign-out, and — in served mode — by the enroll supervisor on
+// every auth-state notification and on a slow tick.
+//
+// Before this existed, Activate ran exactly once, inside enroll. A user who
+// opted in after signing in got nothing until the next app start; a user who
+// opted OUT kept exporting spans until then; and sign-out never stopped the
+// exporters at all.
+//
+// Best-effort: failures are logged and leave export off (fail closed).
+func (a *API) ReconcileTelemetry(ctx context.Context) {
+	if a == nil || a.fleet == nil {
 		return
 	}
 	a.fleet.mu.RLock()
 	pipeline := a.fleet.otlpPipeline
+	lanes := a.fleet.lanes
 	baseRes := a.fleet.telemetryRes
+	resFunc := a.fleet.resFunc
 	consent := a.fleet.consent
 	tpFunc := a.fleet.tpFunc
 	client := a.fleet.client
+	tracker := a.fleet.usageTracker
+	enrolled := a.fleet.enrolled
+	orgID := a.fleet.enrolledOrgID
+	nodeID := a.fleet.enrolledNodeID
 	a.fleet.mu.RUnlock()
 
-	// Resolve the TracerProvider lazily. By the time activateOTLPPipeline is
-	// called (post-login, post-c.Start), telemetry.Init has already run and
-	// tpFunc returns the real provider. Calling it here rather than capturing
-	// the pointer at rpc.New time avoids the tp-nil race where c.Start / init-
-	// Telemetry hasn't executed yet.
-	// (harness-fleet-otlp-export-01NTLMEX01 tp-nil timing fix)
-	var tp *sdktrace.TracerProvider
-	if tpFunc != nil {
-		tp = tpFunc()
+	if pipeline == nil {
+		logging.L().Debug("fleet.otlp.reconcile.skipped", "reason", "pipeline_not_wired")
+		return
 	}
 
-	if pipeline == nil {
-		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "pipeline_not_wired")
-		return
+	// deactivate is the single "export must be off" path. Open conversation
+	// segments are DROPPED, not ended: their totals were gathered under a
+	// session or a consent that no longer stands.
+	//
+	// fleet-session-truth-01DOGF0A FR-6/FR-7: every outcome is reported to
+	// the telemetry lane so it is visible in FleetSession.sync.telemetry,
+	// not only in the log. Deliberate states (consent none, signed out) are
+	// "off"; a missing org claim while signed in is "degraded".
+	deactivate := func(reason string) {
+		if pipeline.Active() {
+			logging.L().Info("fleet.otlp.reconcile.deactivating", "reason", reason)
+		}
+		tracker.DropAll()
+		pipeline.Deactivate(ctx)
+		if reason != telemetryReasonNoOrgClaim {
+			lanes.RecordOff(fleet.LaneTelemetry, reason)
+		}
 	}
 
 	// Consent gate: "none" (default) → no OTLP export (NFR-005 / FR-006).
-	if consent != nil && consent.EffectiveLevel() == fleet.ConsentNone {
-		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "consent_none")
+	// EffectiveLevel clamps by org tier, so a downgraded account lands here.
+	level := fleet.ConsentNone
+	if consent != nil {
+		level = consent.EffectiveLevel()
+	}
+	// The event (log) lane is open only under full consent. Aggregate opts
+	// the count classes in so its counters pass; this switch is what keeps
+	// those same classes from admitting log records.
+	pipeline.SetLogLaneEnabled(level == fleet.ConsentFull)
+	if level == fleet.ConsentNone {
+		deactivate("consent_none")
 		return
 	}
+	if !enrolled || orgID == "" {
+		deactivate("not_enrolled")
+		return
+	}
+
+	// Identity comes from the TOKEN, not the enroll response: Fleet's receiver
+	// compares kameas.user.id to the JWT sub and kameas.org.id to the JWT
+	// resource-owner claim, and 401s the batch otherwise. Enroll's user_id /
+	// org_id are Fleet-internal UUIDs — a different namespace.
+	tokID, idErr := fleet.TokenIdentityFromAccessToken()
+	if idErr != nil || tokID.Subject == "" {
+		deactivate("no_subject") // no token ⇒ signed out / broker session ended
+		return
+	}
+	if tokID.OrgID == "" {
+		// The token predates the resource-owner scope (core/fleet env.go
+		// ZitadelResourceOwnerScope); refresh never adds it, only a fresh
+		// sign-in does. Surfaced as the session's needs_reauth state and
+		// this lane's named reason — so the log line is a one-time INFO at
+		// the transition, not a WARN every reconcile tick (dogfood B3a:
+		// 19:35, 19:39, 19:40:56, … forever).
+		prev := lanes.Snapshot(fleet.LaneTelemetry)
+		if prev.Status != fleet.LaneDegraded || prev.Reason != telemetryReasonNoOrgClaim {
+			logging.L().Info("fleet.otlp.reconcile.no_resource_owner_claim",
+				"surfaced_as", FleetReasonNeedsReauth)
+		} else {
+			logging.L().Debug("fleet.otlp.reconcile.no_resource_owner_claim")
+		}
+		deactivate(telemetryReasonNoOrgClaim)
+		lanes.RecordFailure(fleet.LaneTelemetry, telemetryReasonNoOrgClaim,
+			errors.New("telemetry export off: your token has no org claim — sign in again"), 0, time.Time{})
+		return
+	}
+	want := fleet.IdentityAttrs{UserID: tokID.Subject, OrgID: tokID.OrgID, MachineID: nodeID, Issuer: tokID.Issuer}
 
 	// OTLP ingest lives on the API host, which is discovered from
 	// /config.json on the dashboard host — NOT on the dashboard host itself.
@@ -559,44 +1657,55 @@ func (a *API) activateOTLPPipeline(ctx context.Context, id fleet.Identity, nodeI
 	// which returns 200 + index.html for any path, so exports "succeeded"
 	// into a void. See fleet.OTLPBaseURL.
 	if client == nil {
-		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "no_fleet_client")
+		logging.L().Debug("fleet.otlp.reconcile.skipped", "reason", "no_fleet_client")
 		return
 	}
 	cfg, cfgErr := client.FleetConfig(ctx)
 	if cfgErr != nil {
 		logging.L().Warn("fleet.otlp.activate.api_host_unresolved", "err", cfgErr.Error())
+		lanes.RecordFailure(fleet.LaneTelemetry, "api_host_unresolved", cfgErr, 0, time.Time{})
 		return
 	}
 	otlpBase := fleet.OTLPBaseURL(cfg)
 	if otlpBase == "" {
-		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "no_api_base_url")
+		logging.L().Debug("fleet.otlp.reconcile.skipped", "reason", "no_api_base_url")
 		return
 	}
 
-	// kameas.user.id MUST equal the Zitadel JWT `sub` — the fleet OTLP
-	// receiver (validateResourceAttrs) rejects with 401 otherwise. The
-	// enroll response's user_id is the fleet-internal UUID, a DIFFERENT
-	// identity namespace, so decode the sub from the access token instead.
-	userID, subErr := fleet.SubjectFromAccessToken()
-	if subErr != nil || userID == "" {
-		reason := "empty"
-		if subErr != nil {
-			reason = subErr.Error()
+	if pipeline.Active() {
+		if pipeline.ActiveIdentity() == want && pipeline.ActiveEndpoint() == otlpBase {
+			lanes.RecordSuccess(fleet.LaneTelemetry)
+			return // already exporting as the right account, to the right realm
 		}
-		logging.L().Warn("fleet.otlp.activate.no_subject", "org_id", id.OrgID, "err", reason)
+		// Account, org, issuer or endpoint changed: what was gathered belongs
+		// to the previous activation.
+		logging.L().Info("fleet.otlp.reconcile.identity_changed")
+		tracker.DropAll()
+	}
+
+	// Resolve the TracerProvider and startup resource lazily. Both come from
+	// telemetry.Init, which runs inside c.Start — after rpc.New captured
+	// whatever it could. By activation time they exist.
+	// (harness-fleet-otlp-export-01NTLMEX01 tp-nil timing fix)
+	var tp *sdktrace.TracerProvider
+	if tpFunc != nil {
+		tp = tpFunc()
+	}
+	if baseRes == nil && resFunc != nil {
+		baseRes = resFunc()
+	}
+
+	if err := pipeline.Activate(ctx, otlpBase, baseRes, want, fleet.DefaultBearerProvider(), tp); err != nil {
+		logging.L().Warn("fleet.otlp.activate.failed", "err", err.Error())
+		lanes.RecordFailure(fleet.LaneTelemetry, "activate_failed", err, 0, time.Time{})
 		return
 	}
-
-	attrs := fleet.IdentityAttrs{
-		UserID:    userID,
-		OrgID:     id.OrgID,
-		MachineID: nodeID,
-	}
-
-	if err := pipeline.Activate(ctx, otlpBase, baseRes, attrs, fleet.DefaultBearerProvider(), tp); err != nil {
-		logging.L().Warn("fleet.otlp.activate.failed", "err", err.Error())
-	}
+	lanes.RecordSuccess(fleet.LaneTelemetry)
 }
+
+// telemetryReasonNoOrgClaim is the telemetry lane's reason when the access
+// token lacks the Zitadel resource-owner claim (FR-7).
+const telemetryReasonNoOrgClaim = "no_resource_owner_claim"
 
 // fleetIdentityToView converts a fleet.Identity to the view type.
 func fleetIdentityToView(id fleet.Identity) FleetIdentity {
@@ -695,6 +1804,11 @@ func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusVie
 // indicator (WP10). It combines the signing-key presence, the config source,
 // and the current session state into a single call so the header chip can
 // render without multiple sequential RPCs.
+//
+// ConfigSource values beyond the poller's own Source: "no-key" (no signing
+// key pinned in this binary — fleet.ErrSigningKeyNotConfigured) and
+// "unknown-key" (the latest bundle's signed key_id matches no pinned key —
+// fleet.ErrSigningKeyUnknown; the install must update).
 func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 	enabled := fleet.ConfigDistributionEnabled()
 
@@ -710,7 +1824,16 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 			st := p.Status()
 			configSource = st.Source
 			configLastError = st.LastError
-			if configSource == "default-deny" && configLastError == "" {
+			switch {
+			case st.SigningKeyUnknown:
+				// Parallel to "no-key" (ErrSigningKeyNotConfigured): the
+				// latest bundle was signed with a key_id this build never
+				// pinned (fleet.ErrSigningKeyUnknown). The binary HAS keys,
+				// so distribution is enabled — but nothing new will apply
+				// until the harness is updated. ConfigLastError carries
+				// "bundle signed with an unknown key: key_id …".
+				configSource = "unknown-key"
+			case configSource == "default-deny" && configLastError == "":
 				configSource = "default-deny-degraded"
 			}
 		}
@@ -733,9 +1856,11 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 
 // compositeConfigApplier implements fleet.ConfigApplier. It fans out each
 // section of the bundle to the appropriate sub-system:
-//   - cedar_delta   → cedarpolicy.Engine.SetTeamBundle
-//   - mcp_allowlist → recipes.ApplyFleetAllowlist
-//   - model_prefs   → llmview.ApplyFleetModelPrefs (core/rpc/views/llm)
+//   - cedar_delta     → cedarpolicy.Engine.SetTeamBundle
+//   - mcp_allowlist   → recipes.ApplyFleetAllowlist
+//   - model_prefs     → llmview.ApplyFleetModelPrefs (core/rpc/views/llm)
+//   - provisioned_mcp → recipes.ApplyProvisionedMCP (core/mcp/recipes) —
+//     fleet-org-config-inheritance-01NORGX01 WP02
 //
 // The kameas_ml_weight_urls bundle section is intentionally ignored: the
 // fleet-hosted-LLM / kameas-ml surface was removed
@@ -746,8 +1871,24 @@ type compositeConfigApplier struct {
 	state *fleetState
 }
 
+// ApplyBundle implements fleet.ConfigApplier for callers that do not need
+// per-item statuses.
 func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundle) []error {
+	errs, _ := a.ApplyBundleItems(ctx, b)
+	return errs
+}
+
+// ApplyBundleItems implements fleet.ConfigItemApplier: every section, plus
+// the mandated items' per-item statuses for the ACK (WP02).
+func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.Bundle) ([]error, []fleet.MandatedItemStatus) {
 	var errs []error
+	var itemStatuses []fleet.MandatedItemStatus
+	// provisionedRecipeIDs accumulates the bundle's declared provisioned_mcp
+	// recipe_ids for the closing audit event (WP05, FR-010) — populated in
+	// the Provisioned MCP block below regardless of whether mcpCatalog is
+	// wired, since these are the ids the ORG named in the bundle, not
+	// necessarily every one that successfully installed.
+	var provisionedRecipeIDs []string
 
 	// Cedar delta.
 	//
@@ -794,31 +1935,270 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	// Weight URLs (kameas_ml_weight_urls): intentionally ignored — the
 	// fleet-hosted-LLM / kameas-ml surface was removed. See the type doc above.
 
-	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
-	// FR-012: all section errors are collected and returned so the ACK
-	// carries the full set and the caller can decide not to advance lastAppliedID.
+	// Provisioned MCP (fleet-org-config-inheritance-01NORGX01 WP02).
 	//
-	// fleet-enforcement-truth-01PMZ505 WP02: same fix as cedar_delta — a
-	// bundle carrying mandated_skills that this device cannot apply (refs
-	// not wired) must not ack clean.
-	if len(b.MandatedSkills) > 0 {
-		a.state.mu.RLock()
-		skillStore := a.state.skillStore
-		skillRegistry := a.state.skillRegistry
-		a.state.mu.RUnlock()
-		if skillStore != nil && skillRegistry != nil {
-			skillErrs := fleet.ApplyMandatedSkills(skillStore, skillRegistry, b.MandatedSkills)
-			for _, se := range skillErrs {
-				logging.L().Warn("fleet.config.mandated_skills.apply_error", "err", se.Error())
-				errs = append(errs, se)
+	// Unlike cedar_delta above, this section is applied
+	// UNCONDITIONALLY on every ApplyBundle call, even when b.ProvisionedMCP
+	// is empty/nil — Bundle.ProvisionedMCP's own doc records that nil, an
+	// empty slice, and an absent key are all equivalent ("no org-
+	// provisioned MCP entries"), which means the field carries the org's
+	// CURRENT complete set on every successful bundle, not a delta. If we
+	// only called ApplyProvisionedMCP when non-empty, an org that
+	// de-provisions every entry (bundle N: 1 entry: bundle N+1: 0 entries)
+	// would leave the stale bundle-N recipe permanently shadowing the
+	// member's own catalog — exactly the "signed but the removal never
+	// applies" shape this mission exists to close.
+	//
+	// A nil mcpCatalog (SetMCPCatalog never called) turns a NON-empty
+	// section into a named apply error, same posture as cedar_delta above — but an EMPTY section with no catalog wired is
+	// not an error: there is nothing to apply either way, and erroring on
+	// every bundle for a fleet-disabled/test harness that never carries
+	// provisioned_mcp would fail every apply for no operational reason.
+	for _, e := range b.ProvisionedMCP {
+		if e.RecipeID != "" {
+			provisionedRecipeIDs = append(provisionedRecipeIDs, e.RecipeID)
+		}
+	}
+	if a.state.mcpCatalog != nil {
+		converted := make([]recipes.ProvisionedMCPEntry, 0, len(b.ProvisionedMCP))
+		for _, e := range b.ProvisionedMCP {
+			entry := recipes.ProvisionedMCPEntry{
+				RecipeID:    e.RecipeID,
+				Transport:   e.Transport,
+				URL:         e.URL,
+				PrimaryAuth: e.PrimaryAuth,
+				Config:      e.Config,
 			}
-		} else {
-			errs = append(errs, fmt.Errorf("fleet/config: mandated_skills present but skill refs not wired (SetSkillRefs never called)"))
+			if e.OAuth != nil {
+				entry.OAuthClientID = e.OAuth.ClientID
+				entry.OAuthScopes = e.OAuth.Scopes
+			}
+			converted = append(converted, entry)
+		}
+		for _, err := range recipes.ApplyProvisionedMCP(a.state.mcpCatalog, converted) {
+			errs = append(errs, fmt.Errorf("fleet/config: provisioned_mcp: %w", err))
+		}
+	} else if len(b.ProvisionedMCP) > 0 {
+		errs = append(errs, fmt.Errorf("fleet/config: provisioned_mcp present but no MCP catalog wired (SetMCPCatalog never called)"))
+	}
+
+	// Mandated items (owner wire-contract ruling 2026-10-06, WP02).
+	//
+	// Runs on EVERY bundle, including one with no mandated_items: an empty
+	// section means "nothing is mandated any more", so everything applied
+	// from an earlier bundle is removed (reconciliation). Dispatch by kind:
+	// skill → slash store, workflow → workflows InstallDocument (provenance
+	// mandated), pack/bundle → refused with fleet.ErrMandatedKindUnsupported.
+	// Every refusal / failure is an apply error AND a per-item ACK status —
+	// a bundle carrying an item this device cannot honour must not ack
+	// applied:true (same posture as cedar_delta above).
+	{
+		a.state.mu.Lock()
+		if a.state.mandatedApplier == nil {
+			a.state.mandatedApplier = &fleet.MandatedApplier{DataDir: a.state.dataDir}
+		}
+		m := a.state.mandatedApplier
+		skills, reg, wf := a.state.skillStore, a.state.skillRegistry, a.state.mandatedWorkflows
+		em := a.state.auditEmitter
+		a.state.mu.Unlock()
+		m.SetConsumers(skills, reg, wf)
+		// Local audit: "removed" vs "upgraded" (skill-library-01SKLIB01 WP04).
+		m.SetEmitter(em)
+		statuses, mErrs := m.Apply(ctx, b.MandatedItems)
+		itemStatuses = statuses
+		for _, me := range mErrs {
+			logging.L().Warn("fleet.config.mandated_items.apply_error", "err", me.Error())
+			errs = append(errs, me)
 		}
 	}
 
+	// Tool exposure (tool-context-budget-01TCBUD01 WP07). Runs on every
+	// bundle: an absent section clears the organisation's policy so tiers
+	// drop back to the user's settings. A refused entry is logged, never a
+	// bundle error (the mandated_items F1 posture): the valid entries apply,
+	// the id advances, and the poller's had_refusals re-applies the bundle
+	// once on the next start. Only a persistence failure is a bundle error.
+	{
+		a.state.mu.RLock()
+		pins := a.state.toolExposurePins
+		a.state.mu.RUnlock()
+		switch {
+		case pins != nil:
+			refused, perr := pins.Apply(b.BundleID, b.ToolExposure)
+			for _, te := range refused {
+				logging.L().Warn("fleet.config.tool_exposure.entry_refused", "bundle_id", b.BundleID, "err", te.Error())
+			}
+			if perr != nil {
+				errs = append(errs, fmt.Errorf("fleet/config: tool_exposure: %w", perr))
+			}
+		case b.ToolExposure != nil:
+			errs = append(errs, fmt.Errorf("fleet/config: tool_exposure present but no policy store wired (SetFleetClient never ran with a live client)"))
+		}
+	}
+
+	// Org config (fleet-generic-sync-framework-01NSYNC02 WP02).
+	//
+	// Each entry in the bundle's keyed org_config map dispatches to its
+	// registered SyncKind's Apply(ctx, ScopeOrg, payload). Three distinct
+	// "cannot apply" cases here get deliberately different treatment,
+	// spelled out because they look similar and are not:
+	//
+	//   - registry is nil (sync registration never ran — fleet disabled,
+	//     or SetSyncKindRegistry not yet called): every entry is skipped
+	//     with a single log line, not an error. This mirrors the offline/
+	//     fleet-disabled posture the whole config-pull path preserves
+	//     elsewhere (registerSyncCategories itself no-ops the same way).
+	//   - kind id has NO registration in this build (registry.Kind returns
+	//     ok=false): a per-entry SKIP, not an error — spec §WP02's
+	//     "unknown kind → logged skip, not fatal". This is the forward-
+	//     compatibility case: a newer fleet server may ship an org_config
+	//     kind an older harness build has never heard of, and treating
+	//     that as a hard apply failure would block every OTHER section in
+	//     the same bundle from advancing lastAppliedID on old binaries.
+	//   - kind IS registered but doesn't declare ScopeOrg, or declares it
+	//     but has a nil Apply: this is a real wiring gap (the kind
+	//     promised org support the code doesn't back), not a forward-
+	//     compat gap, so it gets the same error-not-skip treatment as
+	//     cedar_delta/mandated_items — an ACK must not read
+	//     "applied:true" for a section this device cannot actually apply.
+	if len(b.OrgConfig) > 0 {
+		a.state.mu.RLock()
+		registry := a.state.syncKindRegistry
+		a.state.mu.RUnlock()
+		if registry == nil {
+			logging.L().Warn("fleet.config.org_config.registry_unwired",
+				"kind_count", len(b.OrgConfig))
+		} else {
+			// Deterministic order for logging/error-collection readability;
+			// sorted map keys are already what json.Marshal produced on
+			// the wire (see Bundle.OrgConfig's doc comment), but ranging a
+			// Go map directly is not itself ordered, so sort explicitly.
+			ids := make([]string, 0, len(b.OrgConfig))
+			for id := range b.OrgConfig {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			for _, id := range ids {
+				payload := b.OrgConfig[id]
+				kind, ok := registry.Kind(id)
+				if !ok {
+					logging.L().Warn("fleet.config.org_config.unknown_kind_skipped", "kind", id)
+					continue
+				}
+				if !kind.HasScope(fleet.ScopeOrg) || kind.Apply == nil {
+					errs = append(errs, fmt.Errorf(
+						"fleet/config: org_config kind %q is registered but cannot apply an org-scope payload (HasScope(org)=%v, Apply nil=%v)",
+						id, kind.HasScope(fleet.ScopeOrg), kind.Apply == nil))
+					continue
+				}
+				// fleet-generic-sync-framework-01NSYNC02 WP06 (FR-006): the
+				// org_config path dispatches straight to kind.Apply, bypassing
+				// CategoryConfig()'s ScopeUser adapter (synckind.go) entirely
+				// — so the secret-shape backstop wired there does not cover
+				// this path unless it is also applied here. This is the
+				// ScopeOrg half of the same central check.
+				if kind.SecretPolicy == fleet.SecretPolicyMustNotContainSecrets {
+					if reason := fleet.SecretShapeReason(payload); reason != "" {
+						logging.L().Warn("fleet.config.org_config.secret_shaped_payload_refused", "kind", id, "reason", reason)
+						errs = append(errs, fmt.Errorf("fleet/config: org_config kind %q: refusing a secret-shaped payload (%s)", id, reason))
+						continue
+					}
+				}
+				if err := kind.Apply(ctx, fleet.ScopeOrg, payload); err != nil {
+					logging.L().Warn("fleet.config.org_config.apply_error", "kind", id, "err", err.Error())
+					errs = append(errs, fmt.Errorf("fleet/config: org_config kind %q apply: %w", id, err))
+					continue
+				}
+				// fleet-generic-sync-framework-01NSYNC02 WP03: record generic
+				// org provenance ONLY on a successful apply — mirrors this
+				// loop's own "an apply error must not read applied:true"
+				// posture (see the doc comment above this loop). A kind that
+				// failed to apply must not claim to be currently
+				// org-provisioned.
+				registry.MarkOrgApplied(id, time.Now())
+			}
+		}
+	}
+
+	// Audit (fleet-org-config-inheritance-01NORGX01 WP05, FR-010): record a
+	// fleet.config.applied event naming the bundle_id, org, sections
+	// present, and any provisioned recipe ids — but only on a FULLY clean
+	// apply. KindFleetConfigApplied's own doc is explicit that it "fires
+	// after a fleet config bundle has been fully verified and all sections
+	// applied successfully"; a partial-failure bundle does not get to claim
+	// that here (KindFleetConfigPartialFailure is the correct kind for that
+	// case, and remains unwired — see docs/unwired-ledger.md).
+	if len(errs) == 0 {
+		a.emitConfigApplied(ctx, b, provisionedRecipeIDs)
+	}
+
 	// Return all errors (FR-012). An empty slice means full success.
-	return errs
+	return errs, itemStatuses
+}
+
+// emitConfigApplied records KindFleetConfigApplied for a fully-clean
+// ApplyBundle (fleet-org-config-inheritance-01NORGX01 WP05, FR-010). No-op
+// when no emitter is wired (nil is the default, safe posture — mirrors
+// every other optional dependency on fleetState).
+//
+// Org identity is read best-effort from the on-disk fleet.Identity cache
+// (populated at enroll/sign-in time); a missing or unreadable cache simply
+// leaves OrgID/OrgName empty rather than failing the emission — this event
+// is a record of what was applied, not a gate on applying it.
+func (a *compositeConfigApplier) emitConfigApplied(ctx context.Context, b *fleet.Bundle, provisionedRecipeIDs []string) {
+	a.state.mu.RLock()
+	emitter := a.state.auditEmitter
+	dataDir := a.state.dataDir
+	a.state.mu.RUnlock()
+	if emitter == nil {
+		return
+	}
+
+	var sections []string
+	if len(b.CedarDelta) > 0 {
+		sections = append(sections, "cedar_delta")
+	}
+	if b.MCPAllowlist != nil {
+		sections = append(sections, "mcp_allowlist")
+	}
+	if b.ModelPrefs != nil {
+		sections = append(sections, "model_prefs")
+	}
+	if len(b.KameasMLWeightURLs) > 0 {
+		sections = append(sections, "kameas_ml_weight_urls")
+	}
+	if len(b.ProvisionedMCP) > 0 {
+		sections = append(sections, "provisioned_mcp")
+	}
+	if len(b.MandatedItems) > 0 {
+		sections = append(sections, "mandated_items")
+	}
+	if b.ToolExposure != nil {
+		sections = append(sections, "tool_exposure")
+	}
+	if len(b.OrgConfig) > 0 {
+		sections = append(sections, "org_config")
+	}
+
+	var orgID, orgName string
+	if dataDir != "" {
+		if id, err := fleet.LoadIdentity(dataDir); err == nil {
+			orgID = id.OrgID
+			orgName = id.OrgName
+		}
+	}
+
+	payload := contextaudit.FleetConfigAppliedPayload{
+		BundleID:             b.BundleID,
+		IssuedAt:             b.IssuedAt,
+		Sections:             sections,
+		OrgID:                orgID,
+		OrgName:              orgName,
+		ProvisionedRecipeIDs: provisionedRecipeIDs,
+	}
+	if err := emitter.EmitFleetEvent(ctx, contextaudit.KindFleetConfigApplied, payload); err != nil {
+		logging.L().Warn("fleet.config.applied.audit_emit_failed", "err", err.Error())
+	}
 }
 
 // LockdownStatusView is the wire shape returned by FleetLockdownStatus.
@@ -839,7 +2219,7 @@ type LockdownStatusView struct {
 // (fleet-emergency-lockdown-01NDFSEX12 WP02)
 func (a *API) FleetLockdownStatus(_ context.Context) (LockdownStatusView, error) {
 	active := fleet.LockdownActive()
-	return LockdownStatusView{Active: active}, nil
+	return LockdownStatusView{Active: active, Reason: fleet.LockdownReason()}, nil
 }
 
 // ── Telemetry opt-ins (harness-fleet-sync-activation-01NSYNC01 gap #4) ─────────
@@ -910,3 +2290,37 @@ func telemetryOptInsToView(items []fleet.TelemetryOptInItem) []TelemetryOptInVie
 	}
 	return out
 }
+
+// clearToolExposurePins drops the organisation's tool-exposure policy and
+// its state file on an explicit sign-out: a signed-out device no longer
+// carries its organisation's pins. App shutdown keeps them (the state file
+// is what restores them at the next boot).
+func (a *API) clearToolExposurePins(reason string) {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	pins := a.fleet.toolExposurePins
+	a.fleet.mu.RUnlock()
+	if pins == nil {
+		return
+	}
+	if err := pins.Clear(); err != nil {
+		logging.L().Warn("fleet.tool_exposure.clear_failed", "reason", reason, "err", err.Error())
+	}
+}
+
+// ToolExposurePolicy implements toolexposure.PinSource: the
+// organisation's policy from the last verified, applied bundle; the zero
+// policy when fleet is disabled or no bundle carried one.
+func (a *API) ToolExposurePolicy(_ context.Context) (toolexposure.OrgPolicy, error) {
+	if a == nil || a.fleet == nil {
+		return toolexposure.OrgPolicy{}, nil
+	}
+	a.fleet.mu.RLock()
+	pins := a.fleet.toolExposurePins
+	a.fleet.mu.RUnlock()
+	return pins.Policy(), nil
+}
+
+var _ toolexposure.PinSource = (*API)(nil)

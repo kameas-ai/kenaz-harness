@@ -195,6 +195,70 @@ func TestCompactNode_ExplicitBudgetIsHonoured(t *testing.T) {
 	}
 }
 
+// TestCompactNode_SystemPromptReachesCompactionInput is AC-013
+// (chat-turn-integrity-01PMZ606 WP09, CHAT-14/CK-14). The `compact`
+// node's manual-site CompactionInput{} literal
+// (compactExecutor.Execute, exec_compute.go) omitted SystemPrompt
+// entirely, even though CompactAttrs.SystemPrompt and
+// CompactionInput.SystemPrompt both already existed — the value was
+// authored, had somewhere to go, and was simply dropped in transit.
+//
+// This drives the real kernel dispatch path (not a hand-built
+// CompactionInput) so the assertion is sensitive to exactly the
+// literal exec_compute.go builds, the same way
+// TestCompactNode_TargetTokensIsNotTheOutputCap above pins TargetTokens
+// and ContextWindow through the identical seam.
+func TestCompactNode_SystemPromptReachesCompactionInput(t *testing.T) {
+	const wantPrompt = "You are a careful assistant. Never fabricate citations."
+	rec := &targetRecorder{}
+
+	graph := &agentgraph.Graph{
+		ID:          "g-compact-system-prompt",
+		SpecVersion: "1",
+		Entrypoints: []string{"hist"},
+		Nodes: []agentgraph.Node{
+			{ID: "hist", Kind: agentgraph.NodeKindHistoryRead, Attrs: agentgraph.HistoryReadAttrs{N: 0}},
+			{
+				ID:   "compact1",
+				Kind: agentgraph.NodeKindCompact,
+				Attrs: agentgraph.CompactAttrs{
+					Strategy:     "drop_oldest",
+					SystemPrompt: wantPrompt,
+				},
+			},
+		},
+		Edges: []agentgraph.Edge{
+			{
+				From: agentgraph.EndpointRef{Node: "hist", Port: "messages"},
+				To:   agentgraph.EndpointRef{Node: "compact1", Port: "input"},
+			},
+		},
+	}
+
+	k := agentgraph.NewKernel(agentgraph.WithCompactor(rec))
+	env := &agentgraph.Env{
+		RunID:     "r-compact-system-prompt",
+		SessionID: "s-compact-system-prompt",
+		Graph:     graph,
+		History: agentgraph.HistoryReaderFunc(func(context.Context, string, int) ([]agentgraph.Message, error) {
+			return []agentgraph.Message{{Role: "user", Content: "hi"}}, nil
+		}),
+	}
+	env.State = agentgraph.NewRunState()
+	if err := k.Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	seen := rec.snapshot()
+	if len(seen) != 1 {
+		t.Fatalf("expected exactly 1 compaction call from the compact node, got %d", len(seen))
+	}
+	if got := seen[0].SystemPrompt; got != wantPrompt {
+		t.Fatalf("compact node SystemPrompt = %q, want %q — a manual compaction with a system prompt must return it intact (CHAT-14/CK-14), "+
+			"which requires it to actually reach CompactionInput in the first place", got, wantPrompt)
+	}
+}
+
 // TestPreCallSite_TargetTokensIsNotTheOutputCap covers the automatic
 // pre_call site on a model node, the other place the conflation lived.
 //

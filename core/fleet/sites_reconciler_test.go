@@ -37,6 +37,16 @@ func (f *fakeEnabled) Save(_ string) error {
 
 func (f *fakeEnabled) Has(id string) bool { return f.entries[id] }
 
+// fleetSitesOnlySource reproduces the pre-UNIT-12 single-recipe scope for
+// the two tests that predate the generalization — a fixture recipe named
+// "fleet-sites" declaring the sites_hosting capability, so their
+// assertions keep exercising the same recipe id they always have.
+func fleetSitesOnlySource() []recipes.Recipe {
+	return []recipes.Recipe{
+		{ID: "fleet-sites", RequiredCapability: string(fleet.CapSitesHosting)},
+	}
+}
+
 // TestSitesReconciler_EnableOnCapability verifies that the reconciler enables
 // fleet-sites when sites_hosting appears and disables it when absent.
 func TestSitesReconciler_EnableOnCapability(t *testing.T) {
@@ -44,7 +54,7 @@ func TestSitesReconciler_EnableOnCapability(t *testing.T) {
 	poller := fleet.NewCapabilityPoller(nil, t.TempDir())
 	enabled := newFakeEnabled()
 
-	rec := fleet.NewSitesReconciler(poller, enabled, t.TempDir())
+	rec := fleet.NewSitesReconciler(poller, enabled, t.TempDir(), fleetSitesOnlySource)
 	rec.Start()
 
 	// Simulate a capability snapshot WITH sites_hosting.
@@ -88,7 +98,7 @@ func TestSitesReconciler_Staleness(t *testing.T) {
 	poller := fleet.NewCapabilityPoller(nil, t.TempDir())
 	enabled := newFakeEnabled()
 
-	rec := fleet.NewSitesReconciler(poller, enabled, t.TempDir())
+	rec := fleet.NewSitesReconciler(poller, enabled, t.TempDir(), fleetSitesOnlySource)
 	rec.Start()
 
 	// Stale snapshot: FetchedAt > 24h ago, even though the key is present.
@@ -102,6 +112,53 @@ func TestSitesReconciler_Staleness(t *testing.T) {
 	// Has() returns false for stale snapshots, so reconciler should disable.
 	if enabled.Has("fleet-sites") {
 		t.Error("expected fleet-sites to be disabled for stale capability snapshot")
+	}
+}
+
+// TestSitesReconciler_GenericRequiredCapability_NotFleetSites is
+// connector-lifecycle-truth-01PMZ303 UNIT-12 / AC-009: a DIFFERENT recipe
+// (not fleet-sites) declaring required_capability must be enabled and
+// disabled by the same reconciler that governs fleet-sites — proving the
+// reconciler actually reads Recipe.RequiredCapability generically rather
+// than special-casing the one hardcoded id.
+//
+// Mutation (spec.md §7 AC-009): revert the reconciler to matching only
+// fleetSitesRecipeID. This test's fixture recipe id
+// ("second-capability-recipe") is deliberately different from
+// "fleet-sites", so a hardcoded-id reconciler would never enable it and
+// this test would fail.
+func TestSitesReconciler_GenericRequiredCapability_NotFleetSites(t *testing.T) {
+	t.Parallel()
+	poller := fleet.NewCapabilityPoller(nil, t.TempDir())
+	enabled := newFakeEnabled()
+
+	const otherRecipeID = "second-capability-recipe"
+	source := func() []recipes.Recipe {
+		return []recipes.Recipe{
+			{ID: otherRecipeID, RequiredCapability: string(fleet.CapSitesHosting)},
+		}
+	}
+	rec := fleet.NewSitesReconciler(poller, enabled, t.TempDir(), source)
+	rec.Start()
+
+	withSites := fleet.Capabilities{
+		Enabled:   map[fleet.Capability]bool{fleet.CapSitesHosting: true},
+		FetchedAt: time.Now(),
+		Source:    "fleet",
+	}
+	poller.ForceSetCurrentForTesting(withSites)
+	if !enabled.Has(otherRecipeID) {
+		t.Fatalf("expected %q to be enabled after its required capability appeared", otherRecipeID)
+	}
+
+	withoutSites := fleet.Capabilities{
+		Enabled:   map[fleet.Capability]bool{},
+		FetchedAt: time.Now(),
+		Source:    "fleet",
+	}
+	poller.ForceSetCurrentForTesting(withoutSites)
+	if enabled.Has(otherRecipeID) {
+		t.Fatalf("expected %q to be disabled once its required capability disappeared", otherRecipeID)
 	}
 }
 

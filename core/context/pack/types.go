@@ -62,14 +62,34 @@ type EntryKind string
 const (
 	KindGlossary    EntryKind = "glossary"
 	KindExplanation EntryKind = "explanation"
-	KindSkill       EntryKind = "skill"
-	KindGuidance    EntryKind = "guidance"
+	// KindProcedure is step-by-step guidance text ("how to do X"). It was
+	// named "skill" until 2026-10-06: the owner wire-contract ruling renamed
+	// it because "skill" is a CAPABILITY word (a slash-command / catalog
+	// skill under Capabilities) and fleet now refuses it as a knowledge
+	// node kind (400 kind_not_knowledge).
+	KindProcedure EntryKind = "procedure"
+	KindGuidance  EntryKind = "guidance"
 )
+
+// legacyKindSkill is the pre-2026-10-06 spelling of KindProcedure. Packs on
+// disk may still say `kind: skill` or keep entries under skills/; the parser
+// maps both to KindProcedure at read time (NormalizeEntryKind), so nothing
+// downstream — and nothing on the wire — ever carries "skill".
+const legacyKindSkill EntryKind = "skill"
+
+// NormalizeEntryKind maps legacy spellings to the current kind (today only
+// "skill" → "procedure"); every other value is returned unchanged.
+func NormalizeEntryKind(k EntryKind) EntryKind {
+	if k == legacyKindSkill {
+		return KindProcedure
+	}
+	return k
+}
 
 // Valid reports whether k is one of the spec-declared kinds.
 func (k EntryKind) Valid() bool {
 	switch k {
-	case KindGlossary, KindExplanation, KindSkill, KindGuidance:
+	case KindGlossary, KindExplanation, KindProcedure, KindGuidance:
 		return true
 	}
 	return false
@@ -144,9 +164,9 @@ func (p AccessPolicy) Empty() bool {
 // (the envelope itself is opaque to this package — it is consumed by the
 // trust verifier).
 type SignatureRef struct {
-	Path      string `json:"path" yaml:"path"`             // relative path within pack
-	Algorithm string `json:"algorithm" yaml:"algorithm"`   // illustrative (e.g. "sigstore-bundle", "ed25519")
-	AnchorID  string `json:"anchor_id" yaml:"anchor_id"`   // identity claimed by the signer
+	Path      string `json:"path" yaml:"path"`           // relative path within pack
+	Algorithm string `json:"algorithm" yaml:"algorithm"` // illustrative (e.g. "sigstore-bundle", "ed25519")
+	AnchorID  string `json:"anchor_id" yaml:"anchor_id"` // identity claimed by the signer
 }
 
 // Empty reports whether s carries no signature reference at all.
@@ -155,17 +175,17 @@ func (s SignatureRef) Empty() bool { return s.Path == "" && s.AnchorID == "" }
 // ContextEntry is one named unit within a pack. The merge engine keys
 // override decisions on Name (FR-002).
 type ContextEntry struct {
-	Name        string                 `json:"name"`
-	Kind        EntryKind              `json:"kind"`
-	Body        []byte                 `json:"body"`
-	Frontmatter map[string]any         `json:"frontmatter,omitempty"`
-	Scope       Scope                  `json:"scope,omitempty"`
-	Tags        []string               `json:"tags,omitempty"`
-	SourceLayer Layer                  `json:"source_layer"`
-	SourcePack  PackRef                `json:"source_pack"`
-	ContentHash string                 `json:"content_hash"`
-	SizeBytes   int64                  `json:"size_bytes"`
-	RelPath     string                 `json:"rel_path"`
+	Name        string         `json:"name"`
+	Kind        EntryKind      `json:"kind"`
+	Body        []byte         `json:"body"`
+	Frontmatter map[string]any `json:"frontmatter,omitempty"`
+	Scope       Scope          `json:"scope,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	SourceLayer Layer          `json:"source_layer"`
+	SourcePack  PackRef        `json:"source_pack"`
+	ContentHash string         `json:"content_hash"`
+	SizeBytes   int64          `json:"size_bytes"`
+	RelPath     string         `json:"rel_path"`
 }
 
 // ContextPack is a parsed, validated pack.

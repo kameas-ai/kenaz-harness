@@ -1,4 +1,4 @@
-last_updated: "2026-04-27"
+last_updated: "2026-10-09"
 
 # Curated per-(provider_kind, model_pattern) pricing table.
 # Units: USD per 1 million tokens.
@@ -11,6 +11,29 @@ last_updated: "2026-04-27"
 entries:
 
   # ── Anthropic ────────────────────────────────────────────────────────
+  # Lookup is first match: the specific Opus 4.5/4.6 and Haiku 4.5 rows
+  # precede the claude-opus-4* glob (Opus 4 / 4.1 pricing).
+  - provider_kind: anthropic
+    model_pattern: "claude-opus-4-5*"
+    input_per_1m_usd: 5.00
+    output_per_1m_usd: 25.00
+    cached_input_per_1m_usd: 0.50
+    cached_input_write_per_1m_usd: 6.25
+
+  - provider_kind: anthropic
+    model_pattern: "claude-opus-4-6*"
+    input_per_1m_usd: 5.00
+    output_per_1m_usd: 25.00
+    cached_input_per_1m_usd: 0.50
+    cached_input_write_per_1m_usd: 6.25
+
+  - provider_kind: anthropic
+    model_pattern: "claude-haiku-4-5*"
+    input_per_1m_usd: 1.00
+    output_per_1m_usd: 5.00
+    cached_input_per_1m_usd: 0.10
+    cached_input_write_per_1m_usd: 1.25
+
   - provider_kind: anthropic
     model_pattern: "claude-opus-4*"
     input_per_1m_usd: 15.00
@@ -112,6 +135,48 @@ entries:
 
   # ── OpenRouter fallback (prefer provider-reported cost when available) ─
   # Rates below are only used if OpenRouter doesn't return usage.cost.
+  # Anthropic-family rows carry Anthropic's own rates, including the cache
+  # rates; OpenRouter's prompt_tokens includes the cached counts, and
+  # cost.DeriveWithSource bills them out of the input bucket
+  # (cost.splitPrompt). The live chat cost path (cost.Reducer.Derive)
+  # reads core/llm/cost/starter_table.yaml, which carries the same rows.
+  # Lookup is first match: the specific Opus 4.5/4.6 rows must precede
+  # the anthropic/claude-opus-4* glob, which prices Opus 4 / 4.1.
+  - provider_kind: openrouter
+    model_pattern: "anthropic/claude-opus-4.5*"
+    input_per_1m_usd: 5.00
+    output_per_1m_usd: 25.00
+    cached_input_per_1m_usd: 0.50
+    cached_input_write_per_1m_usd: 6.25
+
+  - provider_kind: openrouter
+    model_pattern: "anthropic/claude-opus-4.6*"
+    input_per_1m_usd: 5.00
+    output_per_1m_usd: 25.00
+    cached_input_per_1m_usd: 0.50
+    cached_input_write_per_1m_usd: 6.25
+
+  - provider_kind: openrouter
+    model_pattern: "anthropic/claude-haiku-4.5*"
+    input_per_1m_usd: 1.00
+    output_per_1m_usd: 5.00
+    cached_input_per_1m_usd: 0.10
+    cached_input_write_per_1m_usd: 1.25
+
+  - provider_kind: openrouter
+    model_pattern: "anthropic/claude-opus-4*"
+    input_per_1m_usd: 15.00
+    output_per_1m_usd: 75.00
+    cached_input_per_1m_usd: 1.50
+    cached_input_write_per_1m_usd: 18.75
+
+  - provider_kind: openrouter
+    model_pattern: "anthropic/claude-sonnet-4*"
+    input_per_1m_usd: 3.00
+    output_per_1m_usd: 15.00
+    cached_input_per_1m_usd: 0.30
+    cached_input_write_per_1m_usd: 3.75
+
   - provider_kind: openrouter
     model_pattern: "*"
     input_per_1m_usd: 2.00

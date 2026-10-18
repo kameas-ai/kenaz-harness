@@ -10,6 +10,8 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // Settings is the persisted UI state shape (plan §5.5). lastRoute drives
@@ -147,12 +149,50 @@ type Settings struct {
 
 	// ── WP08 — Universal permission dials ──────────────────────────────
 
-	// PermissionMode controls the global permission posture for all
-	// four resource families (bash, filesystem, credential, tool).
-	// One of: "strict", "normal" (default, empty==normal), "permissive".
-	// "strict"     — every call prompts regardless of saved policies.
-	// "normal"     — prompts only for NotApplicable Cedar decisions.
-	// "permissive" — all non-dangerous ops permitted without prompt.
+	// PermissionMode is the coarse, user-facing preset for
+	// risk-rated-autonomy-01PMRA01's per-call Cedar/risk gate
+	// (core/policy/cedar's ThreeLayerResolve). One of: "strict",
+	// "normal" (default, empty==normal), "permissive". core/rpc/api.go's
+	// foldPermissionModeIntoGlobal maps each value onto the global
+	// autonomy layer's KnobRiskThreshold override
+	// (permissionModeRiskThreshold: strict=0, normal=40, permissive=80 —
+	// the same numbers as three rungs of the autonomy tier ladder,
+	// core/autonomy/presets.go) which
+	// chat.kernelToolAdapter.resolveConfirmEach's rung 0 then threads
+	// into ThreeLayerResolve on every tool dispatch:
+	//
+	//   - An explicit Cedar forbid always denies and an explicit Cedar
+	//     permit always allows, REGARDLESS of PermissionMode — this
+	//     dial only governs what happens when Cedar has no opinion
+	//     (layer 3).
+	//   - "strict"     — every layer-3 dispatch prompts; the risk rater
+	//     is never even called (FR-008).
+	//   - "normal"     — a layer-3 dispatch the rater scores below 40
+	//     auto-allows; 40 and above (which includes every
+	//     destructive/unclassifiable-tool call, per the family floor in
+	//     core/policy/risk/floor.go) still prompts.
+	//   - "permissive" — same shape as "normal" but with the ceiling
+	//     raised to 80 (autonomy.TierAutonomous's own value); the
+	//     family floor (81) still holds, so a destructive or
+	//     unclassifiable-tool call prompts under every mode.
+	//
+	// Precedence: this dial WRITES the global autonomy layer's
+	// KnobRiskThreshold override, but ONLY when no layer — session,
+	// project, OR global — already has an explicit RiskThreshold
+	// override OR a tier Level set at all (autonomy.Resolve,
+	// core/autonomy/resolve.go's resolveKnob, checks Overrides across
+	// all three layers BEFORE checking any layer's Level, so a
+	// global-layer Overrides write would otherwise silently outrank an
+	// explicit session- or project-scoped tier pick, not just a
+	// global one — this is why the guard inspects all three layers'
+	// Overrides AND Level, not only the global layer's Overrides). Any
+	// one of those six slots being populated means the user (or a
+	// panel acting for them, e.g. AutonomyPanel.vue's tier picker,
+	// which persists a bare Level with empty Overrides) has already
+	// made an explicit choice, and this coarse dial must defer to it.
+	// See foldPermissionModeIntoGlobal's doc comment (core/rpc/api.go)
+	// for the full rule, documented at both sites per owner ruling
+	// (permission-mode-wiring, 2026-09-16).
 	// UI: stern confirm dialog when switching to "permissive".
 	PermissionMode string `json:"permissionMode,omitempty"`
 
@@ -194,8 +234,10 @@ type Settings struct {
 	// every engine, so before this field existed it shipped to every
 	// user with an arm nothing could reach.
 	//
-	// No UI dial yet — the Settings → Workflows panel is a tracked
-	// follow-up (docs/unwired-ledger.md, 2026-08-16). Settable today by
+	// No UI dial yet — a dial on the Workflows surface (Workflows ›
+	// Schedules / Library, which absorbed the retired Settings → Workflows
+	// panel in nav-ia-sweep-01DOGF0F) is a tracked follow-up
+	// (docs/unwired-ledger.md, 2026-08-16). Settable today by
 	// editing `cedarStrictWorkflowMode` in the harness settings file,
 	// and read live on every workflow run/save.
 	CedarStrictWorkflowMode bool `json:"cedarStrictWorkflowMode,omitempty"`
@@ -348,6 +390,34 @@ type Settings struct {
 	// existing settings.json round-trip rather than its own migration.
 	Autonomy json.RawMessage `json:"autonomy,omitempty"`
 
+	// RiskRaterModel is the user's explicit (provider, model) choice for
+	// risk-rated-autonomy-01PMRA01's layer-3 rating call — the model
+	// that scores a Cedar-NotApplicable tool dispatch 0-100 against the
+	// tier's threshold. Empty (the zero value) means "no explicit
+	// choice": core/policy/risk.ResolveRaterModel falls back to a
+	// per-provider-kind default (e.g. openrouter ->
+	// qwen/qwen-2.5-7b-instruct), and if that is unavailable too, to any
+	// available model on any configured profile, so the rater always
+	// constructs (owner ruling 3, 2026-09-15). This field is the FIRST
+	// rung of that ladder: set-and-available on its profile wins over
+	// every other rung.
+	//
+	// Wire shape mirrors ProviderProfileRef (same type as
+	// CompactionModel / BranchAdvisorDefaultModel above) — a provider ID
+	// with no matching profile, or a model not in that profile's
+	// AvailableModels(), is NOT an error: ResolveRaterModel logs the
+	// miss and falls through to the next rung rather than surfacing a
+	// broken rater.
+	//
+	// This field replaces the WP05 defect: the risk rater's resolver
+	// used to unconditionally fall back to profiles[0].Model — the
+	// user's configured CHAT model, commonly a large reasoning model —
+	// which the 2026-09-15 benchmark (task #109, 234 calls / 9 models;
+	// vendored at core/policy/risk/data/rater_benchmark.json) measured
+	// at a 7.6s median latency and only 38.5% reliability inside the
+	// rater's 5s timeout budget.
+	RiskRaterModel ProviderProfileRef `json:"riskRaterModel,omitempty"`
+
 	// ── Auto-update dials (auto-update-v0.4.0 WP05) ─────────────────────
 	//
 	// AutoCheckUpdatesDisabled is the inverted-form persisted bit for the
@@ -397,6 +467,21 @@ type Settings struct {
 	// without user intervention on a fresh install. Read via the
 	// MCPAutoRestart() accessor; never read directly.
 	MCPAutoRestartDisabled bool `json:"mcpAutoRestartDisabled,omitempty"`
+
+	// ToolExposure is the user's per-server / per-tool exposure tier
+	// layer (tool-context-budget-01TCBUD01 §2.1 step 4): below org pins,
+	// session and project overrides, above the harness default. nil has
+	// no opinion about any tool. Read through toolexposure.Resolve;
+	// written via SaveToolExposure, which validates every tier.
+	ToolExposure *toolexposure.Exposure `json:"toolExposure,omitempty"`
+	// ToolSchemaBudgetTokens caps the tokens of tool schemas sent per
+	// call (§2.3). 0 = toolexposure.DefaultSchemaBudgetTokens; range
+	// [0, toolexposure.MaxSchemaBudgetTokens].
+	ToolSchemaBudgetTokens int `json:"toolSchemaBudgetTokens,omitempty"`
+	// ToolActivationTTLTurns is how many unused turns a non-sticky
+	// activation survives (§2.3). 0 = toolexposure.DefaultActivationTTLTurns;
+	// range [0, toolexposure.MaxActivationTTLTurns].
+	ToolActivationTTLTurns int `json:"toolActivationTtlTurns,omitempty"`
 
 	// AgenticTurnRouting is the LAUNCH GATE for the routed chat turn
 	// (agentgraph-total-convergence-01PMGX01 WP11b; design in
@@ -579,8 +664,10 @@ type Settings struct {
 	// rejected at Save.
 	LongSessionNudgeTurns int `json:"longSessionNudgeTurns,omitempty"`
 
-	// LongSessionNudgeTokens is the cumulative prompt-token threshold
-	// after which the nudge banner appears regardless of turn count.
+	// LongSessionNudgeTokens is the conversation-history token threshold
+	// (the history part of the last request's composition, not the whole
+	// prompt) after which the nudge banner appears regardless of turn
+	// count.
 	// Default 50000. Zero falls back to the default via
 	// EffectiveLongSessionNudgeTokens. Negative values are rejected at
 	// Save.
@@ -734,6 +821,197 @@ type Settings struct {
 	// upgrade would turn off a working feature for every user with an
 	// unsigned local bundle. See EffectiveBundleSigningPolicy.
 	BundleSigningPolicy string `json:"bundleSigningPolicy,omitempty"`
+
+	// AdvisorModel is the user's explicit (provider, model) choice for
+	// laya-advisors-01LAYA001's advisor seam — the small-model binary
+	// recommendation calls (branch_now / compact_now / escalate_model,
+	// WP04-06) resolve their model through this field via
+	// core/advice.ResolveAdvisorModel's laya ladder, mirroring
+	// RiskRaterModel / CompactionModel exactly: empty (the zero value)
+	// means "no explicit choice" — the ladder falls through to a
+	// detected local laya model (rung 2), then to disabled (rung 4;
+	// rung 3, fleet-hosted laya, is compiled but unreachable pending
+	// OQ-2). A provider ID with no matching profile, or a model not in
+	// that profile's AvailableModels(), is NOT an error: the ladder logs
+	// the miss and falls through, exactly like RiskRaterModel.
+	//
+	// Wire shape mirrors ProviderProfileRef (same type as CompactionModel
+	// / RiskRaterModel above).
+	AdvisorModel ProviderProfileRef `json:"advisorModel,omitempty"`
+
+	// ── Per-kind advisor disable switches (laya-advisors-01LAYA001
+	// WP04-06, spec AC-02: "kinds are independently disableable") ──
+	//
+	// Each field's zero value (false) means ENABLED — mirrors
+	// HarnessSelfMCPDisabled's "*Disabled, default false" polarity rather
+	// than BranchAdvisorEnabled's "*Enabled, default false" polarity,
+	// because these heuristic backends make zero model calls and zero
+	// I/O (core/advice/heuristic.go's HeuristicAdvisor), so there is no
+	// cost/latency reason to default a kind off the way an LLM-backed
+	// advisor would need to be. Read by core/rpc/api.go's newLLMStack,
+	// which wires one advice.KindGate closure per kind onto the
+	// production HeuristicAdvisor (chatAdvisor) via SetKindGate — see
+	// that call site's own comment for the exact line.
+	//
+	// This does NOT gate whether the kind is REGISTERED (registration is
+	// a process-global, init()-time fact scripts/ci/check-advice-kinds.sh
+	// verifies independent of any Settings value) — it gates whether
+	// HeuristicAdvisor.Recommend serves it at all: a disabled kind
+	// degrades to ErrNoAdvice exactly like every other Advisor failure
+	// mode (advice's package doc comment), invisible to the caller beyond
+	// "no advice."
+
+	// AdviceBranchNowDisabled turns off the branch_now advice kind
+	// (core/advice/kinds/branchnow) independent of compact_now/
+	// escalate_model.
+	AdviceBranchNowDisabled bool `json:"adviceBranchNowDisabled,omitempty"`
+
+	// AdviceCompactNowDisabled turns off the compact_now advice kind
+	// (core/advice/kinds/compactnow) independent of branch_now/
+	// escalate_model.
+	AdviceCompactNowDisabled bool `json:"adviceCompactNowDisabled,omitempty"`
+
+	// AdviceEscalateModelDisabled turns off the escalate_model advice
+	// kind (core/advice/kinds/escalatemodel) independent of branch_now/
+	// compact_now.
+	AdviceEscalateModelDisabled bool `json:"adviceEscalateModelDisabled,omitempty"`
+
+	// AdviceLabelCaptureDisabled is laya-advisors-01LAYA001 WP08's
+	// capture toggle (spec §4: "A settings toggle governs capture, ON by
+	// default for local-only storage, honestly labeled"). Zero value
+	// (false) means CAPTURE IS ON — the same "*Disabled, default false"
+	// polarity as AdviceBranchNowDisabled/AdviceCompactNowDisabled/
+	// AdviceEscalateModelDisabled above, chosen for the same reason: the
+	// spec's own default is "on," so the field name must invert to make
+	// the Go zero value match it (a "*Enabled, default false" field would
+	// silently ship capture OFF for every user who never touches
+	// Settings, the opposite of what §4 asks for).
+	//
+	// Honest semantics per spec §4: "stored on this device, used to
+	// improve recommendations; nothing leaves this machine" — capture
+	// writes ONLY to the local advice_labels table
+	// (core/advice/labels.SQLStore); this field has no bearing on any
+	// future export/fleet-contribution consent (spec §8's separate,
+	// per-class, rung-3-only consent surface), which does not exist yet.
+	//
+	// Read by core/rpc/api.go's newLLMStack, which wires a closure onto
+	// core/advice/labels.NewCaptureAdvisor's `enabled` parameter — read
+	// fresh on every Recommend call, exactly like the three per-kind
+	// gates above, so a toggle flip takes effect on the very next
+	// recommendation with no restart. AC-06's "capture toggle OFF => zero
+	// rows written" is a call-count proof on the underlying Store, not a
+	// row-count check — see labels.CaptureAdvisor's doc comment.
+	AdviceLabelCaptureDisabled bool `json:"adviceLabelCaptureDisabled,omitempty"`
+
+	// ── Model-call telemetry (llm-call-telemetry-01LLMTEL01 WP02) ──────
+	// Owner ruling 2026-10-09: the harness collects every LLM provider
+	// call into a local store (core/modelcalls); users opt in to send to
+	// Fleet. UI: Settings → Account → "Model-call telemetry"
+	// (ModelCallTelemetryPanel.vue), written through
+	// Settings_SetModelCallTelemetry or a whole-settings Set.
+
+	// ModelCallStatsPullDisabled turns OFF the OpenRouter generation-stats
+	// pull ("Fetch OpenRouter generation stats", default ON — the zero
+	// value). Read fresh by core/modelcalls.StatsPuller for every call and
+	// every retry (core/rpc/model_calls_wiring.go), so a flip applies to
+	// the next call with no restart.
+	ModelCallStatsPullDisabled bool `json:"modelCallStatsPullDisabled,omitempty"`
+
+	// ModelCallRetentionDays is how long stored model-call records are
+	// kept. 0 = the 30-day default; valid range 1..3650
+	// (modelcalls.EffectiveRetentionDays). Read on every pass of
+	// core/modelcalls.Pruner.
+	ModelCallRetentionDays int `json:"modelCallRetentionDays,omitempty"`
+
+	// ShareModelCallTelemetryWithFleet is "Share model-call telemetry
+	// with Fleet" — default OFF, separate from the general telemetry
+	// consent. ON exports gen_ai.chat / kenaz.chat.turn spans that START
+	// after the toggle over the signed-in user's /otlp/v1/traces lane (no
+	// back-fill); OFF stops export at the next batch. Applied to the live
+	// pipeline by API.applyModelCallSharing (fleet.go) on every write and
+	// at pipeline wiring; the consumer is fleet.closableSpanExporter's
+	// model-call filter. Never content.
+	ShareModelCallTelemetryWithFleet bool `json:"shareModelCallTelemetryWithFleet,omitempty"`
+
+	// ShareModelCallTelemetryTextRevision is the revision of the opt-in
+	// text the user saw when they last turned sharing on (consent
+	// evidence; ModelCallOptInTextRevision is the current one), and
+	// ShareModelCallTelemetryAcceptedAt is when (RFC 3339 UTC). Both are
+	// written ONLY by SetModelCallTelemetry. Sharing takes effect only
+	// while the stored revision is the current one
+	// (Settings.modelCallSharingEffective), so a text change requires a new
+	// opt-in.
+	ShareModelCallTelemetryTextRevision int    `json:"shareModelCallTelemetryTextRevision,omitempty"`
+	ShareModelCallTelemetryAcceptedAt   string `json:"shareModelCallTelemetryAcceptedAt,omitempty"`
+
+	// SettingsSyncUploadsConfirmed records the user's one-time confirmation
+	// that the settings categories they enable under Settings › Sync may be
+	// uploaded to Fleet (owner ruling H1, provider-credentials-client-
+	// 01PCCLI01 §7a). Settings sync never reached Fleet before that
+	// mission's wire fix, so categories a user had opted into had never
+	// left the machine; the first upload waits for this. Default false.
+	// Consumer: fleet.Syncer.Push via the upload gate wired in
+	// core/rpc/sync_upload_consent.go. Written true only by
+	// Sync_ConfirmUploads; Set always keeps the stored value, in both
+	// directions: a stale whole-settings save cannot re-arm the prompt, and
+	// a save carrying true cannot grant consent without the notice.
+	//
+	// H1 scope (owner ruling): the confirmation is global and one-time. A
+	// category the user turns on AFTER confirming is itself consent for
+	// that category (no second prompt). "Not now" means not confirming: the
+	// notice stays until the user chooses Start syncing.
+	SettingsSyncUploadsConfirmed bool `json:"settingsSyncUploadsConfirmed,omitempty"`
+
+	// SettingsSyncEnabledCategories is the persisted set of settings-sync
+	// categories the user has turned on under Settings › Sync (sorted,
+	// unique). Before this field the opt-in lived only in fleet.Syncer's
+	// memory, so every launch silently turned every category off again.
+	// Written only by Sync_Toggle (core/rpc/sync_optins.go); Set always
+	// keeps the stored value, so a whole-settings save from an older copy
+	// cannot undo a toggle. Consumer: syncview.API.RestoreOptIns at boot
+	// (rpc.New) re-applies each entry through fleet.Syncer.RestoreEnabled,
+	// which gates Push and Pull. Restoring is NOT upload consent: uploads
+	// still wait for SettingsSyncUploadsConfirmed.
+	SettingsSyncEnabledCategories []string `json:"settingsSyncEnabledCategories,omitempty"`
+
+	// ── Local ML activity (ml-producer-01MLPRD01 WP11, spec §12 A-16) ──
+
+	// MLLocalActivityRetentionDays is how long the local activity store
+	// (<dataDir>/ml/activity.db) keeps agent activity. 0 = the 90-day
+	// default; valid range 1..3650 (activity.EffectiveRetentionDays).
+	// Read on every pass of core/mlproducer/activity.Pruner
+	// (core/rpc/mlproducer_wiring.go). UI: Settings › Sync › Cloud ML ›
+	// "Local activity", written through
+	// Settings_SetMLLocalActivityRetention or a whole-settings Set.
+	MLLocalActivityRetentionDays int `json:"mlLocalActivityRetentionDays,omitempty"`
+
+	// gates:settings-struct-end — keep this marker the LAST line of the
+	// struct and add new fields ABOVE it. scripts/ci/gates_can_fail_test.go
+	// plants a probe field here, so it no longer re-anchors on whichever
+	// field happens to be last.
+}
+
+// ModelCallOptInTextRevision is the revision of the inline text under
+// "Share model-call telemetry with Fleet" (ModelCallTelemetryPanel.vue).
+// Revision 1 is the B4a text, legal D82 (kameas-ai-8f, 2026-10-16; counsel
+// review pending; a counsel change ships as revision 2). Bump it
+// whenever that text changes, so earlier opt-ins stop taking effect until
+// the user agrees to the new wording.
+const ModelCallOptInTextRevision = 1
+
+// ModelCallTelemetrySettings is the wire shape of the three model-call
+// telemetry settings (llm-call-telemetry-01LLMTEL01 WP02).
+type ModelCallTelemetrySettings struct {
+	// StatsPullEnabled is "Fetch OpenRouter generation stats" (default
+	// true).
+	StatsPullEnabled bool `json:"statsPullEnabled"`
+	// RetentionDays as stored (0 = default).
+	RetentionDays int `json:"retentionDays"`
+	// EffectiveRetentionDays is read-only: the window the pruner applies.
+	EffectiveRetentionDays int `json:"effectiveRetentionDays"`
+	// ShareWithFleet is "Share model-call telemetry with Fleet" (default
+	// false).
+	ShareWithFleet bool `json:"shareWithFleet"`
 }
 
 // EffectiveBundleSigningPolicy normalizes BundleSigningPolicy to one of
@@ -1319,6 +1597,13 @@ type SettingsStore interface {
 	LoadMCPAutoRestart() (bool, error)
 	SaveMCPAutoRestart(enabled bool) error
 
+	// LoadToolExposure / SaveToolExposure expose the tool-exposure layer,
+	// schema budget and activation TTL as one toolexposure.Settings.
+	// Load reports the stored values (0 = default) with the Effective*
+	// fields unset; Save validates and writes the three stored values.
+	LoadToolExposure() (toolexposure.Settings, error)
+	SaveToolExposure(ts toolexposure.Settings) error
+
 	// LoadAutoTitleEnabled / SaveAutoTitleEnabled expose the session
 	// auto-title feature flag (p0-wiring-fixes-3TVMG0MX WP05). Default
 	// true on a fresh install (zero-value Disabled → feature enabled).
@@ -1459,6 +1744,21 @@ type SettingsAPI interface {
 	GetMCPAutoRestart(ctx context.Context) (bool, error)
 	// SetMCPAutoRestart persists the MCP auto-restart dial.
 	SetMCPAutoRestart(ctx context.Context, enabled bool) error
+	// GetToolExposure returns the user's tool-exposure layer, schema
+	// budget and activation TTL as stored (0 = default), with the
+	// read-only Effective* fields filled. Satisfies
+	// toolexposure.SettingsSource.
+	GetToolExposure(ctx context.Context) (toolexposure.Settings, error)
+	// SetToolExposure validates and persists the user's tool-exposure
+	// layer, budget and TTL (0 = default); Effective* are ignored.
+	SetToolExposure(ctx context.Context, ts toolexposure.Settings) error
+	// GetModelCallTelemetry returns the model-call telemetry settings
+	// (stats pull, retention, Fleet sharing) — llm-call-telemetry-
+	// 01LLMTEL01 WP02.
+	GetModelCallTelemetry(ctx context.Context) (ModelCallTelemetrySettings, error)
+	// SetModelCallTelemetry persists them and applies the Fleet-sharing
+	// opt-in to the live span lane.
+	SetModelCallTelemetry(ctx context.Context, mc ModelCallTelemetrySettings) error
 	// GetAutoTitleEnabled returns whether session auto-titling is on.
 	// Default true on a fresh install (zero-value → enabled).
 	// (p0-wiring-fixes-3TVMG0MX WP05)
@@ -1497,6 +1797,12 @@ type SettingsAPI interface {
 	// An empty string clears the user layer.
 	SetChatCustomInstructions(ctx context.Context, text string) error
 
+	// GetRiskRaterBenchmark returns the vendored risk-rater model
+	// comparison (risk-rated-autonomy-01PMRA01, owner ruling 2026-09-15)
+	// the Settings picker UI renders alongside each candidate rating
+	// model. Static data, not a Settings.json read.
+	GetRiskRaterBenchmark(ctx context.Context) (risk.RiskRaterBenchmark, error)
+
 	// GetMemoryNarrativeEnabled returns whether the narrative layer is
 	// enabled in Settings (additional env-var gate applies). Default
 	// true after Phase 2 rollout (WP12).
@@ -1519,6 +1825,12 @@ type SettingsAPI interface {
 	// HARNESS_FLEET_DISABLED=1.
 	FleetSignIn(ctx context.Context) (FleetIdentity, error)
 
+	// FleetSignInCancel cancels the in-flight sign-in flow (the UI's
+	// "Waiting for browser… Cancel"); the pending FleetSignIn returns
+	// context.Canceled. No-op when no flow is running.
+	// (fleet-session-truth-01DOGF0A FR-5)
+	FleetSignInCancel(ctx context.Context) error
+
 	// FleetSignOut clears persisted tokens and the identity cache.
 	// Returns fleet.ErrFleetDisabled when the kill switch is active.
 	FleetSignOut(ctx context.Context) error
@@ -1530,9 +1842,73 @@ type SettingsAPI interface {
 	// the cached identity. Returns fleet.ErrNotSignedIn if not signed in.
 	FleetRefreshIdentity(ctx context.Context) (FleetIdentity, error)
 
+	// ReconcileTelemetry brings fleet export in line with the current
+	// (identity, effective consent). Idempotent.
+	ReconcileTelemetry(ctx context.Context)
+
+	// RefreshTelemetryPreferences re-reads the user's per-class opt-ins from
+	// Fleet (bounded cache, fails closed when stale) and reconciles export.
+	RefreshTelemetryPreferences(ctx context.Context)
+
+	// FleetSessionEnded is the served-mode sign-out (host broker session gone).
+	FleetSessionEnded(ctx context.Context)
+	// FleetHostIdentityPresented is the served-mode re-authorization for
+	// node_removed: lifts the durable block when the host's identity
+	// differs from the one removed. Reports whether it was lifted.
+	FleetHostIdentityPresented(identity string) bool
+
+	// SetFleetExportUnauthorizedHook wires the OTLP 401 callback.
+	SetFleetExportUnauthorizedHook(fn func())
+
+	// FleetTelemetryStatus is a payload-free export health snapshot.
+	FleetTelemetryStatus(ctx context.Context) (FleetTelemetryStatusView, error)
+
+	// ── Fleet learned-memory sync (memory-sync-01MEMSY01 WP08) ──────────
+
+	// FleetMemorySyncStatus returns the opt-in state, Fleet's settings and
+	// usage (fetched only when the memory_sync capability is present),
+	// the sync_blocked count and the lane health.
+	FleetMemorySyncStatus(ctx context.Context) (MemorySyncStatusView, error)
+	// FleetMemorySyncEnable opts in with the given scopes (⊆ long_term,
+	// global) and the disclosure version the user accepted.
+	FleetMemorySyncEnable(ctx context.Context, scopes []string, consentVersion string) (MemorySyncStatusView, error)
+	// FleetMemorySyncDisable opts out (Fleet keeps the data). With
+	// deleteFromFleet it first erases everything on Fleet (forget-all);
+	// confirm must then be exactly "forget-all".
+	FleetMemorySyncDisable(ctx context.Context, deleteFromFleet bool, confirm string) (MemorySyncStatusView, error)
+	// FleetMLStatus returns the Cloud ML consent panel state: a fresh
+	// GET /me/ml read (ml-producer-01MLPRD01 WP01, spec §5), the rendered
+	// notice, and the producer's shipping status.
+	FleetMLStatus(ctx context.Context) (MLStatusView, error)
+	// FleetMLAckNotice acknowledges the notice version the panel showed,
+	// through the notice button clicked (MLNoticeActionTurnOn or
+	// MLNoticeActionRead), which picks the ack action. A
+	// 409 policy_changed re-reads and returns the state with NoticeChanged.
+	FleetMLAckNotice(ctx context.Context, noticeVersion int, button string) (MLStatusView, error)
+	// FleetSetWorkflowEventsOptIn writes the member's workflow_events
+	// opt-in (PUT /me/telemetry-opt-ins) and re-reads /me/ml.
+	FleetSetWorkflowEventsOptIn(ctx context.Context, optedIn bool) (MLStatusView, error)
+	// FleetPendingApprovals is a fresh GET /me/pending-approvals read
+	// (ml-producer-01MLPRD01 WP06): what the member must agree to.
+	FleetPendingApprovals(ctx context.Context) (PendingApprovalsView, error)
+	// FleetApproveItem approves the hub item with id. The approve action is
+	// looked up server-side from a fresh read and sent only when its method +
+	// path is in the harness allowlist.
+	FleetApproveItem(ctx context.Context, id string) (PendingApprovalsView, error)
+	// FleetDismissItemLocally hides an informational hub item on this
+	// device until its version changes. Nothing is sent to Fleet: legal
+	// (kameas-ai-11, 2026-10-16) rules that a "Not now" is never recorded.
+	FleetDismissItemLocally(ctx context.Context, id string) (PendingApprovalsView, error)
+
 	// FleetProfile returns the active env profile for UI rendering.
 	// Does NOT expose ClientID, APIAudience, or any secret fields.
 	FleetProfile(ctx context.Context) (FleetProfileInfo, error)
+
+	// FleetSession returns the single fleet-session snapshot every surface
+	// reads (fleet-session-truth-01DOGF0A FR-1): state (signed_out /
+	// signing_in / signed_in / degraded / disabled), identity, claims,
+	// capabilities and sync-lane health. Network-free.
+	FleetSession(ctx context.Context) (FleetSessionView, error)
 
 	// ── Fleet capabilities (fleet-capability-surface-01NDFSEX09 WP11) ───────
 
@@ -1633,7 +2009,8 @@ type FleetHealthView struct {
 	// in this binary. false means fleet config bundles can never be applied.
 	ConfigDistributionEnabled bool `json:"configDistributionEnabled"`
 	// ConfigSource is the last-known config source: "fleet", "stale-cache",
-	// "default-deny-degraded", or "no-key".
+	// "default-deny-degraded", "no-key", or "unknown-key" (the latest
+	// bundle's signed key_id matches no pinned key — the install must update).
 	ConfigSource string `json:"configSource"`
 	// ConfigLastError is the most recent error string from the config poller.
 	ConfigLastError string `json:"configLastError"`
@@ -1671,8 +2048,9 @@ type AuditSettings struct {
 // long-session nudge banner fires.
 const DefaultLongSessionNudgeTurns = 30
 
-// DefaultLongSessionNudgeTokens is the spec-locked cumulative prompt-token
-// threshold after which the nudge banner fires regardless of turn count.
+// DefaultLongSessionNudgeTokens is the spec-locked conversation-history
+// token threshold after which the nudge banner fires regardless of turn
+// count.
 const DefaultLongSessionNudgeTokens = 50000
 
 // EffectiveLongSessionNudgeTurns returns the user-tuned threshold or the
@@ -1831,4 +2209,29 @@ type ShortcutsStore interface {
 	LoadShortcuts() (map[string]string, error)
 	// SaveShortcuts atomically replaces the full KeyboardShortcuts map.
 	SaveShortcuts(m map[string]string) error
+}
+
+// toolExposureSettings projects the three tool-exposure fields.
+func (s Settings) toolExposureSettings() toolexposure.Settings {
+	out := toolexposure.Settings{
+		SchemaBudgetTokens: s.ToolSchemaBudgetTokens,
+		ActivationTTLTurns: s.ToolActivationTTLTurns,
+	}
+	if s.ToolExposure != nil {
+		out.Exposure = s.ToolExposure.Clone()
+	}
+	return out
+}
+
+// withToolExposureSettings writes the three tool-exposure fields; a
+// zero exposure layer is stored as absent.
+func (s Settings) withToolExposureSettings(ts toolexposure.Settings) Settings {
+	s.ToolSchemaBudgetTokens = ts.SchemaBudgetTokens
+	s.ToolActivationTTLTurns = ts.ActivationTTLTurns
+	s.ToolExposure = nil
+	if !ts.Exposure.IsZero() {
+		e := ts.Exposure.Clone()
+		s.ToolExposure = &e
+	}
+	return s
 }

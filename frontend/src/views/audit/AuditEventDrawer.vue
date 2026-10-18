@@ -62,6 +62,26 @@ const crossRefs = computed<Array<{ kind: string; id: string }>>(() => {
   return refs;
 });
 
+/**
+ * layerLabel — risk-rated-autonomy-01PMRA01 WP10. Layer 0 covers every
+ * pre-mission rung (skip_set, toggle_off, grants, headless, the legacy
+ * rung-6 prompt) — see audit.ToolConfirmDecisionPayload.Layer's own doc
+ * comment for why 0 is "not touched by this mission" rather than "layer
+ * zero" in any Cedar sense.
+ */
+function layerLabel(layer: number | undefined): string {
+  switch (layer) {
+    case 1:
+      return 'Layer 1 — Cedar forbid';
+    case 2:
+      return 'Layer 2 — Cedar permit';
+    case 3:
+      return 'Layer 3 — risk rating';
+    default:
+      return 'Pre-existing confirm_each rung';
+  }
+}
+
 // Synthesise a trace_id from the trailing hex for demo purposes.
 // Real implementation reads from structured payload metadata.
 const traceId = computed(() => {
@@ -157,6 +177,39 @@ const traceId = computed(() => {
             <span class="text-ink-muted">Payload Hash (first 4 bytes)</span>
             <p class="mt-0.5 font-mono text-[11px] text-ink">{{ entry.trailing }}</p>
           </div>
+
+          <!-- risk-rated-autonomy-01PMRA01 WP10: tool-confirm-decision
+               detail — deciding layer always; for layer 3, the model +
+               prompt_version + cache hit. Populated only for this one
+               audit kind (entry.tool_confirm_decision), see
+               AuditEntry.tool_confirm_decision's own doc comment. -->
+          <template v-if="entry.tool_confirm_decision">
+            <div data-testid="audit-drawer-tool-confirm">
+              <span class="text-ink-muted">Deciding layer</span>
+              <p class="mt-0.5 font-mono text-[11px] text-ink">
+                {{ layerLabel(entry.tool_confirm_decision.layer) }}
+              </p>
+            </div>
+            <div v-if="entry.tool_confirm_decision.score !== undefined">
+              <span class="text-ink-muted">Risk score</span>
+              <p class="mt-0.5 font-mono text-[11px] text-ink">
+                {{ entry.tool_confirm_decision.tier ?? 'unknown' }} · {{ entry.tool_confirm_decision.score }}/100
+                <span v-if="entry.tool_confirm_decision.threshold" class="text-ink-muted">
+                  (threshold {{ entry.tool_confirm_decision.threshold }})
+                </span>
+              </p>
+            </div>
+            <div v-if="entry.tool_confirm_decision.layer === 3">
+              <span class="text-ink-muted">Rater</span>
+              <p class="mt-0.5 font-mono text-[11px] text-ink" data-testid="audit-drawer-rater-detail">
+                {{ entry.tool_confirm_decision.model || 'offline floor (no live model)' }}
+                <span v-if="entry.tool_confirm_decision.prompt_version" class="text-ink-muted">
+                  · {{ entry.tool_confirm_decision.prompt_version }}
+                </span>
+                <span v-if="entry.tool_confirm_decision.cache_hit" class="text-ink-muted">· cache hit</span>
+              </p>
+            </div>
+          </template>
 
           <!-- Cross-reference chips -->
           <div v-if="crossRefs.length > 0">

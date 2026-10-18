@@ -4,7 +4,12 @@
  *
  * Threshold logic (OR conditions):
  *   - turn count >= nudgeTurns
- *   - promptTokens (cumulative) >= nudgeTokens
+ *   - historyTokens >= nudgeTokens
+ *
+ * historyTokens is the conversation-history part of the last request
+ * (SessionUsage.composition.history), not prompt tokens: a prompt also
+ * carries the system prompt and every tool definition, which say
+ * nothing about how long the conversation is.
  *
  * A TURN is one human message, and the caller counts them directly.
  * This used to be `messageCount / 2`, which was a stand-in for the same
@@ -39,8 +44,8 @@ export interface UseLongSessionNudgeOptions {
    * and tool entries it produced.
    */
   turnCount: Ref<number>;
-  /** Reactive ref of cumulative prompt tokens for the session. */
-  promptTokens: Ref<number>;
+  /** Reactive ref of the last request's conversation-history tokens. */
+  historyTokens: Ref<number>;
 }
 
 export interface UseLongSessionNudgeReturn {
@@ -99,7 +104,7 @@ export function useLongSessionNudge(
   // Derived: whether the session has crossed either threshold.
   const thresholdCrossed = computed<boolean>(() => {
     if (opts.turnCount.value >= nudgeTurns.value) return true;
-    if (opts.promptTokens.value >= nudgeTokens.value) return true;
+    if (opts.historyTokens.value >= nudgeTokens.value) return true;
     return false;
   });
 

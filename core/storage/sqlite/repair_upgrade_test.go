@@ -28,13 +28,18 @@ import (
 // This test builds that exact database — a real, fully-migrated data.db
 // rewound so the late sessions migrations are unapplied while the
 // high-numbered units rows stay in the ledger — reopens it through the
-// production Open path, and requires the (now six, since
-// chat-turn-integrity-01PMZ606 WP02 added 0336 and
+// production Open path, and requires the (now seven, since
+// chat-turn-integrity-01PMZ606 WP02 added 0336, WP05 added 0337, and
 // model-scheduled-jobs-01PMSJ01 WP09 added 0340) migrations to land and
 // a session INSERT to succeed. 0340's Up is idempotent (pragma_table_info
 // guard, matching the sessions/0330-knobs convention) — the rewind below
 // only deletes the ledger ROW for it, not the columns step 1 already
 // added, so re-applying it here exercises that idempotency for real.
+// 0337's Up is also idempotent under re-application here for a simpler
+// reason: this database has no session_messages rows matching the
+// discriminator at all, so its second run finds zero candidates and
+// deletes nothing — the same "re-run is a no-op on this data" shape as
+// 0330, just via an empty candidate set rather than a schema guard.
 //
 // Verified equivalently against a copy of the live dev database
 // (~/.kenaz/harness/dev/data.db) during the fix.
@@ -56,6 +61,9 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 	//    sessions migrations and the columns 0333/0334 added. The units
 	//    rows (1100-1103) stay — they are what made max(applied) 1103.
 	raw := openRaw(t, dir)
+	// 0332 rebuilds `artifacts`, which units/1104 renamed on the HEAD
+	// database this test starts from — rewind 1104 too.
+	rewindArtifactsToUnits(t, ctx, raw)
 	rewind := []string{
 		"DELETE FROM harness_migrations WHERE owning_mission='sessions' AND version >= 332",
 		"ALTER TABLE session_messages DROP COLUMN kind",
@@ -93,10 +101,12 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = repaired.Close(context.Background()) })
 
-	// 4. The six missing migrations must be applied (332-336, 340; 0336
-	//    added by chat-turn-integrity-01PMZ606 WP02, 0340 added by
-	//    model-scheduled-jobs-01PMSJ01 WP09 — 0337-0339 are reserved for
-	//    sibling WPs and were not registered as of WP09).
+	// 4. The missing migrations must be applied (332-343; 0336 added
+	//    by chat-turn-integrity-01PMZ606 WP02, 0337 added by WP05, 0338
+	//    added by model-scheduled-jobs-01PMSJ01 WP06, 0339 added by the
+	//    same mission's WP08, 0340 added by WP09; 0342 added by
+	//    agentgraph-settings-linkage-01DOGF0D WP03; 0343 added by
+	//    feat/graph-resolved-spec WP01).
 	rows, err := repaired.Reader().Query(ctx,
 		"SELECT version FROM harness_migrations WHERE owning_mission='sessions' AND version >= 332 AND action='applied' ORDER BY version")
 	if err != nil {
@@ -111,7 +121,16 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 		got = append(got, v)
 	}
 	rows.Close()
-	want := []int{332, 333, 334, 335, 336, 340}
+	// 0341 (chat-single-writer-01DOGF0G) is a per-session scan like 0337:
+	// with no doubled turns in this database it finds nothing, so its
+	// re-application here is a no-op by construction. 0342
+	// (agentgraph-settings-linkage-01DOGF0D) and 0343
+	// (feat/graph-resolved-spec) re-create their tables idempotently.
+	// 0344 (undelivered-message-retry) probes pragma_table_info before
+	// each ALTER, so its re-application over existing columns is a no-op;
+	// 0345 (scheduled-chat history model/cost), 0346 (usage cache
+	// tokens) and 0347 (tool exposure) probe the same way.
+	want := []int{332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347}
 	if len(got) != len(want) {
 		t.Fatalf("re-applied sessions migrations = %v, want %v", got, want)
 	}

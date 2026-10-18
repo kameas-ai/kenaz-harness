@@ -9,13 +9,37 @@
 # followed by a `#` comment carrying the DATE, the BLOCKER, and the change
 # that will delete the line. "We'll get to it" is not a reason.
 #
+# KEYING (Finding #92, CI-gate-hardening, 2026-09-14): every clause's key
+# is file-based (clauses 3/4/5: file + field/option name) or file-plus-
+# content-based (clauses 1/2: file + the offending text/variable name,
+# neither of which is a stable symbol). NONE embed a line number — a
+# line-number key self-invalidates on any unrelated edit that shifts
+# lines above the entry (see i16-config-nil-coverage.txt's header for
+# the incident history that motivated auditing every allowlist in this
+# directory for this class). Clauses 1 and 2 used to be file:line-keyed;
+# fixed in the same commit that audited this file, with nothing to
+# migrate since both clauses have been empty since this gate's
+# introduction (see the note below).
+#
 # Entries shrink monotonically. An entry that is no longer a violation is
 # STALE and fails the gate — deleting the line is the required follow-up
 # when the site is wired.
 #
-# EMPTY, and it must stay that way. The 2026-08-16 sweep wired all six
-# sites this gate was written for (audit findings A1 + A2, plus
-# tools.Config.Gate which the gate itself surfaced). There is no known
-# reason for a production wiring site to hold an AllowAll: buildCedarGate
-# already returns AllowAll for an empty DataDir, so the nil-core test
-# posture needs no literal at the call.
+# The 2026-08-16 sweep wired all six sites this gate was written for
+# (audit findings A1 + A2, plus tools.Config.Gate which the gate itself
+# surfaced). There is no known reason for a production wiring site to
+# hold an AllowAll: buildCedarGate already returns AllowAll for an empty
+# DataDir, so the nil-core test posture needs no literal at the call.
+# One entry below is a DELIBERATE, dated exception to that otherwise-
+# empty state.
+
+# DELETED 2026-09-15 (owner ruling, WP05-WP10 finishing pass): the entry
+# that lived here (core/rpc/views/agentgraph/chat/chat_runner.go's
+# Config.RiskGate, clause 3) is gone because the site is now genuinely
+# wired — core/rpc/api.go sets `RiskGate: secretGate`, not because the
+# allowlist grew to hide it. The owner accepted the measured 320.4ms /
+# 359.5ms medians (see core/rpc/api.go's RiskGate wiring-site comment for
+# the full ruling and numbers) and the flip landed in the same change
+# that deletes this line. check-cedar-gate-arguments.sh now reports this
+# site clean because clause 3 no longer matches a nil literal, not
+# because of a listed exception.

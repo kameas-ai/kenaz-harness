@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode"
 
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
@@ -504,6 +505,34 @@ func jsonObjectCandidates(s string) []string {
 	return out
 }
 
+// buildRouterChoiceSchema builds a JSON schema constraining field to
+// one of choices' ids (structured-output-is-reachable-01PMZE14 WP10):
+// {"type":"object","required":[field],"properties":{field:{"type":
+// "string","enum":[...ids]}}}. Marshalled via encoding/json rather than
+// string concatenation so a choice id or field name containing a quote
+// or other JSON-special byte cannot corrupt the schema. Returns an
+// error only if json.Marshal itself fails (never in practice for this
+// input shape); callers must treat a non-nil error as "send the
+// unconstrained request," matching every other opportunistic
+// enhancement on this seam.
+func buildRouterChoiceSchema(field string, choices []routerChoice) (json.RawMessage, error) {
+	ids := make([]string, len(choices))
+	for i, c := range choices {
+		ids[i] = c.ID
+	}
+	schema := map[string]any{
+		"type":     "object",
+		"required": []string{field},
+		"properties": map[string]any{
+			field: map[string]any{
+				"type": "string",
+				"enum": ids,
+			},
+		},
+	}
+	return json.Marshal(schema)
+}
+
 // routerAskModel is standalone mode: one constrained call that lists
 // the menu and asks for a single choice id.
 //
@@ -535,13 +564,28 @@ func routerAskModel(ctx context.Context, env *Env, node *Node, a RouterAttrs, ch
 		b.WriteString("\n")
 	}
 
-	resp, err := env.LLM.Generate(ctx, LLMRequest{
+	// ResponseSchema (structured-output-is-reachable-01PMZE14 WP10): the
+	// field + valid-choice enum parseChoiceField already validates
+	// against, so a model with real structured output is constrained to
+	// return one of the listed ids instead of merely being asked to.
+	// D-9: degrade, never fail — dropped and re-issued on
+	// ErrCapabilityUnsupported below, exactly like the review gate.
+	schema, serr := buildRouterChoiceSchema(defaultRouterChoiceField, choices)
+	req := LLMRequest{
 		Provider:     a.Provider,
 		Model:        model,
 		MaxTokens:    maxTokens,
 		SystemPrompt: composePrompt(resolvePromptTemplate(env, a.Provider, model), graphBaseOf(env), a.SystemPrompt),
 		Messages:     []Message{{Role: "user", Content: b.String()}},
-	})
+	}
+	if serr == nil {
+		req.ResponseSchema = schema
+	}
+	resp, err := env.LLM.Generate(ctx, req)
+	if err != nil && isCapabilityUnsupported(err, corellm.CapStructuredOutput) {
+		req.ResponseSchema = nil
+		resp, err = env.LLM.Generate(ctx, req)
+	}
 	if err != nil {
 		return "", fmt.Errorf("router: node %q: %w", node.ID, err)
 	}

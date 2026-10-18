@@ -1,12 +1,15 @@
 package fleet
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,8 +38,8 @@ func newTestKeyPair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 
 func sampleBundle() *Bundle {
 	return &Bundle{
-		BundleID: 42,
-		IssuedAt: time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC),
+		BundleID:     42,
+		IssuedAt:     time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC),
 		MCPAllowlist: []string{"github", "slack"},
 		ModelPrefs: &BundleModelPrefs{
 			DefaultModel:      "anthropic/claude-opus-4",
@@ -218,7 +221,7 @@ func TestVerifyWithKeySet_EmptySet(t *testing.T) {
 // TestVerifyWithKeySet_ForeignKeyRejected verifies that a bundle signed by
 // an unknown key is rejected even when the accept-set is non-empty.
 func TestVerifyWithKeySet_ForeignKeyRejected(t *testing.T) {
-	pub1, _ := newTestKeyPair(t) // the accepted key
+	pub1, _ := newTestKeyPair(t)  // the accepted key
 	_, priv2 := newTestKeyPair(t) // the foreign key used to sign
 
 	b := sampleBundle()
@@ -282,6 +285,456 @@ func TestVerifyWithKeySet_AfterRotation(t *testing.T) {
 	}
 }
 
+// ── ProvisionedMCP / ProviderSetups (fleet-org-config-inheritance-01NORGX01 WP01) ──
+
+// TestBundle_ProvisionedMCPAndProviderSetups_RoundTrip verifies that both
+// new sections survive a marshal/unmarshal cycle intact.
+func TestBundle_ProvisionedMCPAndProviderSetups_RoundTrip(t *testing.T) {
+	b := sampleBundle()
+	b.ProvisionedMCP = []ProvisionedMCP{
+		{
+			RecipeID:    "slack",
+			Transport:   "http",
+			URL:         "https://mcp.slack.com",
+			PrimaryAuth: "oauth",
+			OAuth: &ProvisionedMCPOAuth{
+				ClientID: "org-public-client-id",
+				Scopes:   []string{"channels:read", "chat:write"},
+			},
+			Config: json.RawMessage(`{"workspace":"acme"}`),
+		},
+	}
+	b.ProviderSetups = []ProviderSetup{
+		{
+			Provider:   "anthropic",
+			AccessMode: "org_shared_key",
+			Models:     []string{"claude-opus-4-8", "claude-sonnet-4-6"},
+			Default:    true,
+		},
+	}
+
+	raw, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var got Bundle
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if !reflect.DeepEqual(b.ProvisionedMCP, got.ProvisionedMCP) {
+		t.Errorf("ProvisionedMCP did not round-trip:\n  want %+v\n  got  %+v", b.ProvisionedMCP, got.ProvisionedMCP)
+	}
+	if !reflect.DeepEqual(b.ProviderSetups, got.ProviderSetups) {
+		t.Errorf("ProviderSetups did not round-trip:\n  want %+v\n  got  %+v", b.ProviderSetups, got.ProviderSetups)
+	}
+}
+
+// TestVerify_TamperedProvisionedMCP verifies that mutating ProvisionedMCP
+// after signing invalidates the signature — the concrete proof that this
+// section is actually covered by the ed25519 signature and not merely
+// carried alongside it. An org-provisioned MCP entry is a command line the
+// harness spawns or a URL it connects to; if this test ever passes with
+// ErrInvalidSignature NOT returned, the section is silently unsigned and
+// attacker-modifiable in transit.
+func TestVerify_TamperedProvisionedMCP(t *testing.T) {
+	pub, priv := newTestKeyPair(t)
+	b := sampleBundle()
+	b.ProvisionedMCP = []ProvisionedMCP{{RecipeID: "slack", PrimaryAuth: "oauth"}}
+	signBundle(t, priv, b)
+
+	// Tamper: swap the URL an attacker-controlled bundle-in-transit might
+	// redirect a spawned/connected MCP server to.
+	b.ProvisionedMCP[0].URL = "https://evil.example.com"
+
+	err := Verify(b, pub, 0)
+	if !errors.Is(err, ErrInvalidSignature) {
+		t.Errorf("expected ErrInvalidSignature after tampering with ProvisionedMCP, got: %v", err)
+	}
+}
+
+// TestVerify_TamperedProviderSetups verifies that mutating ProviderSetups
+// after signing invalidates the signature.
+func TestVerify_TamperedProviderSetups(t *testing.T) {
+	pub, priv := newTestKeyPair(t)
+	b := sampleBundle()
+	b.ProviderSetups = []ProviderSetup{{Provider: "anthropic", AccessMode: "org_shared_key", Default: true}}
+	signBundle(t, priv, b)
+
+	// Tamper: flip the provider after signing.
+	b.ProviderSetups[0].Provider = "some-other-provider"
+
+	err := Verify(b, pub, 0)
+	if !errors.Is(err, ErrInvalidSignature) {
+		t.Errorf("expected ErrInvalidSignature after tampering with ProviderSetups, got: %v", err)
+	}
+}
+
+// TestBundle_ProvisionedMCP_EmptyVsAbsentVsNil documents and pins the
+// nil/empty/absent semantics WP01 deliberately chose for the two new
+// sections. Unlike MCPAllowlist (where nil vs. an explicit empty slice is
+// a meaningful "no restriction" vs. "block all" distinction the field is
+// deliberately NOT omitempty to preserve), ProvisionedMCP/ProviderSetups
+// have no "block" semantic — there is nothing to restrict, only entries to
+// add — so both are omitempty and nil/empty/absent all mean exactly one
+// thing: "no org-provisioned entries". The corollary (and the thing this
+// test actually pins) is Go's well-known asymmetry: an explicit non-nil
+// empty slice does NOT round-trip as an empty slice — omitempty drops it
+// from the wire, so it comes back nil. That asymmetry is fine here because
+// nil and empty are semantically identical for these two fields; it would
+// NOT be fine for a field like MCPAllowlist, which is exactly why that
+// field stays non-omitempty.
+func TestBundle_ProvisionedMCP_EmptyVsAbsentVsNil(t *testing.T) {
+	t.Run("nil field is omitted from the wire", func(t *testing.T) {
+		b := sampleBundle() // ProvisionedMCP/ProviderSetups left nil
+		raw, err := json.Marshal(b)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(raw), `"provisioned_mcp"`) {
+			t.Errorf("expected provisioned_mcp key absent for nil slice, got: %s", raw)
+		}
+		if strings.Contains(string(raw), `"provider_setups"`) {
+			t.Errorf("expected provider_setups key absent for nil slice, got: %s", raw)
+		}
+	})
+
+	t.Run("explicit empty non-nil slice is ALSO omitted (Go omitempty asymmetry)", func(t *testing.T) {
+		b := sampleBundle()
+		b.ProvisionedMCP = []ProvisionedMCP{} // non-nil, len 0
+		b.ProviderSetups = []ProviderSetup{}  // non-nil, len 0
+		raw, err := json.Marshal(b)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(raw), `"provisioned_mcp"`) {
+			t.Errorf("expected provisioned_mcp key absent for empty-non-nil slice (omitempty), got: %s", raw)
+		}
+		if strings.Contains(string(raw), `"provider_setups"`) {
+			t.Errorf("expected provider_setups key absent for empty-non-nil slice (omitempty), got: %s", raw)
+		}
+
+		// The asymmetry: unmarshaling the result does NOT reproduce the
+		// original empty-non-nil slice — it comes back nil.
+		var got Bundle
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if got.ProvisionedMCP != nil {
+			t.Errorf("expected ProvisionedMCP to come back nil (not empty-non-nil) after round-trip, got: %#v", got.ProvisionedMCP)
+		}
+		if got.ProviderSetups != nil {
+			t.Errorf("expected ProviderSetups to come back nil (not empty-non-nil) after round-trip, got: %#v", got.ProviderSetups)
+		}
+	})
+
+	t.Run("absent key on the wire unmarshals to nil", func(t *testing.T) {
+		var got Bundle
+		if err := json.Unmarshal([]byte(`{"bundle_id":1,"issued_at":"2026-05-16T12:00:00Z","mcp_allowlist":[],"signature":""}`), &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if got.ProvisionedMCP != nil {
+			t.Errorf("expected nil ProvisionedMCP for absent key, got: %#v", got.ProvisionedMCP)
+		}
+		if got.ProviderSetups != nil {
+			t.Errorf("expected nil ProviderSetups for absent key, got: %#v", got.ProviderSetups)
+		}
+	})
+
+	t.Run("nil and empty-non-nil signing payloads are identical (both mean no entries)", func(t *testing.T) {
+		bNil := sampleBundle()
+		bEmpty := sampleBundle()
+		bEmpty.ProvisionedMCP = []ProvisionedMCP{}
+		bEmpty.ProviderSetups = []ProviderSetup{}
+
+		pNil, err := bNil.signingPayload()
+		if err != nil {
+			t.Fatalf("signingPayload (nil): %v", err)
+		}
+		pEmpty, err := bEmpty.signingPayload()
+		if err != nil {
+			t.Fatalf("signingPayload (empty): %v", err)
+		}
+		if string(pNil) != string(pEmpty) {
+			t.Errorf("expected nil and empty-non-nil ProvisionedMCP/ProviderSetups to produce identical signing payloads (both mean 'no entries'):\n  nil:   %s\n  empty: %s", pNil, pEmpty)
+		}
+	})
+}
+
+// TestProvisionedMCP_NoSecretField and TestProviderSetup_NoSecretField are
+// the negative-shape checks backing FR-008 ("no secret ever enters a
+// bundle"): reflect over every exported field of the new wire types and
+// fail if any field name suggests it could carry credential material. This
+// is deliberately conservative (substring match, not an exhaustive
+// semantic audit) — it exists to catch an obviously-named regression like
+// a future `APIKey`/`BotToken`/`BearerToken` field being added to either
+// struct, which per spec §2/§7 must never happen (org-shared provider keys
+// ride a dedicated encrypted channel straight into the device credstore,
+// never a bundle payload).
+func TestProvisionedMCP_NoSecretField(t *testing.T) {
+	assertNoSecretLikeFieldNames(t, reflect.TypeOf(ProvisionedMCP{}))
+	assertNoSecretLikeFieldNames(t, reflect.TypeOf(ProvisionedMCPOAuth{}))
+}
+
+func TestProviderSetup_NoSecretField(t *testing.T) {
+	assertNoSecretLikeFieldNames(t, reflect.TypeOf(ProviderSetup{}))
+}
+
+func assertNoSecretLikeFieldNames(t *testing.T, typ reflect.Type) {
+	t.Helper()
+	forbidden := []string{"key", "token", "secret", "password", "bearer", "credential"}
+	// ClientID is a deliberate, spec-documented exception: it is a PUBLIC
+	// PKCE OAuth client identifier, not a secret (§3.1/§3.3 of the spec).
+	allow := map[string]bool{"ClientID": true}
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		if allow[name] {
+			continue
+		}
+		lower := strings.ToLower(name)
+		for _, bad := range forbidden {
+			if strings.Contains(lower, bad) {
+				t.Errorf("%s.%s looks secret-shaped (contains %q) — org-shared keys must ride the dedicated encrypted credstore channel, never a bundle payload field (spec §2/§7)", typ, name, bad)
+			}
+		}
+	}
+}
+
+// ── The general "keep in sync" proof ────────────────────────────────────────
+//
+// TestSigningPayload_EveryBundleFieldAffectsPayload is the test that
+// proves bundleSigningPayload is actually kept in sync with Bundle, in a
+// way that survives future edits: it walks every exported Bundle field by
+// reflection (so it automatically picks up any field added after this
+// commit, not just the two WP01 adds) and asserts that changing that
+// field's value changes signingPayload()'s output. Signature is the one
+// deliberate exception (excluded from the signing input by design).
+//
+// If a future field is added to Bundle and NOT wired into
+// bundleSigningPayload / signingPayload(), this test fails on that field's
+// subtest — it does not depend on anyone remembering to add a
+// field-specific test. If the new field's Go type isn't yet handled by
+// mutateFieldForTest below, the test still fails loudly (via t.Fatalf)
+// rather than silently skipping — see that function's doc.
+func TestSigningPayload_EveryBundleFieldAffectsPayload(t *testing.T) {
+	typ := reflect.TypeOf(Bundle{})
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if field.Name == "Signature" {
+			continue // deliberately excluded from the signing input
+		}
+		t.Run(field.Name, func(t *testing.T) {
+			base := sampleBundle()
+			mutated := sampleBundle()
+
+			mv := reflect.ValueOf(mutated).Elem().FieldByName(field.Name)
+			mutateFieldForTest(t, field.Name, mv)
+
+			basePayload, err := base.signingPayload()
+			if err != nil {
+				t.Fatalf("signingPayload (base): %v", err)
+			}
+			mutatedPayload, err := mutated.signingPayload()
+			if err != nil {
+				t.Fatalf("signingPayload (mutated): %v", err)
+			}
+			if string(basePayload) == string(mutatedPayload) {
+				t.Errorf("mutating Bundle.%s did not change signingPayload() output — the field is carried but NOT covered by the ed25519 signature (bundleSigningPayload/signingPayload() is out of sync with Bundle)", field.Name)
+			}
+		})
+	}
+}
+
+// mutateFieldForTest sets an addressable reflect.Value for a Bundle field
+// (on a fresh sampleBundle()) to a value that is guaranteed to differ from
+// sampleBundle()'s own value for that field, so
+// TestSigningPayload_EveryBundleFieldAffectsPayload's before/after
+// comparison is meaningful. It intentionally covers only the Go types
+// Bundle's fields use today. Adding a Bundle field of a new type without
+// extending this switch makes the corresponding subtest above fail with
+// this message — that is deliberate: it forces whoever adds the field to
+// either extend this switch (keeping the "would fail" property honest) or
+// notice the gap. It must never silently no-op.
+func mutateFieldForTest(t *testing.T, name string, v reflect.Value) {
+	t.Helper()
+	switch v.Interface().(type) {
+	case int64:
+		v.SetInt(v.Int() + 1)
+	case string:
+		v.SetString(v.String() + "-mutated-for-test")
+	case time.Time:
+		v.Set(reflect.ValueOf(v.Interface().(time.Time).Add(time.Hour)))
+	case []string:
+		v.Set(reflect.Append(v, reflect.ValueOf("mutated-for-test")))
+	case json.RawMessage:
+		v.Set(reflect.ValueOf(json.RawMessage(`{"mutated_for_test":true}`)))
+	case []json.RawMessage:
+		v.Set(reflect.ValueOf([]json.RawMessage{json.RawMessage(`{"mutated_for_test":true}`)}))
+	case *BundleModelPrefs:
+		v.Set(reflect.ValueOf(&BundleModelPrefs{DefaultModel: "mutated-for-test"}))
+	case *BundleToolExposure:
+		v.Set(reflect.ValueOf(&BundleToolExposure{BudgetTokens: 1234}))
+	case []BundleMandatedItem:
+		v.Set(reflect.ValueOf([]BundleMandatedItem{{CatalogID: "mutated-for-test", Kind: "skill", Version: "1", Payload: json.RawMessage(`{}`)}}))
+	case []ProvisionedMCP:
+		v.Set(reflect.ValueOf([]ProvisionedMCP{{RecipeID: "mutated-for-test"}}))
+	case []ProviderSetup:
+		v.Set(reflect.ValueOf([]ProviderSetup{{Provider: "mutated-for-test", AccessMode: "byo_key"}}))
+	case map[string]json.RawMessage:
+		v.Set(reflect.ValueOf(map[string]json.RawMessage{"mutated_for_test": json.RawMessage(`{}`)}))
+	default:
+		t.Fatalf("mutateFieldForTest: Bundle field %q has type %s with no mutation rule — extend the switch in mutateFieldForTest (core/fleet/bundle_test.go) instead of letting this subtest vacuously pass", name, v.Type())
+	}
+}
+
+// ─── WP02: org_config keyed section ─────────────────────────────────────────
+// fleet-generic-sync-framework-01NSYNC02 WP02 acceptance: "signature
+// round-trip incl. map ordering canonicalization; unknown-kind tolerance
+// test; replay protection unchanged."
+
+// TestBundle_OrgConfig_RoundTrip proves the keyed map round-trips through
+// JSON with each kind's opaque payload intact.
+func TestBundle_OrgConfig_RoundTrip(t *testing.T) {
+	b := sampleBundle()
+	b.OrgConfig = map[string]json.RawMessage{
+		"provider_profiles": json.RawMessage(`{"provider":"anthropic","default":true}`),
+		"installed_mcp":     json.RawMessage(`{"servers":["slack","github"]}`),
+	}
+
+	raw, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Bundle
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.OrgConfig) != 2 {
+		t.Fatalf("OrgConfig round-trip: got %d entries, want 2 (got=%+v)", len(got.OrgConfig), got.OrgConfig)
+	}
+	if string(got.OrgConfig["provider_profiles"]) != string(b.OrgConfig["provider_profiles"]) {
+		t.Errorf("provider_profiles payload did not round-trip: got %s", got.OrgConfig["provider_profiles"])
+	}
+	if string(got.OrgConfig["installed_mcp"]) != string(b.OrgConfig["installed_mcp"]) {
+		t.Errorf("installed_mcp payload did not round-trip: got %s", got.OrgConfig["installed_mcp"])
+	}
+}
+
+// TestBundle_OrgConfig_EmptyVsAbsentVsNil pins the same omitempty semantics
+// documented for ProvisionedMCP/ProviderSetups: nil, an explicit empty-non-nil
+// map, and an absent key are all equivalent on the wire.
+func TestBundle_OrgConfig_EmptyVsAbsentVsNil(t *testing.T) {
+	b := sampleBundle() // OrgConfig left nil
+	raw, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"org_config"`) {
+		t.Errorf("expected org_config key absent for nil map, got: %s", raw)
+	}
+
+	b.OrgConfig = map[string]json.RawMessage{}
+	raw, err = json.Marshal(b)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"org_config"`) {
+		t.Errorf("expected org_config key absent for empty-non-nil map (omitempty), got: %s", raw)
+	}
+}
+
+// TestSigningPayload_OrgConfig_StableKeyOrder pins the canonicalization
+// claim in Bundle.OrgConfig's doc comment: marshaling the same map twice
+// (including via a differently-ordered map literal) produces byte-identical
+// signing payloads. A signed map payload that were NOT stably ordered would
+// make Verify's re-derived hash nondeterministic and the wire format
+// unreliable across two servers (or two runs of the same server) holding
+// "the same" org_config content in a different map iteration order.
+func TestSigningPayload_OrgConfig_StableKeyOrder(t *testing.T) {
+	b1 := sampleBundle()
+	b1.OrgConfig = map[string]json.RawMessage{
+		"zzz_kind": json.RawMessage(`{"a":1}`),
+		"aaa_kind": json.RawMessage(`{"b":2}`),
+		"mmm_kind": json.RawMessage(`{"c":3}`),
+	}
+	b2 := sampleBundle()
+	// Same content, built via a different insertion order — Go map
+	// literals do not guarantee iteration order, so this alone would catch
+	// an accidental dependency on insertion/iteration order.
+	b2.OrgConfig = map[string]json.RawMessage{}
+	b2.OrgConfig["mmm_kind"] = json.RawMessage(`{"c":3}`)
+	b2.OrgConfig["zzz_kind"] = json.RawMessage(`{"a":1}`)
+	b2.OrgConfig["aaa_kind"] = json.RawMessage(`{"b":2}`)
+
+	p1, err := b1.signingPayload()
+	if err != nil {
+		t.Fatalf("signingPayload b1: %v", err)
+	}
+	p2, err := b2.signingPayload()
+	if err != nil {
+		t.Fatalf("signingPayload b2: %v", err)
+	}
+	if string(p1) != string(p2) {
+		t.Fatalf("signingPayload not stable across map insertion order:\n  p1=%s\n  p2=%s", p1, p2)
+	}
+	// Repeat marshaling the SAME map several times — belt-and-braces check
+	// that json.Marshal itself is deterministic run over run, not just
+	// insensitive to construction order.
+	for i := 0; i < 5; i++ {
+		p, err := b1.signingPayload()
+		if err != nil {
+			t.Fatalf("signingPayload repeat %d: %v", i, err)
+		}
+		if string(p) != string(p1) {
+			t.Fatalf("signingPayload not stable across repeated marshals (run %d)", i)
+		}
+	}
+}
+
+// TestVerify_TamperedOrgConfig verifies that mutating OrgConfig after
+// signing invalidates the signature — the concrete proof that this section
+// is covered by the ed25519 signature, mirroring
+// TestVerify_TamperedProvisionedMCP above. An org_config entry is applied
+// read-only to a member's device by a registered SyncKind's Apply; if this
+// ever passes with ErrInvalidSignature NOT returned, org_config is silently
+// unsigned and attacker-modifiable in transit.
+func TestVerify_TamperedOrgConfig(t *testing.T) {
+	pub, priv := newTestKeyPair(t)
+	b := sampleBundle()
+	b.OrgConfig = map[string]json.RawMessage{
+		"provider_profiles": json.RawMessage(`{"provider":"anthropic"}`),
+	}
+	signBundle(t, priv, b)
+
+	// Tamper with the payload after signing.
+	b.OrgConfig["provider_profiles"] = json.RawMessage(`{"provider":"attacker-controlled"}`)
+
+	if err := Verify(b, pub, 0); !errors.Is(err, ErrInvalidSignature) {
+		t.Errorf("expected ErrInvalidSignature after tampering OrgConfig, got: %v", err)
+	}
+}
+
+// TestVerify_ReplayRejected_WithOrgConfig re-runs the existing replay-
+// protection assertion (TestVerify_ReplayRejected) with OrgConfig populated,
+// pinning WP02's "replay protection unchanged" acceptance criterion: adding
+// the new keyed section must not weaken the monotonic bundle_id guard.
+func TestVerify_ReplayRejected_WithOrgConfig(t *testing.T) {
+	pub, priv := newTestKeyPair(t)
+	b := sampleBundle()
+	b.OrgConfig = map[string]json.RawMessage{"provider_profiles": json.RawMessage(`{}`)}
+	signBundle(t, priv, b)
+
+	if err := Verify(b, pub, 0); err != nil {
+		t.Fatalf("first apply should succeed: %v", err)
+	}
+	// Re-verify against a lastAppliedID equal to this bundle's ID — a
+	// replay of the same bundle_id must be rejected.
+	if err := Verify(b, pub, b.BundleID); !errors.Is(err, ErrBundleIDNonMonotonic) {
+		t.Errorf("expected ErrBundleIDNonMonotonic on replay, got: %v", err)
+	}
+}
+
 // TestConfigDistributionEnabled verifies the helper gates on key presence.
 func TestConfigDistributionEnabled(t *testing.T) {
 	saved := fleetSigningPublicKeyBytes
@@ -302,4 +755,147 @@ func TestConfigDistributionEnabled(t *testing.T) {
 	if !ConfigDistributionEnabled() {
 		t.Error("expected true when valid key bytes set")
 	}
+}
+
+// ─── mandated_items (owner wire-contract ruling 2026-10-06, WP02) ───────────
+//
+// Contract: kenaz-fleet PR #178. TestSigningPayload_MandatedItems_FleetVector
+// replays fleet's own TestBundleMandatedItems_WireOrder vector
+// (service/handlers_config_test.go) byte-for-byte.
+
+// TestSigningPayload_MandatedItems_ByteOrder pins the signed bytes of a
+// multi-item section in fleet's (kind, catalog_id) sort order, its slot
+// between kameas_ml_weight_urls and provisioned_mcp, and that no
+// mandated_skills key survives.
+func TestSigningPayload_MandatedItems_ByteOrder(t *testing.T) {
+	b := &Bundle{
+		BundleID:           7,
+		IssuedAt:           time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC),
+		KameasMLWeightURLs: []string{"https://w.invalid/a"},
+		MandatedItems: []BundleMandatedItem{
+			{CatalogID: "11111111-1111-4111-8111-111111111111", Kind: "pack", Version: "2.0.0", Payload: json.RawMessage(`{"p":1}`)},
+			{CatalogID: "22222222-2222-4222-8222-222222222222", Kind: "skill", Version: "1.0.0", Payload: json.RawMessage(`{"id":"s"}`)},
+			{CatalogID: "33333333-3333-4333-8333-333333333333", Kind: "skill", Version: "", Payload: json.RawMessage(`{"id":"t"}`)},
+			{CatalogID: "44444444-4444-4444-8444-444444444444", Kind: "workflow", Version: "3", Payload: json.RawMessage(`{"id":"w"}`)},
+		},
+		ProvisionedMCP: []ProvisionedMCP{{RecipeID: "slack"}},
+	}
+	got, err := b.signingPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"bundle_id":7,"issued_at":"2026-10-06T12:00:00Z","mcp_allowlist":null,` +
+		`"kameas_ml_weight_urls":["https://w.invalid/a"],` +
+		`"mandated_items":[` +
+		`{"catalog_id":"11111111-1111-4111-8111-111111111111","kind":"pack","version":"2.0.0","payload":{"p":1}},` +
+		`{"catalog_id":"22222222-2222-4222-8222-222222222222","kind":"skill","version":"1.0.0","payload":{"id":"s"}},` +
+		`{"catalog_id":"33333333-3333-4333-8333-333333333333","kind":"skill","version":"","payload":{"id":"t"}},` +
+		`{"catalog_id":"44444444-4444-4444-8444-444444444444","kind":"workflow","version":"3","payload":{"id":"w"}}],` +
+		`"provisioned_mcp":[{"recipe_id":"slack"}]}`
+	if string(got) != want {
+		t.Fatalf("mandated_items signing bytes drifted:\n got %s\nwant %s", got, want)
+	}
+	if strings.Contains(string(got), "mandated_skills") {
+		t.Fatal("mandated_skills must not appear in the signing payload — the section was replaced, not aliased")
+	}
+	// The pinned items ARE in fleet's (kind, catalog_id) order; a harness
+	// re-marshal must preserve received order (it never re-sorts), so the
+	// verifier hashes exactly what fleet signed.
+	for i := 1; i < len(b.MandatedItems); i++ {
+		p, c := b.MandatedItems[i-1], b.MandatedItems[i]
+		if p.Kind > c.Kind || (p.Kind == c.Kind && p.CatalogID > c.CatalogID) {
+			t.Fatalf("fixture not in fleet sort order at %d", i)
+		}
+	}
+
+	// Empty section: key absent (omitempty) — same bytes as a bundle that
+	// never had the field.
+	b.MandatedItems = nil
+	got, _ = b.signingPayload()
+	if strings.Contains(string(got), "mandated_items") {
+		t.Errorf("nil mandated_items must be omitted, got %s", got)
+	}
+}
+
+// TestVerify_TamperedMandatedItems — a mandated item is installed read-only
+// on every member device, so it must be covered by the signature.
+func TestVerify_TamperedMandatedItems(t *testing.T) {
+	pub, priv := newTestKeyPair(t)
+	b := sampleBundle()
+	b.MandatedItems = []BundleMandatedItem{{CatalogID: "c", Kind: "skill", Version: "1", Payload: json.RawMessage(`{"id":"s","body":"ok"}`)}}
+	signBundle(t, priv, b)
+	b.MandatedItems[0].Payload = json.RawMessage(`{"id":"s","body":"evil"}`)
+	if err := Verify(b, pub, 0); !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("tampered mandated item payload verified (err=%v) — the section is not signed", err)
+	}
+}
+
+// TestSigningPayload_MandatedItems_FleetVector mirrors kenaz-fleet PR #178
+// service/handlers_config_test.go TestBundleMandatedItems_WireOrder: the SAME
+// bundle must produce the SAME signing bytes on both sides, or no mandated
+// bundle ever verifies.
+func TestSigningPayload_MandatedItems_FleetVector(t *testing.T) {
+	b := &Bundle{
+		BundleID:           1,
+		KeyID:              "k",
+		IssuedAt:           time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		KameasMLWeightURLs: []string{"u"},
+		MandatedItems: []BundleMandatedItem{{
+			CatalogID: "c", Kind: "workflow", Version: "2", Payload: json.RawMessage(`{"a":1}`),
+		}},
+	}
+	got, err := b.signingPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"bundle_id":1,"key_id":"k","issued_at":"2026-06-01T00:00:00Z","mcp_allowlist":null,` +
+		`"kameas_ml_weight_urls":["u"],"mandated_items":[{"catalog_id":"c","kind":"workflow","version":"2","payload":{"a":1}}]}`
+	if string(got) != want {
+		t.Fatalf("signing payload diverges from fleet's vector:\n got %s\nwant %s", got, want)
+	}
+}
+
+// TestMandatedItems_OddWhitespacePayload_VerifiesAndStaysOpaque — payload
+// bytes are opaque (fleet PR #178): a payload with odd whitespace must (a)
+// verify after a wire round trip — both sides' encoding/json compacts a
+// RawMessage identically when building the signing payload — and (b) reach
+// the consumer byte-identical to what arrived on the wire.
+func TestMandatedItems_OddWhitespacePayload_VerifiesAndStaysOpaque(t *testing.T) {
+	pub, priv := newTestKeyPair(t)
+	const odd = "{ \"id\" :\t\"nightly\" ,\n  \"steps\": [ ] }"
+	signed := sampleBundle()
+	signed.MandatedItems = []BundleMandatedItem{{CatalogID: "11111111-1111-4111-8111-111111111111", Kind: "workflow", Version: "1", Payload: json.RawMessage(odd)}}
+	signBundle(t, priv, signed)
+	// The wire: fleet serves the payload bytes verbatim. encoding/json
+	// compacts a RawMessage on Marshal, so splice the odd bytes back in.
+	marshalled := mustJSON(t, signed)
+	compact := `{"id":"nightly","steps":[]}`
+	if !strings.Contains(marshalled, compact) {
+		t.Fatalf("fixture: compacted payload not found in %s", marshalled)
+	}
+	wire := strings.Replace(marshalled, compact, odd, 1)
+	var got Bundle
+	if err := json.Unmarshal([]byte(wire), &got); err != nil {
+		t.Fatalf("decode wire bundle: %v", err)
+	}
+	if err := Verify(&got, pub, 0); err != nil {
+		t.Fatalf("odd-whitespace payload failed verification after a wire round trip: %v", err)
+	}
+	wf := &recordingMandatedWorkflows{}
+	m := &MandatedApplier{Workflows: wf}
+	if _, errs := m.Apply(context.Background(), got.MandatedItems); len(errs) != 0 {
+		t.Fatalf("apply: %v", errs)
+	}
+	if p := wf.payloads(); len(p) != 1 || string(p[0]) != odd {
+		t.Fatalf("payload reached the consumer as %q, want byte-identical %q", p, odd)
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

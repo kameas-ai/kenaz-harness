@@ -90,8 +90,9 @@ export interface ParsedGraph {
   layout: Record<string, CanvasPoint>;
   /**
    * `spec_provenance` on a materialized run — `library_fallback` when
-   * the resolved spec that executed was evicted and the projection fell
-   * back to the library file. Absent on everything else.
+   * the run's resolved spec was never recorded (it predates per-run spec
+   * recording, or was refused for size) and the projection was
+   * reconstructed from the library file. Absent on everything else.
    */
   specProvenance?: string;
 }

@@ -3,8 +3,8 @@
  * MarkdownBlock recognises `@filename` and `@artifact:<id>` patterns
  * in rendered text and emits placeholder spans → mounted chips.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { mount, flushPromises } from '@vue/test-utils';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils';
 import MarkdownBlock from '@/components/rendering/MarkdownBlock.vue';
 
 vi.mock('@/lib/harnessClient', () => ({
@@ -13,6 +13,16 @@ vi.mock('@/lib/harnessClient', () => ({
     tools: { openInEditor: vi.fn().mockResolvedValue(undefined) },
   }),
 }));
+
+
+// Unmount every wrapper after each test, and let any in-flight async
+// upgrade (dynamic imports of CodeBlock/FilenameChip/KaTeX) settle first,
+// so nothing in MarkdownBlock runs after the environment is torn down.
+enableAutoUnmount(afterEach);
+afterEach(async () => {
+  await vi.dynamicImportSettled();
+  await flushPromises();
+});
 
 describe('MarkdownBlock @-mentions (WP07)', () => {
   it('renders a FilenameChip placeholder for @path mentions', async () => {

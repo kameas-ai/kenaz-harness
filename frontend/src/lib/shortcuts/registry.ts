@@ -146,8 +146,8 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
   },
   {
     id: 'nav.open-tools',
-    label: 'Open Tools view',
-    description: 'Navigate to the Tools management panel.',
+    label: 'Open Capabilities view',
+    description: 'Navigate to the Capabilities panel.',
     category: 'Navigation',
     scope: 'global',
     defaultBinding: 'Cmd+Shift+T',

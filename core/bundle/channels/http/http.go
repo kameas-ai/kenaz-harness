@@ -22,9 +22,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
@@ -35,14 +37,48 @@ import (
 // Kind is the registered channel kind id.
 const Kind = "http_mirror"
 
-// defaultTimeout bounds every outbound request this channel makes.
-// Bundle fetches can legitimately be large; this is a request-level
-// (not a whole-Fetch-body) deadline via the client's Timeout field —
-// see the doc on http.Client.Timeout for why that's a wall-clock cap
-// on the entire round trip including body read. A caller that needs a
-// longer bound should pass ctx with its own deadline; ctx cancellation
-// always aborts the request regardless of this value.
-const defaultTimeout = 60 * time.Second
+// Timeouts (engine-publication-01ENPUB01 WP-H4, survey gap 9).
+//
+// This channel used to set http.Client{Timeout: 60s}. Client.Timeout is
+// a wall-clock cap on the ENTIRE exchange including reading the body, so
+// every artifact that takes longer than 60s to stream — the 126MB+ Kameas
+// ML engine .dmg on any connection slower than ~17 Mbit/s — failed
+// mid-download no matter how healthy the transfer was. The bounds are now
+// split by what they protect against:
+//
+//   - probeTimeout (60s): the whole HEAD exchange of Reachable and
+//     LookupSignatures — unchanged semantics, those have no body.
+//   - dial / TLS-handshake / response-header timeouts: a mirror that
+//     never answers still fails fast, before any body is read.
+//   - stallTimeout (60s): Fetch's body read aborts only when NO bytes
+//     arrive for this long — a slow-but-progressing download completes,
+//     a dead one does not hang forever.
+//
+// A caller wanting an overall bound passes ctx with its own deadline;
+// ctx cancellation always aborts the request.
+const (
+	defaultProbeTimeout  = 60 * time.Second
+	defaultHeaderTimeout = 60 * time.Second
+	defaultStallTimeout  = 60 * time.Second
+	defaultDialTimeout   = 30 * time.Second
+	defaultTLSTimeout    = 15 * time.Second
+)
+
+// timeouts is the injectable knob set (tests shrink it; Factory uses the
+// defaults).
+type timeouts struct {
+	probe, header, stall, dial, tls time.Duration
+}
+
+func defaultTimeouts() timeouts {
+	return timeouts{
+		probe:  defaultProbeTimeout,
+		header: defaultHeaderTimeout,
+		stall:  defaultStallTimeout,
+		dial:   defaultDialTimeout,
+		tls:    defaultTLSTimeout,
+	}
+}
 
 // consumerID identifies this channel to the secrets resolver (FR-016
 // scoping) without ever including bundle- or path-specific detail that
@@ -69,19 +105,32 @@ func Factory(spec channels.ChannelSpec, creds secrets.ResolverAPI) (channels.Cha
 	if creds == nil {
 		creds = secrets.NoopResolver{}
 	}
+	return newChannel(strings.TrimRight(spec.URL, "/"), spec.Auth, creds, defaultTimeouts()), nil
+}
+
+func newChannel(base string, auth *channels.AuthRef, creds secrets.ResolverAPI, to timeouts) *httpChannel {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = (&net.Dialer{Timeout: to.dial, KeepAlive: 30 * time.Second}).DialContext
+	tr.TLSHandshakeTimeout = to.tls
+	tr.ResponseHeaderTimeout = to.header
 	return &httpChannel{
-		base:   strings.TrimRight(spec.URL, "/"),
-		auth:   spec.Auth,
-		creds:  creds,
-		client: &http.Client{Timeout: defaultTimeout},
-	}, nil
+		base:  base,
+		auth:  auth,
+		creds: creds,
+		// No Client.Timeout: it would cap the body read too (see the
+		// timeouts doc above). Every request is bounded by ctx + the
+		// transport timeouts, plus probeTimeout or the stall watchdog.
+		client:  &http.Client{Transport: tr},
+		timeout: to,
+	}
 }
 
 type httpChannel struct {
-	base   string
-	auth   *channels.AuthRef
-	creds  secrets.ResolverAPI
-	client *http.Client
+	base    string
+	auth    *channels.AuthRef
+	creds   secrets.ResolverAPI
+	client  *http.Client
+	timeout timeouts
 }
 
 func (c *httpChannel) Kind() string { return Kind }
@@ -94,6 +143,8 @@ func (c *httpChannel) Kind() string { return Kind }
 // individual artifact fetches fine. Only a transport-level failure
 // (DNS, TCP, TLS) or a 5xx (server-side outage) counts as unreachable.
 func (c *httpChannel) Reachable(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout.probe)
+	defer cancel()
 	req, err := c.newRequest(ctx, http.MethodHead, c.base)
 	if err != nil {
 		return fmt.Errorf("%w: build request: %v", bundle.ErrChannelUnreachable, err)
@@ -117,6 +168,8 @@ func (c *httpChannel) Fetch(ctx context.Context, ref channels.ArtifactCoord, sin
 	if err != nil {
 		return channels.FetchResult{}, err
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	req, err := c.newRequest(ctx, http.MethodGet, target)
 	if err != nil {
 		return channels.FetchResult{}, fmt.Errorf("http: build request: %w", err)
@@ -129,8 +182,20 @@ func (c *httpChannel) Fetch(ctx context.Context, ref channels.ArtifactCoord, sin
 	if resp.StatusCode != http.StatusOK {
 		return channels.FetchResult{}, fmt.Errorf("http: fetch %s: status %d", sanitize(target), resp.StatusCode)
 	}
-	n, err := io.Copy(sink, resp.Body)
+	// Stall watchdog: cancel the request if no body bytes arrive for
+	// stallTimeout. Progress re-arms it, so total duration is unbounded
+	// for a live transfer (ctx still bounds it if the caller wants).
+	var stalled atomic.Bool
+	watchdog := time.AfterFunc(c.timeout.stall, func() {
+		stalled.Store(true)
+		cancel()
+	})
+	defer watchdog.Stop()
+	n, err := io.Copy(sink, &progressReader{r: resp.Body, onProgress: func() { watchdog.Reset(c.timeout.stall) }})
 	if err != nil {
+		if stalled.Load() {
+			return channels.FetchResult{}, fmt.Errorf("http: read body from %s: no data for %s (stalled after %d bytes): %w", sanitize(target), c.timeout.stall, n, err)
+		}
 		return channels.FetchResult{}, fmt.Errorf("http: read body from %s: %w", sanitize(target), err)
 	}
 	// Endpoint is documented as "sanitized endpoint (no credentials)"
@@ -142,6 +207,20 @@ func (c *httpChannel) Fetch(ctx context.Context, ref channels.ArtifactCoord, sin
 	return channels.FetchResult{Bytes: n, Endpoint: sanitize(target)}, nil
 }
 
+// progressReader calls onProgress after every Read that returned data.
+type progressReader struct {
+	r          io.Reader
+	onProgress func()
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.onProgress()
+	}
+	return n, err
+}
+
 // LookupSignatures probes for a sibling "<path>.sig" resource — the
 // http_mirror counterpart to local_path's on-disk convention, chosen
 // because it is the shape ed25519_detached (the one working scheme,
@@ -151,6 +230,8 @@ func (c *httpChannel) LookupSignatures(ctx context.Context, ref channels.Artifac
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, c.timeout.probe)
+	defer cancel()
 	req, err := c.newRequest(ctx, http.MethodHead, target)
 	if err != nil {
 		return nil, fmt.Errorf("http: build request: %w", err)

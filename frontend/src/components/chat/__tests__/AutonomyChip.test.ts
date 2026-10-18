@@ -16,6 +16,7 @@ function makeResolved(overrides: Partial<ResolvedAutonomy> = {}): ResolvedAutono
       recapStyle: 'brief',
       continueOnError: 'retry-once',
       destructiveActionPosture: 'confirm',
+      riskThreshold: 60,
       sourceTrace: {
         maxIterations: 'session',
         askOnAmbiguity: 'project',
@@ -24,6 +25,7 @@ function makeResolved(overrides: Partial<ResolvedAutonomy> = {}): ResolvedAutono
         recapStyle: 'tier-default',
         continueOnError: 'tier-default',
         destructiveActionPosture: 'tier-default',
+        riskThreshold: 'tier-default',
       },
       tier: 'bold',
     },
@@ -85,6 +87,8 @@ function mountChip(resolved: ResolvedAutonomy) {
       setSystemPrompt: async () => undefined,
       moveToProject: async () => undefined,
       resumeMessage: async () => ({ subscriptionId: 's', originalMessageId: 'm' }),
+      turnRuns: async () => [],
+      modelCalls: async () => [],
       getUsage: async () => ({
         promptTokens: 0,
         completionTokens: 0,
@@ -111,6 +115,11 @@ function mountChip(resolved: ResolvedAutonomy) {
       getAutonomy: async () => resolved.session,
       setAutonomy,
       resolveAutonomy,
+      getKnobsDefault: async () => null,
+      setKnobsDefault: async () => undefined,
+      getToolExposure: async () => ({ exposure: {}, activations: [], org: { settings: [], schemaBudgetTokens: 0, bundleId: 0 } }),
+      setToolExposure: async () => undefined,
+      loadTools: async () => ({ loaded: [], loaded_by_server: {}, not_loaded: [], summary: '' }),
       export: async () => ({ path: '', byteCount: 0 }),
     },
   });

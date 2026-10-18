@@ -47,11 +47,20 @@ type BootHealthReport struct {
 	SkillsInitError string `json:"skillsInitError,omitempty"`
 	// FleetInitError is non-empty when fleet telemetry / sync startup failed.
 	FleetInitError string `json:"fleetInitError,omitempty"`
+	// PermissionsInitError is non-empty when <DataDir>/mcp_servers.json
+	// existed but failed to parse at boot. The static tool-permission
+	// resolver degrades to confirm_each for every tool rather than the
+	// auto_allow a bare nil resolver would default to (see
+	// toolloop.NewFailSafeStaticResolver), but the user's configured
+	// allow/deny rules are still not in force until the file is fixed,
+	// so this string is the surface that tells them so
+	// (trust-surfaces-that-fire-01PMZ202 WP24 review finding).
+	PermissionsInitError string `json:"permissionsInitError,omitempty"`
 }
 
 // IsHealthy reports true when no subsystem has a recorded init error.
 func (r BootHealthReport) IsHealthy() bool {
-	return r.MCPInitError == "" && r.SkillsInitError == "" && r.FleetInitError == ""
+	return r.MCPInitError == "" && r.SkillsInitError == "" && r.FleetInitError == "" && r.PermissionsInitError == ""
 }
 
 // Error implements the error interface so *RPCError can be returned from

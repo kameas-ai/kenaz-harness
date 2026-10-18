@@ -49,7 +49,12 @@ var PlanModeDeniedFamilies = []string{
 //	                           plan_mode denies the entire family)
 //	ActionWorkflowSave       — workflow.save
 //	ActionWorkflowDelete     — workflow.delete
-//	ActionArtifactUpdate     — artifact update (write variant)
+//	ActionArtifactUpdate     — artifact update (write variant). INERT
+//	                           today: nothing evaluates this action, so
+//	                           listing it here denies nothing — plan
+//	                           mode does not stop kenaz__update_artifact
+//	                           (H-3/H-4, model-harness-toolset-01MHTS001;
+//	                           see docs/unwired-ledger.md).
 //	ActionScheduledRunCreate  — scheduled run creation/update
 //	ActionScheduledRunDelete  — scheduled run deletion
 //	ActionScheduledRunExecute — scheduled run execution (added WP09,

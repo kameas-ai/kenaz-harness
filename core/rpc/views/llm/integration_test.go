@@ -197,7 +197,9 @@ func TestIntegration_LooseSession_OmitsProjectScope(t *testing.T) {
 }
 
 // integrationHistory bridges core/session.Manager into the llm view's
-// SessionMessageReader.
+// SessionMessageReader. It leaves SessionMessage.ID empty on purpose: these
+// tests pin attachment/system composition in memory, not the chat runner's
+// turn reference (that is core/rpc/chat_single_writer_test.go, real sqlite).
 type integrationHistory struct {
 	mgr *session.Manager
 }

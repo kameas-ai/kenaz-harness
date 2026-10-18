@@ -18,6 +18,7 @@ interface BootHealthReport {
   mcpInitError?: string;
   skillsInitError?: string;
   fleetInitError?: string;
+  permissionsInitError?: string;
 }
 
 const client = useHarnessClient();
@@ -28,11 +29,12 @@ onMounted(async () => {
   try {
     const r = await client.BootHealth_Get();
     // Only store when at least one error is non-empty.
-    if (r.mcpInitError || r.skillsInitError || r.fleetInitError) {
+    if (r.mcpInitError || r.skillsInitError || r.fleetInitError || r.permissionsInitError) {
       report.value = {
         mcpInitError: r.mcpInitError ?? undefined,
         skillsInitError: r.skillsInitError ?? undefined,
         fleetInitError: r.fleetInitError ?? undefined,
+        permissionsInitError: r.permissionsInitError ?? undefined,
       };
     }
   } catch {
@@ -46,6 +48,13 @@ const errors = computed<string[]>(() => {
   if (report.value.mcpInitError) out.push(`MCP: ${report.value.mcpInitError}`);
   if (report.value.skillsInitError) out.push(`Skills: ${report.value.skillsInitError}`);
   if (report.value.fleetInitError) out.push(`Fleet: ${report.value.fleetInitError}`);
+  // trust-surfaces-that-fire-01PMZ202 WP24 review finding: a corrupt
+  // mcp_servers.json degrades the static resolver to confirm_each, but
+  // the user still needs to know their configured policy is not in
+  // force until the file is fixed.
+  if (report.value.permissionsInitError) {
+    out.push(`Tool permissions: ${report.value.permissionsInitError} — tool calls require confirmation until this is fixed.`);
+  }
   return out;
 });
 

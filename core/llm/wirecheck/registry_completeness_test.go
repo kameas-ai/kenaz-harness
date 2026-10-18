@@ -18,7 +18,19 @@ import (
 // inScopeAdapters is the set of adapter kinds the completeness check
 // enforces. Every (struct, exported field, adapter) triple must have
 // either a tests: entry or an unsupported: reason in the registry.
-var inScopeAdapters = []string{"anthropic", "openai", "openrouter", "bedrock"}
+//
+// WIDENED (model-settings-reach-the-model-01PMZ101 WP12, G-3): this
+// slice used to hardcode exactly the four adapters wirecheck shipped
+// with. Three of the seven-plus registered adapter kinds
+// (core/llm/registry/registry.go) were invisible to this gate —
+// azure-openai and custom-openai among them, which is precisely why
+// this mission's own motivating P0 (a capability-catalog gap on those
+// two kinds) shipped unnoticed: a completeness check that only covers
+// 4/7 adapters reports a completeness it does not verify. gemini and
+// ollama remain OUT — see coverage_registry.yaml's closing "Adapter-set
+// scoping" comment for the dated reason (a full per-field audit for
+// those two was not performed in this landing).
+var inScopeAdapters = []string{"anthropic", "openai", "openrouter", "bedrock", "azure-openai", "custom-openai"}
 
 // inScopeStructs are the three connector types the registry covers.
 var inScopeStructs = map[string]reflect.Type{
@@ -117,6 +129,15 @@ func collectTestFunctions(t *testing.T) map[string]struct{} {
 		filepath.Join(llmDir, "openai"),
 		filepath.Join(llmDir, "openrouter"),
 		filepath.Join(llmDir, "bedrock"),
+		// azure-openai / custom-openai (model-settings-reach-the-model-
+		// 01PMZ101 WP12, G-3): the registered Kind string ("azure-openai",
+		// "custom-openai") differs from the package DIRECTORY name
+		// ("azure", "custom") — this list needs the directory to find the
+		// *_test.go files; coverage_registry.yaml's "adapter:" field
+		// carries the Kind string, matching what inScopeAdapters above
+		// now contains.
+		filepath.Join(llmDir, "azure"),
+		filepath.Join(llmDir, "custom"),
 		// gemini (structured-output-is-reachable-01PMZE14 WP05): NOT
 		// added to inScopeAdapters above — that would require a
 		// per-field wire-shape coverage decision for gemini across

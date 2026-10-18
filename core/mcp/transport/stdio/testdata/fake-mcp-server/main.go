@@ -58,32 +58,35 @@ func main() {
 	emitSampling := flag.Bool("emit-sampling", false, "send a sampling/createMessage request to the host after initialize")
 	emitLog := flag.String("emit-log", "", "emit a notifications/message at the given level after initialize")
 	progressOnCall := flag.Bool("progress-on-call", false, "emit a notifications/progress mid-tools/call")
+	advertiseResourcesPrompts := flag.Bool("advertise-resources-prompts", false, "advertise resources+prompts capabilities and answer resources/list + prompts/list with a fixed non-empty set (connector-lifecycle-truth-01PMZ303 UNIT-10)")
 	flag.Parse()
 	os.Exit(run(os.Stdin, os.Stdout, os.Stderr, runConfig{
-		Banner:         *banner,
-		SlowInit:       *slowInit,
-		CrashOnCall:    *crashOnCall,
-		NoInit:         *noInit,
-		IgnorePings:    *ignorePings,
-		SeedStderr:     *seedStderr,
-		EmitRootsList:  *emitRootsList,
-		EmitSampling:   *emitSampling,
-		EmitLogLevel:   *emitLog,
-		ProgressOnCall: *progressOnCall,
+		Banner:                    *banner,
+		SlowInit:                  *slowInit,
+		CrashOnCall:               *crashOnCall,
+		NoInit:                    *noInit,
+		IgnorePings:               *ignorePings,
+		SeedStderr:                *seedStderr,
+		EmitRootsList:             *emitRootsList,
+		EmitSampling:              *emitSampling,
+		EmitLogLevel:              *emitLog,
+		ProgressOnCall:            *progressOnCall,
+		AdvertiseResourcesPrompts: *advertiseResourcesPrompts,
 	}))
 }
 
 type runConfig struct {
-	Banner         bool
-	SlowInit       time.Duration
-	CrashOnCall    bool
-	NoInit         bool
-	IgnorePings    bool
-	SeedStderr     string
-	EmitRootsList  bool
-	EmitSampling   bool
-	EmitLogLevel   string
-	ProgressOnCall bool
+	Banner                    bool
+	SlowInit                  time.Duration
+	CrashOnCall               bool
+	NoInit                    bool
+	IgnorePings               bool
+	SeedStderr                string
+	EmitRootsList             bool
+	EmitSampling              bool
+	EmitLogLevel              string
+	ProgressOnCall            bool
+	AdvertiseResourcesPrompts bool
 }
 
 func run(stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg runConfig) int {
@@ -174,12 +177,17 @@ func run(stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg runConfig) int
 			if cfg.SlowInit > 0 {
 				time.Sleep(cfg.SlowInit)
 			}
+			capabilities := map[string]any{"tools": map[string]any{}}
+			if cfg.AdvertiseResourcesPrompts {
+				capabilities["resources"] = map[string]any{}
+				capabilities["prompts"] = map[string]any{}
+			}
 			_ = write(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      json.RawMessage(idRaw),
 				"result": map[string]any{
 					"protocolVersion": "2024-11-05",
-					"capabilities":    map[string]any{"tools": map[string]any{}},
+					"capabilities":    capabilities,
 					"serverInfo": map[string]any{
 						"name": "fake-mcp-server", "version": "0.0.1",
 					},
@@ -215,6 +223,32 @@ func run(stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg runConfig) int
 								},
 							},
 						},
+					},
+				},
+			})
+		case "resources/list":
+			// Fixed, non-empty set — a fixture returning zero would be
+			// indistinguishable from the hardcoded-0 bug UNIT-10 fixes
+			// (spec.md §7 AC-006's own false-pass warning).
+			_ = write(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      json.RawMessage(idRaw),
+				"result": map[string]any{
+					"resources": []map[string]any{
+						{"uri": "fake:///r1", "name": "fake resource 1"},
+						{"uri": "fake:///r2", "name": "fake resource 2"},
+						{"uri": "fake:///r3", "name": "fake resource 3"},
+					},
+				},
+			})
+		case "prompts/list":
+			_ = write(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      json.RawMessage(idRaw),
+				"result": map[string]any{
+					"prompts": []map[string]any{
+						{"name": "fake_prompt_1"},
+						{"name": "fake_prompt_2"},
 					},
 				},
 			})

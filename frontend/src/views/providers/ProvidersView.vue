@@ -27,7 +27,7 @@ import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import { useHarnessClient } from '@/lib/harnessClientContext';
-import type { AddProviderInput, Provider, TestResult } from '@/lib/types';
+import type { AddProviderInput, CredentialKey, Provider, TestResult } from '@/lib/types';
 import AddProviderForm from './AddProviderForm.vue';
 import ProviderRow from './ProviderRow.vue';
 import LocalRuntimesSection from './LocalRuntimesSection.vue';
@@ -37,6 +37,12 @@ const client = useHarnessClient();
 const { confirmState, confirm } = useConfirmDialog();
 
 const providers = ref<readonly Provider[]>([]);
+/** Every key the profiles use, labelled by scope (LLM_ListCredentialKeys). */
+const credentialKeys = ref<readonly CredentialKey[]>([]);
+
+function keyFor(p: Provider): CredentialKey | undefined {
+  return credentialKeys.value.find((k) => k.profileIds.includes(p.id));
+}
 const loading = ref(false);
 const drawerOpen = ref(false);
 const editingProvider = ref<Provider | null>(null);
@@ -69,6 +75,13 @@ async function refresh(): Promise<void> {
   try {
     providers.value = await client.llm.listProviders();
     errorMessage.value = '';
+    try {
+      credentialKeys.value = await client.llm.listCredentialKeys();
+    } catch {
+      // The key list only adds scope names to the badges; each row still
+      // shows its own source from provider.cred without it.
+      credentialKeys.value = [];
+    }
   } catch (e) {
     errorMessage.value =
       e instanceof Error ? e.message : 'Failed to load providers.';
@@ -302,6 +315,7 @@ const inlineTestClass = computed(() =>
             :provider="p"
             :testing="testingId === p.id"
             :read-only="readOnly"
+            :credential-key="keyFor(p)"
             @test="onTest"
             @edit="openEditDrawer"
             @remove="onRemove"

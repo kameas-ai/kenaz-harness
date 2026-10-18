@@ -4,6 +4,9 @@
  * `main-served.ts` registers neither `/sites` nor `/marketplace`, and the
  * served RPC allowlist (`core/serve/methods.go`) dispatches no `Sites_*` or
  * `Catalog_*` method, so both views are non-functional in a browser build.
+ * (install-framework-01DOGF0B Phase 4 since removed the Marketplace entry on
+ * every build and made `/marketplace` a redirect to Capabilities; the
+ * served-mode pin below now holds trivially and stays as a regression guard.)
  * Wiring the capability gate made these two entries render for the first time
  * ever — including in served mode, where they would have been a link into the
  * not-found page.
@@ -15,6 +18,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { defineComponent, h, nextTick, readonly, ref } from 'vue';
 import LeftRail from '@/shell/LeftRail.vue';
+import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 import { initFeatureFlags } from '@/lib/featureFlags';
 import type { AppInfo } from '@/lib/types';
@@ -92,7 +96,7 @@ describe('LeftRail — fleet nav in served mode', () => {
     expect(w.find('[data-testid=nav-sites]').exists()).toBe(false);
   });
 
-  it('hides Marketplace even when the user is signed in', async () => {
+  it('shows no Marketplace entry even when the user is signed in', async () => {
     initFeatureFlags(makeAppInfo({ sites_hosting: true }));
     const w = await mountRail();
     expect(w.find('[data-testid=nav-marketplace]').exists()).toBe(false);
@@ -103,16 +107,27 @@ describe('LeftRail — fleet nav in served mode', () => {
     // assertions above would pass for the wrong reason.
     initFeatureFlags(makeAppInfo({ sites_hosting: true }));
     const w = await mountRail();
-    expect(w.text()).toContain('Sessions');
+    // (Was 'Sessions' — that rail entry was removed by nav-ia-sweep-01DOGF0F
+    // WP03; then 'Tools', renamed Capabilities by install-framework-01DOGF0B
+    // WP09. It is ungated: in served mode it lands on ToolsView's boundary
+    // panel.)
+    expect(w.text()).toContain('Capabilities');
   });
 
   // served-mode-is-a-real-mode-01PMZ707 WP03 (AC-709). Graph_* has no
   // serve dispatch case (D-701) — the rail entry would route into
   // GraphsView.vue's own boundary panel, so it is hidden at the nav layer
   // too, mirroring Sites/Marketplace above.
+  //
+  // agentgraph-settings-linkage-01DOGF0D WP05 removed the rail entry on
+  // every build and moved it to Settings › Authoring, so the served gate now
+  // has to hold there (pin P-6): no SettingsTabs entry either.
   it('hides Agent graphs — Graph_* has no serve dispatch case', async () => {
     initFeatureFlags(makeAppInfo({}));
     const w = await mountRail();
     expect(w.find('[data-testid=nav-agentgraph]').exists()).toBe(false);
+    const tabs = mount(SettingsTabs);
+    expect(tabs.find('[data-testid^="settings-tab-"]').exists(), 'tabs mounted').toBe(true);
+    expect(tabs.find('[data-testid="settings-tab-agent-graphs"]').exists()).toBe(false);
   });
 });

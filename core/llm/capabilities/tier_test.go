@@ -26,8 +26,16 @@ func TestCatalog_Tier(t *testing.T) {
 		{"openai", "gpt-4o", "medium", true},
 		{"openai", "o1-preview", "large", true},
 		{"openai", "gpt-3.5-turbo", "small", true},
-		// No tiers: row and no provider default → provider default applies.
-		{"gemini", "gemini-2.5-pro", "medium", true},
+		// gemini.yaml gained a real tiers: table (model-settings-reach-
+		// the-model-01PMZ101 UNIT-10 / WP17) so the branch recommender
+		// can enumerate real gemini candidates; before this, EVERY
+		// gemini model fell through to the provider-level "medium"
+		// default regardless of size (an accurate account of the gap,
+		// not a property worth re-pinning). 2.5 Pro is Gemini's
+		// flagship reasoning model — "large", the same bucket
+		// claude-opus-4/o1-preview occupy above.
+		{"gemini", "gemini-2.5-pro", "large", true},
+		{"gemini", "gemini-2.5-flash", "small", true},
 		// Unknown provider — no data at all.
 		{"nonexistent-provider", "some-model", "", false},
 	}

@@ -143,8 +143,8 @@ edges:
 `;
 
 /**
- * The same run, projected against the library file because the resolved
- * spec it executed had been evicted. The ONLY difference is the
+ * The same run, reconstructed from the library file because the resolved
+ * spec it executed was never recorded. The ONLY difference is the
  * `spec_provenance` marker — which is the point: the badge has to come
  * from that one scalar and not from anything about the topology.
  */

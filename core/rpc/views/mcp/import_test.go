@@ -141,9 +141,13 @@ func TestImportRPC_UnsupportedNotWritten(t *testing.T) {
 	dir := t.TempDir()
 	api := newImportAPI(t, dir, stubCatalog{})
 
+	// "type":"http" is a real, supported transport as of
+	// paste-import-accepts-what-we-support-01PMZG16 — it is NOT a stand-in
+	// for "genuinely unsupported" any more. "websocket" names a transport
+	// the harness does not speak at all, which is what this test needs.
 	payload := `{"mcpServers":{
 		"good":{"command":"npx","args":["a"]},
-		"http-server":{"type":"http","url":"https://x"}
+		"ws-server":{"type":"websocket","url":"wss://x"}
 	}}`
 	resp, err := api.ImportClaudeDesktopConfig(context.Background(), ImportRequest{
 		RawJSON: payload,

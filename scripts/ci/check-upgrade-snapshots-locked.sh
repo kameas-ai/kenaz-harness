@@ -102,6 +102,19 @@ for dir in "$SNAP_ROOT"/v*/; do
     continue
   fi
 
+  # Does the directory carry dump.sql at the merge-base? A directory
+  # without one was never a complete snapshot — it is broken state
+  # (check-upgrade-snapshot-present.sh now fails outright on it), and
+  # the lock must not forbid the only possible repair. v0.89.4 shipped
+  # (PR #382) as PROVENANCE.md alone; locking that directory would have
+  # made the 2026-10-06 dump backfill + provenance correction a
+  # violation, leaving no green path back to a covered chain. The lock
+  # engages the moment dump.sql itself has shipped — which is the
+  # content whose immutability spec §4 actually cares about.
+  if ! git cat-file -e "${MERGE_BASE}:${dir%/}/dump.sql" 2>/dev/null; then
+    continue
+  fi
+
   while IFS= read -r -d '' f; do
     rel="${f#./}"
     checked=$((checked + 1))

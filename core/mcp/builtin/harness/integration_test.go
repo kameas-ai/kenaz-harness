@@ -88,12 +88,6 @@ func (stubSettingsReader) ListSettings(_ context.Context) (map[string]any, error
 	return map[string]any{"OnboardingCompleted": false}, nil
 }
 
-type stubStatusReporter struct{}
-
-func (stubStatusReporter) HarnessStatus(_ context.Context) (harness.StatusSnapshot, error) {
-	return harness.StatusSnapshot{}, nil
-}
-
 // ── Stub session kind transitioner ───────────────────────────────────────────
 
 type stubTransitioner struct {
@@ -174,7 +168,6 @@ func TestIntegration_PhaseOneHandoff(t *testing.T) {
 		Providers: stubProviderLister2{},
 		Recipes:   stubRecipeLister{},
 		Settings:  stubSettingsReader{},
-		Status:    stubStatusReporter{},
 		// Write managers are nil — we only call read tools in this test.
 	}
 	srv := harness.RegisterAll(harness.NewServer(), mgrs)
@@ -184,11 +177,10 @@ func TestIntegration_PhaseOneHandoff(t *testing.T) {
 	defer tr.Close()
 
 	// Step 2: call a read-side tool to verify the tool-dispatch + audit path.
-	result := callTool(t, tr, harness.ToolGetStatus, nil)
-	if result.IsError {
-		// Status reporter is a stub — errNotConfigured is expected here
-		// since StatusReporter stub returns empty snapshot, not nil.
-		// The harness should still emit an audit event regardless.
+	// (This used to call harness_read_get_status, removed by
+	// model-harness-toolset-01MHTS001 WP03 — it was never wired.)
+	if result := callTool(t, tr, harness.ToolListProviders, nil); result.IsError {
+		t.Fatalf("harness_read_list_providers returned an error result: %+v", result)
 	}
 
 	// Step 3: assert KindHarnessSelfToolCalled fired.

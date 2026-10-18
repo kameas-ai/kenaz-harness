@@ -9,6 +9,7 @@
  *   - costSource === 'derived' | 'mixed': show "~$X.XX · Nk tokens"
  */
 import type { SessionUsage } from '../../lib/types';
+import { formatCost } from '@/lib/formatCost';
 
 const props = withDefaults(
   defineProps<{
@@ -22,14 +23,6 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
   return String(n);
-}
-
-function formatCost(usd: number): string {
-  if (usd < 0.0001) return '<$0.01';
-  if (usd < 0.01) return '$' + usd.toFixed(4);
-  if (usd < 1) return '$' + usd.toFixed(3);
-  if (usd < 10) return '$' + usd.toFixed(2);
-  return '$' + usd.toFixed(1);
 }
 
 const label = (() => {
@@ -54,6 +47,12 @@ const title = (() => {
           : 'Unknown cost source';
   return [
     `${u.promptTokens.toLocaleString()} prompt + ${u.completionTokens.toLocaleString()} completion = ${u.totalTokens.toLocaleString()} tokens`,
+    // promptTokens is the whole prompt for every provider (the backend
+    // normalises Anthropic's cache-exclusive count), so cached tokens
+    // are a part of it, never an addition.
+    u.cachedTokens
+      ? `of which ${u.cachedTokens.toLocaleString()} prompt tokens were served from cache`
+      : '',
     u.costUsd > 0 ? `$${u.costUsd.toFixed(6)} USD — ${src}` : src,
     u.pricingDataDate ? `Pricing data: ${u.pricingDataDate}` : '',
   ]

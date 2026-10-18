@@ -20,6 +20,7 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/kameas-ai/kenaz-harness/cmd/mcpsubcmd"
+	"github.com/kameas-ai/kenaz-harness/cmd/servedfleet"
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -61,6 +62,11 @@ func main() {
 	// the main goroutine is captured + flushed before re-panicking.
 	// wire-up point 1 for sentry (sentry-error-monitoring-01KX5R8G WP02).
 	defer coresentry.RecoverMain()
+
+	// Every Fleet request carries User-Agent: kenaz-harness/<semver>
+	// (legal kameas-ai-11, 2026-10-16, via kenaz-fleet #289): set it before
+	// any mode can talk to Fleet.
+	fleet.SetClientVersion(Version)
 
 	// Early dispatch: `harness mcp <server>` routes to the stdio MCP server
 	// BEFORE flag.Parse, Wails, SQLite, or any other subsystem init.
@@ -137,11 +143,19 @@ func main() {
 	// FR-002: assert fleet signing-key presence at boot. A shipped binary
 	// without a key logs exactly one WARN so the absence is never silent.
 	// Dev builds (Version == "dev") skip this so local development is unaffected.
-	if !fleet.ConfigDistributionEnabled() {
+	if err := fleet.FleetSigningKeySetError(); err != nil {
+		// A malformed pin list is rejected WHOLE (never a silent skip of the
+		// bad entry) — say so loudly, in every build, not as the quiet
+		// "no key" WARN a deliberately unkeyed build gets.
+		logging.L().Error("fleet.config_distribution.disabled",
+			"reason", "pinned signing key set is malformed and was rejected",
+			"error", err.Error(),
+			"action", "fix the FLEET_SIGNING_PUBKEYS_<ENV> Actions variable (comma-separated 64-hex raw ed25519 public keys) and rebuild")
+	} else if !fleet.ConfigDistributionEnabled() {
 		if Version != "dev" {
 			logging.L().Warn("fleet.config_distribution.disabled",
 				"reason", "signing key not injected at build time",
-				"action", "fleet config bundles will not be applied; contact ops to provision FLEET_SIGNING_PUBKEY")
+				"action", "fleet config bundles will not be applied; contact ops to set the FLEET_SIGNING_PUBKEYS_<ENV> Actions variable")
 		} else {
 			logging.L().Debug("fleet.config_distribution.disabled",
 				"reason", "dev build — signing key absent by design")
@@ -356,6 +370,21 @@ func main() {
 			// reporting the boot-time literal forever. Runs before
 			// c.Shutdown so the settings store is still open.
 			persistWindowSize(ctx, api, wailsruntime.WindowGetSize)
+			// Review finding (Blocker 3, finding #61 follow-up,
+			// 2026-09-11): api.Shutdown() previously had zero production
+			// callers anywhere — this OnShutdown only ever called
+			// c.Shutdown (core.Core.Shutdown, a different type), so
+			// API.Shutdown()'s own docstring claim ("main.go calls this
+			// from OnShutdown") was false, and so was the commit message
+			// that introduced the async post_send embed queue ("no queued
+			// embed outlives process shutdown") — nothing drained
+			// a.hookRunner's pool or stopped a.pruneScheduler /
+			// a.compactionScheduler on a real quit. Safe to call before
+			// c.Shutdown now that hooks.Runner.Shutdown (core/hooks/fire.go)
+			// is idempotent (Blocker 1) — an unguarded double-call here
+			// would otherwise have been a crash on exit the first time this
+			// ran alongside any other Shutdown call path.
+			api.Shutdown()
 			_ = c.Shutdown(ctx)
 		},
 		Bind: api.Bindings(),
@@ -414,11 +443,15 @@ func runServeMode(listenAddr string) {
 	// token never crosses into the VM.
 	authCfg := authbroker.ReadConfig(os.Getenv)
 	connTokens := authbroker.NewConnectorTokens(authCfg, serveLog)
+	// Named so the same emitter also backs authbroker.WithLedgerEmit below
+	// (fleet-enforcement-truth-01PMZ505 WP14) — one reporter-ingest-socket
+	// emitter for both connector-lifecycle and session-lifecycle events.
+	ledgerEmitter := connectors.NewLedgerEmitterFromEnv(os.Getenv, serveLog)
 	connSup := connectors.NewSupervisor(connectors.SupervisorConfig{
 		Provisioning: mcpProv,
 		Getenv:       os.Getenv,
 		Tokens:       connTokens,
-		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, serveLog),
+		Ledger:       ledgerEmitter,
 		// D13/US5: include operator-authored user recipes baked under
 		// <dataDir>/mcp/recipes so whitelisted custom connector ids
 		// resolve in served mode. The whitelist still gates every id.
@@ -469,7 +502,11 @@ func runServeMode(listenAddr string) {
 	// disk, same mechanism as SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
 	//
 	// Privacy: broker token and access token bytes are never logged.
-	authSession := authbroker.NewSession(ctx, authCfg, serveLog)
+	// WithLedgerEmit (fleet-enforcement-truth-01PMZ505 WP14): reuse the
+	// connector-lifecycle emitter so "session.signed_out" reaches the
+	// same reporter ingest socket as connector.* events.
+	authSession := authbroker.NewSession(ctx, authCfg, serveLog,
+		authbroker.WithLedgerEmit(ledgerEmitter.EmitSessionLifecycle))
 	serveLog.Info("harness.serve: auth session initialised",
 		"auth_state", authSession.State().String(),
 		"broker_addr", authCfg.BrokerAddr,
@@ -481,20 +518,12 @@ func runServeMode(listenAddr string) {
 	// has no OS keychain for the default store to read, and renewal is owned
 	// host-side; no refresh token ever crosses the boundary. Guarded on
 	// BrokerAddr so a desktop `--serve` run keeps keychain-backed sign-in.
-	if authCfg.BrokerAddr != "" {
-		fleet.SetExternalTokenSource(authSession.AccessToken)
-		if authSession.State() == authbroker.StateSignedIn {
-			// One-shot enroll → activates the fleet OTLP pipeline. On
-			// desktop FleetSignIn does this post-login; served mode has no
-			// sign-in affordance, so the signed-in seed is the trigger.
-			// Best-effort: failure means telemetry stays off, nothing else.
-			go func() {
-				if _, err := api.Settings().FleetRefreshIdentity(ctx); err != nil {
-					serveLog.Info("harness.serve: fleet enroll skipped", "reason", err.Error())
-				}
-			}()
-		}
-	}
+	//
+	// servedfleet.Start also runs the enroll supervisor: enroll with backoff,
+	// recover from an anonymous boot or a host sign-out/in, re-enroll on an
+	// account change. It replaced a one-shot enroll that only fired when the
+	// host was already signed in at boot and never retried.
+	fleetEnroll := servedfleet.Start(ctx, api, authCfg, authSession, serveLog)
 
 	token := os.Getenv(serve.EnvToken)
 	addr := listenAddr
@@ -526,12 +555,29 @@ func runServeMode(listenAddr string) {
 
 	srv := serve.New(api, addr, token, servedFS, serveLog,
 		serve.WithAuthSession(authSession),
+		serve.WithFleetEnroll(fleetEnroll),
 		serve.WithConnectors(connSup),
 		// SD-16 (WP08): KENAZ_SERVE_STREAM_QUEUE_CAP, the workbench-image
 		// config surface WithStreamQueueCap's "constrained workbench" half
 		// never had. 0 (absent/invalid) keeps serve.defaultStreamQueueCap.
 		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
-	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
+	serveErr := srv.Serve(ctx)
+	// Two findings, one call. #68 (v0.78.1): served mode never called
+	// api.Shutdown() at all, so a queued post_send embed and the
+	// prune/compaction schedulers were never stopped -- see the
+	// OnShutdown comment above for that history. #70: it never called
+	// core.Shutdown(ctx) either, so nothing core owns was closed -- no
+	// final WAL checkpoint, no orderly MCP child teardown, no telemetry
+	// flush. serve.ShutdownServedCore does api.Shutdown() THEN
+	// core.Shutdown(), the ordering verified on the desktop path.
+	//
+	// On a real SIGTERM/SIGINT, installServeShutdownSignal's cancel()
+	// unblocks Serve with context.Canceled (verified by SD-11 above), so
+	// this point is genuinely reached on every served exit -- and it runs
+	// even when serveErr is a real error, so the os.Exit(1) below no
+	// longer skips teardown.
+	serve.ShutdownServedCore(ctx, api, c, serveLog, "harness.serve")
+	if serveErr != nil && serveErr != context.Canceled {
 		serveLog.Error("harness.serve: server error", "err", serveErr)
 		os.Exit(1)
 	}
@@ -674,14 +720,14 @@ func initSentryFromSettings(api *rpc.Bindings) {
 	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP12 (FR-016):
 	// this was hardcoded `false`, so ResolveTier permanently downgraded
 	// TierIdentified to TierAnonymous for every user, even one genuinely
-	// signed into fleet — Settings_FleetSignedIn (arity 0) is exactly
-	// what ResolveTier's second parameter wants. A read error (fleet
-	// disabled, no client) is treated as "not signed in" (the safe,
-	// anonymous-leaning default).
-	fleetSignedIn, fsErr := api.Settings_FleetSignedIn()
-	if fsErr != nil {
-		fleetSignedIn = false
-	}
+	// signed into fleet. fleet-session-truth-01DOGF0A: read from the single
+	// FleetSession snapshot (Settings_FleetSignedIn was deleted in favour of
+	// it) — TokensUsable is the snapshot's own "the stored tokens still
+	// authenticate" answer, which is what ResolveTier's second parameter
+	// wants. A read error (fleet disabled, no client) is treated as "not
+	// signed in" (the safe, anonymous-leaning default).
+	fs, fsErr := api.Settings_FleetSession()
+	fleetSignedIn := fsErr == nil && fs.TokensUsable
 	tier := coresentry.ResolveTier(s.CrashReportingTier, fleetSignedIn)
 	if initErr := coresentry.Init(tier, s.SentryDSN, Version, ""); initErr != nil {
 		logging.L().Warn("sentry.init.error", "err", initErr.Error())

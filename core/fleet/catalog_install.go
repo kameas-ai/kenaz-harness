@@ -1,9 +1,14 @@
-// catalog_install.go — signature verification + namespaced extraction.
+// catalog_install.go — the generic catalog install path (refusing), plus
+// cleanup and listing of what earlier releases left under installed/.
 //
-// Install verifies the ed25519 signature, then writes the payload to
-//   <DataDir>/installed/<kind>/<catalog_id>@<version>/payload
-//
-// Uninstall removes the namespaced directory (FR-006).
+// install-framework-01DOGF0B WP02: Install used to verify, then write
+// <DataDir>/installed/<kind>/<catalog_id>@<version>/payload (+ meta.json)
+// and report success. Nothing reads installed/ — not for workflow,
+// agent_pack, bundle or skill — so every such "install" was a badge with no
+// capability behind it (docs/unwired-ledger.md, "badge-only catalog
+// install"). Install now refuses every kind with ErrCatalogKindNotInstallable
+// and writes nothing. Uninstall and InstalledItems stay: they are how
+// existing installed/ residue is listed and removed.
 package fleet
 
 import (
@@ -11,13 +16,43 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
+
+// ErrCatalogKindNotInstallable is returned by Install for every catalog
+// kind: no kind has an installer that ends in a consumed capability on
+// this path yet. The wrapped message names the kind and the working
+// alternative. Deleted when each kind gains a provider that registers with
+// its runtime consumer (install-framework-01DOGF0B WP05–WP07).
+var ErrCatalogKindNotInstallable = errors.New("fleet/catalog: installing this kind from the org catalog isn't supported yet")
+
+// catalogInstallRefusal returns the named refusal for kind — the single
+// source of the per-kind reason on the Go side (the Capabilities surface's
+// frontend/src/views/capabilities/catalogBrowse.ts carries the matching UI
+// copy for the provider-less kinds).
+func catalogInstallRefusal(kind CatalogItemKind) error {
+	switch kind {
+	case CatalogKindWorkflow:
+		return fmt.Errorf("%w: workflow — nothing on this device would load the download; install the workflow from Capabilities (Workflows), which installs org-catalog workflows and shipped templates through the install framework", ErrCatalogKindNotInstallable)
+	case CatalogKindPack:
+		return fmt.Errorf("%w: agent pack — nothing on this device would load the download; add agent profiles to the agents folder in your profile directory instead", ErrCatalogKindNotInstallable)
+	case CatalogKindBundle:
+		return fmt.Errorf("%w: bundle — nothing on this device would load the download; install a bundle from Settings › Integrations › Bundles instead", ErrCatalogKindNotInstallable)
+	case CatalogKindSkill:
+		return fmt.Errorf("%w: skill — this path would not register it; install it from Capabilities (Skills) instead", ErrCatalogKindNotInstallable)
+	default:
+		return fmt.Errorf("%w: unknown kind %q", ErrCatalogKindNotInstallable, kind)
+	}
+}
 
 // installBasePath returns the namespaced path for an installed item.
 //   <dataDir>/installed/<kind>/<catalogID>@<version>/
@@ -25,23 +60,18 @@ func installBasePath(dataDir string, kind CatalogItemKind, catalogID, version st
 	return filepath.Join(dataDir, "installed", string(kind), catalogID+"@"+version)
 }
 
-// Install downloads the item from fleet, verifies the signature against the
-// provided fleet signing public key (base64), and extracts the payload to
-//   <dataDir>/installed/<kind>/<id>@<version>/payload
-//
-// The pubKeyBase64 parameter is the raw 32-byte ed25519 public key of the
-// fleet signing key, encoded in standard base64. For device-signed catalog
-// items the pubkey is the publishing device's key (sourced from the item's
-// pubkey_fp lookup — not yet implemented server-side; the parameter carries
-// the fleet-level verification key until per-device key lookup is available).
-//
-// Install is verified in under 500ms per NFR-004.
-func (c *Client) Install(ctx context.Context, dataDir string, pubKeyBase64 string, catalogID, version string) error {
+// Install fetches the item to learn its kind, then refuses it with
+// catalogInstallRefusal — it writes nothing (install-framework-01DOGF0B
+// WP02). dataDir and pubKeyBase64 are unread for now: they are kept so the
+// per-kind providers that replace this method (WP05–WP07) and any future
+// bundle-key payload signature (register C-2; catalog/impl.go's
+// pubKeyBase64, WithPubKey) plug into the existing call chain rather than
+// re-threading it.
+func (c *Client) Install(ctx context.Context, _ string, _ string, catalogID, version string) error {
 	if c == nil || c.isNop {
 		return ErrFleetDisabled
 	}
-	// Fetch the signed payload.
-	path := fmt.Sprintf("/api/v1/catalog/%s@%s", catalogID, version)
+	path := fmt.Sprintf("/api/v1/catalog/%s@%s", url.PathEscape(catalogID), url.PathEscape(version))
 	resp, err := c.Get(ctx, path)
 	if err != nil {
 		return fmt.Errorf("fleet/catalog: install: fetch: %w", err)
@@ -56,37 +86,45 @@ func (c *Client) Install(ctx context.Context, dataDir string, pubKeyBase64 strin
 	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {
 		return fmt.Errorf("fleet/catalog: install: decode: %w", err)
 	}
-
-	// Verify signature.
-	if err := verifyCatalogSignature(pubKeyBase64, item.PayloadBytes, item.Signature); err != nil {
-		return err
-	}
-
-	// Extract to namespaced dir.
-	destDir := installBasePath(dataDir, item.Kind, catalogID, version)
-	if err := os.MkdirAll(destDir, 0o700); err != nil {
-		return fmt.Errorf("fleet/catalog: install: mkdir: %w", err)
-	}
-	payloadPath := filepath.Join(destDir, "payload")
-	if err := os.WriteFile(payloadPath, item.PayloadBytes, 0o600); err != nil {
-		return fmt.Errorf("fleet/catalog: install: write payload: %w", err)
-	}
-	// Write a metadata sidecar for provenance.
-	metaPath := filepath.Join(destDir, "meta.json")
-	metaBytes, _ := json.MarshalIndent(map[string]string{
-		"catalog_id": catalogID,
-		"version":    version,
-		"kind":       string(item.Kind),
-		"slug":       item.Slug,
-		"signature":  item.Signature,
-	}, "", "  ")
-	_ = os.WriteFile(metaPath, metaBytes, 0o600) // best-effort
-	return nil
+	return catalogInstallRefusal(item.Kind)
 }
 
-// Uninstall removes the namespaced install directory (FR-006).
+// ErrCatalogInvalidPathSegment is returned by Uninstall when kind,
+// catalogID or version is not a single clean path segment.
+var ErrCatalogInvalidPathSegment = errors.New("fleet/catalog: uninstall: invalid path segment")
+
+// cleanPathSegment reports whether s is safe as exactly one path element:
+// non-empty, not "." or "..", no separator of either OS flavour, no NUL,
+// and unchanged by filepath.Clean.
+func cleanPathSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	if strings.ContainsAny(s, "/\\\x00") || strings.ContainsRune(s, filepath.Separator) {
+		return false
+	}
+	return filepath.Clean(s) == s
+}
+
+// Uninstall removes the namespaced install directory (FR-006) — since
+// install-framework-01DOGF0B WP02, residue an earlier release's Install
+// left behind ("Remove download" in the Capabilities surface). kind, catalogID and
+// version come from the frontend and are joined into a RemoveAll path, so
+// each must be a single clean path segment (review F8); dataDir must be
+// set, or the path would resolve against the process working directory.
 // Returns nil when the directory does not exist (idempotent).
 func (c *Client) Uninstall(dataDir string, kind CatalogItemKind, catalogID, version string) error {
+	if dataDir == "" {
+		return fmt.Errorf("fleet/catalog: uninstall: data dir not configured")
+	}
+	for _, seg := range []string{string(kind), catalogID, version} {
+		if !cleanPathSegment(seg) {
+			return fmt.Errorf("%w: %q", ErrCatalogInvalidPathSegment, seg)
+		}
+	}
+	if !cleanPathSegment(catalogID + "@" + version) {
+		return fmt.Errorf("%w: %q", ErrCatalogInvalidPathSegment, catalogID+"@"+version)
+	}
 	dir := installBasePath(dataDir, kind, catalogID, version)
 	if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("fleet/catalog: uninstall: %w", err)
@@ -148,8 +186,14 @@ func InstalledItems(dataDir string) ([]CatalogItem, error) {
 // pubKeyBase64 is the standard (non-URL-safe) base64-encoded 32-byte public key.
 func verifyCatalogSignature(pubKeyBase64 string, payload []byte, sigBase64 string) error {
 	if pubKeyBase64 == "" {
-		// No public key provided — skip verification (useful when server
-		// hasn't yet published per-device keys; tracked for follow-up).
+		// fleet-enforcement-truth-01PMZ505 WP10 (register C-2,
+		// 2026-08-19): logged at warn, not silently, because this skip
+		// means the install about to proceed is UNVERIFIED. Design truth
+		// (kenaz-fleet owner, 2026-10-05): fleet signs only the config
+		// bundle (mandated items); non-mandated catalog payloads carry no
+		// fleet signature and no per-org/per-device catalog key will exist.
+		logging.L().Warn("fleet.catalog_install.signature_verification_skipped",
+			"reason", "no pubkey configured — fleet signs only the config bundle; catalog payloads are unsigned")
 		return nil
 	}
 	pubBytes, err := base64.StdEncoding.DecodeString(pubKeyBase64)

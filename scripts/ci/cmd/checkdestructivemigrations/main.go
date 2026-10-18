@@ -79,6 +79,20 @@ func run() error {
 		return err
 	}
 
+	// Discovery floor (Finding #74, CI-gate-hardening, 2026-09-14): this
+	// codebase is known to ship several destructive migrations (DROP
+	// TABLE/INDEX/TRIGGER/COLUMN, RENAME, DELETE FROM outside a
+	// scratch/backup table — e.g. sessions/0335, event-log/0106). A scan
+	// that finds none is far more likely a broken migration.Migration{}
+	// literal match (a renamed constructor, a moved package) than a
+	// migration history that stopped needing destructive changes.
+	if len(findings) == 0 {
+		return fmt.Errorf("scanned %s and found zero destructive migration.Migration{} literals — "+
+			"this codebase is known to ship several (e.g. sessions/0335, event-log/0106), so this is "+
+			"almost certainly a broken scan (a renamed constructor, a moved migrations package), not "+
+			"a migration history with no destructive changes", root)
+	}
+
 	tested, err := idsReferencedByTests(testRoot)
 	if err != nil {
 		return err

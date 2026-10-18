@@ -3,7 +3,7 @@
 // MCP prompt definitions for the fleet-sites server.
 // Prompts are intentionally terse and contain no cloud identifiers,
 // endpoint URLs, quota numbers, or runtime enum values (OSS boundary).
-// Framework-specific guidance lives in the Fleet mandated_skills channel.
+// Framework-specific guidance lives in the Fleet mandated_items channel (kind=skill).
 //
 // Mission: sites-mcp-server-01NSITE05 WP02.
 package sites

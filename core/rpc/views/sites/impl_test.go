@@ -15,6 +15,7 @@ package sites_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -56,6 +57,19 @@ type fakeFleetClient struct {
 
 	// recorded tail lines from last SiteLogs call.
 	lastTailLines int
+
+	// envListResult / envListErr control SiteEnvList.
+	envListResult []corefleet.SiteEnvEntry
+	envListErr    error
+
+	// envSetErr controls SiteEnvSet.
+	envSetErr error
+
+	// lastEnvSetVars records the vars map passed to the last SiteEnvSet
+	// call, so tests can assert what reached the fleet client without
+	// the RPC layer itself ever having anywhere to leak a value TO
+	// (AC-012: the wire type carries no value field at all).
+	lastEnvSetVars map[string]string
 }
 
 func (f *fakeFleetClient) SitesList(_ context.Context) ([]corefleet.SiteRecord, error) {
@@ -80,6 +94,13 @@ func (f *fakeFleetClient) SiteLogs(_ context.Context, _ string, tailLines int) (
 }
 func (f *fakeFleetClient) SiteDelete(_ context.Context, _ string) error {
 	return f.deleteErr
+}
+func (f *fakeFleetClient) SiteEnvSet(_ context.Context, _ string, vars map[string]string) error {
+	f.lastEnvSetVars = vars
+	return f.envSetErr
+}
+func (f *fakeFleetClient) SiteEnvList(_ context.Context, _ string) ([]corefleet.SiteEnvEntry, error) {
+	return f.envListResult, f.envListErr
 }
 
 // ----- fake emitter -----
@@ -337,6 +358,95 @@ func TestSitesDelete_NotFound(t *testing.T) {
 	}
 	if !errors.Is(err, corefleet.ErrSiteNotFound) {
 		t.Errorf("error = %v, want to wrap ErrSiteNotFound", err)
+	}
+}
+
+// ----- Sites_EnvSet / Sites_EnvList (fleet-enforcement-truth-01PMZ505 WP09) -----
+//
+// AC-012: "a declared env var can be set." Before this WP, SiteEnvSet /
+// SiteEnvList existed on core/fleet.Client with zero non-test callers —
+// the manifest's own doc pointed at "PUT /sites/{id}/env" as the only way
+// to set a declared secret, and nothing in the app called it.
+
+func TestSitesEnvSet_OK(t *testing.T) {
+	ts := corefleet.TokenSet{AccessToken: "tok-access", RefreshToken: "tok-refresh"}
+	if err := corefleet.SaveTokens(ts); err != nil {
+		t.Skipf("skip: OS keychain unavailable (%v)", err)
+	}
+	t.Cleanup(func() { _ = corefleet.ClearTokens() })
+
+	fc := &fakeFleetClient{}
+	impl, _ := newImplWithCap(t, fc, nil)
+	if err := impl.Sites_EnvSet(t.Context(), "my-site", map[string]string{"API_KEY": "s3cr3t"}); err != nil {
+		t.Fatalf("Sites_EnvSet: %v", err)
+	}
+	if fc.lastEnvSetVars["API_KEY"] != "s3cr3t" {
+		t.Errorf("fleet client received vars = %v, want API_KEY=s3cr3t reaching the client unchanged", fc.lastEnvSetVars)
+	}
+}
+
+func TestSitesEnvSet_FleetDisabled(t *testing.T) {
+	t.Setenv("HARNESS_FLEET_DISABLED", "1")
+	impl := viewsites.NewForTesting(&fakeFleetClient{}, false, t.TempDir(), nil)
+	err := impl.Sites_EnvSet(t.Context(), "my-site", map[string]string{"K": "v"})
+	if !errors.Is(err, corefleet.ErrFleetDisabled) {
+		t.Fatalf("Sites_EnvSet with fleet disabled = %v, want ErrFleetDisabled", err)
+	}
+}
+
+// TestSitesEnvList_NeverReturnsAValue is AC-012's core assertion: the
+// wire type SiteEnvEntry carries no value field, full stop — this is
+// not a runtime redaction, it is a type the value cannot travel
+// through. Proven at the JSON-wire level, not by inspecting the struct
+// literal, so a future field addition that reintroduces a value is
+// caught by the marshalled bytes, matching check-no-credential-in-ui.sh's
+// own wire-shape enforcement.
+func TestSitesEnvList_NeverReturnsAValue(t *testing.T) {
+	ts := corefleet.TokenSet{AccessToken: "tok-access", RefreshToken: "tok-refresh"}
+	if err := corefleet.SaveTokens(ts); err != nil {
+		t.Skipf("skip: OS keychain unavailable (%v)", err)
+	}
+	t.Cleanup(func() { _ = corefleet.ClearTokens() })
+
+	fc := &fakeFleetClient{envListResult: []corefleet.SiteEnvEntry{
+		{Name: "API_KEY", Description: "third-party API key"},
+		{Name: "DB_URL"},
+	}}
+	impl, _ := newImplWithCap(t, fc, nil)
+	entries, err := impl.Sites_EnvList(t.Context(), "my-site")
+	if err != nil {
+		t.Fatalf("Sites_EnvList: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(entries))
+	}
+	if entries[0].Name != "API_KEY" || entries[1].Name != "DB_URL" {
+		t.Errorf("entries = %+v, want names in order", entries)
+	}
+
+	raw, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var asMaps []map[string]any
+	if err := json.Unmarshal(raw, &asMaps); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, m := range asMaps {
+		for k := range m {
+			if k != "name" && k != "description" && k != "setAt" {
+				t.Errorf("SiteEnvEntry wire shape carries unexpected key %q — only name/description/setAt are allowed, never a value", k)
+			}
+		}
+	}
+}
+
+func TestSitesEnvList_FleetDisabled(t *testing.T) {
+	t.Setenv("HARNESS_FLEET_DISABLED", "1")
+	impl := viewsites.NewForTesting(&fakeFleetClient{}, false, t.TempDir(), nil)
+	_, err := impl.Sites_EnvList(t.Context(), "my-site")
+	if !errors.Is(err, corefleet.ErrFleetDisabled) {
+		t.Fatalf("Sites_EnvList with fleet disabled = %v, want ErrFleetDisabled", err)
 	}
 }
 

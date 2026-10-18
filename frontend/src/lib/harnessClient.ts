@@ -17,19 +17,30 @@
 import { ServedTransport } from './servedTransport';
 import { ServedUnsupportedError } from './errors';
 import { dispatchServedEvent } from './useServedEvents';
+import { SERVED_STREAM_TOPICS } from './servedStreamTopics.gen';
 
 import type {
   AutonomyLayer,
   ResolvedAutonomy,
+  ReasoningConfig,
+  WireSessionKnobs,
   Session,
   SiteSummary,
+  SiteEnvEntry,
   Project,
+  DocumentSummary,
+  DocumentRecord,
+  DocumentPreview,
+  KnowledgeSiteBuild,
   Provider,
+  CredentialKey,
   AddProviderInput,
   TestResult,
   ModelInfo,
   MCPServer,
   MCPTestResult,
+  MCPToolPolicy,
+  MCPToolPolicyRule,
   A2ACard,
   Job,
   SecretReference,
@@ -52,6 +63,7 @@ import type {
   AuditExportOptions,
   ShellStatus,
   AppInfo,
+  CompactionOverheadInfo,
   Settings,
   Theme,
   ListMessagesResult,
@@ -75,8 +87,10 @@ import type {
   PrimaryAuth,
   RecipeCategory,
   RecipeListing,
+  RecipeSource,
   RecipeState,
   RecipeStatus,
+  HealthEntry,
   MissingPrereq,
   EnvKey,
   ConfigOption,
@@ -123,6 +137,7 @@ import type {
   CompactionManualResult,
   CompactionScopeKey,
   CompactionTierExplain,
+  RiskRaterBenchmark,
   Branch,
   BranchCreateOptions,
   BranchStatusInfo,
@@ -142,6 +157,11 @@ import type {
   PermissionRequest,
   PermissionMode,
   SessionUsage,
+  ModelCall,
+  ModelCallTelemetrySettings,
+  SettingsResetUnreadableResult,
+  MLLocalActivity,
+  TurnRun,
   DriftReport,
   PolicyFileDetail,
   ParseResult,
@@ -164,6 +184,10 @@ import type {
   FallbackChainSummary,
   FleetIdentity,
   FleetProfileInfo,
+  FleetSessionView,
+  MemorySyncStatus,
+  MLStatus,
+  PendingApprovals,
   CapabilitiesView,
   FleetConfigPullStatusView,
   FleetHealthView,
@@ -177,6 +201,10 @@ import type {
   CatalogPublishInput,
   CatalogItemView,
   CatalogFilter,
+  CapabilityFilter,
+  CapabilityItem,
+  CapabilityKind,
+  CapabilityListing,
   SyncStatusView,
   PendingMCPSecret,
   BootHealthReport,
@@ -192,7 +220,13 @@ import type {
   FleetTeamMemberView,
   FleetInboxItemView,
   FleetAcceptedSessionView,
+  FleetRecipientDeviceView,
   ComplianceStatus,
+  ToolExposure,
+  ToolExposureSettings,
+  SessionToolExposure,
+  LoadToolsResult,
+  ServerSchemaCost,
 } from './types';
 
 /**
@@ -222,6 +256,16 @@ export interface EmbedderConfigResult {
 interface WailsBindingsLike {
   ShellStatus(): Promise<ShellStatus>;
   AppInfo(): Promise<AppInfo>;
+  /**
+   * CompactionOverhead — chat-turn-integrity-01PMZ606 WP12. Hand-declared
+   * here (not in wailsjs/go/rpc/Bindings.d.ts) per the established
+   * WailsBindingsLike convention: `wails generate module` opens a REAL
+   * database (see CLAUDE.md's tooling footguns) and is never run by an
+   * agent, so a new Go-side binding is declared by hand on this
+   * interface until the next real `wails generate module` regenerates
+   * the file for real.
+   */
+  CompactionOverhead(): Promise<CompactionOverheadInfo>;
   LoadRoute(): Promise<string>;
   SaveRoute(route: string): Promise<void>;
   LogRouteChange(from: string, to: string): Promise<void>;
@@ -264,6 +308,18 @@ interface WailsBindingsLike {
   ): Promise<ResumeMessageResult>;
   /** Returns the cumulative token + cost aggregate (token-cost-telemetry WP03). */
   Sessions_GetUsage(id: string): Promise<SessionUsage>;
+  // ── llm-call-telemetry-01LLMTEL01 WP02 ──────────────────────────────
+  Sessions_ModelCalls(id: string, limit: number): Promise<ModelCall[] | null>;
+  Settings_GetModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
+  Settings_SetModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  /** "Reset settings" recovery for an unreadable settings.json. Desktop-only. */
+  Settings_ResetUnreadable(): Promise<SettingsResetUnreadableResult>;
+  // ── ml-producer-01MLPRD01 WP11 ──────────────────────────────────────
+  Settings_GetMLLocalActivity(): Promise<MLLocalActivity>;
+  Settings_SetMLLocalActivityRetention(days: number): Promise<MLLocalActivity>;
+  Settings_DeleteMLLocalActivity(): Promise<MLLocalActivity>;
+  /** Turn -> run links (agentgraph-settings-linkage-01DOGF0D WP03). Desktop-only. */
+  Sessions_TurnRuns(sessionID: string): Promise<TurnRun[]>;
   Sessions_SaveAsArtifact(
     sessionID: string,
     messageID: string,
@@ -295,6 +351,26 @@ interface WailsBindingsLike {
   Projects_AddSession(projectID: string, sessionID: string): Promise<void>;
   Projects_RemoveSession(sessionID: string): Promise<void>;
   Projects_ListSessions(projectID: string): Promise<Session[]>;
+  // ── documents (contracts/documents-rpc.md) ─────────────────────────
+  // Hand-declared per the convention documented on CompactionOverhead
+  // above: no agent runs `wails generate module`.
+  Documents_List(sessionID: string): Promise<DocumentSummary[]>;
+  Documents_Get(sessionID: string, id: string): Promise<DocumentRecord>;
+  Documents_Create(sessionID: string, title: string, body: string): Promise<DocumentRecord>;
+  Documents_Update(
+    sessionID: string,
+    id: string,
+    baseVersion: number,
+    body: string,
+  ): Promise<DocumentRecord>;
+  Documents_Preview(body: string): Promise<DocumentPreview>;
+  Documents_BuildSite(
+    sessionID: string,
+    slug: string,
+    title: string,
+    documentIDs: string[],
+  ): Promise<KnowledgeSiteBuild>;
+  Documents_ExportsDir(): Promise<{ dir: string }>;
   // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
   Settings_GetAutonomy(): Promise<AutonomyLayer>;
   Settings_SetAutonomy(layer: AutonomyLayer): Promise<void>;
@@ -303,8 +379,45 @@ interface WailsBindingsLike {
   Sessions_GetAutonomy(sessionID: string): Promise<AutonomyLayer>;
   Sessions_SetAutonomy(sessionID: string, layer: AutonomyLayer): Promise<void>;
   Sessions_ResolveAutonomy(sessionID: string): Promise<ResolvedAutonomy>;
+  /**
+   * Sessions_{Get,Set}KnobsDefault — model-settings-reach-the-model-
+   * 01PMZ101 UNIT-6 / WP10. Hand-declared here (not in
+   * wailsjs/go/rpc/Bindings.d.ts) per the CompactionOverhead precedent
+   * above: `wails generate module` opens a REAL database and was not run
+   * for this change — see core/rpc/bindings.go's matching doc comment.
+   * The wire shape is WireSessionKnobs (snake_case, matching Go
+   * llm.RequestKnobs' own JSON tags), NOT the camelCase ReasoningConfig
+   * SessionTunePanel edits — getKnobsDefault/setKnobsDefault below do
+   * the translation, the same class of fix as cmd_effort.go's
+   * reasoningKnobMetadata.
+   */
+  Sessions_GetKnobsDefault(id: string): Promise<WireSessionKnobs | null>;
+  Sessions_SetKnobsDefault(
+    id: string,
+    knobs: WireSessionKnobs | null,
+  ): Promise<void>;
+  // ── tool-context-budget-01TCBUD01 WP02 ──────────────────────────────
+  Settings_GetToolExposure(): Promise<ToolExposureSettings>;
+  Settings_SetToolExposure(settings: ToolExposureSettings): Promise<void>;
+  Projects_GetToolExposure(projectID: string): Promise<ToolExposure>;
+  Projects_SetToolExposure(
+    projectID: string,
+    exposure: ToolExposure,
+  ): Promise<void>;
+  Sessions_GetToolExposure(sessionID: string): Promise<SessionToolExposure>;
+  Sessions_SetToolExposure(
+    sessionID: string,
+    exposure: ToolExposure,
+  ): Promise<void>;
+  Sessions_LoadTools(
+    sessionID: string,
+    servers: string[],
+    tools: string[],
+    sticky: boolean,
+  ): Promise<LoadToolsResult>;
 
   LLM_ListProviders(): Promise<Provider[]>;
+  LLM_ListCredentialKeys(): Promise<CredentialKey[]>;
   LLM_StartStream(
     profileID: string,
     sessionID: string,
@@ -349,6 +462,8 @@ interface WailsBindingsLike {
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
   MCP_StopStream(id: string): Promise<void>;
+  MCP_HealthSnapshot(): Promise<Record<string, WireHealthEntry>>;
+  MCP_SubscribeHealthChanges(): Promise<string>;
   MCP_TestRecipe(
     recipeID: string,
     env: Record<string, string>,
@@ -360,6 +475,16 @@ interface WailsBindingsLike {
   MCP_SaveCustomRecipe(
     req: MCPSaveCustomRecipeRequest,
   ): Promise<{ id: string }>;
+  // trust-surfaces-that-fire-01PMZ202 WP24 (CHAT-05): the writer for the
+  // static permission source. Read once at chassis boot — a write here
+  // applies starting with the next restart.
+  MCP_SetToolPolicy(
+    server: string,
+    tool: string,
+    policy: string,
+    reason: string,
+  ): Promise<void>;
+  MCP_ListToolPolicies(): Promise<MCPToolPolicyRule[]>;
 
   A2A_ListCards(): Promise<A2ACard[]>;
   A2A_StartStream(): Promise<string>;
@@ -500,6 +625,10 @@ interface WailsBindingsLike {
   Settings_GetEmbedderConfig(): Promise<EmbedderConfigResult>;
   /** Persists the embedder provider selection and optional model override. */
   Settings_SetEmbedderConfig(profileID: string, modelOverride: string): Promise<void>;
+  /** Returns the vendored risk-rater model comparison
+   * (risk-rated-autonomy-01PMRA01, owner ruling 2026-09-15) the
+   * risk-rater-model picker renders alongside each candidate model. */
+  Settings_GetRiskRaterBenchmark(): Promise<RiskRaterBenchmark>;
   // per-message-token-meter-01KR3PQR
   Settings_GetShowPerMessageTokenMeter(): Promise<boolean>;
   Settings_SetShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
@@ -519,9 +648,11 @@ interface WailsBindingsLike {
   // fleet-auth-foundation-01NDFSEX08 WP05
   Settings_FleetSignIn(): Promise<FleetIdentity>;
   Settings_FleetSignOut(): Promise<void>;
-  Settings_FleetSignedIn(): Promise<boolean>;
+  Settings_FleetSignInCancel(): Promise<void>;
   Settings_FleetRefreshIdentity(): Promise<FleetIdentity>;
   Settings_FleetProfile(): Promise<FleetProfileInfo>;
+  // fleet-session-truth-01DOGF0A FR-1
+  Settings_FleetSession(): Promise<FleetSessionView>;
   // fleet-capability-surface-01NDFSEX09 WP11
   Settings_FleetCapabilities(): Promise<CapabilitiesView>;
   Settings_FleetRefreshCapabilities(): Promise<CapabilitiesView>;
@@ -602,6 +733,11 @@ interface WailsBindingsLike {
     path: string,
     reason: string,
   ): Promise<{ granted: boolean; expanded: string; message: string }>;
+  // ── tool-context-budget-01TCBUD01 WP06 ──────────────────────────────
+  Tools_SchemaCosts(
+    sessionID: string,
+    projectID: string,
+  ): Promise<ServerSchemaCost[]>;
 
   Bash_Exec(sessionID: string, command: string): Promise<BashExecResult>;
 
@@ -633,7 +769,7 @@ interface WailsBindingsLike {
   // ── fleet skill CRUD (fleet-skills-sync-01NDFSEX18 WP04/WP06) ──────
   /** Returns all fleet-installed skills (catalog + mandated). */
   Slashcmd_SkillList(): Promise<SkillItem[]>;
-  /** Downloads, verifies, and live-registers a skill from the catalog. */
+  /** Downloads and live-registers a skill from the catalog. NOT signature-verified today — fleet signs only the org config bundle (mandated items); catalog payloads carry no fleet signature (register C-2). */
   Slashcmd_SkillInstall(catalogID: string, version: string): Promise<void>;
   /** Removes and live-unregisters a skill by its store ID. */
   Slashcmd_SkillUninstall(skillID: string): Promise<void>;
@@ -675,6 +811,12 @@ interface WailsBindingsLike {
     since: number,
   ): Promise<GraphRunTraceEvent[]>;
   Graph_Resume(runID: string, askResponse: string): Promise<void>;
+  Graph_ResolveApproval(
+    runID: string,
+    nodeID: string,
+    approved: boolean,
+    reason: string,
+  ): Promise<void>;
   Graph_CancelRun(runID: string): Promise<void>;
   Graph_MaterializeRun(runID: string): Promise<GraphSpec>;
 
@@ -729,6 +871,17 @@ interface WailsBindingsLike {
     taskHint: string,
     preference: string,
   ): Promise<BranchRecommendedModel>;
+
+  // Sub-agent control verbs (subagent-control-and-background-tasks-
+  // 01PMZB11 UNIT-8/UNIT-10). Real, codegenned bindings — NOT the
+  // CompactionOverhead hand-declared-pending-regeneration shape;
+  // `wails generate module` already ran for these (see
+  // core/rpc/bindings.go + frontend/wailsjs/go/rpc/Bindings.{d.ts,js}),
+  // this interface just hadn't been told about them yet.
+  Subagent_Abort(branchID: string): Promise<void>;
+  Subagent_Steer(branchID: string, message: string): Promise<void>;
+  Subagent_Pause(branchID: string): Promise<void>;
+  Subagent_Resume(branchID: string): Promise<void>;
 
   // Search view (cross-session-search mission + unified-search-01KX5R8C).
   Search_Sessions(
@@ -821,6 +974,9 @@ interface WailsBindingsLike {
   Confirm_ApproveBatch(batchID: string, rememberSession: boolean): Promise<number>;
   Confirm_CancelBatch(batchID: string, reason: string): Promise<number>;
   Confirm_ListPending(sessionID: string): Promise<import('./types').ToolConfirmPending[]>;
+
+  // ── Advisor seam (laya-advisors-01LAYA001 WP07) ──
+  Advice_Respond(sessionID: string, kindID: string, action: string): Promise<string>;
   // WP05 multi-step wizard sequencing. Same value-not-string contract as
   // Elicit_SubmitAnswer above.
   Elicit_SubmitWizardStep(
@@ -866,23 +1022,65 @@ interface WailsBindingsLike {
   Sentry_GenerateLocalReport(): Promise<{ Path: string; ByteCount: number }>;
   Sentry_TestDSN(dsn: string): Promise<{ OK: boolean; Error: string }>;
 
+  // ── Local ML engine (laya-advisors-01LAYA001 WP13) ──────────────────────
+  Sidecar_Status(): Promise<SidecarStatusView>;
+  Sidecar_Enable(): Promise<SidecarStatusView>;
+  Sidecar_Update(): Promise<SidecarStatusView>;
+  Sidecar_Repair(): Promise<SidecarStatusView>;
+  Sidecar_Uninstall(): Promise<SidecarStatusView>;
+
   // ── Fleet telemetry consent (fleet-otel-archival-01NDFSEX11 WP06) ────────
   /** Returns the current fleet telemetry consent level: "none" | "aggregate" | "full". */
   Fleet_GetTelemetryConsent(): Promise<string>;
   /** Persists a new fleet telemetry consent level. Returns an error if the org tier is insufficient. */
   Fleet_SetTelemetryConsent(level: string): Promise<void>;
+  Fleet_TelemetryStatus(): Promise<FleetTelemetryStatus>;
+  // ── Fleet learned-memory sync (memory-sync-01MEMSY01 WP08) ────────────
+  Fleet_MemorySyncStatus(): Promise<MemorySyncStatus>;
+  Fleet_MemorySyncEnable(scopes: string[], consentVersion: string): Promise<MemorySyncStatus>;
+  Fleet_MemorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
+  // ── Fleet Cloud ML consent (ml-producer-01MLPRD01 WP01) ───────────────
+  Fleet_MLStatus(): Promise<MLStatus>;
+  Fleet_MLAckNotice(noticeVersion: number, button: string): Promise<MLStatus>;
+  Fleet_SetWorkflowEventsOptIn(optedIn: boolean): Promise<MLStatus>;
+  // ── Fleet pending-approvals hub (ml-producer-01MLPRD01 WP06) ──────────
+  Fleet_PendingApprovals(): Promise<PendingApprovals>;
+  Fleet_ApproveItem(id: string): Promise<PendingApprovals>;
+  Fleet_DismissItemLocally(id: string): Promise<PendingApprovals>;
+
+  // ── Capabilities: the one install framework (install-framework-01DOGF0B) ──
+  /** Every install provider's items (consumer-derived state) + unreachable sources with reasons. */
+  Capability_List(filter: CapabilityFilter): Promise<CapabilityListing>;
+  /** Install a zero-input item; returns its refreshed row. */
+  Capability_Install(kind: string, id: string, version: string): Promise<CapabilityItem>;
+  /** Uninstall through the provider; the consumer must confirm. Org-managed items are refused. */
+  Capability_Uninstall(kind: string, id: string): Promise<void>;
+  /** Install the newest version of an installed item. */
+  Capability_Update(kind: string, id: string): Promise<CapabilityItem>;
 
   // ── Catalog (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────────
   /** Sign and publish a workflow/agent-pack/bundle to the fleet catalog. */
   Catalog_Publish(input: CatalogPublishInput): Promise<CatalogItemView>;
   /** List catalog items, optionally filtered by kind or visibility. */
   Catalog_List(filter: CatalogFilter): Promise<CatalogItemView[]>;
-  /** Download and install a catalog item into the local DataDir. */
+  /**
+   * Refuses every catalog kind (install-framework-01DOGF0B WP02): no kind has
+   * an install on this path that anything consumes. Skills install via
+   * Slashcmd_SkillInstall, workflows via the Add-capability surface (both
+   * through the install framework). Writes nothing.
+   */
   Catalog_Install(catalogID: string, version: string): Promise<void>;
-  /** Remove an installed catalog item from the local DataDir. Idempotent. */
+  /** Remove a downloaded catalog payload (installed/ residue) from the local DataDir. Idempotent. */
   Catalog_Uninstall(kind: string, catalogID: string, version: string): Promise<void>;
   /** List all catalog items currently installed in the local DataDir. */
   Catalog_Installed(): Promise<CatalogItemView[]>;
+  /**
+   * Withdraws catalogID from the org listing (fleet-enforcement-truth-01PMZ505
+   * WP11). Distinct from Catalog_Uninstall, which only removes the local
+   * copy. The server enforces "owner or fleet admin only"; a 403 surfaces
+   * as a forbidden error, not a subscription-tier error.
+   */
+  Catalog_Unpublish(catalogID: string): Promise<void>;
 
   // ── Sync (fleet-share-and-sync-01NDFSEX14 WP05) ───────────────────────────
   /** Enable or disable sync for a category. On enable, triggers an immediate push. */
@@ -895,6 +1093,12 @@ interface WailsBindingsLike {
   Sync_ForcePull(category: string): Promise<void>;
   /** MCPs that arrived via sync but need credentials before they can start. */
   Sync_PendingMCPSecrets(): Promise<PendingMCPSecret[]>;
+  /**
+   * Record the one-time confirmation that enabled settings categories may
+   * upload to Fleet, then upload the held ones (provider-credentials-client-
+   * 01PCCLI01 A2, owner ruling H1).
+   */
+  Sync_ConfirmUploads(): Promise<void>;
 
   // ── Cedar team publish (fleet-share-and-sync-01NDFSEX14 WP07) ────────────
   /** Publish a Cedar rule to the team via fleet. Requires policy_admin role. */
@@ -926,6 +1130,15 @@ interface WailsBindingsLike {
   Sites_Status(site: string): Promise<SiteSummary>;
   Sites_Logs(site: string, tailLines: number): Promise<string>;
   Sites_Delete(site: string): Promise<void>;
+  /**
+   * Sets one or more declared environment variable values for site
+   * (fleet-enforcement-truth-01PMZ505 WP09). Write-only — values are never
+   * returned by Sites_EnvList. This is the ONLY way secrets reach a site;
+   * they must never ride in a deploy/manifest payload.
+   */
+  Sites_EnvSet(site: string, vars: Record<string, string>): Promise<void>;
+  /** Returns declared env var names + metadata for site. Never returns a value. */
+  Sites_EnvList(site: string): Promise<import('./types').SiteEnvEntry[]>;
   // ── plan-mode-posture-01KZNP3F WP06 — plan approval actions ─────────────
   Planmode_Approve(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
   Planmode_Discard(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
@@ -955,14 +1168,18 @@ interface WailsBindingsLike {
   ProjectSync_SetArtifactClass(projectID: string, opts: FleetArtifactClassOptionsView): Promise<FleetProjectSyncStatus>;
   Handoff_ListTeam(): Promise<FleetTeamMemberView[]>;
   Handoff_Share(sessionID: string, recipientUserID: string): Promise<void>;
+  Handoff_RecipientDevices(recipientUserID: string): Promise<FleetRecipientDeviceView[]>;
   Handoff_Inbox(): Promise<FleetInboxItemView[]>;
   Handoff_Accept(inboxItemID: string): Promise<FleetAcceptedSessionView>;
+  Handoff_Delete(inboxItemID: string): Promise<void>;
   ContextSync_GenerateRecoveryCode(): Promise<string>;
   ContextSync_ApplyRecoveryCode(code: string): Promise<void>;
   // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ─────────────────
   Compliance_Status(): Promise<ComplianceStatus>;
   Compliance_ArchiveNow(): Promise<void>;
   Compliance_SetRetention(days: number): Promise<void>;
+  // fleet-enforcement-truth-01PMZ505 WP06.
+  Compliance_SkipToID(toID: string): Promise<void>;
 }
 
 
@@ -1125,6 +1342,7 @@ interface WireRecipeListing {
   enabled: boolean;
   status: WireRecipeStatus;
   keysPresent: boolean;
+  source: string;
 }
 
 export function adaptCategory(raw: string): RecipeCategory {
@@ -1296,12 +1514,64 @@ function adaptRecipeStatus(w: WireRecipeStatus): RecipeStatus {
   };
 }
 
+/**
+ * WireHealthEntry — Wails-generated shape for `mcp.HealthEntry`
+ * (connector-lifecycle-truth-01PMZ303 UNIT-7/UNIT-8): both
+ * `MCP_HealthSnapshot`'s map values and the raw `mcp:health-changed`
+ * push-event payload `useEventStream` receives before adaptation.
+ * Exported (with adaptHealthEntry below) so a subscriber consuming the
+ * push event directly — rather than through the mcp client's
+ * `healthSnapshot()` — can adapt the same wire shape instead of
+ * re-declaring it and drifting from PublishHealthChange's real JSON
+ * tags (see core/rpc/views/mcp.HealthEntry).
+ */
+export interface WireHealthEntry {
+  id: string;
+  state: string;
+  last_error?: string;
+  restart_attempts: number;
+  stderr_tail?: string;
+  tool_count: number;
+  server_name?: string;
+  server_version?: string;
+  protocol_version?: string;
+}
+
+export function adaptHealthEntry(w: WireHealthEntry): HealthEntry {
+  return {
+    id: w.id,
+    state: adaptState(w.state),
+    lastError: w.last_error || undefined,
+    restartAttempts: w.restart_attempts,
+    stderrTail: w.stderr_tail || undefined,
+    toolCount: w.tool_count,
+    serverName: w.server_name || undefined,
+    serverVersion: w.server_version || undefined,
+    protocolVersion: w.protocol_version || undefined,
+  };
+}
+
+const KNOWN_RECIPE_SOURCES: readonly RecipeSource[] = [
+  'shipped',
+  'registry',
+  'user',
+  'imported',
+  'org',
+];
+
+function adaptRecipeSource(raw: string): RecipeSource {
+  return (KNOWN_RECIPE_SOURCES as readonly string[]).includes(raw)
+    ? (raw as RecipeSource)
+    : 'shipped';
+}
+
 function adaptRecipeListing(w: WireRecipeListing): RecipeListing {
   return {
     recipe: adaptRecipe(w.recipe),
     enabled: w.enabled,
     status: adaptRecipeStatus(w.status),
     keysPresent: w.keysPresent,
+    source: adaptRecipeSource(w.source),
   };
 }
 
@@ -1427,6 +1697,21 @@ export interface SessionsClient {
    */
   getUsage(id: string): Promise<SessionUsage>;
   /**
+   * modelCalls lists the session's most recent stored model provider
+   * calls, newest first (llm-call-telemetry-01LLMTEL01 WP02) — the
+   * read-only "Model calls" disclosure under the cost readout. limit <= 0
+   * means 50 (max 500). Never content. Desktop-only.
+   */
+  modelCalls(id: string, limit?: number): Promise<ModelCall[]>;
+  /**
+   * turnRuns returns the session's recorded chat turn -> agent-graph run
+   * links, oldest first (agentgraph-settings-linkage-01DOGF0D WP03). Turns
+   * that predate the mapping have no entry. Desktop-only: served mode
+   * rejects with ServedUnsupportedError (the run routes it feeds are
+   * Graph_* surfaces with no serve dispatch, D-701).
+   */
+  turnRuns(sessionId: string): Promise<TurnRun[]>;
+  /**
    * saveAsArtifact pins a message (or a sub-range thereof) as a
    * `user_pin` artifact. `rangeStart` / `rangeEnd` are byte offsets
    * into the message's content; `(0, 0)` captures the full message.
@@ -1461,6 +1746,39 @@ export interface SessionsClient {
    * + per-session panel.
    */
   resolveAutonomy(id: string): Promise<ResolvedAutonomy>;
+
+  // ── model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10 ───────────
+  /**
+   * Read the session-level reasoning-knob default persisted via
+   * setKnobsDefault, or null when none has been set. SessionTunePanel
+   * reads this on mount.
+   */
+  getKnobsDefault(id: string): Promise<ReasoningConfig | null>;
+  /**
+   * Persist the session-level reasoning-knob default. null clears any
+   * existing override (SessionTunePanel's "Reset"). The stored value
+   * merges onto every GenerationRequest.Knobs the session issues —
+   * this is the "reaches the model" half; without it the value only
+   * round-trips through the database.
+   */
+  setKnobsDefault(id: string, knobs: ReasoningConfig | null): Promise<void>;
+
+  // ── tool-context-budget-01TCBUD01 WP02 ──────────────────────────────
+  /** Read the session's tool-exposure override layer and activated set. */
+  getToolExposure(id: string): Promise<SessionToolExposure>;
+  /** Persist the session's tool-exposure override; an empty layer clears it. */
+  setToolExposure(id: string, exposure: ToolExposure): Promise<void>;
+  /**
+   * Load tools into the session (server names, exact "server__tool"
+   * names or "server__prefix*" globs) — the activation the model's
+   * kenaz__load_tools performs. Reports every name not loaded and why.
+   */
+  loadTools(
+    id: string,
+    servers: string[],
+    tools: string[],
+    sticky: boolean,
+  ): Promise<LoadToolsResult>;
 
   // ── session-export-01NDFSEX05 WP03 ──────────────────────────────────
   /**
@@ -1513,6 +1831,32 @@ export interface ArtifactsClient {
  * ProjectsClient — top-level Project entity CRUD + session membership.
  * Projects group related sessions; sessions outside a project are loose.
  */
+/**
+ * DocumentsClient — the Documents_* family (contracts/documents-rpc.md).
+ * Every call but preview/exportsDir names a session; the backend checks the
+ * session exists and decides what it may see. Errors carry
+ * "documents: <code>: <message>" — see parseDocumentsError.
+ */
+export interface DocumentsClient {
+  list(sessionId: string): Promise<DocumentSummary[]>;
+  get(sessionId: string, id: string): Promise<DocumentRecord>;
+  create(sessionId: string, title: string, body: string): Promise<DocumentRecord>;
+  update(
+    sessionId: string,
+    id: string,
+    baseVersion: number,
+    body: string,
+  ): Promise<DocumentRecord>;
+  preview(body: string): Promise<DocumentPreview>;
+  buildSite(
+    sessionId: string,
+    slug: string,
+    title: string,
+    documentIds: string[],
+  ): Promise<KnowledgeSiteBuild>;
+  exportsDir(): Promise<{ dir: string }>;
+}
+
 export interface ProjectsClient {
   list(): Promise<Project[]>;
   get(id: string): Promise<Project>;
@@ -1534,10 +1878,21 @@ export interface ProjectsClient {
   getAutonomy(id: string): Promise<AutonomyLayer>;
   /** Persist the project's autonomy.Layer override. */
   setAutonomy(id: string, layer: AutonomyLayer): Promise<void>;
+
+  // ── tool-context-budget-01TCBUD01 WP02 ──────────────────────────────
+  /** Read the project's tool-exposure override layer (empty when unset). */
+  getToolExposure(id: string): Promise<ToolExposure>;
+  /** Persist the project's tool-exposure override; an empty layer clears it. */
+  setToolExposure(id: string, exposure: ToolExposure): Promise<void>;
 }
 
 export interface LLMConnectorClient {
   listProviders(): Promise<Provider[]>;
+  /**
+   * Every key the configured profiles use, one row per key, labelled by
+   * scope (local / user_sync / org / team). Read-only; never key bytes.
+   */
+  listCredentialKeys(): Promise<CredentialKey[]>;
   /**
    * startStream begins an assistant completion against `profileID` for
    * `sessionID`. modelOverride (optional) selects a non-default model
@@ -1703,6 +2058,26 @@ export interface MCPClient {
   startStream(id: string): Promise<string>;
   stopStream(id: string): Promise<void>;
   /**
+   * healthSnapshot — the current live-probed health for every installed
+   * recipe, keyed by recipe id (connector-lifecycle-truth-01PMZ303
+   * UNIT-7/UNIT-8). Before UNIT-7, the state behind this call was a
+   * permanently-synthesised "running" for every http/sse recipe; it is
+   * now the real, transport-delegated status. Use
+   * `subscribeHealthChanges` for push updates rather than polling this
+   * repeatedly.
+   */
+  healthSnapshot(): Promise<Record<string, HealthEntry>>;
+  /**
+   * subscribeHealthChanges — registers for live `mcp:health-changed`
+   * push events (UNIT-8, ruling A-2). Returns a subscription id for
+   * `stopStream`. After calling this once, listen for payloads with
+   * `useEventStream<HealthEntry>('mcp:health-changed', handler)` — the
+   * subscription id itself is only needed for teardown, not for
+   * receiving events (the broker delivers on the fixed `view:kind`
+   * topic, not a per-subscription channel).
+   */
+  subscribeHealthChanges(): Promise<string>;
+  /**
    * testRecipe — run a one-shot connection test against the recipe
    * identified by recipeID (mission mcp-server-install-01KQ8TDP, WP07).
    *
@@ -1739,6 +2114,24 @@ export interface MCPClient {
    * full saved recipe should re-fetch via Tools_ListRecipes.
    */
   saveCustomRecipe(req: MCPSaveCustomRecipeRequest): Promise<{ id: string }>;
+  /**
+   * setToolPolicy — the writer for the static permission source
+   * (trust-surfaces-that-fire-01PMZ202 WP24, finding CHAT-05):
+   * `<DataDir>/mcp_servers.json` had a reader
+   * (toolloop.NewStaticResolverFromDataDir) but nothing that ever wrote
+   * it, so a "confirm each use" / "deny" policy could never be produced
+   * from a shipped surface. `tool: '*'` sets a whole-server policy.
+   * The static resolver is read once at chassis boot — this takes
+   * effect on the next restart, not the running session.
+   */
+  setToolPolicy(
+    server: string,
+    tool: string,
+    policy: MCPToolPolicy,
+    reason?: string,
+  ): Promise<void>;
+  /** listToolPolicies — every rule currently persisted in mcp_servers.json. */
+  listToolPolicies(): Promise<MCPToolPolicyRule[]>;
 }
 
 export type {
@@ -1750,6 +2143,8 @@ export type {
   MCPTranslationReport,
   MCPImportWrotePath,
   MCPSaveCustomRecipeRequest,
+  MCPToolPolicy,
+  MCPToolPolicyRule,
   AttachmentLimitsView,
 };
 
@@ -2130,8 +2525,42 @@ export interface SettingsClient {
    * ping failures. Default: true.
    */
   getMCPAutoRestart(): Promise<boolean>;
+  /**
+   * Model-call telemetry settings (llm-call-telemetry-01LLMTEL01 WP02):
+   * the OpenRouter stats pull, retention, and the default-off "Share
+   * model-call telemetry with Fleet" opt-in.
+   */
+  getModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
+  /** Persist them; turning sharing on exports only calls that start afterwards. */
+  setModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  /**
+   * Recovery for a settings file that cannot be read: moves it aside to
+   * settings.json.corrupt-<UTC timestamp> (returned as backupPath), writes
+   * the defaults, and turns settings sync off. Rejects, changing nothing,
+   * when the file reads fine. Desktop-only (no served dispatch).
+   */
+  resetUnreadable(): Promise<SettingsResetUnreadableResult>;
+  /**
+   * The local ML activity store (ml-producer-01MLPRD01 WP11): row counts,
+   * size, retention, and whether new activity is also shared with Fleet.
+   */
+  getMLLocalActivity(): Promise<MLLocalActivity>;
+  /** Days to keep local activity (0 = the 90-day default; 1..3650). */
+  setMLLocalActivityRetention(days: number): Promise<MLLocalActivity>;
+  /** "Delete local activity data": wipes the store, the unsent outbox and task state. */
+  deleteMLLocalActivity(): Promise<MLLocalActivity>;
   /** Persist the MCP auto-restart dial. */
   setMCPAutoRestart(enabled: boolean): Promise<void>;
+
+  // ── tool-context-budget-01TCBUD01 WP02 ──────────────────────────────
+  /**
+   * The user's per-server / per-tool exposure tiers, schema budget and
+   * activation TTL as stored (0 = default), plus the read-only effective
+   * budget and TTL.
+   */
+  getToolExposure(): Promise<ToolExposureSettings>;
+  /** Persist exposure tiers, budget and TTL (0 = default); effective* fields are ignored. Unknown tiers are refused. */
+  setToolExposure(settings: ToolExposureSettings): Promise<void>;
   /** Returns the persisted embedder provider profileId and modelOverride. */
   getEmbedderConfig(): Promise<EmbedderConfigResult>;
   /** Persists embedder provider selection and optional model override.
@@ -2217,6 +2646,14 @@ export interface SettingsClient {
   /** Persist the user's chat custom-instructions text (empty clears it). */
   setChatCustomInstructions(text: string): Promise<void>;
 
+  /**
+   * Returns the vendored risk-rater model comparison
+   * (risk-rated-autonomy-01PMRA01, owner ruling 2026-09-15: 234 calls /
+   * 9 models) the risk-rater-model picker renders alongside each
+   * candidate model. Static reference data — fetch once per view mount.
+   */
+  getRiskRaterBenchmark(): Promise<RiskRaterBenchmark>;
+
   // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
   /** Read the audit-log retention strategy and window. */
   getAuditSettings(): Promise<import('./types').AuditSettings>;
@@ -2230,10 +2667,14 @@ export interface SettingsClient {
    * returns the user's Identity. Returns an error when fleet is disabled.
    */
   fleetSignIn(): Promise<FleetIdentity>;
+  /**
+   * Cancel the in-flight sign-in flow (fleet-session-truth-01DOGF0A FR-5).
+   * The pending fleetSignIn() rejects with "context canceled". No-op when
+   * no flow is running.
+   */
+  fleetSignInCancel(): Promise<void>;
   /** Clear tokens and identity cache. */
   fleetSignOut(): Promise<void>;
-  /** True iff valid fleet tokens exist. */
-  fleetSignedIn(): Promise<boolean>;
   /** Re-call the fleet enroll endpoint and update the cached identity. */
   fleetRefreshIdentity(): Promise<FleetIdentity>;
   /**
@@ -2241,6 +2682,12 @@ export interface SettingsClient {
    * expose ClientID, APIAudience, or any secret fields.
    */
   fleetProfile(): Promise<FleetProfileInfo>;
+  /**
+   * The single fleet-session snapshot (fleet-session-truth-01DOGF0A FR-1).
+   * Components do not call this directly — they read `useFleetSession()`,
+   * which calls it once and then follows `fleet:session-changed`.
+   */
+  fleetSession(): Promise<FleetSessionView>;
 
   // ── fleet-capability-surface-01NDFSEX09 WP11 ────────────────────────────
   /** Return the in-memory fleet capability snapshot. */
@@ -2320,8 +2767,8 @@ export interface PermissionsClient {
  * Scope (WP06): RememberMessage accepts a third arg, one of
  * `'session' | 'project' | 'global'`, defaulting to `'session'` when
  * the caller omits it. PromoteScope moves an existing chunk to a wider
- * scope (move semantics — the original row is deleted and re-inserted
- * with a new ID; UI must refresh after the call).
+ * scope in place and resolves to the SAME id (memory-sync-01MEMSY01
+ * WP03; UI must still refresh after the call to pick up the new scope).
  */
 export interface MemoryClient {
   listChunks(filter?: MemoryListFilter): Promise<MemoryChunk[]>;
@@ -2549,6 +2996,13 @@ export interface ToolsClient {
     reason: string,
     recipeID?: string,
   ): Promise<FSAccessResult>;
+  /**
+   * Every tool server's schema cost and resolved exposure tier
+   * (tool-context-budget-01TCBUD01 §2.5). With sessionId set the tiers
+   * are that session's (override and activated set included); otherwise
+   * projectId's, or the user's default when projectId is empty.
+   */
+  schemaCosts(sessionId: string, projectId: string): Promise<ServerSchemaCost[]>;
 }
 
 /**
@@ -2638,7 +3092,7 @@ export interface SlashcmdClient {
   // ── fleet skill CRUD (fleet-skills-sync-01NDFSEX18 WP04/WP06) ─────────
   /** Returns all fleet-installed skills (catalog + mandated). */
   skillList(): Promise<SkillItem[]>;
-  /** Downloads, verifies, and live-registers a skill from the catalog. */
+  /** Downloads and live-registers a skill from the catalog. NOT signature-verified today — fleet signs only the org config bundle (mandated items); catalog payloads carry no fleet signature (register C-2). */
   skillInstall(catalogID: string, version: string): Promise<void>;
   /** Removes and live-unregisters a skill by its store ID. */
   skillUninstall(skillID: string): Promise<void>;
@@ -2716,6 +3170,20 @@ export interface GraphClient {
   getRunStatus(runID: string): Promise<GraphRunStatus>;
   getRunTrace(runID: string, since: number): Promise<GraphRunTraceEvent[]>;
   resume(runID: string, askResponse: string): Promise<void>;
+  /**
+   * resolveApproval resolves a paused run's pending approval node —
+   * approve or reject, with an optional reason
+   * (approval-node-01PMZC12 UNIT-3/UNIT-7). This is the sibling verb to
+   * `resume`, not a widened form of it: an approval resolution is a
+   * verdict, not free text, and resolving an approval through `resume`
+   * (or an ask through this) is refused server-side.
+   */
+  resolveApproval(
+    runID: string,
+    nodeID: string,
+    approved: boolean,
+    reason: string,
+  ): Promise<void>;
   cancelRun(runID: string): Promise<void>;
   /**
    * materializeRun projects a run — including a chat turn — into a
@@ -2764,9 +3232,10 @@ export interface CompactionClient {
 /**
  * NodesClient — manifest-driven node catalog (mission
  * agent-kernel-graph-node-catalog; WP07). Backs WP06's NodePaletteTree
- * + NodeAttributeEditor; the dev-only ReloadOverrides path is also
- * exposed so the Settings panel can offer a "Reload node catalog"
- * doctor button.
+ * + NodeAttributeEditor; `reloadOverrides`/`listUserOverrides`/`doctor`
+ * back the node-override diagnostics panel mounted directly on
+ * NodePalette.vue (mission controls-and-readouts-that-tell-the-truth-01PMZ808
+ * WP18) — there is no standalone debug view for the node catalog.
  */
 export interface NodesClient {
   /** List every callable kind + archetype (palette tree source). */
@@ -2777,7 +3246,7 @@ export interface NodesClient {
   reloadOverrides(): Promise<NodeReloadResult>;
   /** Inspect the user-override directory; list each YAML's parse status. */
   listUserOverrides(): Promise<NodeUserOverrideInfo[]>;
-  /** Catalog health one-shot for the NodesView debug panel (WP08). */
+  /** Catalog health one-shot for the NodePalette.vue diagnostics panel. */
   doctor(): Promise<NodeDoctorReport>;
 }
 
@@ -2839,6 +3308,22 @@ export interface BranchesClient {
    * (branching-ux-polish-01KQ8TD7 WP02/WP03)
    */
   listWithBranchTree(projectId: string): Promise<SessionWithBranchPointer[]>;
+  /**
+   * Stop a dispatched sub-agent's underlying run and mark its task
+   * cancelled (subagent-control-and-background-tasks-01PMZB11 UNIT-8,
+   * wired to SubagentTab's Abort button in UNIT-10).
+   */
+  abortSubagent(branchID: string): Promise<void>;
+  /** Append a steering message to a dispatched sub-agent's child session. */
+  steerSubagent(branchID: string, message: string): Promise<void>;
+  /**
+   * Arm a dispatched sub-agent's turn-pause signal — finishes the
+   * current turn, starts no further one (owner ruling E-002; NOT
+   * immediate).
+   */
+  pauseSubagent(branchID: string): Promise<void>;
+  /** Clear a dispatched sub-agent's turn-pause signal. */
+  resumeSubagent(branchID: string): Promise<void>;
 }
 
 /**
@@ -3082,6 +3567,12 @@ export interface ContextBootstrapRunStatus {
     budget_limit: number;
   }>;
   error_summary?: string;
+  /**
+   * Why extracted nodes were not shared beyond this device — today always
+   * "personal_requires_share_consent": bootstrap context stays local until
+   * the user shares an entry from Knowledge › Curated (fleet contract WP04).
+   */
+  sharing_skipped?: string;
 }
 
 /** A user-declared trusted person, weighted higher in the confidence model. */
@@ -3294,6 +3785,31 @@ export interface ConfirmClient {
 }
 
 /**
+ * AdviceClient — laya-advisors-01LAYA001 WP07's chip response surface.
+ * The chip itself arrives via the `advice:recommendation` event topic
+ * (AdviceChipPayload, see types.ts); this is the accept/dismiss round
+ * trip back to the advisor seam.
+ */
+export interface AdviceClient {
+  /**
+   * Respond to the most recently shown recommendation for
+   * (sessionID, kindID). `action` is `"accept"` or `"dismiss"`.
+   *
+   * Returns the newly created child session id for a `branch_now`
+   * accept (spec §2: accept invokes the kind's consumer action — for
+   * branch_now that action IS branch creation); an empty string for
+   * every other case, including a successful dismiss. A benign no-op
+   * (empty string, no error) when the chip has already expired
+   * server-side (e.g. the app restarted since it was shown).
+   */
+  respond(
+    sessionID: string,
+    kindID: string,
+    action: 'accept' | 'dismiss',
+  ): Promise<string>;
+}
+
+/**
  * ConfigClient — feature flag reads.
  * (user-slash-commands-01KQ8TD9 WP09)
  */
@@ -3351,13 +3867,195 @@ export interface SentryClient {
   testDsn(dsn: string): Promise<{ ok: boolean; error?: string }>;
 }
 
+// ── local ML engine client (laya-advisors-01LAYA001 WP13) ────────────────
+
+/**
+ * Every value of SidecarStatusView.state. The first seven are
+ * core/mlsidecar.State strings verbatim; `installed_idle` is the one
+ * view-only state (Go: core/rpc/views/sidecar.StateInstalledIdle) for the
+ * normal "installed, engine stopped, starts when needed" condition.
+ */
+export type SidecarState =
+  | 'not_installed'
+  | 'installing'
+  | 'healthy'
+  | 'installed_unhealthy'
+  | 'unverified'
+  | 'contract_unsupported'
+  | 'legacy_unverified'
+  | 'installed_idle';
+
+/** Go: core/rpc/views/sidecar.StatusView. */
+export interface SidecarStatusView {
+  state: SidecarState;
+  /** crash | port_conflict | digest_mismatch | update_pending | legacy_engine | ... ('' when none). */
+  reason: string;
+  detail: string;
+  engineVersion: string;
+  installed: boolean;
+  installedVersion: string;
+  /** false on platforms the engine is not built for. */
+  supported: boolean;
+  /** The single "may the Enable button be offered" bit. */
+  available: boolean;
+  unavailableReason: string;
+  /** What Enable would download — disclosed before the click. */
+  release: { version: string; sizeMB: number };
+  /** Where the engine, its models and its config live on this device. */
+  installLocation: string;
+  updateAvailable: boolean;
+  /**
+   * Advice kinds whose label sync lane is PAUSED (contract mismatch,
+   * unknown kind, refused rows — design A4). Empty when everything
+   * flows; nothing is lost while paused (the cursor holds).
+   */
+  labelLanes: SidecarLaneView[];
+}
+
+/** One paused label lane. */
+export interface SidecarLaneView {
+  kind: string;
+  reason: string;
+  /** The engine's typed error code, when it sent one. */
+  code: string;
+  detail: string;
+  /** Next retry time, RFC3339. */
+  until: string;
+}
+
+export interface SidecarClient {
+  /** Read-only observation (never spawns) + the pre-download disclosure. */
+  status(): Promise<SidecarStatusView>;
+  /** Download, verify, install and start the engine. Blocks for the duration. */
+  enable(): Promise<SidecarStatusView>;
+  /** Install the newer pinned engine. Always an explicit user action. */
+  update(): Promise<SidecarStatusView>;
+  /** Re-attempt to start an installed engine that is not answering. */
+  repair(): Promise<SidecarStatusView>;
+  /** Stop the engine and remove it, its models and its config. */
+  uninstall(): Promise<SidecarStatusView>;
+}
+
+/** The fake client's (and the no-binding fallback's) honest "unavailable" status. */
+export function fakeSidecarStatus(): Promise<SidecarStatusView> {
+  return Promise.resolve({
+    state: 'not_installed',
+    reason: '',
+    detail: '',
+    engineVersion: '',
+    installed: false,
+    installedVersion: '',
+    supported: false,
+    available: false,
+    unavailableReason: 'not available in test mode',
+    release: { version: '', sizeMB: 0 },
+    installLocation: '',
+    updateAvailable: false,
+    labelLanes: [],
+  });
+}
+
 // ── fleet telemetry client (fleet-otel-archival-01NDFSEX11 WP06) ─────────
 
+/** Payload-free export health (Go: settings.FleetTelemetryStatusView). */
+export interface FleetTelemetryStatus {
+  wired: boolean;
+  enrolled: boolean;
+  stored_consent: string;
+  effective_consent: string;
+  org_tier: string;
+  open_conversations: number;
+  /** This USER's per-class preferences as last confirmed by Fleet (not an org default). */
+  opted_in_classes: string[] | null;
+  preferences_fetched_at?: string;
+  pipeline: {
+    active: boolean;
+    log_lane_enabled: boolean;
+    last_export_at?: string;
+    last_export_code?: number;
+    events_accepted: number;
+    events_dropped_inactive: number;
+    events_dropped_gated: number;
+    counts_recorded: number;
+    counts_dropped_inactive: number;
+    counts_dropped_gated: number;
+    exports_ok: number;
+    exports_failed: number;
+    exports_unauthorized: number;
+    exports_identity_mismatch: number;
+    /** "Share model-call telemetry with Fleet" is on (llm-call-telemetry WP02). */
+    model_calls_shared?: boolean;
+    model_calls_exported?: number;
+    model_calls_withheld?: number;
+  };
+  /** Served mode only: the enroll supervisor. */
+  enroll?: {
+    auth_state: string;
+    enrolled: boolean;
+    enroll_attempts: number;
+    enroll_failures: number;
+    last_error?: string;
+    last_enroll_at?: string;
+  };
+}
+
 export interface FleetClient {
+  /** Export health, for diagnosing "enrolled but not reporting". */
+  getTelemetryStatus(): Promise<FleetTelemetryStatus>;
   /** Returns the current fleet telemetry consent level. */
   getTelemetryConsent(): Promise<'none' | 'aggregate' | 'full'>;
   /** Persists a new consent level. Rejects when the org tier is insufficient. */
   setTelemetryConsent(level: 'none' | 'aggregate' | 'full'): Promise<void>;
+  /** Learned-memory sync panel state (memory-sync-01MEMSY01 WP08). */
+  memorySyncStatus(): Promise<MemorySyncStatus>;
+  /** Opt in with scopes ⊆ long_term/global and the accepted disclosure version. */
+  memorySyncEnable(scopes: string[], consentVersion: string): Promise<MemorySyncStatus>;
+  /**
+   * Opt out (Fleet keeps the data). deleteFromFleet erases everything on
+   * Fleet first; confirm must then be exactly "forget-all".
+   */
+  memorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
+  /** Cloud ML consent panel state: a fresh GET /me/ml read (ml-producer-01MLPRD01 WP01). */
+  mlStatus(): Promise<MLStatus>;
+  /**
+   * Acknowledge the notice version that was shown, through the notice button
+   * clicked ("Turn on Offload" or "I have read this"; it picks the ack action
+   * Fleet records). On 409 policy_changed the re-read state comes back with
+   * noticeChanged set (show the notice again).
+   */
+  mlAckNotice(noticeVersion: number, button: string): Promise<MLStatus>;
+  /** The member's own workflow_events opt-in (policy member_choice). */
+  setWorkflowEventsOptIn(optedIn: boolean): Promise<MLStatus>;
+  /** Fleet's pending-approvals hub: everything the member must agree to (WP06). */
+  pendingApprovals(): Promise<PendingApprovals>;
+  /**
+   * Approve one hub item by id. The backend re-reads the list, looks the
+   * action up and sends it only when it is in the harness allowlist. A stale
+   * item comes back as the fresh list with `changed` set.
+   */
+  approveItem(id: string): Promise<PendingApprovals>;
+  /**
+   * "Not now" on an informational item (`localDismiss`): hidden on THIS
+   * device until the item's version changes. Nothing is sent to Fleet —
+   * legal rules a decline is never recorded.
+   */
+  dismissItemLocally(id: string): Promise<PendingApprovals>;
+}
+
+// ── Capabilities client (install-framework-01DOGF0B) ────────────────────────
+
+/**
+ * CapabilitiesClient — the one install framework's generic surface. Every
+ * per-kind install binding (tools.recipes.install, slashcmd.skillInstall,
+ * the workflow catalog install) routes through the same Go pipeline; this
+ * client is what the shared list/detail UI uses for zero-input installs,
+ * uninstalls and updates.
+ */
+export interface CapabilitiesClient {
+  list(filter?: CapabilityFilter): Promise<CapabilityListing>;
+  install(kind: CapabilityKind, id: string, version?: string): Promise<CapabilityItem>;
+  uninstall(kind: CapabilityKind, id: string): Promise<void>;
+  update(kind: CapabilityKind, id: string): Promise<CapabilityItem>;
 }
 
 // ── Catalog client (fleet-share-and-sync-01NDFSEX14 WP02) ───────────────────
@@ -3367,20 +4065,32 @@ export interface CatalogClient {
   publish(input: CatalogPublishInput): Promise<CatalogItemView>;
   /** List catalog items, optionally filtered. */
   list(filter?: CatalogFilter): Promise<CatalogItemView[]>;
-  /** Install a catalog item into the local DataDir. */
+  /** Refused server-side for every kind (install-framework-01DOGF0B WP02). */
   install(catalogID: string, version: string): Promise<void>;
-  /** Remove an installed catalog item. Idempotent. */
+  /** Remove a downloaded catalog payload (installed/ residue). Idempotent. */
   uninstall(kind: string, catalogID: string, version: string): Promise<void>;
   /**
    * List all catalog items currently installed locally.
    * NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
    * UNIT-14 WP19, C2V-24, 2026-08-21): zero `.vue` callers today —
    * `list()` rows already carry an `installed` flag
-   * (MarketplaceView.vue reads `item.installed` directly), which is
+   * (the Capabilities surface's catalog browse — views/capabilities/
+   * catalogBrowse.ts — reads `item.installed` directly), which is
    * the live path. The Go implementation is correct and unused, not
    * broken.
    */
   installed(): Promise<CatalogItemView[]>;
+  /**
+   * Withdraws catalogID from the org listing (fleet-enforcement-truth-01PMZ505
+   * WP11). Distinct from uninstall(), which only removes the local copy.
+   * The server enforces the authorization rule (owner or fleet admin) —
+   * the harness has no publisher identity on the wire to evaluate it
+   * itself, so this shows the action on every listed item, sends the
+   * request, and reports the server's answer. A 403 surfaces as a
+   * forbidden error, distinct from the subscription-tier error used
+   * elsewhere in this client.
+   */
+  unpublish(catalogID: string): Promise<void>;
 }
 
 // ── Sync client (fleet-share-and-sync-01NDFSEX14 WP05) ──────────────────────
@@ -3396,6 +4106,8 @@ export interface SyncClient {
   forcePull(category: string): Promise<void>;
   /** MCPs that arrived via sync but need credentials. */
   pendingMCPSecrets(): Promise<PendingMCPSecret[]>;
+  /** Confirm once that enabled categories may upload, then upload them. */
+  confirmUploads(): Promise<void>;
 }
 
 // ── CedarPublish client (fleet-share-and-sync-01NDFSEX14 WP07) ──────────────
@@ -3430,6 +4142,15 @@ export interface SitesClient {
   logs(site: string, tailLines: number): Promise<string>;
   /** Delete a site and all its deployments. */
   delete(site: string): Promise<void>;
+  /**
+   * Sets one or more declared environment variable values for site
+   * (fleet-enforcement-truth-01PMZ505 WP09). Write-only: values are
+   * accepted here and never surfaced by envList(). This is the ONLY way
+   * secrets reach a site — they must never ride in a deploy manifest.
+   */
+  envSet(site: string, vars: Record<string, string>): Promise<void>;
+  /** Returns declared env var names + metadata for site. Never returns a value. */
+  envList(site: string): Promise<SiteEnvEntry[]>;
 }
 
 // ── Compliance client (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
@@ -3441,11 +4162,24 @@ export interface ComplianceClient {
   archiveNow(): Promise<void>;
   /** Update the local audit retention window. Days must be 30 | 60 | 90 | 365. */
   setRetention(days: number): Promise<void>;
+  /**
+   * Operator recovery action after a hash-chain break: manually advances
+   * the archiver's cursor to toID, clearing the halt so archiveNow() can
+   * proceed again (fleet-enforcement-truth-01PMZ505 WP06). Rejects when
+   * the capability is not enabled or the archiver is not wired.
+   */
+  skipToId(toID: string): Promise<void>;
 }
 
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
+  /**
+   * compactionOverhead returns the running compaction-driven LLM cost
+   * tally (chat-turn-integrity-01PMZ606 WP12, owner ruling X-7 / CK-08).
+   * Zero value, not a rejection, when compaction is disabled.
+   */
+  compactionOverhead(): Promise<CompactionOverheadInfo>;
 
   // openExternalURL forwards to Wails's BrowserOpenURL so the user's
   // default system browser handles the link (vs opening inside the
@@ -3456,6 +4190,7 @@ export interface HarnessClient {
 
   sessions: SessionsClient;
   projects: ProjectsClient;
+  documents: DocumentsClient;
   llm: LLMConnectorClient;
   mcp: MCPClient;
   a2a: A2AClient;
@@ -3495,6 +4230,8 @@ export interface HarnessClient {
   elicit: ElicitClient;
   /** Confirm-each tool-confirmation surface (confirm-each-enforcement-01PMAG05 WP02). */
   confirm: ConfirmClient;
+  /** Advisor-seam chip response surface (laya-advisors-01LAYA001 WP07). */
+  advice: AdviceClient;
   /** Config / feature-flag client (slash-commands WP09). */
   config: ConfigClient;
   /** Model-accessible secrets panel client (model-secret-references-01KW7M5A WP10). */
@@ -3503,10 +4240,14 @@ export interface HarnessClient {
   agents: AgentsClient;
   /** Crash-reporting surface (sentry-error-monitoring-01KX5R8G WP05). */
   sentry: SentryClient;
+  /** Local ML engine install/status surface (laya-advisors-01LAYA001 WP13). */
+  sidecar: SidecarClient;
   /** Fleet telemetry consent surface (fleet-otel-archival-01NDFSEX11 WP06). */
   fleet: FleetClient;
   /** Catalog publish/list/install surface (fleet-share-and-sync-01NDFSEX14 WP02). */
   catalog: CatalogClient;
+  /** The one install framework's surface (install-framework-01DOGF0B). */
+  capabilities: CapabilitiesClient;
   /** Per-category settings sync surface (fleet-share-and-sync-01NDFSEX14 WP05). */
   sync: SyncClient;
   /** Team Cedar policy publish surface (fleet-share-and-sync-01NDFSEX14 WP07). */
@@ -3555,13 +4296,141 @@ export interface HarnessClient {
   ProjectSync_SetArtifactClass(projectID: string, opts: FleetArtifactClassOptionsView): Promise<FleetProjectSyncStatus>;
   Handoff_ListTeam(): Promise<FleetTeamMemberView[]>;
   Handoff_Share(sessionID: string, recipientUserID: string): Promise<void>;
+  Handoff_RecipientDevices(recipientUserID: string): Promise<FleetRecipientDeviceView[]>;
   Handoff_Inbox(): Promise<FleetInboxItemView[]>;
   Handoff_Accept(inboxItemID: string): Promise<FleetAcceptedSessionView>;
+  Handoff_Delete(inboxItemID: string): Promise<void>;
   ContextSync_GenerateRecoveryCode(): Promise<string>;
   ContextSync_ApplyRecoveryCode(code: string): Promise<void>;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
+
+/**
+ * ARRAY_RETURNING_BINDINGS — every `*Bindings` method in
+ * core/rpc/bindings.go whose Go signature is `([]X, error)`.
+ *
+ * Wails marshals a Go `nil` slice to JSON `null`, not `[]`. Every one of
+ * these bindings is declared on WailsBindingsLike as returning
+ * `Promise<T[]>` — never `T[] | null` — so a Go implementation that takes
+ * an early-return-nil path ("not wired yet" guard, empty registry,
+ * disabled-feature short circuit, no rows matched a filter, ...) delivers
+ * `null` to a `ref<T[]>` with zero compile-time signal. The first array
+ * method the view calls on it (`.filter`, `.map`, even a bare `.length`
+ * in a template) throws "null is not an object" / "Cannot read
+ * properties of null".
+ *
+ * This is exactly what took down TasksPanel.vue / BackgroundTaskChip.vue
+ * under a fleet-session-expired state: Tasks_List returns `nil, nil` when
+ * the task registry isn't wired, and Tasks_ListBySession returns `nil,
+ * nil` whenever no task matches the session (the common case — most
+ * sessions have never spawned a background task). The same shape was
+ * found in ~10 other bindings (Unit_ListConflicts when the fleet syncer
+ * is offline, Search_Unified when search is disabled, Shell_PathComplete
+ * on an empty `@` token, Slashcmd_SkillList / Memory_NarrativeFailedList
+ * when their subsystem isn't wired, ...).
+ *
+ * wailsBindings() wraps the raw generated client in a Proxy that
+ * normalises a `null`/`undefined` resolution from exactly these methods
+ * to `[]`, so no individual view has to guard a binding result itself.
+ * Keep this set in sync with bindings.go — `grep -c '(\[\]' core/rpc/bindings.go`
+ * catches drift by count; a name typo here is silently inert (the Proxy
+ * only intercepts an exact match), so prefer regenerating this list over
+ * hand-editing it.
+ */
+const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
+  'Sessions_List', 'Sessions_ListMessages', 'LLM_ListProviders', 'LLM_ListCredentialKeys', 'LLM_ListModels',
+  'LLM_ListCustomTemplates', 'LLM_ListFallbackChains', 'MCP_ListServers', 'MCP_ListToolPolicies', 'A2A_ListCards',
+  'Workflow_ListJobs', 'Trust_ListSecretReferences', 'Context_List', 'Contexts_RecentlyApplied',
+  'Contexts_ContextSearch', 'Bundle_List', 'Trust_ListAnchors', 'CedarPolicy_ListPolicies',
+  'CedarPolicy_RecentDecisions', 'Permissions_ListGrants', 'Permissions_ListPending', 'Audit_ListEntries',
+  'Audit_Filter', 'Audit_ListSavedQueries', 'Logs_Tail', 'Settings_FleetTelemetryOptIns',
+  'Memory_ListChunks', 'Memory_JournalTail', 'Memory_NarrativeFailedList', 'Memory_EmbeddingProbe',
+  'Projects_List', 'Projects_ListSessions', 'Documents_List', 'Artifacts_List', 'Attachments_List',
+  'Attachments_ListResolved', 'Hooks_List', 'Hooks_AvailableBuiltins', 'Tools_ListRecipes',
+  'Tools_CheckRecipePrereqs', 'Shell_PathComplete', 'Slash_List', 'Slashcmd_List',
+  'Slashcmd_SkillList', 'Config_GetFlags', 'Corpus_ListCorpora', 'Corpus_ListFiles',
+  'Corpus_ListChunks', 'Graph_ListGraphs', 'Graph_GetRunTrace', 'Compaction_ListCustomStrategies',
+  'Compaction_GetTierExplain', 'Branches_List', 'Branches_ListWithBranchTree', 'Workflows_List',
+  'Workflows_ScheduleList', 'Workflows_ScheduleRunHistory', 'ScheduledChat_List',
+  'ScheduledChat_History', 'Update_ListSkippedVersions', 'Nodes_Catalog', 'Nodes_ListUserOverrides',
+  'CedarPolicy_ListPlanModeActions', 'Search_Sessions', 'Search_Unified', 'Onboarding_ListStarters',
+  'Elicit_ListPending', 'Confirm_ListPending', 'Secrets_List', 'LLM_ListDetectedLocalRuntimes',
+  'LLM_RescanLocalRuntimes', 'Agents_ListProfiles', 'Sentry_GetLastFive', 'Unit_ListConflicts',
+  'Unit_ResolveLoadable', 'Catalog_List', 'Catalog_Installed', 'Sync_Status',
+  'Sync_PendingMCPSecrets', 'Sites_List', 'Tasks_List', 'Tasks_Tail',
+  'Tasks_ListBySession', 'ACP_ListPeers', 'ACP_ListTraces', 'Handoff_ListTeam',
+  'Handoff_Inbox', 'Handoff_RecipientDevices',
+]);
+
+/**
+ * reasoningConfigToWire / wireToReasoningConfig — the camelCase <->
+ * snake_case translation at the Sessions_{Get,Set}KnobsDefault boundary
+ * (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11). See
+ * WireSessionKnobs' doc comment in types.ts: Go llm.RequestKnobs.Reasoning
+ * marshals as `openai_effort` / `anthropic_thinking_budget`, not the
+ * camelCase SessionTunePanel.vue edits. Retagging the Go struct was
+ * rejected for the same reason cmd_effort.go's fix rejected it — that
+ * struct is also KnobsToParams' and the send-path merge's wire type, so
+ * changing its tags would silently break both. The translation lives
+ * here instead, the one place both directions cross the RPC boundary.
+ */
+function reasoningConfigToWire(
+  knobs: ReasoningConfig | null,
+): WireSessionKnobs | null {
+  if (!knobs) return null;
+  const reasoning: WireSessionKnobs['reasoning'] = {};
+  if (knobs.openAIEffort) reasoning.openai_effort = knobs.openAIEffort;
+  if (knobs.anthropicThinkingBudget && knobs.anthropicThinkingBudget > 0) {
+    reasoning.anthropic_thinking_budget = knobs.anthropicThinkingBudget;
+  }
+  if (Object.keys(reasoning).length === 0) return null;
+  return { reasoning };
+}
+
+function wireToReasoningConfig(
+  wire: WireSessionKnobs | null | undefined,
+): ReasoningConfig | null {
+  if (!wire?.reasoning) return null;
+  const cfg: ReasoningConfig = {};
+  if (wire.reasoning.openai_effort) {
+    cfg.openAIEffort = wire.reasoning.openai_effort;
+  }
+  if (
+    wire.reasoning.anthropic_thinking_budget &&
+    wire.reasoning.anthropic_thinking_budget > 0
+  ) {
+    cfg.anthropicThinkingBudget = wire.reasoning.anthropic_thinking_budget;
+  }
+  return Object.keys(cfg).length > 0 ? cfg : null;
+}
+
+/**
+ * Wraps the raw Wails bindings object so every call listed in
+ * ARRAY_RETURNING_BINDINGS resolves `null`/`undefined` to `[]` instead of
+ * handing a JS `null` to code that trusts the declared `Promise<T[]>`
+ * return type. See ARRAY_RETURNING_BINDINGS for why this exists.
+ */
+function withArrayNullSafety(bindings: WailsBindingsLike): WailsBindingsLike {
+  return new Proxy(bindings, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof prop !== 'string' || typeof value !== 'function' || !ARRAY_RETURNING_BINDINGS.has(prop)) {
+        return value;
+      }
+      return (...args: unknown[]) =>
+        Promise.resolve((value as (...a: unknown[]) => unknown).apply(target, args)).then(
+          (result) => result ?? [],
+        );
+    },
+  }) as WailsBindingsLike;
+}
+
+// Memoized so repeated calls don't allocate a new Proxy per RPC — the
+// underlying window.go.rpc.Bindings reference is a stable singleton once
+// Wails has injected it.
+let _cachedRawBindings: WailsBindingsLike | undefined;
+let _cachedWrappedBindings: WailsBindingsLike | undefined;
 
 function wailsBindings(): WailsBindingsLike {
   const b = (typeof window !== 'undefined' && window.go?.rpc?.Bindings) || undefined;
@@ -3570,7 +4439,11 @@ function wailsBindings(): WailsBindingsLike {
       'window.go.rpc.Bindings is not available. The harness frontend must run inside Wails.',
     );
   }
-  return b;
+  if (b !== _cachedRawBindings) {
+    _cachedRawBindings = b;
+    _cachedWrappedBindings = withArrayNullSafety(b);
+  }
+  return _cachedWrappedBindings as WailsBindingsLike;
 }
 
 // Lazy import: BrowserOpenURL is loaded only when a real Wails runtime
@@ -3604,6 +4477,7 @@ export function createHarnessClient(): HarnessClient {
   return {
     shellStatus: () => b().ShellStatus(),
     appInfo: () => b().AppInfo(),
+    compactionOverhead: () => b().CompactionOverhead(),
     openExternalURL,
 
     sessions: {
@@ -3634,6 +4508,10 @@ export function createHarnessClient(): HarnessClient {
         b().Sessions_ResumeMessage(sessionId, messageId),
       getUsage: (id: string): Promise<SessionUsage> =>
         b().Sessions_GetUsage(id),
+      modelCalls: async (id: string, limit = 0): Promise<ModelCall[]> =>
+        (await b().Sessions_ModelCalls(id, limit)) ?? [],
+      turnRuns: (sessionId: string): Promise<TurnRun[]> =>
+        b().Sessions_TurnRuns(sessionId),
       saveAsArtifact: (sessionId, messageId, title, rangeStart, rangeEnd) =>
         b().Sessions_SaveAsArtifact(
           sessionId,
@@ -3647,6 +4525,17 @@ export function createHarnessClient(): HarnessClient {
       getAutonomy: (id) => b().Sessions_GetAutonomy(id),
       setAutonomy: (id, layer) => b().Sessions_SetAutonomy(id, layer),
       resolveAutonomy: (id) => b().Sessions_ResolveAutonomy(id),
+      getKnobsDefault: (id) =>
+        b()
+          .Sessions_GetKnobsDefault(id)
+          .then(wireToReasoningConfig),
+      setKnobsDefault: (id, knobs) =>
+        b().Sessions_SetKnobsDefault(id, reasoningConfigToWire(knobs)),
+      getToolExposure: (id) => b().Sessions_GetToolExposure(id),
+      setToolExposure: (id, exposure) =>
+        b().Sessions_SetToolExposure(id, exposure),
+      loadTools: (id, servers, tools, sticky) =>
+        b().Sessions_LoadTools(id, servers, tools, sticky),
       export: (sessionId, format) => b().Sessions_Export(sessionId, format),
     },
     artifacts: {
@@ -3680,9 +4569,24 @@ export function createHarnessClient(): HarnessClient {
       listSessions: (projectId) => b().Projects_ListSessions(projectId),
       getAutonomy: (id) => b().Projects_GetAutonomy(id),
       setAutonomy: (id, layer) => b().Projects_SetAutonomy(id, layer),
+      getToolExposure: (id) => b().Projects_GetToolExposure(id),
+      setToolExposure: (id, exposure) =>
+        b().Projects_SetToolExposure(id, exposure),
+    },
+    documents: {
+      list: (sessionId) => b().Documents_List(sessionId),
+      get: (sessionId, id) => b().Documents_Get(sessionId, id),
+      create: (sessionId, title, body) => b().Documents_Create(sessionId, title, body),
+      update: (sessionId, id, baseVersion, body) =>
+        b().Documents_Update(sessionId, id, baseVersion, body),
+      preview: (body) => b().Documents_Preview(body),
+      buildSite: (sessionId, slug, title, documentIds) =>
+        b().Documents_BuildSite(sessionId, slug, title, documentIds),
+      exportsDir: () => b().Documents_ExportsDir(),
     },
     llm: {
       listProviders: () => b().LLM_ListProviders(),
+      listCredentialKeys: () => b().LLM_ListCredentialKeys(),
       startStream: (profileID, sessionID, modelOverride) =>
         b().LLM_StartStream(profileID, sessionID, modelOverride ?? ''),
       stopStream: (id) => b().LLM_StopStream(id),
@@ -3716,10 +4620,22 @@ export function createHarnessClient(): HarnessClient {
       listServers: () => b().MCP_ListServers(),
       startStream: (id) => b().MCP_StartStream(id),
       stopStream: (id) => b().MCP_StopStream(id),
+      healthSnapshot: async () => {
+        const raw = await b().MCP_HealthSnapshot();
+        const out: Record<string, HealthEntry> = {};
+        for (const [id, entry] of Object.entries(raw)) {
+          out[id] = adaptHealthEntry(entry);
+        }
+        return out;
+      },
+      subscribeHealthChanges: () => b().MCP_SubscribeHealthChanges(),
       testRecipe: (recipeID, env = {}, config = {}) =>
         b().MCP_TestRecipe(recipeID, env, config),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
       saveCustomRecipe: (req) => b().MCP_SaveCustomRecipe(req),
+      setToolPolicy: (server, tool, policy, reason = '') =>
+        b().MCP_SetToolPolicy(server, tool, policy, reason),
+      listToolPolicies: () => b().MCP_ListToolPolicies(),
     },
     a2a: {
       listCards: () => b().A2A_ListCards(),
@@ -3867,7 +4783,15 @@ export function createHarnessClient(): HarnessClient {
       getAutonomy: () => b().Settings_GetAutonomy(),
       setAutonomy: (layer) => b().Settings_SetAutonomy(layer),
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
+      getModelCallTelemetry: () => b().Settings_GetModelCallTelemetry(),
+      setModelCallTelemetry: (mc) => b().Settings_SetModelCallTelemetry(mc),
+      resetUnreadable: () => b().Settings_ResetUnreadable(),
+      getMLLocalActivity: () => b().Settings_GetMLLocalActivity(),
+      setMLLocalActivityRetention: (days) => b().Settings_SetMLLocalActivityRetention(days),
+      deleteMLLocalActivity: () => b().Settings_DeleteMLLocalActivity(),
       setMCPAutoRestart: (enabled) => b().Settings_SetMCPAutoRestart(enabled),
+      getToolExposure: () => b().Settings_GetToolExposure(),
+      setToolExposure: (settings) => b().Settings_SetToolExposure(settings),
       getEmbedderConfig: () => b().Settings_GetEmbedderConfig(),
       setEmbedderConfig: (profileID, modelOverride) =>
         b().Settings_SetEmbedderConfig(profileID, modelOverride),
@@ -3893,15 +4817,17 @@ export function createHarnessClient(): HarnessClient {
       setAutoTitleEnabled: (enabled) => b().Settings_SetAutoTitleEnabled(enabled),
       getChatCustomInstructions: () => b().Settings_GetChatCustomInstructions(),
       setChatCustomInstructions: (text) => b().Settings_SetChatCustomInstructions(text),
+      getRiskRaterBenchmark: () => b().Settings_GetRiskRaterBenchmark(),
       // audit-log-enhancement-01KX5R8F WP07
       getAuditSettings: () => b().Settings_GetAuditSettings(),
       setAuditSettings: (s) => b().Settings_SetAuditSettings(s),
       // fleet-auth-foundation-01NDFSEX08 WP05
       fleetSignIn: () => b().Settings_FleetSignIn(),
       fleetSignOut: () => b().Settings_FleetSignOut(),
-      fleetSignedIn: () => b().Settings_FleetSignedIn(),
+      fleetSignInCancel: () => b().Settings_FleetSignInCancel(),
       fleetRefreshIdentity: () => b().Settings_FleetRefreshIdentity(),
       fleetProfile: () => b().Settings_FleetProfile(),
+      fleetSession: () => b().Settings_FleetSession(),
       // fleet-capability-surface-01NDFSEX09 WP11
       fleetCapabilities: () => b().Settings_FleetCapabilities(),
       fleetRefreshCapabilities: () => b().Settings_FleetRefreshCapabilities(),
@@ -3995,6 +4921,8 @@ export function createHarnessClient(): HarnessClient {
         b().Tools_PickDirectory(title ?? '', defaultDir ?? ''),
       requestAdditionalAllowedDir: (path, reason, recipeID = 'filesystem') =>
         b().Tools_RequestAdditionalAllowedDir(recipeID, path, reason),
+      schemaCosts: async (sessionId, projectId) =>
+        (await b().Tools_SchemaCosts(sessionId, projectId)) ?? [],
     },
     shell: {
       openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
@@ -4047,6 +4975,8 @@ export function createHarnessClient(): HarnessClient {
       getRunStatus: (runID) => b().Graph_GetRunStatus(runID),
       getRunTrace: (runID, since) => b().Graph_GetRunTrace(runID, since),
       resume: (runID, askResponse) => b().Graph_Resume(runID, askResponse),
+      resolveApproval: (runID, nodeID, approved, reason) =>
+        b().Graph_ResolveApproval(runID, nodeID, approved, reason),
       cancelRun: (runID) => b().Graph_CancelRun(runID),
       materializeRun: (runID) => b().Graph_MaterializeRun(runID),
     },
@@ -4082,6 +5012,10 @@ export function createHarnessClient(): HarnessClient {
         b().Branches_SetAdvisorDismissed(sessionID, dismissed),
       listWithBranchTree: (projectId) =>
         b().Branches_ListWithBranchTree(projectId),
+      abortSubagent: (branchID) => b().Subagent_Abort(branchID),
+      steerSubagent: (branchID, message) => b().Subagent_Steer(branchID, message),
+      pauseSubagent: (branchID) => b().Subagent_Pause(branchID),
+      resumeSubagent: (branchID) => b().Subagent_Resume(branchID),
     },
     nodes: {
       catalog: () => b().Nodes_Catalog(),
@@ -4153,6 +5087,10 @@ export function createHarnessClient(): HarnessClient {
       cancelBatch: (batchID, reason) => b().Confirm_CancelBatch(batchID, reason),
       listPending: (sessionID) => b().Confirm_ListPending(sessionID),
     },
+    advice: {
+      respond: (sessionID, kindID, action) =>
+        b().Advice_Respond(sessionID, kindID, action),
+    },
     config: {
       getFlags: () => b().Config_GetFlags(),
     },
@@ -4189,6 +5127,14 @@ export function createHarnessClient(): HarnessClient {
           .Sentry_TestDSN(dsn)
           .then((r) => ({ ok: r.OK, error: r.Error || undefined })),
     },
+    // ── local ML engine (laya-advisors-01LAYA001 WP13) ─────────────────────
+    sidecar: {
+      status: () => b().Sidecar_Status(),
+      enable: () => b().Sidecar_Enable(),
+      update: () => b().Sidecar_Update(),
+      repair: () => b().Sidecar_Repair(),
+      uninstall: () => b().Sidecar_Uninstall(),
+    },
     // ── fleet telemetry (fleet-otel-archival-01NDFSEX11 WP06) ──────────────
     fleet: {
       getTelemetryConsent: () =>
@@ -4196,6 +5142,26 @@ export function createHarnessClient(): HarnessClient {
           .Fleet_GetTelemetryConsent()
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
       setTelemetryConsent: (level) => b().Fleet_SetTelemetryConsent(level),
+      getTelemetryStatus: () => b().Fleet_TelemetryStatus(),
+      memorySyncStatus: () => b().Fleet_MemorySyncStatus(),
+      memorySyncEnable: (scopes, consentVersion) => b().Fleet_MemorySyncEnable(scopes, consentVersion),
+      memorySyncDisable: (deleteFromFleet, confirm) => b().Fleet_MemorySyncDisable(deleteFromFleet, confirm),
+      mlStatus: () => b().Fleet_MLStatus(),
+      mlAckNotice: (noticeVersion, button) => b().Fleet_MLAckNotice(noticeVersion, button),
+      setWorkflowEventsOptIn: (optedIn) => b().Fleet_SetWorkflowEventsOptIn(optedIn),
+      pendingApprovals: () => b().Fleet_PendingApprovals(),
+      approveItem: (id) => b().Fleet_ApproveItem(id),
+      dismissItemLocally: (id) => b().Fleet_DismissItemLocally(id),
+    },
+    // ── Capabilities (install-framework-01DOGF0B) ─────────────────────────
+    capabilities: {
+      list: (filter = {}) =>
+        b()
+          .Capability_List(filter)
+          .then((l) => ({ items: l?.items ?? [], unavailable: l?.unavailable ?? [] })),
+      install: (kind, id, version = '') => b().Capability_Install(kind, id, version),
+      uninstall: (kind, id) => b().Capability_Uninstall(kind, id),
+      update: (kind, id) => b().Capability_Update(kind, id),
     },
     // ── Catalog (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────
     catalog: {
@@ -4204,6 +5170,8 @@ export function createHarnessClient(): HarnessClient {
       install: (catalogID, version) => b().Catalog_Install(catalogID, version),
       uninstall: (kind, catalogID, version) => b().Catalog_Uninstall(kind, catalogID, version),
       installed: () => b().Catalog_Installed(),
+      // fleet-enforcement-truth-01PMZ505 WP11.
+      unpublish: (catalogID) => b().Catalog_Unpublish(catalogID),
     },
     // ── Sync (fleet-share-and-sync-01NDFSEX14 WP05) ────────────────────────
     sync: {
@@ -4212,6 +5180,7 @@ export function createHarnessClient(): HarnessClient {
       forcePush: (category) => b().Sync_ForcePush(category),
       forcePull: (category) => b().Sync_ForcePull(category),
       pendingMCPSecrets: () => b().Sync_PendingMCPSecrets(),
+      confirmUploads: () => b().Sync_ConfirmUploads(),
     },
     // ── CedarPublish (fleet-share-and-sync-01NDFSEX14 WP07) ──────────────
     cedarPublish: {
@@ -4224,12 +5193,17 @@ export function createHarnessClient(): HarnessClient {
       status: (site) => b().Sites_Status(site),
       logs: (site, tailLines) => b().Sites_Logs(site, tailLines),
       delete: (site) => b().Sites_Delete(site),
+      // fleet-enforcement-truth-01PMZ505 WP09.
+      envSet: (site, vars) => b().Sites_EnvSet(site, vars),
+      envList: (site) => b().Sites_EnvList(site),
     },
     // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
     compliance: {
       status: () => b().Compliance_Status(),
       archiveNow: () => b().Compliance_ArchiveNow(),
       setRetention: (days) => b().Compliance_SetRetention(days),
+      // fleet-enforcement-truth-01PMZ505 WP06.
+      skipToId: (toID) => b().Compliance_SkipToID(toID),
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: () => b().Unit_SyncStatus(),
@@ -4266,8 +5240,10 @@ export function createHarnessClient(): HarnessClient {
     ProjectSync_SetArtifactClass: (projectID, opts) => b().ProjectSync_SetArtifactClass(projectID, opts),
     Handoff_ListTeam: () => b().Handoff_ListTeam(),
     Handoff_Share: (sessionID, recipientUserID) => b().Handoff_Share(sessionID, recipientUserID),
+    Handoff_RecipientDevices: (recipientUserID) => b().Handoff_RecipientDevices(recipientUserID),
     Handoff_Inbox: () => b().Handoff_Inbox(),
     Handoff_Accept: (inboxItemID) => b().Handoff_Accept(inboxItemID),
+    Handoff_Delete: (inboxItemID) => b().Handoff_Delete(inboxItemID),
     ContextSync_GenerateRecoveryCode: () => b().ContextSync_GenerateRecoveryCode(),
     ContextSync_ApplyRecoveryCode: (code) => b().ContextSync_ApplyRecoveryCode(code),
   };
@@ -4371,43 +5347,21 @@ export function createUnsupportedServedClient(): HarnessClient {
  * event bus so `useEventStream(topic, …)` receives it exactly as it would
  * over the Wails bridge on the desktop — no per-topic component changes.
  *
- * Keep this list in sync with `passthroughTopics` in core/serve/wsstream.go.
- * A topic present there but missing here is delivered to the browser and
- * then dropped on the floor, which looks to the user like the backend
- * hanging.
+ * Re-exported from the GENERATED servedStreamTopics.gen.ts (findings
+ * #63/#62): this used to be a hand-maintained array that had to be kept
+ * in sync with `passthroughTopics` by hand, plus a second hand-copied
+ * mirror in harnessClient.wp06Overlay.test.ts — the three-way drift that
+ * let mcp:health-changed go missing from all three at once. There is now
+ * exactly one authored list (passthroughTopics in wsstream.go); this one
+ * is derived by `go generate ./core/serve/...` and drift is caught by
+ * scripts/ci/check-codegen.sh, not by a runtime parity test. A topic
+ * missing from passthroughTopics is delivered to the browser and then
+ * dropped on the floor, which looks to the user like the backend
+ * hanging — that failure mode still exists, it just can no longer be
+ * caused by this file falling out of sync, because this file has no
+ * independent content to fall out of sync.
  */
-export const SERVED_STREAM_TOPICS = [
-  // Chat streaming.
-  'llm:stream-chunk',
-  'llm:stream-closed',
-  'llm:fallback-attempted',
-  // Per-turn accounting rendered inline in the chat surface.
-  'session.usage.updated',
-  'cost.threshold.crossed',
-  // Interactive gates. A tool call BLOCKS on the user's answer, so a
-  // dropped permission-pending event reads as "the harness hung".
-  'bash:permission-pending',
-  'cred:permission-pending',
-  'fs:permission-pending',
-  'tool:permission-pending',
-  // Blocking elicitation (kenaz__ask_user_question).
-  'elicit:pending',
-  // Confirm-each tool confirmation. Same reasoning as the permission
-  // gates above and then some: the tool call is parked with NO deadline,
-  // so a dropped frame is not a missed notification — it is a turn that
-  // never resumes.
-  'tool:confirm-pending',
-  // Mid-turn context-overflow recovery (01PMGX01 WP17). The backend
-  // compacted the session and re-drove the turn; the reply is still
-  // coming. Dropping this leaves the compaction pause looking like a
-  // hang — the same failure shape as the gates above, minus the block.
-  'chat:overflow-recovery',
-  // Boot-time migration drift, severity:"error" only
-  // (upgrade-path-coverage-01PMUG01 WP04, FR-3c). useEventToasts.ts
-  // surfaces a persistent toast so a served workbench user with a
-  // corrupted ledger isn't left with no signal at all.
-  'storage.migration.drift-detected',
-] as const;
+export { SERVED_STREAM_TOPICS };
 
 /**
  * SERVED_STREAM_TRUNCATED is the transport-level event the served server
@@ -4707,6 +5661,9 @@ export function createServedHarnessClient(opts?: {
        */
       listProviders: () => transport.call<Provider[]>('LLM_ListProviders'),
 
+      /** listCredentialKeys — READ-ONLY, the same projection as desktop. */
+      listCredentialKeys: () => transport.call<CredentialKey[]>('LLM_ListCredentialKeys'),
+
       /**
        * startStream / stopStream — the chat turn itself.
        *
@@ -4736,6 +5693,46 @@ export function createServedHarnessClient(opts?: {
       // flow needs them, and an edit form that cannot succeed is worse
       // than none.
       list: () => transport.call<Project[]>('Projects_List'),
+    },
+
+    // The whole Documents flow — list, open, edit with conflict detection,
+    // preview, build a local site into the workspace — completes inside a
+    // workbench, so every method is wired (contracts/documents-rpc.md §5).
+    documents: {
+      list: (sessionId) =>
+        transport.call<DocumentSummary[]>('Documents_List', { sessionId }),
+      get: (sessionId, id) =>
+        transport.call<DocumentRecord>('Documents_Get', { sessionId, id }),
+      create: (sessionId, title, body) =>
+        transport.call<DocumentRecord>('Documents_Create', { sessionId, title, body }),
+      update: (sessionId, id, baseVersion, body) =>
+        transport.call<DocumentRecord>('Documents_Update', {
+          sessionId,
+          id,
+          baseVersion,
+          body,
+        }),
+      preview: (body) => transport.call<DocumentPreview>('Documents_Preview', { body }),
+      buildSite: (sessionId, slug, title, documentIds) =>
+        transport.call<KnowledgeSiteBuild>('Documents_BuildSite', {
+          sessionId,
+          slug,
+          title,
+          documentIds,
+        }),
+      exportsDir: () => transport.call<{ dir: string }>('Documents_ExportsDir', {}),
+    },
+
+    // Agents_* — sub-agent profile registry CRUD, ported to served mode so
+    // a workbench can configure named Sonnet/Opus/Fable delegation profiles
+    // (contracts/agents-served-rpc.md). Full family, no partial overlay.
+    agents: {
+      listProfiles: () =>
+        transport.call<import('./types').AgentProfileSummary[]>('Agents_ListProfiles', {}),
+      loadProfile: (id) =>
+        transport.call<import('./types').AgentProfile>('Agents_LoadProfile', { id }),
+      saveProfile: (profile) => transport.call<void>('Agents_SaveProfile', profile),
+      deleteProfile: (id) => transport.call<void>('Agents_DeleteProfile', { id }),
     },
 
     permissions: {
@@ -4769,6 +5766,27 @@ export function createServedHarnessClient(opts?: {
         transport.call<PermissionRequest[]>('Permissions_ListPending'),
     },
 
+    // Settings_FleetSession — the only settings method core/serve answers
+    // (fleet-session-truth-01DOGF0A FR-1). Everything else under settings
+    // stays an honest ServedUnsupportedError.
+    settings: {
+      ...base.settings,
+      fleetSession: () => transport.call<FleetSessionView>('Settings_FleetSession'),
+    },
+
+    // Fleet telemetry consent + status: the workbench is where everyday work
+    // happens, so consent must be settable here or a workbench never reports.
+    fleet: {
+      ...base.fleet,
+      getTelemetryConsent: () =>
+        transport
+          .call<string>('Fleet_GetTelemetryConsent')
+          .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
+      setTelemetryConsent: (level) =>
+        transport.call<void>('Fleet_SetTelemetryConsent', { level }),
+      getTelemetryStatus: () => transport.call<FleetTelemetryStatus>('Fleet_TelemetryStatus'),
+    },
+
     config: {
       ...base.config,
 
@@ -4778,6 +5796,26 @@ export function createServedHarnessClient(opts?: {
       // kill (served-mode-is-a-real-mode-01PMZ707 WP04).
       getFlags: () => transport.call<FeatureFlagInfo[]>('Config_GetFlags'),
     },
+  };
+}
+
+/**
+ * fakeFleetSession — the fake client's fleet-session snapshot: signed out,
+ * nothing granted. Exported so tests can start from a valid shape.
+ */
+export function fakeFleetSession(
+  overrides: Partial<FleetSessionView> = {},
+): FleetSessionView {
+  const lane = { status: 'unknown', consecutiveFailures: 0 };
+  return {
+    state: 'signed_out',
+    autoRetry: true,
+    tokensUsable: false,
+    claims: { hasSubject: false, hasOrgClaim: false },
+    capabilities: { tier: '', enabled: {}, fetchedAt: '', source: 'default-deny' },
+    sync: { contextSync: { ...lane }, unitPoll: { ...lane }, telemetry: { ...lane }, catalogRevocation: { ...lane } },
+    updatedAt: '',
+    ...overrides,
   };
 }
 
@@ -4811,6 +5849,18 @@ export function createFakeHarnessClient(
       goVersion: '',
       platform: 'fake',
       windowSize: { width: 1280, height: 800 },
+    }),
+    compactionOverhead: async () => ({
+      total: 0,
+      calls: 0,
+      indeterminateCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      autoTitleTotal: 0,
+      autoTitleCalls: 0,
+      autoTitleIndeterminateCalls: 0,
+      autoTitleInputTokens: 0,
+      autoTitleOutputTokens: 0,
     }),
     openExternalURL: () => {
       // No-op in fake; tests assert the call shape via vi.fn() seeds.
@@ -4864,6 +5914,8 @@ export function createFakeHarnessClient(
         subscriptionId: `fake-resume-${Math.random().toString(36).slice(2, 8)}`,
         originalMessageId: messageId,
       }),
+      turnRuns: async () => [],
+      modelCalls: async () => [],
       getUsage: async () => ({
         promptTokens: 0,
         completionTokens: 0,
@@ -4898,12 +5950,27 @@ export function createFakeHarnessClient(
           recapStyle: 'brief',
           continueOnError: 'retry-once',
           destructiveActionPosture: 'confirm',
+          riskThreshold: 40,
           sourceTrace: {},
           tier: 'default',
         },
         global: { level: null, overrides: {} },
         project: { level: null, overrides: {} },
         session: { level: null, overrides: {} },
+      }),
+      getKnobsDefault: async () => null,
+      setKnobsDefault: noop,
+      getToolExposure: async () => ({
+        exposure: {},
+        activations: [],
+        org: { settings: [], schemaBudgetTokens: 0, bundleId: 0 },
+      }),
+      setToolExposure: noop,
+      loadTools: async (_id, servers, tools) => ({
+        loaded: [],
+        loaded_by_server: {},
+        not_loaded: [...servers, ...tools].map((name) => ({ name, reason: 'unknown' })),
+        summary: 'loaded no tools',
       }),
       export: async (_sessionId, _format) => ({ path: '/fake/export.md', byteCount: 0 }),
     },
@@ -4931,9 +5998,31 @@ export function createFakeHarnessClient(
       listSessions: async () => [],
       getAutonomy: async () => ({ level: null, overrides: {} }),
       setAutonomy: noop,
+      getToolExposure: async () => ({}),
+      setToolExposure: noop,
+    },
+    documents: {
+      list: async () => [],
+      get: async () => {
+        throw new Error('documents: document_not_found: no document with that id is visible in this session');
+      },
+      create: async () => {
+        throw new Error('documents: unavailable: the fake client has no document store');
+      },
+      update: async () => {
+        throw new Error('documents: unavailable: the fake client has no document store');
+      },
+      preview: async () => ({ html: '', sanitized: false, byteSize: 0 }),
+      buildSite: async () => {
+        throw new Error('documents: unavailable: the fake client has no document store');
+      },
+      exportsDir: async () => {
+        throw new Error('documents: unavailable: the fake client has no document store');
+      },
     },
     llm: {
       listProviders: async () => [],
+      listCredentialKeys: async () => [],
       startStream: async () => 'fake-sub',
       stopStream: noop,
       addProvider: noop,
@@ -4995,6 +6084,8 @@ export function createFakeHarnessClient(
       listServers: async () => [],
       startStream: async () => 'fake-sub',
       stopStream: noop,
+      healthSnapshot: async () => ({}),
+      subscribeHealthChanges: async () => 'fake-health-sub',
       importClaudeDesktopConfig: async () => ({
         report: {
           entries: [],
@@ -5016,6 +6107,8 @@ export function createFakeHarnessClient(
         duration_ms: 1,
       }),
       saveCustomRecipe: async (req) => ({ id: req.id }),
+      setToolPolicy: noop,
+      listToolPolicies: async () => [],
     },
     a2a: {
       listCards: async () => [],
@@ -5081,6 +6174,7 @@ export function createFakeHarnessClient(
         accepted_nodes: 1,
         accepted_edges: 0,
         conflicts: [],
+        effective_layer: _req.layer,
       }),
       promote: async (_nodeID: string) => ({
         updated_node_id: _nodeID,
@@ -5232,7 +6326,27 @@ export function createFakeHarnessClient(
       getAutonomy: async () => ({ level: null, overrides: {} }),
       setAutonomy: noop,
       getMCPAutoRestart: async () => true,
+      getModelCallTelemetry: async () => ({
+        statsPullEnabled: true,
+        retentionDays: 0,
+        effectiveRetentionDays: 30,
+        shareWithFleet: false,
+      }),
+      setModelCallTelemetry: noop,
+      resetUnreadable: async () => ({ backupPath: '' }),
+      getMLLocalActivity: async () => fakeMLLocalActivity(),
+      setMLLocalActivityRetention: async (days: number) => fakeMLLocalActivity(days),
+      deleteMLLocalActivity: async () => fakeMLLocalActivity(),
       setMCPAutoRestart: noop,
+      getToolExposure: async () => ({
+        exposure: {},
+        schemaBudgetTokens: 0,
+        activationTtlTurns: 0,
+        effectiveSchemaBudgetTokens: 24000,
+        effectiveActivationTtlTurns: 6,
+        org: { settings: [], schemaBudgetTokens: 0, bundleId: 0 },
+      }),
+      setToolExposure: noop,
       getEmbedderConfig: async () => ({ profileId: '', modelOverride: '' }),
       setEmbedderConfig: noop,
       getShowPerMessageTokenMeter: async () => false,
@@ -5259,6 +6373,37 @@ export function createFakeHarnessClient(
       setAutoTitleEnabled: noop,
       getChatCustomInstructions: async () => '',
       setChatCustomInstructions: noop,
+      // risk-rated-autonomy-01PMRA01: a small representative fixture, not
+      // the full 9-model vendored table — one benchmarked row (the
+      // openrouter default) so picker tests can assert real numbers
+      // render, plus enough shape to exercise the "unbenchmarked" badge
+      // path for any model id the fixture doesn't cover.
+      getRiskRaterBenchmark: async () => ({
+        provenance: {
+          benchmark_date: '2026-09-15',
+          calls: 234,
+          method: 'fake-client fixture — see core/policy/risk/data/rater_benchmark.json for the real vendored data',
+        },
+        models: [
+          {
+            id: 'qwen/qwen-2.5-7b-instruct',
+            label: 'Qwen 2.5 7B Instruct',
+            measured_via: 'openrouter',
+            data_available: true,
+            bands_exact: 4,
+            bands_adjacent: 1,
+            bands_miss: 0,
+            injection_raw_score: 100,
+            injection_raw_note: '',
+            reliability_5s_pct: 96.2,
+            reliability_30s_pct: 100.0,
+            median_latency_ms: 467.9,
+            p90_latency_ms: 851.7,
+            cost_per_rating_usd: 0.0000592,
+            notes: 'openrouter provider default (owner ruling 3, 2026-09-15).',
+          },
+        ],
+      }),
       // audit-log-enhancement-01KX5R8F WP07; retention_enforced added by
       // audit-that-tells-the-truth-01PMZA10 UNIT-4 (spec D-8) — the fake
       // reports false, matching the honest pre-UNIT-8 default the real
@@ -5270,13 +6415,14 @@ export function createFakeHarnessClient(
         userId: '', orgId: '', teamId: '',
       }),
       fleetSignOut: noop,
-      fleetSignedIn: async () => false,
+      fleetSignInCancel: noop,
       fleetRefreshIdentity: async () => ({
         userId: '', orgId: '', teamId: '',
       }),
       fleetProfile: async () => ({
         name: 'prod', badgeColor: '', fleetBaseUrl: '', configured: false,
       }),
+      fleetSession: async () => fakeFleetSession(),
       // fleet-capability-surface-01NDFSEX09 WP11
       fleetCapabilities: async () => ({
         tier: '', enabled: {}, fetchedAt: '', source: 'default-deny',
@@ -5490,6 +6636,7 @@ export function createFakeHarnessClient(
         expanded: '',
         message: 'stub',
       }),
+      schemaCosts: async () => [],
     },
     shell: {
       openInOSBrowser: noop,
@@ -5645,6 +6792,7 @@ export function createFakeHarnessClient(
       }),
       getRunTrace: async () => [],
       resume: noop,
+      resolveApproval: noop,
       cancelRun: noop,
       materializeRun: async (runID) => ({
         id: `fake__run_${runID}`,
@@ -5761,6 +6909,10 @@ export function createFakeHarnessClient(
         updatedAt: new Date().toISOString(),
       }),
       listWithBranchTree: async () => [],
+      abortSubagent: noop,
+      steerSubagent: noop,
+      pauseSubagent: noop,
+      resumeSubagent: noop,
     },
     nodes: {
       catalog: async () => [],
@@ -5870,6 +7022,12 @@ export function createFakeHarnessClient(
       cancelBatch: async () => 0,
       listPending: async () => [],
     },
+    advice: {
+      // Same reasoning as confirm above: nothing is ever "shown"
+      // server-side in the fake client, so responding is a no-op that
+      // resolves to no new session.
+      respond: async () => '',
+    },
     config: {
       getFlags: async () => [
         {
@@ -5938,9 +7096,67 @@ export function createFakeHarnessClient(
       generateLocalReport: async () => ({ path: '', byteCount: 0 }),
       testDsn: async (_dsn: string) => ({ ok: false, error: 'not available in test mode' }),
     },
+    sidecar: {
+      status: fakeSidecarStatus,
+      enable: async () => fakeSidecarStatus(),
+      update: async () => fakeSidecarStatus(),
+      repair: async () => fakeSidecarStatus(),
+      uninstall: async () => fakeSidecarStatus(),
+    },
     fleet: {
       getTelemetryConsent: async () => 'none' as const,
       setTelemetryConsent: noop,
+      memorySyncStatus: async () => fakeMemorySyncStatus(),
+      memorySyncEnable: async () => fakeMemorySyncStatus(),
+      memorySyncDisable: async () => fakeMemorySyncStatus(),
+      mlStatus: async () => fakeMLStatus(),
+      mlAckNotice: async () => fakeMLStatus(),
+      setWorkflowEventsOptIn: async () => fakeMLStatus(),
+      pendingApprovals: async () => fakePendingApprovals(),
+      approveItem: async () => fakePendingApprovals(),
+      dismissItemLocally: async () => fakePendingApprovals(),
+      getTelemetryStatus: async () => ({
+        wired: false,
+        enrolled: false,
+        stored_consent: 'none',
+        effective_consent: 'none',
+        org_tier: 'free',
+        open_conversations: 0,
+        opted_in_classes: [],
+        pipeline: {
+          active: false,
+          log_lane_enabled: false,
+          events_accepted: 0,
+          events_dropped_inactive: 0,
+          events_dropped_gated: 0,
+          counts_recorded: 0,
+          counts_dropped_inactive: 0,
+          counts_dropped_gated: 0,
+          exports_ok: 0,
+          exports_failed: 0,
+          exports_unauthorized: 0,
+          exports_identity_mismatch: 0,
+        },
+      }),
+    },
+    capabilities: {
+      list: async () => ({ items: [], unavailable: [] }),
+      install: async (kind, id, version) => ({
+        kind,
+        id,
+        version,
+        name: id,
+        source: 'local',
+        state: { installed: true },
+      }),
+      uninstall: noop,
+      update: async (kind, id) => ({
+        kind,
+        id,
+        name: id,
+        source: 'local',
+        state: { installed: true },
+      }),
     },
     catalog: {
       publish: async () => ({
@@ -5956,6 +7172,8 @@ export function createFakeHarnessClient(
       install: noop,
       uninstall: noop,
       installed: async () => [],
+      // fleet-enforcement-truth-01PMZ505 WP11.
+      unpublish: noop,
     },
     sync: {
       toggle: noop,
@@ -5963,6 +7181,7 @@ export function createFakeHarnessClient(
       forcePush: noop,
       forcePull: noop,
       pendingMCPSecrets: async () => [],
+      confirmUploads: noop,
     },
     cedarPublish: {
       publishToTeam: noop,
@@ -5983,6 +7202,9 @@ export function createFakeHarnessClient(
       }),
       logs: async () => '',
       delete: noop,
+      // fleet-enforcement-truth-01PMZ505 WP09.
+      envSet: noop,
+      envList: async () => [],
     },
     // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
     compliance: {
@@ -5996,6 +7218,8 @@ export function createFakeHarnessClient(
       }),
       archiveNow: noop,
       setRetention: noop,
+      // fleet-enforcement-truth-01PMZ505 WP06.
+      skipToId: noop,
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: async (): Promise<import('./types').UnitSyncStatusView> => ({
@@ -6059,13 +7283,88 @@ export function createFakeHarnessClient(
     }),
     Handoff_ListTeam: async (): Promise<FleetTeamMemberView[]> => [],
     Handoff_Share: noop,
+    Handoff_RecipientDevices: async (_recipientUserID: string): Promise<FleetRecipientDeviceView[]> => [],
     Handoff_Inbox: async (): Promise<FleetInboxItemView[]> => [],
     Handoff_Accept: async (_inboxItemID: string): Promise<FleetAcceptedSessionView> => ({
+      localSessionID: '',
       eventCount: 0,
+      title: '',
+      alreadyAccepted: false,
     }),
+    Handoff_Delete: noop,
     ContextSync_GenerateRecoveryCode: async (): Promise<string> => '',
     ContextSync_ApplyRecoveryCode: noop,
   };
 
   return { ...defaults, ...seed };
+}
+
+/** Fake-client Cloud ML state: signed out (no Fleet in the fake). */
+/** Fake client: an empty local activity store (ml-producer-01MLPRD01 WP11). */
+function fakeMLLocalActivity(retentionDays = 0): MLLocalActivity {
+  return {
+    available: true,
+    events: 0,
+    tasks: 0,
+    sizeBytes: 0,
+    retentionDays,
+    effectiveRetentionDays: retentionDays > 0 ? retentionDays : 90,
+    sharingWithFleet: false,
+    retentionBlocked: false,
+    lastGoodRetentionDays: 0,
+  };
+}
+
+function fakeMLStatus(): MLStatus {
+  return {
+    signedIn: false,
+    entitled: false,
+    orgPaused: false,
+    loaded: false,
+    orgOffloadEnabled: false,
+    orgPolicy: '',
+    userWorkflowEventsOptedIn: false,
+    noticeAckRequired: false,
+    effective: false,
+    noticeVersion: 0,
+    noticeAckedAt: '',
+    retentionDays: 0,
+    retainOnWithdrawal: false,
+    orgName: '',
+    noticeText: '',
+    noticeTextRevision: 0,
+    ackedTextRevision: 0,
+    noticeNeedsDashboard: false,
+    noticeFromHub: false,
+    exclusionPaths: [],
+    exclusionCommands: [],
+    excludeBrowser: false,
+    exclusionsVersion: 0,
+    legacyExclusionNotes: [],
+  };
+}
+
+/** Fake-client approvals hub: signed out (no Fleet in the fake). */
+function fakePendingApprovals(): PendingApprovals {
+  return { signedIn: false, available: false, items: [], requiredCount: 0 };
+}
+
+/** Fake-client memory sync state: not wired (no store in the fake). */
+function fakeMemorySyncStatus(): MemorySyncStatus {
+  return {
+    wired: false,
+    entitled: false,
+    enabled: false,
+    scopes: [],
+    consentVersion: '',
+    optedInAt: '',
+    currentConsentVersion: '',
+    liveRecords: 0,
+    liveBytes: 0,
+    maxRecords: 0,
+    maxBytes: 0,
+    blockedCount: 0,
+    pendingCount: 0,
+    lane: { status: 'unknown', consecutiveFailures: 0 },
+  };
 }

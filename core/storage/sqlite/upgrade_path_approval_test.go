@@ -1,53 +1,55 @@
 package sqlite_test
 
 // upgrade_path_approval_test.go — approval-node-01PMZC12 UNIT-PI
-// (AC-PI-1).
+// (AC-PI-1, AC-08, G7).
 //
 // This mission's spec (C-3) establishes that a run paused at ANY node
 // — `ask` today, `approval` since UNIT-2 — is durable in its EVENT
 // TRAIL (agent_graph_events, migration sessions/0309) but NOT in the
 // in-memory run registry (Manager.runs): a process restart loses the
-// registry, so the run becomes permanently unresumable while its last
-// durable word stays "run_paused" forever — a record saying a human
-// was asked and never answered.
+// registry, so a naive re-lookup would report "not found" while the
+// trace's last durable word still says a human was asked and never
+// answered.
 //
 // UNIT-6 (durable pause: persist enough of the pending decision + Env
-// to rehydrate it at boot) is the fix, and is EXPLICITLY GATED ON
+// to rehydrate a run BACK TO RUNNING at boot) is EXPLICITLY GATED ON
 // ESCALATION E-002 in this mission's spec (spec.md §13, plan.md's
 // sequencing rule 7: "if the mission is cut short, cut at UNIT-4 —
 // never at UNIT-2"; UNIT-6 is P2 and may be replaced by an "abandoned"
-// alternative — spec.md §5.5). Neither UNIT-6 nor the abandoned
-// alternative was implemented in this pass; E-002 is left OPEN and
-// unresolved rather than answered under time pressure — see this
-// mission's UNIT-PI report for the full disclosure.
+// alternative — spec.md §5.5) and remains CUT: no code rebuilds a
+// resumable *coreag.Env from the log. What landed instead is the
+// alternative spec.md §5.5 sanctions — Manager.rehydrateAbandonedRuns,
+// called from NewManager, marks an orphaned paused run
+// RunStateAbandoned with a recorded reason and an EventRunAbandoned
+// row, rather than answering "not found" (silence) forever. This test
+// now asserts THAT behaviour, updated from the "known gap, not a fix"
+// version this mission originally shipped with UNIT-6/E-002 left open.
 //
 // Per this template's AC-PI-1, a test asserting anything about
 // persistence, migration selection or schema evolution must boot from
 // a database a PREVIOUS RELEASE produced, not from Open on an empty
 // directory (CLAUDE.md blind spot #3 / the v0.63.0 P0). This test
 // does exactly that: it materialises the newest COMMITTED upgrade
-// snapshot (v0.64.0 as of this mission — the chain has not been
-// extended past it for five releases, v0.65.0..v0.69.0, a pre-existing
-// release-ritual gap this mission did not create and is out of scope
-// to backfill here), appends a real run_paused + approval_pending
-// event pair through the production coreag.SQLEventLog exactly as the
-// approval executor would on a genuine pause, closes the database
-// (simulating the process exit), reopens a FRESH connection under HEAD
-// (simulating the restart), and asserts what actually happens today:
-// the run is unresumable and GetRunStatus-equivalent reports "not
-// found" — the trace's last row still claims run_paused.
+// snapshot, appends a real run_paused + approval_pending event pair
+// through the production coreag.SQLEventLog exactly as the approval
+// executor would on a genuine pause, closes the database (simulating
+// the process exit), reopens a FRESH connection under HEAD (simulating
+// the restart) and constructs a FRESH Manager over it, and asserts the
+// run is reported RunStateAbandoned — with a non-generic reason and an
+// EventRunAbandoned row appended to the durable trail — not "not
+// found".
 //
-// THIS TEST DOCUMENTS A KNOWN GAP, NOT A FIX. It exists so the gap is
-// pinned against a real upgraded database rather than merely asserted
-// in prose, and so the day UNIT-6 or the abandoned alternative lands,
-// this test's own assertion flips from "still broken" to a positive
-// resumable/abandoned check — the mechanical signal that G7 has
-// actually been met, rather than another paragraph claiming it.
+// AC-PI-1 falsifiability: reverting rehydrateAbandonedRuns's wiring in
+// NewManager (core/rpc/views/agentgraph/manager.go) makes this test
+// fail with "run ... not found" again — proved directly in this
+// mission's abandoned_run_test.go, which disables the same call site
+// and asserts the resulting failure names the run as not-found.
 
 import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
@@ -95,7 +97,7 @@ func newestCommittedUpgradeSnapshotTag(t *testing.T) string {
 // than renaming: two names for one shape is how the next merge gets a
 // third.
 
-func TestUpgradePath_PausedApprovalIsNotResumableAcrossRestart(t *testing.T) {
+func TestUpgradePath_PausedApprovalIsAbandonedAcrossRestart(t *testing.T) {
 	tag := newestCommittedUpgradeSnapshotTag(t)
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -211,9 +213,12 @@ func TestUpgradePath_PausedApprovalIsNotResumableAcrossRestart(t *testing.T) {
 		t.Fatalf("last durable event is %q, want %q", lastKind, coreag.EventRunPaused)
 	}
 
-	// The run registry did NOT survive — a fresh Manager over the same
-	// event log has never heard of this run. This is C-3's documented
-	// gap, unchanged by this mission (UNIT-6 not built; E-002 open).
+	// The run registry did NOT survive the restart — a fresh Manager's
+	// runs map starts empty regardless of what the log holds. What
+	// happens next is the property under test: NewManager's boot-time
+	// rehydrateAbandonedRuns pass (E-002's "abandoned" fallback) must
+	// find this orphaned pause and register it truthfully instead of
+	// leaving it to answer "not found".
 	mgr, err := graphview.NewManager(
 		graphview.WithDataDir(dir),
 		graphview.WithEventLog(log2),
@@ -222,33 +227,47 @@ func TestUpgradePath_PausedApprovalIsNotResumableAcrossRestart(t *testing.T) {
 		t.Fatalf("NewManager (boot 2): %v", err)
 	}
 	impl := graphview.New(mgr)
-	_, err = impl.GetRunStatus(ctx, runID)
-	if err == nil {
-		t.Fatalf("GetRunStatus unexpectedly succeeded after a simulated restart — " +
-			"if this is because UNIT-6 (or the abandoned-run alternative) has landed, " +
-			"update this test to assert the NEW positive behaviour (resumable, or " +
-			"explicitly reported abandoned with an event) instead of deleting it; " +
-			"G7 / E-002's disposition should be recorded in the commit that flips this.")
+	st, err := impl.GetRunStatus(ctx, runID)
+	if err != nil {
+		t.Fatalf("GetRunStatus after a simulated restart: %v — "+
+			"an orphaned paused run must be reported RunStateAbandoned, not "+
+			"fail as not-found (spec.md §5.5: silence is the one unacceptable outcome)", err)
+	}
+	if st.State != graphview.RunStateAbandoned {
+		t.Fatalf("state after restart = %q, want %q", st.State, graphview.RunStateAbandoned)
+	}
+	if strings.TrimSpace(st.Error) == "" {
+		t.Fatalf("abandoned run must record a non-empty reason")
+	}
+	if st.PendingApproval != nil {
+		t.Fatalf("an abandoned run must not still advertise a resolvable pending approval; got %+v", st.PendingApproval)
 	}
 
-	// The trace itself still asserts a pending human decision that no
-	// surface will ever offer again — the exact "silence" spec.md §5.5
-	// calls the one unacceptable outcome if UNIT-6 is cut. This
-	// assertion is what should start failing, loudly, the moment
-	// someone builds the abandoned-run alternative without also
-	// updating this test — a stale test here is worse than no test.
-	var traceAfterFailedLookup []coreag.Event
+	// The event stream, not just the status struct (spec.md §9 rule 1):
+	// the durable trail must end on an EventRunAbandoned row recording
+	// why — the mechanical signal that G7's fallback actually landed,
+	// not just a paragraph claiming it. This is what should start
+	// failing, loudly, the moment someone reverts the rehydration wiring
+	// — proved directly by this mission's abandoned_run_test.go, which
+	// disables the same call site and asserts the resulting
+	// "not found" failure.
+	var traceAfterLookup []coreag.Event
 	if err := log2.Replay(runID, func(e coreag.Event) error {
-		traceAfterFailedLookup = append(traceAfterFailedLookup, e)
+		traceAfterLookup = append(traceAfterLookup, e)
 		return nil
 	}); err != nil {
-		t.Fatalf("Replay after failed GetRunStatus: %v", err)
+		t.Fatalf("Replay after GetRunStatus: %v", err)
 	}
-	finalKind := traceAfterFailedLookup[len(traceAfterFailedLookup)-1].Kind
-	if finalKind != coreag.EventRunPaused {
-		t.Fatalf("trace's last word is %q, want %q (run_paused, forever, per C-3) — "+
-			"if an abandonment event now gets appended lazily on lookup, that is progress; "+
-			"update this test to assert it explicitly rather than leaving this check stale",
-			finalKind, coreag.EventRunPaused)
+	finalKind := traceAfterLookup[len(traceAfterLookup)-1].Kind
+	if finalKind != coreag.EventRunAbandoned {
+		t.Fatalf("trace's last word is %q, want %q — a paused run's trail must not still "+
+			"read as an unanswered human decision once it has been reconciled as abandoned",
+			finalKind, coreag.EventRunAbandoned)
+	}
+
+	// Resolving an abandoned run must be refused — the pending decision
+	// no longer exists to resolve.
+	if err := impl.ResolveApproval(ctx, runID, nodeID, true, "too late"); err == nil {
+		t.Fatalf("ResolveApproval on an abandoned run must be refused")
 	}
 }

@@ -78,7 +78,7 @@ func TestUnattendedRun_UnseededAskCompletesInsteadOfPausing(t *testing.T) {
 	runner, broker := buildUnseededAskRunner(t)
 
 	ctx := runposture.Unattended(context.Background())
-	subID, err := runner.StartStream(ctx, "profile-1", "session-1", "", "")
+	subID, err := runner.StartStream(ctx, "profile-1", "session-1", "", UserTurn{})
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestInteractiveRun_UnseededAskStillPauses(t *testing.T) {
 	t.Parallel()
 	runner, broker := buildUnseededAskRunner(t)
 
-	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "")
+	subID, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", UserTurn{})
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}

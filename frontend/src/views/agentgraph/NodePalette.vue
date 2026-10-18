@@ -14,10 +14,27 @@
  *     metadata matches stay visible.
  *
  * Source data comes from `useManifestStore` (FR-027).
+ *
+ * Node-override diagnostics (mission
+ * controls-and-readouts-that-tell-the-truth-01PMZ808 WP18): the "Doctor"
+ * button surfaces `client.nodes.doctor()` (cached catalog-health
+ * counters) plus a fresh `client.nodes.listUserOverrides()` parse pass
+ * over <DataDir>/agent_graph/nodes/ so a broken YAML's error is visible
+ * without a restart. "Reload" now performs the real
+ * `client.nodes.reloadOverrides()` re-scan + atomic catalog swap (the
+ * button previously only re-fetched the in-memory catalog, so a
+ * dropped-in override file never actually got picked up) and then
+ * refreshes the palette tree from the swapped catalog.
  */
 import { computed, ref } from 'vue';
 import { useManifestStore } from '@/composables/useNodeManifest';
-import type { NodeManifestSummary } from '@/lib/types';
+import { useHarnessClient } from '@/lib/harnessClientContext';
+import type {
+  NodeManifestSummary,
+  NodeDoctorReport,
+  NodeUserOverrideInfo,
+  NodeReloadResult,
+} from '@/lib/types';
 
 const emit = defineEmits<{
   /** Fired on dragstart from a concrete-kind row. */
@@ -27,7 +44,24 @@ const emit = defineEmits<{
 }>();
 
 const store = useManifestStore();
+const client = useHarnessClient();
 const filterText = ref('');
+
+// ── node-override diagnostics (WP18) ──────────────────────────────────
+
+const diagnosticsOpen = ref(false);
+const diagnosticsLoading = ref(false);
+const diagnosticsError = ref<string | null>(null);
+const doctorReport = ref<NodeDoctorReport | null>(null);
+const userOverrides = ref<NodeUserOverrideInfo[]>([]);
+const reloading = ref(false);
+const lastReloadResult = ref<NodeReloadResult | null>(null);
+
+const reloadDiffEmpty = computed(() => {
+  const r = lastReloadResult.value;
+  if (!r) return true;
+  return r.added.length === 0 && r.removed.length === 0 && r.modified.length === 0;
+});
 
 interface ArchetypeGroup {
   archetype: NodeManifestSummary | null;
@@ -165,8 +199,51 @@ function onDragStart(ev: DragEvent, kindId: string) {
   emit('kind-drag-start', { kind: kindId });
 }
 
+/** Fetches the doctor report + a fresh per-file override parse pass. */
+async function loadDiagnostics() {
+  diagnosticsLoading.value = true;
+  diagnosticsError.value = null;
+  try {
+    const [doctor, overrides] = await Promise.all([
+      client.nodes.doctor(),
+      client.nodes.listUserOverrides(),
+    ]);
+    doctorReport.value = doctor;
+    userOverrides.value = overrides;
+  } catch (err) {
+    diagnosticsError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    diagnosticsLoading.value = false;
+  }
+}
+
+/** "Doctor" button: opens the diagnostics panel and loads a fresh report. */
+async function onDoctor() {
+  diagnosticsOpen.value = true;
+  await loadDiagnostics();
+}
+
+/**
+ * "Reload" button: performs the real on-disk re-scan + atomic catalog
+ * swap (`reloadOverrides`), then refreshes the palette tree so a fixed
+ * or newly-dropped override kind shows up without an app restart. When
+ * the diagnostics panel is open, also re-runs the doctor/list pass so
+ * a previously-reported parse error updates in place.
+ */
 async function onReload() {
+  reloading.value = true;
+  diagnosticsError.value = null;
+  try {
+    lastReloadResult.value = await client.nodes.reloadOverrides();
+  } catch (err) {
+    diagnosticsError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    reloading.value = false;
+  }
   await store.reload();
+  if (diagnosticsOpen.value) {
+    await loadDiagnostics();
+  }
 }
 
 defineExpose({ filterText });
@@ -183,14 +260,25 @@ defineExpose({ filterText });
           class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim"
           >Node palette</span
         >
-        <button
-          type="button"
-          class="rounded-sm border border-border-muted px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
-          data-testid="palette-reload"
-          @click="onReload"
-        >
-          Reload
-        </button>
+        <div class="flex items-center gap-1">
+          <button
+            type="button"
+            class="rounded-sm border border-border-muted px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            data-testid="palette-doctor"
+            @click="onDoctor"
+          >
+            Doctor
+          </button>
+          <button
+            type="button"
+            class="rounded-sm border border-border-muted px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2 disabled:opacity-50 disabled:cursor-wait"
+            data-testid="palette-reload"
+            :disabled="reloading"
+            @click="onReload"
+          >
+            {{ reloading ? 'Reloading…' : 'Reload' }}
+          </button>
+        </div>
       </div>
       <input
         v-model="filterText"
@@ -200,6 +288,134 @@ defineExpose({ filterText });
         class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink placeholder:text-ink-dim"
         data-testid="palette-filter"
       />
+
+      <!-- Node-override diagnostics panel (WP18): reachable via the
+           "Doctor" button. Shows the cached catalog-health counters
+           plus a fresh per-file parse pass over the user-override
+           directory, and the diff/errors from the most recent Reload. -->
+      <div
+        v-if="diagnosticsOpen"
+        class="mt-2 space-y-2 rounded-sm border border-border-muted bg-surface-0 px-2 py-2"
+        data-testid="node-diagnostics-panel"
+      >
+        <div class="flex items-center justify-between">
+          <span
+            class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-muted"
+            >Node-override diagnostics</span
+          >
+          <button
+            type="button"
+            class="font-ui text-[10px] text-ink-dim hover:text-ink"
+            data-testid="diagnostics-close"
+            @click="diagnosticsOpen = false"
+          >
+            Close
+          </button>
+        </div>
+
+        <div
+          v-if="diagnosticsLoading"
+          class="font-ui text-[11px] text-ink-dim"
+          data-testid="diagnostics-loading"
+        >
+          Checking…
+        </div>
+        <div
+          v-else-if="diagnosticsError"
+          class="font-ui text-[11px] text-signal-danger"
+          role="alert"
+          data-testid="diagnostics-error"
+        >
+          {{ diagnosticsError }}
+        </div>
+        <template v-else>
+          <dl
+            v-if="doctorReport"
+            class="grid grid-cols-2 gap-x-3 gap-y-0.5 font-ui text-[11px]"
+            data-testid="diagnostics-doctor"
+          >
+            <dt class="text-ink-subtle">Shipped</dt>
+            <dd class="font-mono text-ink" data-testid="doctor-shipped">{{ doctorReport.shippedCount }}</dd>
+            <dt class="text-ink-subtle">User overrides</dt>
+            <dd class="font-mono text-ink" data-testid="doctor-user-overrides">{{ doctorReport.userOverrideCount }}</dd>
+            <dt class="text-ink-subtle">Archetypes</dt>
+            <dd class="font-mono text-ink">{{ doctorReport.archetypeCount }}</dd>
+            <dt class="text-ink-subtle">Callable</dt>
+            <dd class="font-mono text-ink">{{ doctorReport.callableCount }}</dd>
+            <dt class="text-ink-subtle">Aliases</dt>
+            <dd class="font-mono text-ink">{{ doctorReport.aliasCount }}</dd>
+            <dt class="text-ink-subtle">Hot reload</dt>
+            <dd class="font-mono text-ink" data-testid="doctor-hot-reload">
+              {{ doctorReport.hotReloadEnabled ? 'enabled' : 'disabled' }}
+            </dd>
+            <dt class="text-ink-subtle">Last reload</dt>
+            <dd class="font-mono text-ink" data-testid="doctor-last-reload">
+              {{ doctorReport.lastReloadAt || 'never' }}
+            </dd>
+          </dl>
+
+          <ul
+            v-if="userOverrides.length > 0"
+            class="space-y-0.5"
+            data-testid="diagnostics-overrides-list"
+          >
+            <li
+              v-for="o in userOverrides"
+              :key="o.filename"
+              class="flex items-center gap-2 font-ui text-[11px]"
+              :data-testid="`override-row-${o.filename}`"
+            >
+              <span
+                :class="o.status === 'error' ? 'text-signal-danger' : 'text-signal-success'"
+                :data-testid="`override-status-${o.filename}`"
+                >{{ o.status }}</span
+              >
+              <span class="font-mono text-ink">{{ o.filename }}</span>
+              <span
+                v-if="o.error"
+                class="truncate text-ink-dim"
+                :title="o.error"
+                :data-testid="`override-error-${o.filename}`"
+                >{{ o.error }}</span
+              >
+            </li>
+          </ul>
+          <p
+            v-else
+            class="font-ui text-[11px] text-ink-dim"
+            data-testid="diagnostics-overrides-empty"
+          >
+            No user-override files found.
+          </p>
+        </template>
+
+        <div
+          v-if="lastReloadResult"
+          class="border-t border-border-muted pt-2 font-ui text-[11px] text-ink-muted"
+          data-testid="diagnostics-reload-diff"
+        >
+          <span v-if="reloadDiffEmpty" data-testid="reload-diff-none">No changes.</span>
+          <template v-else>
+            <span v-if="lastReloadResult.added.length" data-testid="reload-diff-added" class="mr-2"
+              >+{{ lastReloadResult.added.length }} added</span
+            >
+            <span v-if="lastReloadResult.removed.length" data-testid="reload-diff-removed" class="mr-2"
+              >-{{ lastReloadResult.removed.length }} removed</span
+            >
+            <span v-if="lastReloadResult.modified.length" data-testid="reload-diff-modified"
+              >{{ lastReloadResult.modified.length }} modified</span
+            >
+          </template>
+          <p
+            v-if="lastReloadResult.errors && lastReloadResult.errors.length > 0"
+            class="mt-1 text-signal-danger"
+            role="alert"
+            data-testid="reload-errors"
+          >
+            <span v-for="(e, i) in lastReloadResult.errors" :key="i">{{ e }}</span>
+          </p>
+        </div>
+      </div>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-2 py-1">

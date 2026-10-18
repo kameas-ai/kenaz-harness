@@ -164,6 +164,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Discovery floor (Finding #74, CI-gate-hardening, 2026-09-14): this
+	// codebase is known to ship at least two external-content FTS5
+	// tables (events_fts, messages_fts — both named in this file's own
+	// header comment as the gate's motivating history). A scan that
+	// finds zero CREATE VIRTUAL TABLE ... USING fts5(...) definitions at
+	// all is far more likely a broken reCreateVirtualFTS5 pattern (DDL
+	// reformatted, moved to a new file layout) than a codebase that
+	// stopped using FTS5 entirely.
+	if len(externalContentTables) == 0 {
+		fmt.Fprintf(os.Stderr, "checkftssync: FAIL: found zero external-content FTS5 table definitions "+
+			"under %s.\n", root)
+		fmt.Fprintln(os.Stderr, "checkftssync: This codebase is known to ship at least two (events_fts, "+
+			"messages_fts) — finding")
+		fmt.Fprintln(os.Stderr, "checkftssync: none is almost certainly a broken CREATE VIRTUAL TABLE "+
+			"scan pattern, not a")
+		fmt.Fprintln(os.Stderr, "checkftssync: codebase that stopped using external-content FTS5.")
+		os.Exit(1)
+	}
+
 	// De-duplicate: the same CREATE VIRTUAL TABLE can appear once per
 	// definition site; report each distinct (name, contentTable) pair once
 	// even if matched from more than one file (e.g. a .sql file and a

@@ -99,8 +99,21 @@ func TestMapUnitToNode_CarriesAllFields(t *testing.T) {
 	if err := json.Unmarshal(envRaw, &env); err != nil {
 		t.Fatalf("envelope parse: %v", err)
 	}
-	if env.Scope != "project" || env.ScopeID != "proj-9" || env.LoadPolicy != "always" {
-		t.Errorf("envelope = %+v, want project/proj-9/always", env)
+	// No admin check wired → load_policy=always is downgraded to on_demand
+	// on the wire (fleet 403s always from a non-admin) — top level AND
+	// envelope, so the two never diverge.
+	if env.Scope != "project" || env.ScopeID != "proj-9" || env.LoadPolicy != "on_demand" {
+		t.Errorf("envelope = %+v, want project/proj-9/on_demand", env)
+	}
+	if node.UnitKind != "root" || node.UnitScope != "project" || node.ScopeID != "proj-9" || node.LoadPolicy != "on_demand" {
+		t.Errorf("top-level unit fields = %q/%q/%q/%q", node.UnitKind, node.UnitScope, node.ScopeID, node.LoadPolicy)
+	}
+
+	// An admin may push always.
+	m.SetLoadAlwaysAllowed(func() bool { return true })
+	node, _, _ = m.MapUnitToNode(u)
+	if node.LoadPolicy != "always" {
+		t.Errorf("admin push load_policy = %q, want always", node.LoadPolicy)
 	}
 }
 

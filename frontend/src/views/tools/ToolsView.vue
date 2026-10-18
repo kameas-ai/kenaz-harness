@@ -1,39 +1,117 @@
 <script setup lang="ts">
 /**
- * ToolsView — connected MCP servers list (NN/SECTION pattern).
+ * ToolsView — the Capabilities route, /tools (NN/SECTION pattern).
  *
- * Renders every MCP server registered with the harness alongside
- * its transport, advertised capabilities, and current state. The
- * mcp-client implementation hasn't landed yet, so the list is empty
- * by construction — the view is structured so it lights up the
- * moment a server registers via a bundle.
+ * install-framework-01DOGF0B Phase 4 WP09 (decision record §3, executed
+ * early by owner ruling 2026-10-05): the rail's one "Capabilities" entry
+ * replaces Tools + Marketplace and lands here; the page's primary action is
+ * "Add capability". The route and file keep the tools name so every deep
+ * link (/tools?kind=…, the Workflows ?tab=catalog redirect, /marketplace)
+ * keeps resolving.
+ *
+ * Top: the one capability surface (views/capabilities/CapabilitySurface.vue)
+ * — built-in tool toggles, MCP servers, skills, workflows, and the fleet
+ * catalog's bundles / agent packs (listed, not installable yet: Phase 3 has
+ * not shipped) in one list + detail. Below it: every MCP server registered
+ * with the harness, with its per-server tool policy. Between them: how much
+ * of each server the model is sent per request (ToolExposurePanel).
  */
 import { onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
-import KenazToolsPanel from './KenazToolsPanel.vue';
+import CapabilitySurface from '@/views/capabilities/CapabilitySurface.vue';
+import ToolExposurePanel from '@/views/tools/ToolExposurePanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
-import type { MCPServer } from '@/lib/types';
+import type { MCPServer, MCPToolPolicy, MCPToolPolicyRule } from '@/lib/types';
 
 const servedMode = useServedMode();
 const client = useHarnessClient();
 
+// The page's primary action (decision record §3): open the surface's
+// browse — filters cleared, search focused.
+const surfaceRef = ref<{ focusBrowse?: () => void } | null>(null);
+function addCapability() {
+  surfaceRef.value?.focusBrowse?.();
+}
+
 const servers = ref<readonly MCPServer[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
+
+// trust-surfaces-that-fire-01PMZ202 WP24 (finding CHAT-05): this is the
+// writer for the static permission source. Without it, no shipped
+// surface could ever set a "confirm each use" or "deny" policy on an
+// MCP server — <DataDir>/mcp_servers.json had a reader
+// (toolloop.NewStaticResolverFromDataDir) and nothing that ever wrote
+// it. One rule per server, keyed on tool "*" (whole-server policy) —
+// per-tool granularity is a follow-up, not this WP's scope.
+const policies = ref<readonly MCPToolPolicyRule[]>([]);
+const policyError = ref<string | null>(null);
+const policySaving = ref<string | null>(null); // server name currently saving, or null
+
+// MCP_ListServers reads a registry production does not wire yet
+// (docs/unwired-ledger.md "views/mcp.WithRegistry has no non-test
+// caller"), so an empty table does not mean nothing is installed. The
+// installed count comes from the capability listing the runtime consumer
+// reports; null = that listing failed, so the count is unknown.
+const installedMcpCount = ref<number | null>(0);
+
+async function refreshInstalledMcpCount() {
+  try {
+    const l = await client.capabilities.list({ kind: 'mcp_recipe' });
+    installedMcpCount.value = (l.items ?? []).filter(
+      (it) => it.kind === 'mcp_recipe' && it.state?.installed,
+    ).length;
+  } catch {
+    installedMcpCount.value = null;
+  }
+}
 
 async function refresh() {
   loading.value = true;
   error.value = null;
   try {
     servers.value = await client.mcp.listServers();
+    if (servers.value.length === 0) await refreshInstalledMcpCount();
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load MCP servers.';
     servers.value = [];
   } finally {
     loading.value = false;
   }
+}
+
+async function refreshPolicies() {
+  try {
+    policies.value = await client.mcp.listToolPolicies();
+  } catch (e) {
+    policyError.value = e instanceof Error ? e.message : 'Failed to load tool policies.';
+    policies.value = [];
+  }
+}
+
+function policyFor(serverName: string): MCPToolPolicy {
+  const rule = policies.value.find((r) => r.server === serverName && r.tool === '*');
+  return rule?.policy ?? 'auto_allow';
+}
+
+async function setPolicy(serverName: string, policy: MCPToolPolicy) {
+  policyError.value = null;
+  policySaving.value = serverName;
+  try {
+    await client.mcp.setToolPolicy(serverName, '*', policy, 'set from Tools view');
+    await refreshPolicies();
+  } catch (e) {
+    policyError.value = e instanceof Error ? e.message : 'Failed to save tool policy.';
+  } finally {
+    policySaving.value = null;
+  }
+}
+
+function onPolicyChange(serverName: string, event: Event) {
+  const value = (event.target as HTMLSelectElement).value as MCPToolPolicy;
+  void setPolicy(serverName, value);
 }
 
 function stateColor(state: string): string {
@@ -53,25 +131,56 @@ function stateColor(state: string): string {
 }
 
 onMounted(() => {
+  // Guard the eager fetches, not just the template. The template's
+  // NotAvailableInServedMode v-if/v-else means the fetched data is
+  // never rendered in served mode, but onMounted still runs regardless
+  // of which template branch is chosen -- these two calls fired one
+  // unservable MCP_ListServers/MCP_ListToolPolicies RPC per served-mode
+  // visit to /tools (error swallowed, so harmless, but it made the i15
+  // allowlist's "boundary-panelled" claim about scripts/ci/allowlists/
+  // i15-serve-dispatch-gap.txt technically false: the panel blocked the
+  // UI, not the call).
+  if (servedMode.value) return;
   void refresh();
+  void refreshPolicies();
 });
 </script>
 
 <template>
   <NotAvailableInServedMode
     v-if="servedMode"
-    feature="Tools"
-      reason="The tool catalogue and enable/disable RPCs are not wired into the in-workbench build yet. Tools still run during a turn; you just cannot inspect or toggle them from here."
+    feature="Capabilities"
+    reason="The capability list and its install / enable RPCs are not wired into the in-workbench build yet. Tools, skills and workflows you already installed still run during a turn; you just cannot inspect, add or toggle them from here."
   />
   <div v-else>
+    <!--
+      Subtitle reworded in WP09 (v0.88.0 adversarial review): the old copy
+      said "built-in tools and MCP servers in one list" while skills and
+      workflows were listed too, and claimed tool invocations never leave
+      the device — false for a remote (HTTP) MCP server, and the fleet
+      catalog is fetched from your org.
+    -->
     <CanvasHead
       number="02"
-      section="TOOLS"
-      title="Tools"
-      subtitle="Built-in Kenaz tools toggle on top; below them, every MCP server registered with the harness. All tool calls flow through the local mcp-client; tool invocations do not leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active)."
-    />
+      section="CAPABILITIES"
+      title="Capabilities"
+      subtitle="Built-in tools, MCP servers, skills and workflows in one list, with your org's fleet catalog when you are signed in. Below it, per-server MCP tool policy. Every MCP tool call goes through the harness's MCP client and its policy layer; a call to a remote MCP server leaves this device."
+    >
+      <template #trailing>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow"
+          data-testid="capabilities-add"
+          @click="addCapability"
+        >
+          Add capability
+        </button>
+      </template>
+    </CanvasHead>
 
-    <KenazToolsPanel />
+    <CapabilitySurface ref="surfaceRef" />
+
+    <ToolExposurePanel />
 
     <div class="px-6 pt-2 pb-1">
       <h2
@@ -92,15 +201,49 @@ onMounted(() => {
       {{ error }}
     </div>
     <div
-      v-else-if="servers.length === 0"
+      v-if="policyError"
+      class="mx-6 mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      role="alert"
+      data-testid="tool-policy-error"
+    >
+      {{ policyError }}
+    </div>
+    <!-- Not chained to policyError: that banner can co-render with the table. -->
+    <div
+      v-if="!loading && !error && servers.length === 0 && installedMcpCount === null"
+      class="px-6 py-6 font-ui text-sm text-ink-muted"
+      data-testid="tools-empty-unknown"
+    >
+      <div class="text-ink">Could not determine installed MCP servers</div>
+      <p class="mt-2 max-w-prose text-ink-muted">
+        The capability listing failed to load, so this table cannot say
+        whether any are installed. Tool policy for MCP servers can't be set
+        from this table yet.
+      </p>
+    </div>
+    <div
+      v-else-if="!loading && !error && servers.length === 0 && installedMcpCount !== null && installedMcpCount > 0"
+      class="px-6 py-6 font-ui text-sm text-ink-muted"
+      data-testid="tools-empty-installed"
+    >
+      <div class="text-ink">
+        {{ installedMcpCount }} installed MCP server{{ installedMcpCount === 1 ? ' is' : 's are' }} listed above
+      </div>
+      <p class="mt-2 max-w-prose text-ink-muted">
+        Tool policy for these servers can't be set from this table yet.
+      </p>
+    </div>
+    <div
+      v-else-if="!loading && !error && servers.length === 0"
       class="px-6 py-6 font-ui text-sm text-ink-muted"
       data-testid="tools-empty"
     >
       <div class="text-ink">No MCP servers configured</div>
       <p class="mt-2 max-w-prose text-ink-muted">
-        Add an MCP server by installing a bundle that registers one. The
-        harness's local mcp-client routes every call through the policy
-        layer so capability advertisements stay enforceable.
+        Install one from the list above, or add your own with Paste MCP
+        config / Custom MCP server. The harness's local mcp-client routes
+        every call through the policy layer so capability advertisements
+        stay enforceable.
       </p>
       <a
         href="https://github.com/sigil-tech/kenaz-harness/blob/main/docs/mcp.md"
@@ -109,7 +252,7 @@ onMounted(() => {
         rel="noopener"
       >Read the MCP docs →</a>
     </div>
-    <table v-else class="w-full font-ui text-[12px] text-ink" data-testid="tools-table">
+    <table v-else-if="!loading && !error" class="w-full font-ui text-[12px] text-ink" data-testid="tools-table">
       <thead class="bg-surface-1 text-ink-muted">
         <tr>
           <th class="text-left px-4 py-2 font-medium">Name</th>
@@ -117,6 +260,7 @@ onMounted(() => {
           <th class="text-left px-4 py-2 font-medium">Capabilities</th>
           <th class="text-left px-4 py-2 font-medium">Version</th>
           <th class="text-left px-4 py-2 font-medium">Status</th>
+          <th class="text-left px-4 py-2 font-medium">Policy</th>
         </tr>
       </thead>
       <tbody>
@@ -143,8 +287,24 @@ onMounted(() => {
               {{ s.state || 'unknown' }}
             </span>
           </td>
+          <td class="px-4 py-2">
+            <select
+              class="rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[11px] uppercase tracking-[0.1em] text-ink disabled:opacity-50"
+              :value="policyFor(s.name)"
+              :disabled="policySaving === s.name"
+              :data-testid="`tool-policy-select-${s.name}`"
+              @change="onPolicyChange(s.name, $event)"
+            >
+              <option value="auto_allow">Auto-allow</option>
+              <option value="confirm_each">Confirm each use</option>
+              <option value="deny">Deny</option>
+            </select>
+          </td>
         </tr>
       </tbody>
     </table>
+    <p v-if="servers.length > 0" class="px-6 pt-2 pb-4 font-ui text-[11px] text-ink-subtle">
+      Policy changes take effect on next restart — the permission list is read once at startup.
+    </p>
   </div>
 </template>

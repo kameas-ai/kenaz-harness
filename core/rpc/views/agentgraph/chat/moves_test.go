@@ -3,9 +3,14 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
@@ -69,6 +74,19 @@ func (r *scriptedRegistry) Stream(_ context.Context, _ corellm.GenerationRequest
 	}
 	close(ch)
 	return &scriptedStream{events: ch, resp: t.resp}, nil
+}
+
+// erroringRegistry always fails Stream with a preset error, counting
+// calls so a test can assert the failure was NOT retried.
+type erroringRegistry struct {
+	stubRegistry
+	err   error
+	calls int32
+}
+
+func (r *erroringRegistry) Stream(_ context.Context, _ corellm.GenerationRequest) (corellm.Stream, error) {
+	atomic.AddInt32(&r.calls, 1)
+	return nil, r.err
 }
 
 // ---- a programmable ToolPool ---------------------------------------------
@@ -206,7 +224,7 @@ func runFiveIterationTurn(t *testing.T) (*recordingBroker, *recordingHistoryWrit
 	pool := &scriptedPool{entries: []ToolEntry{{Server: "search", Name: "web"}}}
 	runner, broker, writer := buildMoveRunner(t, reg, pool)
 
-	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "find it"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("find it")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -274,11 +292,10 @@ func TestMoves_FiveIterationTurnPersistsEveryMove(t *testing.T) {
 	}
 
 	// Every move shares the turn's span — the id of the user row the
-	// runner wrote at StartStream (recordingHistoryWriter returns
-	// "msg-1").
+	// caller persisted before StartStream (testTurn's testUserTurnID).
 	for i, e := range got {
-		if e.TurnSpanID != "msg-1" {
-			t.Errorf("move %d TurnSpanID = %q, want %q", i, e.TurnSpanID, "msg-1")
+		if e.TurnSpanID != testUserTurnID {
+			t.Errorf("move %d TurnSpanID = %q, want %q", i, e.TurnSpanID, testUserTurnID)
 		}
 	}
 
@@ -396,7 +413,7 @@ func TestMoves_ToolCallEntryRedactsArgumentValues(t *testing.T) {
 
 	pool := &scriptedPool{entries: []ToolEntry{{Server: "fs", Name: "write"}}}
 	runner, broker, writer := buildMoveRunner(t, reg, pool)
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "write the config"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("write the config")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -473,7 +490,7 @@ func TestMoves_OnlyTheChatBoundModelNodeBecomesAMove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "ask"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("ask")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -530,7 +547,7 @@ func TestMoves_RunThatDiesKeepsItsLastSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "find it"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("find it")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -557,6 +574,121 @@ func TestMoves_RunThatDiesKeepsItsLastSegment(t *testing.T) {
 	}
 }
 
+// TestMoves_PaymentRequiredRendersFriendlyNoNodeChain is the reported-bug
+// regression for the provider-billing-failure mission. Before this
+// mission, a provider 402 reached the user as
+//
+//	loop: node "agent_loop": body assistant_turn: model: node "assistant_turn":
+//	chat: registry stream: llm: invalid request (status=402): <raw body>
+//
+// — the full graph-node wrapping chain (developer-log detail) instead of
+// a message naming the provider/profile and repeating the provider's own
+// remedy.
+//
+// This test drives the REAL LLMProviderAdapter and the REAL production
+// chat_default.yaml graph (same rationale as the other tests in this
+// file: a fixture that swapped them for stubs would assert nothing
+// about the shipped node-wrapping chain that caused the bug). The 402 is
+// produced by an actual httptest round trip through llm.ClassifyStatus
+// — not hand-constructed — so the classification half of the fix is
+// exercised for real; the registry-level decoration
+// (ErrPaymentRequired -> ErrProviderPaymentRequired, adding Provider/
+// ProfileID) is applied by hand here because chat's Registry seam is a
+// test double that stands in for core/llm/registry.Registry, which does
+// that decoration in production (covered separately by
+// core/llm/registry.TestRegistry_PaymentRequiredDecoratedAsErrProviderPaymentRequired).
+//
+// MUTATION EVIDENCE (run and confirmed to fail): revert the
+// `corellm.FriendlyOr(err, err.Error())` line in driveRun's default
+// case back to `err.Error()` -> closed.Message becomes the raw
+// wrapped string and this test's want/got Friendly() comparison fails,
+// and the node-chain assertion catches the leaked "node \"" text.
+func TestMoves_PaymentRequiredRendersFriendlyNoNodeChain(t *testing.T) {
+	t.Parallel()
+
+	const providerBody = `{"type":"error","error":{"type":"invalid_request_error","message":"This request's maximum cost exceeds your available credits. Add credits, or lower max_tokens or prompt size."}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = io.WriteString(w, providerBody)
+	}))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("http.Post: %v", err)
+	}
+	respBody, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+
+	classified := corellm.ClassifyStatus(resp.StatusCode, respBody)
+	var paymentErr *corellm.ErrPaymentRequired
+	if !errors.As(classified, &paymentErr) {
+		t.Fatalf("ClassifyStatus(402, ...) = %T, want *ErrPaymentRequired", classified)
+	}
+
+	// Registry-level decoration — mirrors what core/llm/registry.Registry.
+	// Stream does in production for this exact error type (see
+	// core/llm/registry/registry.go's paymentErr branch).
+	decorated := &corellm.ErrProviderPaymentRequired{
+		Provider:  "anthropic",
+		ProfileID: "work-claude",
+		ModelID:   "claude-sonnet-4-5",
+		Reason:    paymentErr.Message,
+		Cause:     paymentErr,
+	}
+
+	reg := &erroringRegistry{err: decorated}
+	broker := &recordingBroker{}
+	writer := &recordingHistoryWriter{}
+	graph := loadProductionChatGraph(t)
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      reg,
+		Pool:          &scriptedPool{},
+		Broker:        broker,
+		HistoryWriter: writer,
+		History:       staticHistoryReader{},
+		GraphLoader:   func() (coreag.Graph, error) { return graph, nil },
+		MaxTurns:      func() int { return 25 },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := runner.StartStream(context.Background(), "work-claude", "s", "", testTurn("hi")); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	closed := waitForClosed(t, broker)
+	if closed.Reason != "backend-error" {
+		t.Fatalf("reason = %q, want backend-error (msg=%q)", closed.Reason, closed.Message)
+	}
+
+	want := decorated.Friendly()
+	if closed.Message != want {
+		t.Fatalf("stream-closed message = %q, want the Friendly() text %q", closed.Message, want)
+	}
+	if !strings.Contains(closed.Message, "anthropic") || !strings.Contains(closed.Message, "work-claude") {
+		t.Errorf("message = %q, want it to name the provider and profile", closed.Message)
+	}
+	if !strings.Contains(closed.Message, "Add credits") {
+		t.Errorf("message = %q, want the provider's own remedy text", closed.Message)
+	}
+	if strings.Contains(closed.Message, `node "`) {
+		t.Errorf("message leaks the graph-node wrapping chain: %q", closed.Message)
+	}
+	if strings.Contains(closed.Message, "registry stream") {
+		t.Errorf("message leaks the internal wrapping prefix: %q", closed.Message)
+	}
+
+	// Not retried: the adapter must have been called exactly once.
+	if got := atomic.LoadInt32(&reg.calls); got != 1 {
+		t.Errorf("registry Stream call count = %d, want exactly 1 (no retry on 402)", got)
+	}
+}
+
 // stubTurnSpan answers the empty-userMessage span lookup.
 type stubTurnSpan struct {
 	id  string
@@ -580,12 +712,12 @@ func (s *stubTurnSpan) callCount() int {
 	return s.calls
 }
 
-// TestMoves_EmptyUserMessageTurnResolvesItsSpan pins the third
-// turn-span source. StartStream is called with an empty userMessage on
-// two live paths — the keychain-rotation redrive and the multimodal
-// send, where the frontend already landed the user row — so the runner
-// has no id of its own to span from. Without the lookup those turns
-// would write no moves at all and silently regress to the pre-mission
+// TestMoves_EmptyUserMessageTurnResolvesItsSpan pins the fallback
+// turn-span source: a caller that could not name the persisted user row
+// (UserTurn.MessageID empty — e.g. an llm view History fake that carries
+// no ids). The runner never writes the user turn
+// (chat-single-writer-01DOGF0G), so without the lookup such a turn would
+// write no moves at all and silently regress to the pre-mission
 // single-row shape.
 //
 // MUTATION EVIDENCE (run and confirmed to fail): delete the
@@ -615,7 +747,7 @@ func TestMoves_EmptyUserMessageTurnResolvesItsSpan(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	// Empty userMessage: the redrive shape.
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", ""); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", UserTurn{}); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -636,11 +768,13 @@ func TestMoves_EmptyUserMessageTurnResolvesItsSpan(t *testing.T) {
 	}
 }
 
-// TestMoves_UserMessageTurnDoesNotLookUpItsSpan is the other half: when
-// StartStream wrote the user row itself it already HAS the id, and
-// reaching for the reader would be a wasted store read on the hot path
-// of every ordinary turn.
-func TestMoves_UserMessageTurnDoesNotLookUpItsSpan(t *testing.T) {
+// TestMoves_CallerSuppliedSpanSkipsTheLookup is the other half: when the
+// caller hands StartStream the persisted row's id (llm view StartStream
+// always does), the runner already HAS the span, and reaching for the
+// reader would be a wasted store read on the hot path of every ordinary
+// turn. (Before chat-single-writer-01DOGF0G the id came from the runner's
+// own append of the user text — the duplicate write behind dogfood F12.)
+func TestMoves_CallerSuppliedSpanSkipsTheLookup(t *testing.T) {
 	t.Parallel()
 	reg := &scriptedRegistry{}
 	reg.push(textTurn("answer"))
@@ -663,18 +797,22 @@ func TestMoves_UserMessageTurnDoesNotLookUpItsSpan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "a real question"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("a real question")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
 		t.Fatalf("run failed: %s", closed.Message)
 	}
 	if span.callCount() != 0 {
-		t.Errorf("span lookups = %d, want 0 — the runner already had the id", span.callCount())
+		t.Errorf("span lookups = %d, want 0 — the caller already supplied the id", span.callCount())
 	}
-	for i, e := range moveEntries(writer) {
-		if e.TurnSpanID != "msg-1" {
-			t.Errorf("move %d TurnSpanID = %q, want the id the runner's own write returned", i, e.TurnSpanID)
+	moves := moveEntries(writer)
+	if len(moves) == 0 {
+		t.Fatal("no moves persisted")
+	}
+	for i, e := range moves {
+		if e.TurnSpanID != testUserTurnID {
+			t.Errorf("move %d TurnSpanID = %q, want the caller's row %q", i, e.TurnSpanID, testUserTurnID)
 		}
 	}
 }
@@ -719,11 +857,11 @@ func TestMoves_InterruptKeepsPartialAndClosesDanglingPairs(t *testing.T) {
 	ctx := context.Background()
 	w := &recordingHistoryWriter{}
 	sink := &recordingSink{}
-	j := newTurnJournal(w, sink.emit, "sess-1", "span-1")
+	j := newTurnJournal(w, sink.emit, "sess-1", "span-1", nil)
 
 	// Fire 1 completes with text and asks for a tool.
 	j.OpenAssistantSegment()
-	j.RecordAssistantMove(ctx, "I'll read the file")
+	j.RecordAssistantMove(ctx, "I'll read the file", corellm.Response{}, "", "")
 	call := coreag.ToolCall{ID: "tu-1", Name: "fs__read", Args: map[string]any{"path": "/tmp/x"}}
 	j.RecordToolCall(ctx, call)
 	j.RecordToolResult(ctx, call, coreag.ToolResult{Content: "contents"})
@@ -839,12 +977,12 @@ func TestMoves_InterruptPersistsOnlyTheInFlightSegment(t *testing.T) {
 		ctx := context.Background()
 		w := &recordingHistoryWriter{}
 		bridge := NewStreamBridge(&recordingBroker{}, "sub-1", "sess-1")
-		j := newTurnJournal(w, bridge.Emit, "sess-1", "span-1")
+		j := newTurnJournal(w, bridge.Emit, "sess-1", "span-1", nil)
 
 		// Fire 1: a preamble, then a tool.
 		j.OpenAssistantSegment()
 		bridge.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: preamble})
-		j.RecordAssistantMove(ctx, preamble)
+		j.RecordAssistantMove(ctx, preamble, corellm.Response{}, "", "")
 		call := coreag.ToolCall{ID: "tu-1", Name: "fs__read"}
 		j.RecordToolCall(ctx, call)
 		j.RecordToolResult(ctx, call, coreag.ToolResult{Content: "contents"})
@@ -876,14 +1014,14 @@ func TestMoves_InterruptPersistsOnlyTheInFlightSegment(t *testing.T) {
 		ctx := context.Background()
 		w := &recordingHistoryWriter{}
 		bridge := NewStreamBridge(&recordingBroker{}, "sub-1", "sess-1")
-		j := newTurnJournal(w, bridge.Emit, "sess-1", "span-1")
+		j := newTurnJournal(w, bridge.Emit, "sess-1", "span-1", nil)
 
 		// A single fire that finished streaming — its text is parked,
 		// waiting to learn whether session_write claims it — and the
 		// stop lands in that window.
 		j.OpenAssistantSegment()
 		bridge.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: inflight})
-		j.RecordAssistantMove(ctx, inflight)
+		j.RecordAssistantMove(ctx, inflight, corellm.Response{}, "", "")
 
 		is := NewInterruptState(bridge, nil)
 		is.PersistInterrupt(ctx, "sess-1", w, j)
@@ -917,10 +1055,10 @@ func TestMoves_InertWithoutTurnSpan(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	w := &recordingHistoryWriter{}
-	j := newTurnJournal(w, nil, "sess-1", "")
+	j := newTurnJournal(w, nil, "sess-1", "", nil)
 
 	j.OpenAssistantSegment()
-	j.RecordAssistantMove(ctx, "text")
+	j.RecordAssistantMove(ctx, "text", corellm.Response{}, "", "")
 	j.RecordToolCall(ctx, coreag.ToolCall{ID: "t", Name: "a__b"})
 	if _, err := j.AppendEntry(ctx, "sess-1", coreag.HistoryEntry{Role: "assistant", Content: "answer"}); err != nil {
 		t.Fatalf("AppendEntry: %v", err)
@@ -950,10 +1088,10 @@ func TestMoves_RevisedAnswerKeepsBothTheDraftAndTheFinal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	w := &recordingHistoryWriter{}
-	j := newTurnJournal(w, nil, "sess-1", "span-1")
+	j := newTurnJournal(w, nil, "sess-1", "span-1", nil)
 
 	j.OpenAssistantSegment()
-	j.RecordAssistantMove(ctx, "half-finished draft")
+	j.RecordAssistantMove(ctx, "half-finished draft", corellm.Response{}, "", "")
 	if _, err := j.AppendEntry(ctx, "sess-1", coreag.HistoryEntry{
 		Role: "assistant", Content: "the revised answer",
 	}); err != nil {
@@ -991,10 +1129,10 @@ func TestMoves_WhitespaceOnlyDifferenceIsNotARevision(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	w := &recordingHistoryWriter{}
-	j := newTurnJournal(w, nil, "sess-1", "span-1")
+	j := newTurnJournal(w, nil, "sess-1", "span-1", nil)
 
 	j.OpenAssistantSegment()
-	j.RecordAssistantMove(ctx, "the answer is 42\n")
+	j.RecordAssistantMove(ctx, "the answer is 42\n", corellm.Response{}, "", "")
 	if _, err := j.AppendEntry(ctx, "sess-1", coreag.HistoryEntry{
 		Role: "assistant", Content: "the answer is 42",
 	}); err != nil {
@@ -1032,10 +1170,10 @@ func TestMoves_NonStreamingFireStillAnnouncesItsBoundary(t *testing.T) {
 	ctx := context.Background()
 	w := &recordingHistoryWriter{}
 	sink := &recordingSink{}
-	j := newTurnJournal(w, sink.emit, "sess-1", "span-1")
+	j := newTurnJournal(w, sink.emit, "sess-1", "span-1", nil)
 
 	// No OpenAssistantSegment: no delta ever arrived.
-	j.RecordAssistantMove(ctx, "whole body at once")
+	j.RecordAssistantMove(ctx, "whole body at once", corellm.Response{}, "", "")
 	j.RecordToolCall(ctx, coreag.ToolCall{ID: "t1", Name: "a__b"})
 	j.Finish(ctx)
 
@@ -1230,7 +1368,7 @@ func TestMoves_ToolCallBoundaryCarriesTheArgsSummary(t *testing.T) {
 
 	pool := &scriptedPool{entries: []ToolEntry{{Server: "fs", Name: "write"}}}
 	runner, broker, writer := buildMoveRunner(t, reg, pool)
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "write it"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("write it")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
@@ -1294,7 +1432,7 @@ func TestMoves_FailedToolIsErrorOnBoundaryAndRow(t *testing.T) {
 		failOn:  map[string]error{"sh__exec": fmt.Errorf("permission denied")},
 	}
 	runner, broker, writer := buildMoveRunner(t, reg, pool)
-	if _, err := runner.StartStream(context.Background(), "p", "s", "", "go"); err != nil {
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("go")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	waitForClosed(t, broker)

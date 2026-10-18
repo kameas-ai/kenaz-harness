@@ -8,8 +8,10 @@ import {artifacts} from '../models';
 import {attachments} from '../models';
 import {log} from '../models';
 import {audit} from '../models';
+import {blockedrequests} from '../models';
 import {branches} from '../models';
 import {bundle} from '../models';
+import {install} from '../models';
 import {catalog} from '../models';
 import {cedarpolicy} from '../models';
 import {cedar} from '../models';
@@ -21,8 +23,10 @@ import {contextbootstrap} from '../models';
 import {contextview} from '../models';
 import {contexts} from '../models';
 import {corpus} from '../models';
+import {documents} from '../models';
 import {elicit} from '../models';
 import {json} from '../models';
+import {settings} from '../models';
 import {agentgraph} from '../models';
 import {contextsync} from '../models';
 import {hooks} from '../models';
@@ -38,13 +42,17 @@ import {planmode} from '../models';
 import {policy} from '../models';
 import {projects} from '../models';
 import {autonomy} from '../models';
+import {toolexposure} from '../models';
 import {scheduledchat} from '../models';
 import {search} from '../models';
 import {secrets} from '../models';
 import {sentry} from '../models';
 import {sessions} from '../models';
+import {loadtools} from '../models';
+import {modelcalls} from '../models';
 import {context} from '../models';
-import {settings} from '../models';
+import {risk} from '../models';
+import {sidecar} from '../models';
 import {sites} from '../models';
 import {slashcmd} from '../models';
 import {storage} from '../models';
@@ -75,6 +83,8 @@ export function ACP_ListTraces(arg1:string):Promise<Array<acp.EnvelopeTrace>>;
 export function ACP_RevokePeer(arg1:string):Promise<void>;
 
 export function ACP_TrustPeer(arg1:string):Promise<acp.TrustResult>;
+
+export function Advice_Respond(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function Agents_DeleteProfile(arg1:string):Promise<void>;
 
@@ -134,6 +144,12 @@ export function Audit_VerifyEntry(arg1:string):Promise<boolean>;
 
 export function Bash_Exec(arg1:string,arg2:string):Promise<rpc.BashExecResult>;
 
+export function BlockedRequests_Dismiss(arg1:string):Promise<void>;
+
+export function BlockedRequests_Grant(arg1:string):Promise<void>;
+
+export function BlockedRequests_ListPending():Promise<Array<blockedrequests.PendingRequest>>;
+
 export function BootHealth_Get():Promise<rpc.BootHealthReport>;
 
 export function Branches_Abandon(arg1:string):Promise<void>;
@@ -164,6 +180,14 @@ export function Bundle_List():Promise<Array<bundle.Bundle>>;
 
 export function Bundle_Remove(arg1:string):Promise<void>;
 
+export function Capability_Install(arg1:string,arg2:string,arg3:string):Promise<install.Item>;
+
+export function Capability_List(arg1:install.Filter):Promise<install.Listing>;
+
+export function Capability_Uninstall(arg1:string,arg2:string):Promise<void>;
+
+export function Capability_Update(arg1:string,arg2:string):Promise<install.Item>;
+
 export function Catalog_Install(arg1:string,arg2:string):Promise<void>;
 
 export function Catalog_Installed():Promise<Array<catalog.CatalogItemView>>;
@@ -173,6 +197,8 @@ export function Catalog_List(arg1:catalog.CatalogFilter):Promise<Array<catalog.C
 export function Catalog_Publish(arg1:catalog.PublishInput):Promise<catalog.CatalogItemView>;
 
 export function Catalog_Uninstall(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function Catalog_Unpublish(arg1:string):Promise<void>;
 
 export function CedarPolicy_Delete(arg1:string):Promise<void>;
 
@@ -198,6 +224,8 @@ export function CedarPolicy_WriteSnippet(arg1:string,arg2:string):Promise<void>;
 
 export function Cedar_PublishToTeam(arg1:string,arg2:string):Promise<void>;
 
+export function CompactionOverhead():Promise<rpc.CompactionOverheadInfo>;
+
 export function Compaction_GetConfig(arg1:compaction.Layer,arg2:string):Promise<compaction.Config>;
 
 export function Compaction_GetEffective(arg1:compaction.ScopeKey):Promise<compaction.EffectiveConfig>;
@@ -213,6 +241,8 @@ export function Compaction_TriggerManual(arg1:string,arg2:compaction.ManualOpts)
 export function Compliance_ArchiveNow():Promise<void>;
 
 export function Compliance_SetRetention(arg1:number):Promise<void>;
+
+export function Compliance_SkipToID(arg1:string):Promise<void>;
 
 export function Compliance_Status():Promise<compliance.ComplianceStatus>;
 
@@ -298,6 +328,20 @@ export function Diag_LogClientEvent(arg1:string,arg2:string,arg3:Record<string, 
 
 export function Diag_LogPath():Promise<string>;
 
+export function Documents_BuildSite(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<documents.SiteBuildResult>;
+
+export function Documents_Create(arg1:string,arg2:string,arg3:string):Promise<documents.Document>;
+
+export function Documents_ExportsDir():Promise<documents.ExportsDirResult>;
+
+export function Documents_Get(arg1:string,arg2:string):Promise<documents.Document>;
+
+export function Documents_List(arg1:string):Promise<Array<documents.DocumentSummary>>;
+
+export function Documents_Preview(arg1:string):Promise<documents.PreviewResult>;
+
+export function Documents_Update(arg1:string,arg2:string,arg3:number,arg4:string):Promise<documents.Document>;
+
 export function Elicit_AnswerDeferred(arg1:string,arg2:any):Promise<string>;
 
 export function Elicit_ListPending():Promise<Array<elicit.ElicitRequest>>;
@@ -308,9 +352,29 @@ export function Elicit_SubmitAnswer(arg1:string,arg2:json.RawMessage,arg3:boolea
 
 export function Elicit_SubmitWizardStep(arg1:string,arg2:string,arg3:json.RawMessage,arg4:boolean):Promise<void>;
 
+export function Fleet_ApproveItem(arg1:string):Promise<settings.PendingApprovalsView>;
+
+export function Fleet_DismissItemLocally(arg1:string):Promise<settings.PendingApprovalsView>;
+
 export function Fleet_GetTelemetryConsent():Promise<string>;
 
+export function Fleet_MLAckNotice(arg1:number,arg2:string):Promise<settings.MLStatusView>;
+
+export function Fleet_MLStatus():Promise<settings.MLStatusView>;
+
+export function Fleet_MemorySyncDisable(arg1:boolean,arg2:string):Promise<settings.MemorySyncStatusView>;
+
+export function Fleet_MemorySyncEnable(arg1:Array<string>,arg2:string):Promise<settings.MemorySyncStatusView>;
+
+export function Fleet_MemorySyncStatus():Promise<settings.MemorySyncStatusView>;
+
+export function Fleet_PendingApprovals():Promise<settings.PendingApprovalsView>;
+
 export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
+
+export function Fleet_SetWorkflowEventsOptIn(arg1:boolean):Promise<settings.MLStatusView>;
+
+export function Fleet_TelemetryStatus():Promise<settings.FleetTelemetryStatusView>;
 
 export function Graph_CancelRun(arg1:string):Promise<void>;
 
@@ -340,9 +404,13 @@ export function Graph_Validate(arg1:string):Promise<agentgraph.ValidationResult>
 
 export function Handoff_Accept(arg1:string):Promise<contextsync.AcceptedSessionView>;
 
+export function Handoff_Delete(arg1:string):Promise<void>;
+
 export function Handoff_Inbox():Promise<Array<contextsync.InboxItemView>>;
 
 export function Handoff_ListTeam():Promise<Array<contextsync.TeamMemberView>>;
+
+export function Handoff_RecipientDevices(arg1:string):Promise<Array<contextsync.RecipientDeviceView>>;
 
 export function Handoff_Share(arg1:string,arg2:string):Promise<void>;
 
@@ -371,6 +439,8 @@ export function LLM_AutoConfigureLocalRuntime(arg1:string):Promise<llm.LocalRunt
 export function LLM_DeleteChain(arg1:string):Promise<void>;
 
 export function LLM_GetAttachmentLimits(arg1:string,arg2:string):Promise<llm.AttachmentLimitsView>;
+
+export function LLM_ListCredentialKeys():Promise<Array<llm.CredentialKey>>;
 
 export function LLM_ListCustomTemplates():Promise<Array<llm.CustomTemplateSummary>>;
 
@@ -424,7 +494,11 @@ export function MCP_ImportClaudeDesktopConfig(arg1:mcp.ImportRequest):Promise<mc
 
 export function MCP_ListServers():Promise<Array<mcp.Server>>;
 
+export function MCP_ListToolPolicies():Promise<Array<toolloop.permRule>>;
+
 export function MCP_SaveCustomRecipe(arg1:mcp.SaveCustomRecipeRequest):Promise<recipes.Recipe>;
+
+export function MCP_SetToolPolicy(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function MCP_StartStream(arg1:string):Promise<string>;
 
@@ -542,6 +616,8 @@ export function Projects_Get(arg1:string):Promise<projects.Project>;
 
 export function Projects_GetAutonomy(arg1:string):Promise<autonomy.Layer>;
 
+export function Projects_GetToolExposure(arg1:string):Promise<toolexposure.Exposure>;
+
 export function Projects_List():Promise<Array<projects.Project>>;
 
 export function Projects_ListSessions(arg1:string):Promise<Array<projects.Session>>;
@@ -552,6 +628,8 @@ export function Projects_Rename(arg1:string,arg2:string):Promise<void>;
 
 export function Projects_SetAutonomy(arg1:string,arg2:autonomy.Layer):Promise<void>;
 
+export function Projects_SetToolExposure(arg1:string,arg2:toolexposure.Exposure):Promise<void>;
+
 export function Projects_UpdateDescription(arg1:string,arg2:string):Promise<void>;
 
 export function SaveRoute(arg1:string):Promise<void>;
@@ -559,6 +637,8 @@ export function SaveRoute(arg1:string):Promise<void>;
 export function SaveTheme(arg1:string):Promise<void>;
 
 export function ScheduledChat_Create(arg1:scheduledchat.CreateInput):Promise<scheduledchat.ChatRunEntry>;
+
+export function ScheduledChat_DefaultModel():Promise<scheduledchat.DefaultModel>;
 
 export function ScheduledChat_Delete(arg1:string):Promise<void>;
 
@@ -612,6 +692,10 @@ export function Sessions_Get(arg1:string):Promise<sessions.Session>;
 
 export function Sessions_GetAutonomy(arg1:string):Promise<autonomy.Layer>;
 
+export function Sessions_GetKnobsDefault(arg1:string):Promise<llm.RequestKnobs>;
+
+export function Sessions_GetToolExposure(arg1:string):Promise<sessions.SessionToolExposure>;
+
 export function Sessions_GetUsage(arg1:string):Promise<sessions.SessionUsage>;
 
 export function Sessions_List():Promise<Array<sessions.Session>>;
@@ -625,6 +709,10 @@ export function Sessions_ListMessagesAll(arg1:string):Promise<sessions.ListMessa
 export function Sessions_LoadDraft(arg1:string):Promise<string>;
 
 export function Sessions_LoadScrollPosition(arg1:string):Promise<number>;
+
+export function Sessions_LoadTools(arg1:string,arg2:Array<string>,arg3:Array<string>,arg4:boolean):Promise<loadtools.Result>;
+
+export function Sessions_ModelCalls(arg1:string,arg2:number):Promise<Array<modelcalls.CallView>>;
 
 export function Sessions_MoveToProject(arg1:string,arg2:string):Promise<void>;
 
@@ -646,7 +734,11 @@ export function Sessions_SendMessageWithBlocks(arg1:string,arg2:Array<llm.Conten
 
 export function Sessions_SetAutonomy(arg1:string,arg2:autonomy.Layer):Promise<void>;
 
+export function Sessions_SetKnobsDefault(arg1:string,arg2:llm.RequestKnobs):Promise<void>;
+
 export function Sessions_SetSystemPrompt(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function Sessions_SetToolExposure(arg1:string,arg2:toolexposure.Exposure):Promise<void>;
 
 export function Sessions_StartCapture(arg1:string):Promise<void>;
 
@@ -658,9 +750,13 @@ export function Sessions_StopStream(arg1:string):Promise<void>;
 
 export function Sessions_SuggestTitle(arg1:string):Promise<string>;
 
+export function Sessions_TurnRuns(arg1:string):Promise<Array<sessions.TurnRun>>;
+
 export function SetContext(arg1:context.Context):Promise<void>;
 
 export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
+
+export function Settings_DeleteMLLocalActivity():Promise<rpc.MLLocalActivityView>;
 
 export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
 
@@ -676,13 +772,15 @@ export function Settings_FleetRefreshCapabilities():Promise<settings.Capabilitie
 
 export function Settings_FleetRefreshIdentity():Promise<settings.FleetIdentity>;
 
+export function Settings_FleetSession():Promise<settings.FleetSessionView>;
+
 export function Settings_FleetSetTelemetryOptIn(arg1:string,arg2:boolean):Promise<void>;
 
 export function Settings_FleetSignIn():Promise<settings.FleetIdentity>;
 
-export function Settings_FleetSignOut():Promise<void>;
+export function Settings_FleetSignInCancel():Promise<void>;
 
-export function Settings_FleetSignedIn():Promise<boolean>;
+export function Settings_FleetSignOut():Promise<void>;
 
 export function Settings_FleetTelemetryOptIns():Promise<Array<settings.TelemetryOptInView>>;
 
@@ -720,11 +818,15 @@ export function Settings_GetLocalRuntimeRAMOverrideGB():Promise<number>;
 
 export function Settings_GetMCPAutoRestart():Promise<boolean>;
 
+export function Settings_GetMLLocalActivity():Promise<rpc.MLLocalActivityView>;
+
 export function Settings_GetMaxAgentTurns():Promise<number>;
 
 export function Settings_GetMaxGeneratedImageBytes():Promise<number>;
 
 export function Settings_GetMemory():Promise<boolean>;
+
+export function Settings_GetModelCallTelemetry():Promise<settings.ModelCallTelemetrySettings>;
 
 export function Settings_GetMonthlyCostNotifyUSD():Promise<number>;
 
@@ -736,6 +838,8 @@ export function Settings_GetPermissionMode():Promise<string>;
 
 export function Settings_GetPermissionsMigrationToastShown():Promise<boolean>;
 
+export function Settings_GetRiskRaterBenchmark():Promise<risk.RiskRaterBenchmark>;
+
 export function Settings_GetSaveArtifactEnabled():Promise<boolean>;
 
 export function Settings_GetShortcuts():Promise<Record<string, string>>;
@@ -744,9 +848,13 @@ export function Settings_GetShowPerMessageTokenMeter():Promise<boolean>;
 
 export function Settings_GetTodoEnabled():Promise<boolean>;
 
+export function Settings_GetToolExposure():Promise<toolexposure.Settings>;
+
 export function Settings_GetWebFetchEnabled():Promise<boolean>;
 
 export function Settings_GetWebSearch():Promise<boolean>;
+
+export function Settings_ResetUnreadable():Promise<settings.ResetUnreadableResult>;
 
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
 
@@ -780,11 +888,15 @@ export function Settings_SetLocalRuntimeRAMOverrideGB(arg1:number):Promise<void>
 
 export function Settings_SetMCPAutoRestart(arg1:boolean):Promise<void>;
 
+export function Settings_SetMLLocalActivityRetention(arg1:number):Promise<rpc.MLLocalActivityView>;
+
 export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 
 export function Settings_SetMaxGeneratedImageBytes(arg1:number):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
+
+export function Settings_SetModelCallTelemetry(arg1:settings.ModelCallTelemetrySettings):Promise<void>;
 
 export function Settings_SetMonthlyCostNotifyUSD(arg1:number):Promise<void>;
 
@@ -806,6 +918,8 @@ export function Settings_SetShowPerMessageTokenMeter(arg1:boolean):Promise<void>
 
 export function Settings_SetTodoEnabled(arg1:boolean):Promise<void>;
 
+export function Settings_SetToolExposure(arg1:toolexposure.Settings):Promise<void>;
+
 export function Settings_SetWebFetchEnabled(arg1:boolean):Promise<void>;
 
 export function Settings_SetWebSearch(arg1:boolean):Promise<void>;
@@ -820,9 +934,23 @@ export function Shell_PickFile(arg1:string,arg2:string,arg3:Array<string>):Promi
 
 export function Shell_ReadFile(arg1:string):Promise<rpc.ShellReadFileResult>;
 
+export function Sidecar_Enable():Promise<sidecar.StatusView>;
+
+export function Sidecar_Repair():Promise<sidecar.StatusView>;
+
+export function Sidecar_Status():Promise<sidecar.StatusView>;
+
+export function Sidecar_Uninstall():Promise<sidecar.StatusView>;
+
+export function Sidecar_Update():Promise<sidecar.StatusView>;
+
 export function Sites_Delete(arg1:string):Promise<void>;
 
 export function Sites_Deploy(arg1:string):Promise<sites.SiteSummary>;
+
+export function Sites_EnvList(arg1:string):Promise<Array<sites.SiteEnvEntry>>;
+
+export function Sites_EnvSet(arg1:string,arg2:Record<string, string>):Promise<void>;
 
 export function Sites_List():Promise<Array<sites.SiteSummary>>;
 
@@ -857,6 +985,16 @@ export function Slashcmd_SkillUninstall(arg1:string):Promise<void>;
 export function Storage_ApplyDriftFix(arg1:number):Promise<void>;
 
 export function Storage_GetMigrationDriftReport():Promise<storage.DriftReport>;
+
+export function Subagent_Abort(arg1:string):Promise<void>;
+
+export function Subagent_Pause(arg1:string):Promise<void>;
+
+export function Subagent_Resume(arg1:string):Promise<void>;
+
+export function Subagent_Steer(arg1:string,arg2:string):Promise<void>;
+
+export function Sync_ConfirmUploads():Promise<void>;
 
 export function Sync_ForcePull(arg1:string):Promise<void>;
 
@@ -901,6 +1039,8 @@ export function Tools_RecipeConfig(arg1:string):Promise<Record<string, any>>;
 export function Tools_RecipeStatus(arg1:string):Promise<transport.RecipeStatus>;
 
 export function Tools_RequestAdditionalAllowedDir(arg1:string,arg2:string,arg3:string):Promise<tools.FSAccessResult>;
+
+export function Tools_SchemaCosts(arg1:string,arg2:string):Promise<Array<loadtools.ServerCost>>;
 
 export function Tools_SignInRecipe(arg1:string):Promise<transport.RecipeStatus>;
 
@@ -951,8 +1091,6 @@ export function Workflows_CancelRun(arg1:string):Promise<void>;
 export function Workflows_CatalogGet(arg1:string):Promise<workflows.CatalogPreview>;
 
 export function Workflows_CatalogInstall(arg1:string):Promise<workflows.CatalogInstallResult>;
-
-export function Workflows_CatalogList():Promise<Array<workflows.CatalogEntry>>;
 
 export function Workflows_Delete(arg1:string):Promise<void>;
 

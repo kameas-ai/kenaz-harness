@@ -1,0 +1,4 @@
+{
+  "code": "handoff_empty",
+  "message": "a handoff must contain at least one event"
+}

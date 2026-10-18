@@ -19,6 +19,16 @@ type skillCommand struct {
 // Compile-time witness.
 var _ Command = skillCommand{}
 
+// IsSkill reports whether cmd is a fleet-installed skill registered via
+// RegisterSkill, as opposed to a built-in. Skills share the registry with
+// built-ins but rank BELOW user commands (FR-401: personal > team > org),
+// so surfaces that give built-ins precedence over user commands must not
+// extend that precedence to skills.
+func IsSkill(cmd Command) bool {
+	_, ok := cmd.(skillCommand)
+	return ok
+}
+
 func (c skillCommand) Name() string        { return c.skill.EffectiveTrigger() }
 func (c skillCommand) Description() string { return c.skill.Description }
 func (c skillCommand) Hidden() bool        { return false }

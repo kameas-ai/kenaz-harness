@@ -9,7 +9,8 @@
  *   - Polls Memory_HealthSnapshot on mount and every 30 s.
  *   - Filters by projectId client-side (HealthSnapshot returns the global
  *     count; ListChunks + filter is used for project-scoped counts).
- *   - Click navigates to /memory (optionally with ?project=<id> filter).
+ *   - Click navigates to Knowledge › Learned (/knowledge/learned, optionally
+ *     with ?project=<id>).
  *   - 0-chunk state shows a brief onboarding modal.
  *   - Tooltip text explains the value proposition.
  */
@@ -101,7 +102,7 @@ function onClick() {
     return;
   }
   const query = props.projectId ? `?project=${encodeURIComponent(props.projectId)}` : '';
-  void router.push(`/memory${query}`);
+  void router.push(`/knowledge/learned${query}`);
 }
 
 function dismissZeroModal() {

@@ -20,6 +20,33 @@ export interface ScheduledChatEntry {
   enabled: boolean;
   createdAt: string; // ISO 8601
   updatedAt: string; // ISO 8601
+  /**
+   * One-shot schedules (model-scheduled-jobs-01PMSJ01 WP08, FR-006).
+   * "cron" (the default, backward-compatible with every row created
+   * before this field existed) or "once". Always populated on the real
+   * wire response; optional here (rather than required) so existing
+   * fixtures/tests written before this field existed do not all need
+   * updating — treat a missing value as "cron".
+   */
+  triggerKind?: 'cron' | 'once';
+  /** Fire time for a triggerKind "once" row (ISO 8601, UTC). Absent for "cron". */
+  runAt?: string;
+  /**
+   * Tool-name allowlist the schedule's runs are contained to (Go
+   * ChatRunEntry.ToolAllowlist); absent or empty = not contained.
+   */
+  toolAllowlist?: string[];
+  /**
+   * The newest persisted run outcome; absent when the schedule has never
+   * run.
+   */
+  lastRun?: ScheduledChatRunSummary;
+}
+
+/** What "active default" resolves to for a schedule with no model override. */
+export interface ScheduledChatDefaultModel {
+  profileId: string;
+  model: string;
 }
 
 export interface ScheduledChatRunSummary {
@@ -31,16 +58,25 @@ export interface ScheduledChatRunSummary {
   endedAt?: string;  // ISO 8601
   outputSnippet?: string;
   error?: string;
+  /** Model the run was dispatched with; absent when unknown. */
+  model?: string;
+  /** Run cost in USD; absent/0 when unknown or free. */
+  costUsd?: number;
 }
 
 export interface ScheduledChatCreateInput {
   name: string;
   promptTemplate: string;
+  /** Required when triggerKind is "cron" (the default); ignored for "once". */
   cron: string;
   timezone?: string;
   model?: string;
   outputSink?: string;
   enabled: boolean;
+  /** "cron" (default) or "once" (model-scheduled-jobs-01PMSJ01 WP08). */
+  triggerKind?: 'cron' | 'once';
+  /** Required (ISO 8601) when triggerKind is "once"; ignored for "cron". */
+  runAt?: string;
 }
 
 export interface ScheduledChatUpdateInput {
@@ -52,6 +88,8 @@ export interface ScheduledChatUpdateInput {
   model?: string;
   outputSink?: string;
   enabled: boolean;
+  triggerKind?: 'cron' | 'once';
+  runAt?: string;
 }
 
 // ── client interface ──────────────────────────────────────────────────────
@@ -65,6 +103,7 @@ export interface ScheduledChatClient {
   runNow(id: string): Promise<ScheduledChatRunSummary>;
   history(id: string, limit: number): Promise<ScheduledChatRunSummary[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
+  defaultModel(): Promise<ScheduledChatDefaultModel>;
 }
 
 // ── bridge helper ─────────────────────────────────────────────────────────
@@ -93,6 +132,7 @@ export function createScheduledChatClient(): ScheduledChatClient {
     runNow: (id) => bridge().ScheduledChat_RunNow(id),
     history: (id, limit) => bridge().ScheduledChat_History(id, limit),
     setEnabled: (id, enabled) => bridge().ScheduledChat_SetEnabled(id, enabled),
+    defaultModel: () => bridge().ScheduledChat_DefaultModel(),
   };
 }
 
@@ -115,6 +155,7 @@ export function createFakeScheduledChatClient(
     enabled: true,
     createdAt: '1970-01-01T00:00:00Z',
     updatedAt: '1970-01-01T00:00:00Z',
+    triggerKind: 'cron',
   };
   return {
     create: seed.create ?? ((input) => Promise.resolve({ ...stub, ...input, id: 'new-id' })),
@@ -133,5 +174,7 @@ export function createFakeScheduledChatClient(
         })),
     history: seed.history ?? (() => Promise.resolve([])),
     setEnabled: seed.setEnabled ?? (() => Promise.resolve()),
+    defaultModel:
+      seed.defaultModel ?? (() => Promise.resolve({ profileId: '', model: '' })),
   };
 }

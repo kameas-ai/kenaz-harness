@@ -43,6 +43,13 @@ type ContextWriter interface {
 	Sync(ctx context.Context, payload SyncPayload) error
 }
 
+// SharingStatusReporter is optionally implemented by a ContextWriter that
+// does NOT share extracted nodes beyond the device. SharingSkipReason is a
+// short stable code copied into RunStatus.SharingSkipped.
+type SharingStatusReporter interface {
+	SharingSkipReason() string
+}
+
 // ProgressSink receives live run-status updates. The RPC layer wires this
 // to a Wails EventsEmit broadcast so the frontend can show live progress.
 // A nil ProgressSink is safe; progress is silently dropped.

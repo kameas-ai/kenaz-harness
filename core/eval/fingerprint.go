@@ -36,7 +36,7 @@ func FingerprintRequest(req corellm.GenerationRequest) string {
 	cr := canonReq{
 		ProfileID: req.ProfileID,
 		Model:     req.Model,
-		System:    req.System,
+		System:    req.FullSystem(),
 	}
 	for _, m := range req.Messages {
 		cm := canonMsg{Role: string(m.Role)}

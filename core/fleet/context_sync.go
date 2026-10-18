@@ -9,6 +9,12 @@ package fleet
 // Fleet API paths:
 //   POST /api/v1/context/append  — append a batch of encrypted events
 //   GET  /api/v1/context/replay  — replay events from seq N
+//
+// NOTE (verified against kenaz-fleet main, 2026-10-05): fleet registers
+// neither route — both answer the mux's plain 404. A plain 404 latches the
+// event stream unsupported for the Client's lifetime (unsupported_endpoint.go)
+// and events stay local. A fleet session-event log is a NEW fleet feature
+// awaiting an owner spec (server-assigned seq); see docs/unwired-ledger.md.
 //   DELETE /api/v1/context/{streamID} — purge all events for a stream
 //
 // Privacy invariant: no event payload bytes appear in slog. The client only
@@ -22,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -71,9 +78,47 @@ type replayResponse struct {
 // It is safe for concurrent use.
 type EventStream struct {
 	client   *Client
-	key      []byte   // 32-byte AEAD key; never logs
-	streamID string   // fleet stream identifier (stream-scoped UUID)
+	key      []byte // 32-byte AEAD key; never logs
+	streamID string // fleet stream identifier (stream-scoped UUID)
 	lastSeq  atomic.Uint64
+	// decryptFallbacks are keys derived from retained (pre-import) seeds.
+	// Replay tries them, in order, after key; encrypt never uses them.
+	decryptFallbacks [][]byte
+}
+
+// newDecryptStream builds a stream from DeriveDecryptKeys output: keys[0]
+// (the current seed's key) is the stream key, the rest are Replay-only
+// decrypt fallbacks.
+func newDecryptStream(client *Client, streamID string, keys [][]byte) (*EventStream, error) {
+	if len(keys) == 0 {
+		return nil, errors.New("fleet: EventStream needs at least one key")
+	}
+	es, err := NewEventStream(client, streamID, keys[0])
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range keys[1:] {
+		if len(k) != 32 {
+			return nil, fmt.Errorf("fleet: EventStream fallback key must be 32 bytes, got %d", len(k))
+		}
+		es.decryptFallbacks = append(es.decryptFallbacks, k)
+	}
+	return es, nil
+}
+
+// decrypt opens one wire payload with the stream key, then each fallback
+// key in order. ErrDecryptionFailed only when every key fails.
+func (es *EventStream) decrypt(ciphertext, nonce []byte) ([]byte, error) {
+	pt, err := Decrypt(es.key, ciphertext, nonce)
+	if err == nil || len(es.decryptFallbacks) == 0 {
+		return pt, err
+	}
+	for _, k := range es.decryptFallbacks {
+		if pt, fbErr := Decrypt(k, ciphertext, nonce); fbErr == nil {
+			return pt, nil
+		}
+	}
+	return nil, err
 }
 
 // NewEventStream constructs an EventStream for the given stream ID and AEAD
@@ -160,7 +205,10 @@ func (es *EventStream) Backfill(ctx context.Context, events []Event) error {
 func (es *EventStream) Replay(ctx context.Context, sinceSeq uint64, apply func(Event) error) error {
 	nextSeq := sinceSeq
 	for {
-		path := fmt.Sprintf("/api/v1/context/replay?stream_id=%s&since=%d", es.streamID, nextSeq)
+		if err := es.client.endpointUnsupported(FeatureContextEventStream); err != nil {
+			return err
+		}
+		path := fmt.Sprintf("/api/v1/context/replay?stream_id=%s&since=%d", url.QueryEscape(es.streamID), nextSeq)
 		resp, err := es.client.Get(ctx, path)
 		if err != nil {
 			return fmt.Errorf("fleet: context replay GET: %w", err)
@@ -169,6 +217,9 @@ func (es *EventStream) Replay(ctx context.Context, sinceSeq uint64, apply func(E
 		_ = resp.Body.Close()
 		if readErr != nil {
 			return fmt.Errorf("fleet: context replay read body: %w", readErr)
+		}
+		if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), body) {
+			return es.client.markEndpointUnsupported(FeatureContextEventStream, endpointPath(path))
 		}
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("fleet: context replay status %d", resp.StatusCode)
@@ -180,7 +231,7 @@ func (es *EventStream) Replay(ctx context.Context, sinceSeq uint64, apply func(E
 		}
 
 		for _, we := range rr.Events {
-			pt, decErr := Decrypt(es.key, we.EncryptedPayload, we.Nonce)
+			pt, decErr := es.decrypt(we.EncryptedPayload, we.Nonce)
 			if decErr != nil {
 				return fmt.Errorf("fleet: replay decrypt seq %d: %w", we.Seq, decErr)
 			}
@@ -214,7 +265,7 @@ func (es *EventStream) Replay(ctx context.Context, sinceSeq uint64, apply func(E
 
 // DeleteRemote sends DELETE /api/v1/context/<streamID> to purge all events.
 func (es *EventStream) DeleteRemote(ctx context.Context) error {
-	path := "/api/v1/context/" + es.streamID
+	path := "/api/v1/context/" + url.PathEscape(es.streamID)
 	resp, err := es.client.Delete(ctx, path)
 	if err != nil {
 		return fmt.Errorf("fleet: context delete: %w", err)
@@ -264,14 +315,29 @@ func (es *EventStream) postChunk(ctx context.Context, events []wireEvent) error 
 	if err != nil {
 		return fmt.Errorf("fleet: marshal append request: %w", err)
 	}
-	resp, err := es.client.Post(ctx, "/api/v1/context/append", "application/json", bytes.NewReader(data))
+	// A server already known not to have the event stream is never asked
+	// again (unsupported_endpoint.go): events stay local.
+	if err := es.client.endpointUnsupported(FeatureContextEventStream); err != nil {
+		return err
+	}
+	const appendPath = "/api/v1/context/append"
+	resp, err := es.client.Post(ctx, appendPath, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("fleet: context append POST: %w", err)
 	}
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+	if isPlainNotFound(resp.StatusCode, resp.Header.Get("Content-Type"), respBody) {
+		return es.client.markEndpointUnsupported(FeatureContextEventStream, appendPath)
+	}
+	if isProxyNotFoundPage(resp.StatusCode, resp.Header.Get("Content-Type"), respBody) {
+		// An HTML/XML 404 page: something in front of fleet, not a
+		// verdict on the route. Transient, never latched.
+		return &AppendStatusError{Status: resp.StatusCode, ProxyPage: true}
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("fleet: context append status %d", resp.StatusCode)
+		return &AppendStatusError{Status: resp.StatusCode}
 	}
 	logging.L().Info("fleet.context_sync.appended",
 		"stream_id", shortID(es.streamID),

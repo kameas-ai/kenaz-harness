@@ -184,6 +184,14 @@ product decision made by a linter.
   `AttachmentTreePicker`; the toast trio → `useEventToasts`).
 - A **documented product retirement** superseded it (corpora → contexts;
   the update-dot → the Help menu, per `os-menu-bar-01NDFSEX16` §FR-006).
+  **Scope correction (ruling X-4, chat-turn-integrity-01PMZ606 WP13,
+  2026-08-29):** the corpora → contexts retirement applies to the
+  *corpora UI surface* only — `AN-12` verified `exec_state.go:106`
+  still calls `env.Corpus.Search` on the live agent-graph kernel path
+  and `corpus_read`/`corpus_write` ship in the node catalog. Do not
+  extend this bullet to the `core/corpus` kernel seam; that half is a
+  live capability (ruling: wire the embedder, don't delete the client
+  surface — see `docs/escalation-register-2026-08-19.md` X-4).
 - It is **rival infrastructure** — a second implementation of something
   the app already does one way (`lib/slashcmd.ts`, `lib/useStream.ts`).
 - The **whole subsystem has no producer and no product intent**, and
@@ -328,6 +336,18 @@ Per-symbol justifications stay with their gate in
 
 ---
 
+## Merge gates key on paths, not branch names
+
+Owner policy (2026-09-15, finding #100). A merge gate written as "the
+`feature/X` -> `main` PR is blocked until ..." is unenforceable: the sites
+release gate (9 verification WPs, all still NOT RUN) was bypassed when the
+same feature reached `main` via a different PR, and nothing fired. A gate
+that must bind names the **code paths it protects** (files, packages,
+bindings), so it fires however the change arrives. When writing a
+release-gate into a spec, state it as "changes touching `core/x/**` /
+binding family `Y_*` require ..." and, where mechanically checkable, back
+it with a `scripts/ci/check-*.sh` gate + planted proof rather than prose.
+
 ## Mission system (kitty-specs/)
 
 Each feature is a *mission* under `kitty-specs/<slug>-<ULID>/`:
@@ -388,6 +408,20 @@ When merging multiple mission branches, expect simultaneous additions in these f
 - `core/context/audit/audit.go` — `Kind*` constants + payload structs
 - `core/hooks/hooks.go` — `Event*` constants + `AllEvents` slice (the slice is what `isKnownEvent` validates against; new events must be added there too)
 - `core/hooks/runner.go` — `BuiltinRegistry` fields + constructor map initialisers
+
+**Exception: same sentinel name, different meaning is not additive.** PR
+#334 (pause/resume) and PR #331 (Abort/Steer) both declared `var
+ErrSubagentUnavailable` in `core/rpc/views/branches` — same name, but
+guarding two genuinely different degraded-boot conditions with two
+different messages (an unset pause registry vs. an unset task registry).
+Go forbids two same-named package-level vars, so "keep all additions"
+does not apply here: whoever merges second must rename, not collapse,
+or the surviving literal silently mislabels the other feature's error.
+The tell that this is more than cosmetic is that the value escapes
+unwrapped to a caller (here, through the Wails-bound `Subagent_*`
+methods) — when that's true, treat a same-name collision as a real
+conflict and pick a more specific name for the newer or not-yet-merged
+copy, rather than reflexively combining both sides.
 
 ### Worktree agents cannot read `kitty-specs/` — copy it in
 
@@ -488,6 +522,12 @@ wails build
 
 # Live dev
 wails dev
+
+# Live dev with the kenaz-ml engine seeded into ~/.kenaz/ml/dev first
+# (scripts/dev-ml.sh: explicit onedir -> sibling ../kenaz-ml/dist -> CI artifact
+# via gh -> KENAZ_ML_BUILD=1 freeze; never blocks the launch). KENAZ_ML_SEED=0 skips.
+bash scripts/dev.sh
+go run ./cmd/mlsidecar-devseed --status   # what the dev engine root holds
 
 # Backend tests (mirror CI)
 go test ./core/... -race -count=1 -short

@@ -56,12 +56,192 @@ export interface Session {
   branchTitle?: string;
   /** Nesting depth; 0 for root sessions; pre-computed server-side. */
   branchDepth?: number;
+
+  /**
+   * Per-turn token/cost snapshot most recently persisted for this session
+   * (chat-turn-integrity-01PMZ606 WP11, task #37). Mirrors
+   * core/rpc/views/sessions.LastUsage, read from session.Manager
+   * .GetLastUsage via the sessions.last_usage_json column. Undefined when
+   * no turn has completed yet — distinct from a genuine zero-cost turn,
+   * which round-trips as a defined object with zero fields. useSession.ts's
+   * load() copies this into its own `lastUsage` ref so the composer footer
+   * and context-window meter (SessionsView.vue) show the real number on a
+   * session reopen instead of resetting to 0 tok · $0.0000 until the next
+   * live `session.usage.updated` event.
+   */
+  lastUsage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    costUsd: number;
+    costSource: string;
+  };
 }
 
 /**
  * SessionUsage — per-session cumulative token + cost aggregate.
  * Mirrors core/rpc/views/sessions.SessionUsage (token-cost-telemetry WP03).
  */
+/**
+ * One chat turn -> agent-graph run link (agentgraph-settings-linkage-
+ * 01DOGF0D WP03, `Sessions_TurnRuns`). The transcript keys a turn by
+ * `turnSpanId` (the same id every move of the turn carries) and links to
+ * `/agentgraph/run/:runId/graph` and `/agentgraph/run/:runId`. A turn with
+ * no TurnRun predates the mapping and must not be linked.
+ */
+export interface TurnRun {
+  runId: string;
+  turnSpanId: string;
+  graphId: string;
+  /** Which version of `graphId` ran ("sha256:<hex>"). */
+  specDigest: string;
+  /** RFC3339Nano. */
+  createdAt: string;
+  /**
+   * How the run ended (undelivered-message-retry, migration
+   * sessions/0344): "completed" | "failed" | "stopped", or "" while in
+   * flight / for a run recorded before the column existed. Optional so
+   * older fakes and backends type-check; absent reads as "".
+   */
+  outcome?: string;
+  /** Whether the model accepted the request. Meaningful only with an outcome. */
+  delivered?: boolean;
+  /** llm.FailureClass: "user_actionable" | "transient" | "unknown". */
+  failureClass?: string;
+  /** Stable failure code ("payment_required", "rate_limited", …). */
+  failureCode?: string;
+  /** Provider HTTP status, when it sent one. */
+  failureStatus?: number;
+  /** Provider adapter kind ("openrouter"). */
+  failureProvider?: string;
+  /** One-line copy ("Out of credits with OpenRouter"). */
+  failureSummary?: string;
+  /** Provider's own message, sanitized server-side. */
+  failureMessage?: string;
+}
+
+/**
+ * UsageComposition — one model call's prompt by part, in tokens.
+ * Mirrors core/rpc/views/sessions.UsageComposition. Every part but
+ * `cached` is the harness estimate (tool definitions at 2.5 bytes per token, text at ~4 characters per token); `cached` is the
+ * provider-reported prompt-cache read.
+ */
+export interface UsageComposition {
+  system: number;
+  tools: number;
+  history: number;
+  attachments: number;
+  memory: number;
+  cached: number;
+  /** Number of tool definitions the call carried. */
+  toolsFull: number;
+  /**
+   * Number of tools listed only by summary. Optional so older backends
+   * and fakes type-check; absent reads as 0.
+   */
+  toolsSummary?: number;
+  /** Tool-schema budget the call was fitted to; absent when none applied. */
+  schemaBudget?: number;
+  /** Loaded tools left out of the call to fit the schema budget. */
+  toolsEvicted?: number;
+  /**
+   * Tokens of the overage pinned tools account for; > 0 is
+   * the composer's "Pinned tools exceed the schema budget by N tokens"
+   * warning. Absent reads as 0.
+   */
+  pinnedOverBudgetBy?: number;
+  /**
+   * Tokens by which the always-sent core tools alone exceed the schema
+   * budget; > 0 means this model's window is too small for the core
+   * tools. Absent reads as 0.
+   */
+  hotOverBudgetBy?: number;
+}
+
+/**
+ * One stored model provider call (llm-call-telemetry-01LLMTEL01 WP02):
+ * the wire shape of Go modelcalls.CallView, read through
+ * Sessions_ModelCalls. Every string is a bounded allowlist value (ids,
+ * model ids, provider tokens, enums) — never content. Pointer fields are
+ * null when the provider did not report them; provider* / native* fields
+ * come from the OpenRouter generation-stats pull and stay null until it
+ * lands (statsState 'fetched').
+ */
+export interface ModelCall {
+  spanId: string;
+  startedAtMs: number;
+  durationMs: number;
+  status: 'ok' | 'error';
+  provider: string;
+  requestModel: string;
+  responseModel: string;
+  responseId: string;
+  upstream: string;
+  finishReasons: string[];
+  errorType: string;
+  attempt: number;
+  fallback: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  ttftMs: number;
+  costUsd: number | null;
+  statsState: '' | 'fetched' | 'gave_up';
+  providerLatencyMs: number | null;
+  providerGenerationTimeMs: number | null;
+  providerCostUsd: number | null;
+  nativeInputTokens: number | null;
+  nativeOutputTokens: number | null;
+  nativeReasoningTokens: number | null;
+  nativeCachedTokens: number | null;
+  nativeFinishReason: string;
+}
+
+/**
+ * The three model-call telemetry settings (Go
+ * settings.ModelCallTelemetrySettings).
+ */
+export interface ModelCallTelemetrySettings {
+  /** "Fetch OpenRouter generation stats" — default true. */
+  statsPullEnabled: boolean;
+  /** Retention as stored; 0 = the 30-day default. */
+  retentionDays: number;
+  /** Read-only: the window the pruner applies. Ignored on write. */
+  effectiveRetentionDays: number;
+  /** "Share model-call telemetry with Fleet" — default false. */
+  shareWithFleet: boolean;
+}
+
+/**
+ * The local ML activity store (ml-producer-01MLPRD01 WP11): what Kenaz keeps
+ * on this device to power local suggestions (rpc.MLLocalActivityView).
+ */
+export interface MLLocalActivity {
+  /** False when the store could not be opened; the counts are then 0. */
+  available: boolean;
+  events: number;
+  tasks: number;
+  /** The database file plus its write-ahead log. */
+  sizeBytes: number;
+  /** Retention as stored; 0 = the 90-day default. */
+  retentionDays: number;
+  /** Read-only: the window the pruner applies. */
+  effectiveRetentionDays: number;
+  /** New activity is also being copied to Fleet right now. */
+  sharingWithFleet: boolean;
+  /**
+   * The retention setting has kept failing to read (3 prune passes in a
+   * row, or over 24 h since the last good read). Pruning continues to the
+   * last saved retention (lastGoodRetentionDays), or deletes nothing when
+   * there is none.
+   */
+  retentionBlocked: boolean;
+  /** With retentionBlocked: the last saved effective days still applied; 0 = none. */
+  lastGoodRetentionDays: number;
+}
+
 export interface SessionUsage {
   /** Sum of all input tokens for the session. */
   promptTokens: number;
@@ -84,6 +264,16 @@ export interface SessionUsage {
   /** Last-updated date of the pricing table used ("YYYY-MM-DD"). */
   pricingDataDate: string;
   /**
+   * Sum of provider-reported prompt-cache reads across the session.
+   * Optional so older backends and fakes type-check; absent reads as 0.
+   */
+  cachedTokens?: number;
+  /**
+   * The most recent model call's prompt by part. Absent until a measured
+   * call has completed (and on sessions whose last call predates it).
+   */
+  composition?: UsageComposition;
+  /**
    * True when the auto-titling engine wrote the session name. Mirrors
    * session.Record.AutoTitled. The rail renders auto-titled sessions
    * with a subtle italic+muted hint so the user can distinguish
@@ -101,6 +291,54 @@ export interface Project {
   description: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// ── documents + local knowledge sites (contracts/documents-rpc.md) ─────
+
+export type DocumentScope = 'session' | 'global';
+
+/** A Documents_List row. Timestamps are RFC3339Nano UTC. */
+export interface DocumentSummary {
+  id: string;
+  title: string;
+  scope: DocumentScope;
+  version: number;
+  contentSha256: string;
+  byteSize: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A full document. `body` is the sanitized HTML the store holds. */
+export interface DocumentRecord extends DocumentSummary {
+  body: string;
+}
+
+/** Documents_Preview: exactly what Create/Update would store. */
+export interface DocumentPreview {
+  html: string;
+  sanitized: boolean;
+  byteSize: number;
+}
+
+export interface KnowledgeSiteWarnings {
+  documentId: string;
+  warnings: string[];
+}
+
+/**
+ * Documents_BuildSite. Paths are absolute on the machine running the
+ * harness (inside a workbench, under /workspace). `published` is always
+ * false: nothing in this family uploads.
+ */
+export interface KnowledgeSiteBuild {
+  siteDir: string;
+  publicDir: string;
+  bundle: string;
+  bundleSha256: string;
+  documents: number;
+  warnings: KnowledgeSiteWarnings[];
+  published: boolean;
 }
 
 export interface Provider {
@@ -154,6 +392,37 @@ export type ProviderSource = 'bundle' | 'host' | 'personal';
 export interface CredentialReference {
   kind: 'keychain' | 'env' | 'file' | 'aws_profile' | 'kms';
   locator: string;
+  /**
+   * Who owns the key (provider-credentials-client-01PCCLI01 B1). Absent
+   * means 'local' — a key entered on this device.
+   */
+  source?: CredentialSource;
+  /** Fleet credential id for a Fleet source. An identifier, not key material. */
+  credentialId?: string;
+}
+
+/** Ownership of a provider key. Mirrors Go llm.CredentialSource. */
+export type CredentialSource = 'local' | 'user_sync' | 'org' | 'team';
+
+/**
+ * One key a provider profile can use, as LLM_ListCredentialKeys lists it
+ * (§7a H2: several per provider, labelled by scope). Display metadata only:
+ * no key material and no keychain locator. Mirrors Go
+ * core/rpc/views/llm.CredentialKey.
+ */
+export interface CredentialKey {
+  /** Fleet credential id, or "local:<profileId>" for a key entered here. */
+  id: string;
+  provider: string;
+  source: CredentialSource;
+  /** Org or team display name for an org/team key, when known. */
+  scopeName?: string;
+  profileIds: string[];
+  orgDefault?: boolean;
+  teamDefault?: boolean;
+  /** The provider's default key, in contract order (team → org → own key). */
+  preselected?: boolean;
+  userSelectable: boolean;
 }
 
 export type ProviderKind =
@@ -268,6 +537,13 @@ export interface ModelInfo {
   /** Max context length in tokens; 0 / undefined = unknown. */
   contextWindow?: number;
   /**
+   * True when requests for this model carry prompt-cache markers
+   * (tool-context-budget-01TCBUD01 WP05). Go views/llm.ModelInfo derives
+   * it from the adapter's llm.ModelInfo flag, falling back to the curated
+   * llm.SupportsPromptCache table (Anthropic direct); omitted when false.
+   */
+  supportsPromptCache?: boolean;
+  /**
    * Provider's hard cap on output tokens per turn.
    * 0 / undefined = unknown — the UI should not render an explicit cap.
    * Sourced from the backend capability catalog
@@ -283,6 +559,24 @@ export interface MCPServer {
   version: string;
   transport?: string;
   capabilities?: string[];
+}
+
+// ── Static tool permission rules (trust-surfaces-that-fire-01PMZ202
+// WP24, finding CHAT-05) ────────────────────────────────────────────
+//
+// Wire shape for `MCP_SetToolPolicy` / `MCP_ListToolPolicies`. Mirrors
+// toolloop.StaticRule's JSON tags verbatim. `server`/`tool` may be "*"
+// for a wildcard rule; `tool: "*"` is the whole-server policy the Tools
+// view sets. The static resolver behind this is read once at chassis
+// boot, so a write here takes effect on the next restart, not the
+// running session.
+export type MCPToolPolicy = 'auto_allow' | 'confirm_each' | 'deny';
+
+export interface MCPToolPolicyRule {
+  server: string;
+  tool: string;
+  policy: MCPToolPolicy;
+  reason?: string;
 }
 
 // ── MCP Test Connection (mission mcp-server-install-01KQ8TDP, WP07) ────
@@ -588,6 +882,15 @@ export interface ContextPublishResult {
   accepted_nodes: number;
   accepted_edges: number;
   conflicts: ContextPushConflict[];
+  /**
+   * The layer the entry actually published to — "team" or "org". Can
+   * differ from the request's `layer`: a "team" request with no team_id
+   * falls back to "org" (finding #97 — THROWAWAY until fleet's default
+   * "everyone" team ships, see core/rpc/views/contexts/impl.go). Always
+   * use this, never the request layer, when telling the user where the
+   * entry went.
+   */
+  effective_layer: 'team' | 'org';
 }
 
 export interface ContextPromoteResult {
@@ -602,6 +905,10 @@ export interface ContextSyncStatusView {
   last_push_err: string;
   pull_count: number;
   team_cap_enabled: boolean;
+  /** Pulled nodes skipped because their kind is not a Curated kind (WP03). */
+  skipped_unknown_kinds?: number;
+  /** "_unit" metadata keys stripped before push (review F13). */
+  stripped_unit_keys?: number;
 }
 
 /** One search result from `contexts.search` (Contexts_ContextSearch). */
@@ -688,6 +995,30 @@ export interface AuditEntry {
   category: string;
   subject: string;
   trailing?: string;
+  /**
+   * risk-rated-autonomy-01PMRA01 WP10: populated ONLY when subject is
+   * "tool.confirm_decision" — every other kind leaves this undefined,
+   * unchanged from the pre-WP10 "kind + category + trailing only"
+   * projection every other audit kind still gets.
+   */
+  tool_confirm_decision?: ToolConfirmDecisionDetail;
+}
+
+/** ToolConfirmDecisionDetail — mirrors core/rpc/views/audit.ToolConfirmDecisionDetail 1:1. */
+export interface ToolConfirmDecisionDetail {
+  server?: string;
+  tool?: string;
+  family?: string;
+  path?: string;
+  layer?: number;
+  threshold?: number;
+  approved: boolean;
+  reason?: string;
+  score?: number;
+  tier?: string;
+  model?: string;
+  prompt_version?: string;
+  cache_hit?: boolean;
 }
 
 export interface AuditFilter {
@@ -825,6 +1156,43 @@ export interface AppInfo {
 export interface WindowSize {
   width: number;
   height: number;
+}
+
+/**
+ * CompactionOverheadInfo — the running compaction-driven LLM cost tally
+ * the SessionsView header row renders (chat-turn-integrity-01PMZ606 WP12,
+ * owner ruling X-7 / CK-08). Mirrors core/rpc.CompactionOverheadInfo.
+ *
+ * Process-wide, not per-session: the backend running counter
+ * (compactionwiring.LLMCaller.Overhead()) accumulates for the whole
+ * process's lifetime, not per session — see the Go-side doc comment for
+ * why. `calls === 0` means "no compaction has run since this process
+ * started," not "this session never compacted."
+ *
+ * The autoTitle* fields (model-settings-reach-the-model-01PMZ101 WP07)
+ * carry the SAME kind of running tally for the auto-title LLM caller,
+ * reusing this type/RPC rather than adding a parallel binding — both
+ * readouts feed the same cost panel.
+ */
+export interface CompactionOverheadInfo {
+  total: number;
+  currency?: string;
+  calls: number;
+  indeterminateCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** Aggressiveness tier of up to the last 5 successful compactions, oldest first. */
+  recentTiers?: string[];
+  // Optional (rather than mirroring the compaction fields' required-ness)
+  // so the many pre-existing compactionOverhead() test fixtures that
+  // predate WP07 keep type-checking without every one of them being
+  // touched; SessionsView.vue treats a missing value as 0/absent.
+  autoTitleTotal?: number;
+  autoTitleCurrency?: string;
+  autoTitleCalls?: number;
+  autoTitleIndeterminateCalls?: number;
+  autoTitleInputTokens?: number;
+  autoTitleOutputTokens?: number;
 }
 
 export interface Settings {
@@ -986,6 +1354,16 @@ export interface Settings {
    * docs/unwired-ledger.md for why it is not wired.
    */
   branchAdvisorDefaultModel?: ProviderProfileRef;
+
+  /**
+   * Explicit (provider, model) choice for risk-rated-autonomy-01PMRA01's
+   * layer-3 rating call. Empty == no explicit choice: the backend's
+   * three-rung ladder (core/policy/risk.ResolveRaterModel) falls back to
+   * a per-provider default, then to any available model, so the rater
+   * always constructs (owner ruling 3, 2026-09-15). See
+   * RiskRaterBenchmark for the per-model data the picker renders.
+   */
+  riskRaterModel?: ProviderProfileRef;
   /**
    * User-overridden keyboard shortcut bindings. Map of shortcut id
    * (e.g. 'chat.send') → canonical binding string (e.g. 'Cmd+Shift+Enter').
@@ -1112,8 +1490,10 @@ export interface Settings {
   longSessionNudgeTurns?: number;
 
   /**
-   * longSessionNudgeTokens — cumulative prompt-token threshold after
-   * which the nudge banner appears regardless of turn count.
+   * longSessionNudgeTokens — conversation-history token threshold (the
+   * history part of the last request's composition, not the whole
+   * prompt) after which the nudge banner appears regardless of turn
+   * count.
    * Default 50000. Zero == use default.
    */
   longSessionNudgeTokens?: number;
@@ -1168,6 +1548,17 @@ export interface Settings {
    * "optional" (default, empty==optional), "required", "forbidden".
    */
   bundleSigningPolicy?: string;
+
+  /**
+   * Explicit (provider, model) choice for laya-advisors-01LAYA001's
+   * advisor seam (branch_now / compact_now / escalate_model, WP04-06).
+   * Empty == no explicit choice: the backend's laya ladder
+   * (core/advice.ResolveAdvisorModel) falls back to a detected local
+   * laya model, then to disabled. Mirrors riskRaterModel /
+   * compactionModel exactly; no dedicated picker ships in WP01-03 — the
+   * field rides the generic settings get/save round-trip.
+   */
+  advisorModel?: ProviderProfileRef;
 
   /**
    * GraphAuthoringEnabled — the model-authored-agent-graphs consent
@@ -1228,6 +1619,22 @@ export interface MigrationDriftDetectedPayload {
 }
 
 /**
+ * ScheduledChatBannerPayload — the event published on the
+ * `scheduled-chat:banner` broker topic when a scheduled chat run with
+ * `outputSink: "banner"` (the schema default) finishes
+ * (model-scheduled-jobs-01PMSJ01 WP07, FR-007). Mirrors
+ * core/rpc.ScheduledChatBannerPayload exactly.
+ */
+export interface ScheduledChatBannerPayload {
+  chatRunId: string;
+  name: string;
+  sessionId: string;
+  status: 'completed' | 'failed';
+  outputSnippet?: string;
+  error?: string;
+}
+
+/**
  * MarkdownExtensions — controls which rendering features are active in
  * MarkdownBlock. Matches the four-stop dial in SettingsView.
  *   'basic'    — GFM only; KaTeX and Mermaid disabled.
@@ -1273,6 +1680,22 @@ export interface ToolConfirmPending {
   args_summary: string;
   /** The permission resolver's reason for the confirm_each verdict. */
   reason?: string;
+
+  /**
+   * risk-rated-autonomy-01PMRA01 WP10: true only when this prompt came
+   * from layer 3 (a Cedar-unmatched action a risk rating evaluated) AND
+   * a score was actually produced. Gate rendering on this flag, not on
+   * `risk_score !== 0` — 0 is itself a valid (very low) score.
+   */
+  has_risk_rating?: boolean;
+  /** The floored score compared against risk_threshold. */
+  risk_score?: number;
+  /** Named band (risk.BandFor): "low" | "moderate" | "elevated" | "high" | "critical". */
+  risk_tier?: string;
+  /** The resolved autonomy RiskThreshold this score was compared against. */
+  risk_threshold?: number;
+  /** The rater's own short justification, or the offline-floor's reason. */
+  risk_rationale?: string;
 }
 
 export type Theme = 'light' | 'dark' | 'system';
@@ -1408,6 +1831,12 @@ export interface Message {
   promptTokens?: number;
   completionTokens?: number;
   costUsd?: number;
+  /**
+   * Part of promptTokens the provider served from its prompt cache
+   * (session_messages.cached_tokens). promptTokens is the whole prompt for
+   * every provider, so this is a share of it. Absent on rows without usage.
+   */
+  cachedTokens?: number;
   /** "provider" | "derived" | "mixed" | "unknown". Empty when absent. */
   messageCostSource?: string;
 
@@ -1445,6 +1874,21 @@ export interface Message {
   kind?: MoveKind;
   moveIndex?: number;
   turnSpanId?: string;
+
+  /**
+   * Live extended-thinking content (model-settings-reach-the-model-
+   * 01PMZ101 WP16). Populated only while streaming, from
+   * `llm:stream-chunk` frames of kind "reasoning" — mirrors
+   * core/llm.StreamEvent.Reasoning.Content, itself sourced from the
+   * provider's own reasoning/thinking deltas (Anthropic
+   * thinking_delta, Bedrock reasoningContent, Gemini thought parts).
+   * Deliberately **not persisted**: no SQL column carries it and no
+   * server round-trip returns it on reload — a reopened session shows
+   * the answer but not the reasoning that produced it. Empty /
+   * undefined for every non-streaming render and for any turn where
+   * the model did not emit reasoning.
+   */
+  reasoning?: string;
 }
 
 /**
@@ -1678,13 +2122,16 @@ export interface CostEstimate {
 }
 
 /**
- * MemoryScopeKind — the three scope tiers used by long-term memory.
+ * MemoryScopeKind — the scope tiers used by long-term memory.
  * Mirrors core/memory.ScopeKind. "session" is the chat-local default;
  * "project" survives between sister sessions of the same project;
- * "global" is harness-wide. Promotion is monotonic
- * (session → project → global); demotion isn't supported.
+ * "global" is harness-wide; "long_term" is the harness-wide tier loaded
+ * into the session prelude and resistant to pruning. The UI promotes
+ * session → project → global → long_term; the id is kept across a
+ * promotion (memory-sync-01MEMSY01 WP03 — it is the chunk's Fleet origin
+ * id). Remember (capture) accepts only global / project / session.
  */
-export type MemoryScopeKind = 'global' | 'project' | 'session';
+export type MemoryScopeKind = 'global' | 'long_term' | 'project' | 'session';
 
 /**
  * MemoryChunk — one persisted memory. In the hooks-driven architecture
@@ -1727,6 +2174,11 @@ export interface MemoryChunk {
   retrievalWeight?: number;
   /** Narrative layer — originating turn ID. */
   turnId?: string;
+  /**
+   * memory-sync-01MEMSY01: code Fleet memory sync refused this chunk with
+   * (e.g. "secret_detected") — it stays on this device only.
+   */
+  syncBlocked?: string;
 }
 
 /**
@@ -2071,8 +2523,8 @@ export interface DryRunResult {
 /**
  * CanonicalRecipeCategory — the 16 canonical MCP-connector categories the
  * registry normalizes to. Display names + icons live in
- * `lib/recipeCategories.ts` (the single source of truth consumed by both
- * `RegistryTab.vue` and `KenazToolsPanel.vue`).
+ * `lib/recipeCategories.ts` (the single source of truth consumed by the
+ * "Add capability" surface and its MCP detail plugin).
  */
 export type CanonicalRecipeCategory =
   | 'automation'
@@ -2357,6 +2809,30 @@ export interface RecipeStatus {
   stderrTail?: string;
 }
 
+/**
+ * HealthEntry — live-probed health for one MCP connector. Mirrors
+ * `core/rpc/views/mcp.HealthEntry`, the shape `MCP_HealthSnapshot` and
+ * the `mcp:health-changed` push event both carry
+ * (connector-lifecycle-truth-01PMZ303 UNIT-7/UNIT-8). Distinct from
+ * `RecipeStatus` above: `RecipeStatus` is the STDIO-process-centric
+ * shape `Tools_RecipeStatus` returns (pid, keysPresent, resource/
+ * prompt counts); `HealthEntry` is transport-agnostic and is the one
+ * that is honest for http/sse servers after UNIT-7 — before that unit,
+ * the http/sse fields behind this shape were a permanently-synthesised
+ * "running" with no real check behind it.
+ */
+export interface HealthEntry {
+  id: string;
+  state: RecipeState;
+  lastError?: string;
+  restartAttempts: number;
+  stderrTail?: string;
+  toolCount: number;
+  serverName?: string;
+  serverVersion?: string;
+  protocolVersion?: string;
+}
+
 // ── Artifacts (artifacts-storage WP01..WP03) ─────────────────────────
 //
 // Mirrors core/rpc/views/artifacts.Artifact. The wire shape is camelCase
@@ -2376,11 +2852,12 @@ export interface RecipeStatus {
 export type ArtifactSource = 'code_block' | 'tool_output' | 'user_pin' | 'model_output';
 
 /**
- * ArtifactScope — promotion tier. v1 carries `session` (default at
- * capture time) and `project` (after promotion). A future `global`
- * tier is reserved by the spec but not wired in v1.
+ * ArtifactScope — promotion tier: `session` (default at capture time),
+ * `project` (after promotion) and `global` (valid since
+ * unified-context-artifacts-01NCTXU01; artifacts are units since
+ * artifacts-as-units-01DOGF0C, and the store returns global rows).
  */
-export type ArtifactScope = 'session' | 'project';
+export type ArtifactScope = 'session' | 'project' | 'global';
 
 /**
  * ArtifactSourceRef — provenance back to the originating message /
@@ -2451,15 +2928,32 @@ export interface ArtifactWithBytes {
 }
 
 /**
+ * RecipeSource — which catalog layer produced a RecipeListing's Recipe.
+ * Mirrors the recipes.Source* constants (core/mcp/recipes/recipes.go).
+ * 'org' rows are provisioned by the user's fleet organization and render
+ * read-only (fleet-generic-sync-framework-01NSYNC02 WP03) — mirroring the
+ * "Org-managed" badge SkillsPanel.vue already renders for mandated
+ * skills (FR-302).
+ */
+export type RecipeSource = 'shipped' | 'registry' | 'user' | 'imported' | 'org';
+
+/**
  * RecipeListing — one row returned from `Tools_ListRecipes`. Combines
  * the catalog metadata with the harness-side overlay (enabled flag,
- * live status snapshot, keys-resolvable hint).
+ * live status snapshot, keys-resolvable hint, catalog-layer source).
  */
 export interface RecipeListing {
   recipe: Recipe;
   enabled: boolean;
   status: RecipeStatus;
   keysPresent: boolean;
+  /**
+   * Which catalog layer produced this row (see RecipeSource). Wired
+   * fleet-generic-sync-framework-01NSYNC02 WP03 — before this field
+   * existed, KenazToolsPanel.vue's sourceBadge() hardcoded every row to
+   * 'shipped' regardless of the real source.
+   */
+  source: RecipeSource;
 }
 
 // ── slash commands ───────────────────────────────────────────────────
@@ -2480,6 +2974,8 @@ export interface SlashCommandInfo {
   description: string;
   comingSoon: boolean;
   isUser?: boolean;
+  /** A fleet-installed skill: listed with built-ins, ranks below user commands. */
+  isSkill?: boolean;
 }
 
 // ── user-defined slash commands (user-slash-commands-01KQ8TD9) ───────
@@ -2608,8 +3104,23 @@ export interface SlashExecuteResult {
 
 /**
  * ReasoningConfig — the wire shape returned in SlashExecuteResult.metadata
- * under the `reasoningKnob` key after a successful /effort command.
- * Mirrors the Go llm.ReasoningConfig struct.
+ * under the `reasoningKnob` key after a successful /effort command, and
+ * the shape SessionTunePanel.vue edits.
+ *
+ * CORRECTED (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11):
+ * this does NOT mirror the Go llm.ReasoningConfig struct's own JSON tags
+ * — that struct marshals as `openai_effort` / `anthropic_thinking_budget`
+ * (snake_case; core/llm/capabilities.go), which is what this camelCase
+ * interface's docstring used to (wrongly) claim it matched. The two were
+ * never byte-compatible: cmd_effort.go marshalled the Go struct directly
+ * into /effort's metadata for years, so `metadata.reasoningKnob` actually
+ * carried snake_case keys this interface's fields could never read.
+ * cmd_effort.go's fix (reasoningKnobMetadata) now builds this exact
+ * camelCase shape by hand instead of marshalling the struct, and
+ * harnessClient's getKnobsDefault/setKnobsDefault do the same
+ * camelCase<->snake_case translation at the Sessions_{Get,Set}KnobsDefault
+ * boundary (see WireSessionKnobs below) — this interface is the one true
+ * frontend shape either path produces or consumes.
  *
  * Exactly one field is set:
  *   - openAIEffort:              "low" | "medium" | "high" | "minimal"
@@ -2618,6 +3129,22 @@ export interface SlashExecuteResult {
 export interface ReasoningConfig {
   openAIEffort?: string;
   anthropicThinkingBudget?: number;
+}
+
+/**
+ * WireSessionKnobs — the Sessions_{Get,Set}KnobsDefault wire shape,
+ * matching Go llm.RequestKnobs' OWN json tags byte-for-byte (snake_case
+ * — core/llm/capabilities.go). Deliberately narrow: only the `reasoning`
+ * sub-object has a frontend surface today (SessionTunePanel.vue). Widen
+ * this type, and harnessClient's translation in getKnobsDefault/
+ * setKnobsDefault, together in the same change when a second RequestKnobs
+ * field gets a UI (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10).
+ */
+export interface WireSessionKnobs {
+  reasoning?: {
+    openai_effort?: string;
+    anthropic_thinking_budget?: number;
+  };
 }
 
 /**
@@ -2833,8 +3360,9 @@ export interface GraphSpec {
    * `yaml` (model-authored-graphs-01PMGA01 UNIT-6) — a convenience
    * projection, not a second source of truth. "model_authored" marks
    * an unreviewed model draft; "library_fallback" marks a materialized
-   * run projected against the library file because the resolved spec
-   * was no longer available.
+   * run reconstructed from the library file because its resolved spec
+   * was never recorded (runs before per-run spec recording, or a spec
+   * refused for size).
    */
   specProvenance?: string;
 }
@@ -2880,7 +3408,17 @@ export interface GraphEdgeCheckResult {
 }
 
 /** RunState mirrors the kernel's emitted lifecycle. */
-export type GraphRunState = 'running' | 'paused' | 'completed' | 'failed';
+/**
+ * 'abandoned' (approval-node-01PMZC12 E-002's "abandoned" fallback):
+ * a run a PREVIOUS process paused and never resolved. Durable run
+ * state (rebuilding a resumable Env from the event log — UNIT-6) is
+ * not built, so a process restart cannot bring the run back; Manager
+ * .rehydrateAbandonedRuns reports this instead of "not found" so the
+ * UI never has to render a paused run whose pendingApproval/pendingAsk
+ * will silently never resolve (spec.md §5.5: "Silence is the one
+ * unacceptable outcome").
+ */
+export type GraphRunState = 'running' | 'paused' | 'completed' | 'failed' | 'abandoned';
 
 /** PendingAsk surfaces a parked AskNode question for the resume UI. */
 export interface GraphPendingAsk {
@@ -2894,6 +3432,20 @@ export interface GraphPendingAsk {
   kind?: QuestionKind;
   /** The full question (options, bounds, preview) when kind is set. */
   spec?: ElicitationQuestion;
+}
+
+/**
+ * PendingApproval surfaces a parked approval node's decision for the
+ * approve/reject UI (approval-node-01PMZC12 UNIT-7). Distinct from
+ * GraphPendingAsk — an approval resolves through
+ * `Graph_ResolveApproval(runID, nodeID, approved, reason)`, not
+ * `Graph_Resume(runID, freeText)`. Mirrors
+ * `core/rpc/views/agentgraph/api.go`'s `PendingApproval` struct.
+ */
+export interface GraphPendingApproval {
+  nodeId: string;
+  prompt: string;
+  approverRole?: string;
 }
 
 /** RunStatus is the snapshot the RunView renders. */
@@ -2912,6 +3464,12 @@ export interface GraphRunStatus {
   toolCalls: number;
   costUsd: number;
   pendingAsk?: GraphPendingAsk;
+  /**
+   * Exactly one of pendingAsk / pendingApproval is set on a paused run
+   * — the kernel parks on at most one node per pause cycle, and its
+   * kind is what decides which field this is.
+   */
+  pendingApproval?: GraphPendingApproval;
 }
 
 /** RunTraceEvent is one row of the EventLog tail. */
@@ -3043,9 +3601,10 @@ export interface NodeUserOverrideInfo {
 }
 
 /**
- * NodeDoctorReport summarises catalog health for the NodesView debug
- * panel (mission agent-kernel-graph-node-catalog WP08). Counters are
- * non-negative ints; lastReloadAt is RFC3339Nano (empty before any
+ * NodeDoctorReport summarises catalog health for the node-override
+ * diagnostics panel mounted on NodePalette.vue (mission
+ * controls-and-readouts-that-tell-the-truth-01PMZ808 WP18). Counters
+ * are non-negative ints; lastReloadAt is RFC3339Nano (empty before any
  * reload). userOverrideErrors carries the per-file parse failures
  * recorded by the most-recent reload pass.
  */
@@ -3220,6 +3779,56 @@ export interface ProviderProfileRef {
   modelId?: string;
 }
 
+/**
+ * RiskRaterBenchmarkProvenance — how/when the vendored risk-rater model
+ * comparison (risk-rated-autonomy-01PMRA01, owner ruling 2026-09-15) was
+ * collected. Rendered in the picker so a reader never has to take the
+ * numbers on faith.
+ */
+export interface RiskRaterBenchmarkProvenance {
+  benchmark_date: string;
+  calls: number;
+  method: string;
+}
+
+/**
+ * RiskRaterBenchmarkModel — one measured model's risk-rater performance,
+ * mirroring core/policy/risk.BenchmarkModelRow. A model with NO matching
+ * row here is "unbenchmarked" — the picker must render an explicit badge
+ * for that case, never a blank cell (the silent-lie rule).
+ */
+export interface RiskRaterBenchmarkModel {
+  id: string;
+  label: string;
+  measured_via: string;
+  approximate_for_direct_provider?: boolean;
+  aliases?: string[];
+  data_available: boolean;
+  bands_exact: number;
+  bands_adjacent: number;
+  bands_miss: number;
+  /** null when the model's injection-fixture response failed to parse
+   * (see injection_raw_note for why) — never coerced to 0. */
+  injection_raw_score: number | null;
+  injection_raw_note: string;
+  reliability_5s_pct: number;
+  reliability_30s_pct: number;
+  median_latency_ms: number;
+  p90_latency_ms: number;
+  cost_per_rating_usd: number;
+  notes: string;
+}
+
+/**
+ * RiskRaterBenchmark — the full vendored comparison returned by
+ * Settings_GetRiskRaterBenchmark(). Static reference data; fetched once
+ * per Settings view mount, same pattern as compaction.getTierExplain().
+ */
+export interface RiskRaterBenchmark {
+  provenance: RiskRaterBenchmarkProvenance;
+  models: RiskRaterBenchmarkModel[];
+}
+
 // ── conversation branches (agent-kernel-graph; Bundle B WP07/08) ──────
 
 /**
@@ -3262,6 +3871,22 @@ export interface Branch {
   advisorSignals?: string[];
   /** Parent session id — populated on subagent branches. */
   parentSessionIdRef?: string;
+
+  // Dispatched-sub-agent fields (subagent-control-and-background-
+  // tasks-01PMZB11 UNIT-9). Populated only for branches created by
+  // kenaz__subagent_dispatch — distinct from subagentBranch above,
+  // which is the older branch-advisor flag. Declared optional here
+  // (mirrors the Go wire type's omitempty) so any Branch[] consumer
+  // (BranchSidebar, SessionsView's activeSubagentBranch) can read them
+  // without narrowing to SubagentBranch first; SubagentBranch below
+  // re-declares subagentStatus/profileId as required once a caller
+  // has confirmed the branch is a sub-agent.
+  subagentStatus?: SubagentStatus;
+  profileId?: string;
+  tokensUsed?: number;
+  budgetTokens?: number;
+  elapsedS?: number;
+  budgetTimeS?: number;
 }
 
 /**
@@ -3314,6 +3939,9 @@ export interface BranchCreateOptions {
   /**
    * creationPath is "explicit" | "edit_resend" | "unknown". Set by the
    * "Branch from this turn" menu item. Defaults to "unknown" when unset.
+   * The backend also records "auto_act" and "model_tool", but only from
+   * its own internal callers — Branches_Create coerces either to
+   * "unknown" when the client sends it.
    */
   creationPath?: string;
   title?: string;
@@ -3414,6 +4042,42 @@ export interface PermissionRequest {
  * PermissionMode — the three global permission posture values.
  */
 export type PermissionMode = 'strict' | 'normal' | 'permissive';
+
+// ── Advisor seam (laya-advisors-01LAYA001 WP07) ────────────────────────
+
+/**
+ * AdviceChipPayload — the `advice:recommendation` broker/WS event
+ * payload (mirrors core/rpc/views/agentgraph/chat.AdviceChipPayload).
+ * Rendered only at confidence >= 75 with decision === true (the backend
+ * only ever PUBLISHES a chip-worthy recommendation — see
+ * advice.ShouldShowChip — so every payload that arrives on this topic is
+ * already chip-eligible; the frontend does not re-filter).
+ */
+export interface AdviceChipPayload {
+  session_id: string;
+  kind_id: 'branch_now' | 'compact_now' | 'escalate_model' | string;
+  decision: boolean;
+  confidence: number;
+  model: string;
+  rung: string;
+  title: string;
+  body: string;
+  prompt_version: string;
+}
+
+/**
+ * AdviceAutoActedPayload — the `advice:auto-acted` broker/WS event
+ * payload, fired alongside branch_now's Autonomous-tier auto-act
+ * (mirrors core/rpc/views/agentgraph/chat.AdviceAutoActedPayload).
+ */
+export interface AdviceAutoActedPayload {
+  session_id: string;
+  kind_id: string;
+  child_session_id: string;
+  confidence: number;
+  model: string;
+}
+
 // ── Branch Advisor (branch-as-subagent-recommendation WP02/WP03/WP06/WP07) ─
 
 /**
@@ -3524,7 +4188,8 @@ export type AutonomyKnob =
   | 'tokenCeilingPerTurn'
   | 'recapStyle'
   | 'continueOnError'
-  | 'destructiveActionPosture';
+  | 'destructiveActionPosture'
+  | 'riskThreshold';
 
 /**
  * AutonomyLayer is the wire shape of one rung in the global → project
@@ -3574,6 +4239,8 @@ export interface AutonomyKnobValues {
   recapStyle: string;
   continueOnError: string;
   destructiveActionPosture: string;
+  /** risk-rated-autonomy-01PMRA01 FR-003 dial, 0-100. */
+  riskThreshold: number;
   sourceTrace: Record<string, string>;
   /** Effective tier label for chat-header chip display. */
   tier: AutonomyTier | string;
@@ -3653,6 +4320,7 @@ export const AUTONOMY_KNOB_ORDER: readonly AutonomyKnob[] = [
   'recapStyle',
   'continueOnError',
   'destructiveActionPosture',
+  'riskThreshold',
 ];
 
 /** Display label for a knob. */
@@ -3664,6 +4332,7 @@ export const AUTONOMY_KNOB_LABELS: Record<AutonomyKnob, string> = {
   recapStyle: 'Recap style',
   continueOnError: 'On tool error',
   destructiveActionPosture: 'Destructive actions',
+  riskThreshold: 'Risk threshold (ask above)',
 };
 
 // ── Elicitation (ask-user-question-interactive-01KZNP3G WP02/WP04) ────
@@ -3831,6 +4500,21 @@ export interface PolicyFile {
   embedded?: boolean;
   parse_ok: boolean;
   parse_err?: string;
+  /** Policies in this file that parsed but failed to evaluate (cedar.PolicyEvalError). */
+  eval_errors?: PolicyEvalError[];
+}
+
+/**
+ * PolicyEvalError mirrors cedar.PolicyEvalError: a policy that failed to
+ * evaluate on at least one request since the last reload. An erroring
+ * forbid denies (fail-closed); an erroring permit is skipped.
+ */
+export interface PolicyEvalError {
+  policy_id: string;
+  file?: string;
+  effect: 'forbid' | 'permit' | string;
+  message: string;
+  count: number;
 }
 
 /**
@@ -3838,7 +4522,7 @@ export interface PolicyFile {
  * Used by the audit panel in the policy view.
  */
 export interface PolicyDecision {
-  outcome: 'allow' | 'deny' | 'not_applicable' | 'unknown';
+  outcome: 'allow' | 'deny' | 'not_applicable' | 'confirm' | 'unknown';
   action: string;
   principal: string;
   resource: string;
@@ -3885,6 +4569,8 @@ export interface PolicyFileDetail {
   parse_ok: boolean;
   /** Parse error message; empty when parse_ok is true. */
   parse_err?: string;
+  /** Policies in this file that parsed but failed to evaluate. */
+  eval_errors?: PolicyEvalError[];
   /** The raw Cedar source text. */
   source: string;
   /** true for embedded defaults that cannot be edited or deleted via the UI. */
@@ -4168,6 +4854,306 @@ export interface CapabilitiesView {
 }
 
 /**
+ * FleetSessionState — the fleet session's one answer to "am I signed in"
+ * (fleet-session-truth-01DOGF0A FR-1). `degraded` = tokens are usable but the
+ * last identity refresh failed; it is NOT signed out (FR-3).
+ */
+export type FleetSessionState =
+  | 'signed_out'
+  | 'signing_in'
+  | 'signed_in'
+  | 'degraded'
+  | 'disabled';
+
+/** One session's context-sync breaker state. Mirrors settings.FleetSyncSessionView. */
+export interface FleetSyncSessionView {
+  sessionId: string;
+  reason?: string;
+  lastError?: string;
+  consecutiveFailures: number;
+  open: boolean;
+  nextRetryAt?: string;
+  dropped: number;
+}
+
+/** One background lane's health. Mirrors settings.FleetSyncLaneView. */
+export interface FleetSyncLaneView {
+  /** 'unknown' | 'ok' | 'degraded' | 'off' */
+  status: string;
+  reason?: string;
+  lastError?: string;
+  consecutiveFailures: number;
+  lastSuccessAt?: string;
+  nextRetryAt?: string;
+  sessions?: FleetSyncSessionView[];
+}
+
+/**
+ * Mirrors settings.MemorySyncStatusView — the learned-memory sync panel
+ * (memory-sync-01MEMSY01 WP08). `entitled` mirrors the memory_sync
+ * capability: the panel hides the toggle without it.
+ */
+export interface MemorySyncStatus {
+  wired: boolean;
+  entitled: boolean;
+  enabled: boolean;
+  scopes: string[];
+  consentVersion: string;
+  optedInAt: string;
+  currentConsentVersion: string;
+  liveRecords: number;
+  liveBytes: number;
+  maxRecords: number;
+  maxBytes: number;
+  /** Local chunks Fleet refused permanently (e.g. secret_detected). */
+  blockedCount: number;
+  /** Local sync-scope chunks not yet accepted by Fleet. */
+  pendingCount: number;
+  fleetError?: string;
+  lane: FleetSyncLaneView;
+  /** Staff org pause (kenaz-fleet PR 206): show the paused banner, keep data-rights actions. */
+  orgPaused?: boolean;
+  pausedCategory?: string;
+}
+
+/**
+ * Mirrors settings.MLShippingStatusView — the ML producer's shipping health
+ * (ml-producer-01MLPRD01 spec §5). Filled by the WP03 shipper.
+ */
+export interface MLShippingStatus {
+  /** RFC 3339 time of the last accepted batch ("" = none yet). */
+  lastBatchAt: string;
+  accepted: number;
+  duplicates: number;
+  rejected: number;
+  /** Last stop code ("" = running / never stopped). */
+  stopReason: string;
+}
+
+/** Mirrors settings.MLNoticeSection: one bold-labelled notice paragraph. */
+export interface MLNoticeSection {
+  /** The bold label, as written (with its colon). */
+  label: string;
+  text: string;
+}
+
+/** Mirrors settings.MLNoticeView: the fallback Cloud ML notice, structured. */
+export interface MLNotice {
+  heading: string;
+  intro: string;
+  sections: MLNoticeSection[];
+  /** The member-choice or required paragraph ("" for other policies). */
+  policyText: string;
+  /** The org_policy it was rendered for. */
+  policy: string;
+  /**
+   * The org's exclusions paragraph, Fleet's own words (a port of Fleet's
+   * exclusionsSummary, template 2); "" when nothing is excluded. Shown inside
+   * the notice, before the buttons.
+   */
+  exclusionsText?: string;
+  /** Button labels: ["Turn on Offload", "Not now"] | ["I have read this"] | []. */
+  actions: string[];
+}
+
+/**
+ * Mirrors settings.MLStatusView — the Cloud ML consent panel
+ * (ml-producer-01MLPRD01 WP01, kenaz-fleet docs/contract-harness-ml.md).
+ * `effective` is effective AND a current notice ack. `noticeText` is the
+ * contract notice rendered server-side (org, retention, variant).
+ */
+export interface MLStatus {
+  signedIn: boolean;
+  /** hosted_inference capability; the panel hides without it. */
+  entitled: boolean;
+  orgPaused: boolean;
+  pausedCategory?: string;
+  /** /me/ml was read and decoded on this call. */
+  loaded: boolean;
+  orgOffloadEnabled: boolean;
+  /** "on" | "off" | "member_choice" ("" when not loaded). */
+  orgPolicy: string;
+  userWorkflowEventsOptedIn: boolean;
+  noticeAckRequired: boolean;
+  effective: boolean;
+  noticeVersion: number;
+  /** RFC 3339; "" while not acknowledged. */
+  noticeAckedAt: string;
+  retentionDays: number;
+  retainOnWithdrawal: boolean;
+  orgName: string;
+  /** The notice as plain text: the hub's body_text, or the fallback `notice` joined. */
+  noticeText: string;
+  /**
+   * The fallback notice (counsel's rev-1 text, verbatim) as structured
+   * fields, rendered for this org, retention and policy. Absent when the
+   * hub's notice is shown or the dashboard is needed.
+   */
+  notice?: MLNotice;
+  /** The hub ml_notice item's title: the heading above its body_text. */
+  noticeTitle?: string;
+  /** Set on an ack Fleet refused with 409 policy_changed: show the notice again. */
+  noticeChanged?: boolean;
+  /** Notice-text revision Fleet requires (0 = older Fleet without revisions). */
+  noticeTextRevision: number;
+  /** Notice-text revision this member last acknowledged (0 = none / older Fleet). */
+  ackedTextRevision: number;
+  /**
+   * An ack is required for a notice text NEWER than the one this harness
+   * renders: `noticeText` is "" and the panel routes the user to the Fleet
+   * dashboard instead of offering Acknowledge.
+   */
+  noticeNeedsDashboard: boolean;
+  /** `<fleet base>/settings#hosted-inference`; absent when the base is unknown. */
+  noticeDashboardUrl?: string;
+  /**
+   * WP06: `noticeText` is the pending-approvals hub's ml_notice body_text,
+   * verbatim (including any "Changed since you last approved" section).
+   * Approve it with fleet.approveItem(noticeItemId). False when the hub is
+   * unavailable (an older Fleet): the local-template / dashboard fallback.
+   */
+  noticeFromHub: boolean;
+  noticeItemId?: string;
+  /**
+   * Org exclusions (WP05), read-only. Path globs and command prefixes are
+   * matched on this device before anything is hashed or queued. Always
+   * arrays ([] when none or not loaded).
+   */
+  exclusionPaths: string[];
+  exclusionCommands: string[];
+  /** Shown for completeness: the harness sends no browser data. */
+  excludeBrowser: boolean;
+  exclusionsVersion: number;
+  /** The org's old free-text exclusions: display only, never matched. */
+  legacyExclusionNotes: string[];
+  /**
+   * The exclusions paragraph Fleet's notice carries (same text as
+   * notice.exclusionsText); "" when nothing is excluded. Shown outside a
+   * notice; never on the hub path (body_text carries it).
+   */
+  exclusionsSummary?: string;
+  fleetError?: string;
+  /** Absent until the ML shipper is wired. */
+  shipping?: MLShippingStatus;
+}
+
+/**
+ * Mirrors settings.PendingApprovalView — one item of Fleet's
+ * pending-approvals hub (ml-producer-01MLPRD01 WP06; kenaz-fleet
+ * docs/contract-pending-approvals.md). The approve action never reaches the
+ * frontend: approve by `id` and the backend looks it up.
+ */
+export interface PendingApprovalItem {
+  id: string;
+  /** legal_acceptance | ml_notice | ml_exclusions_change | … (unknown kinds render generically). */
+  kind: string;
+  title: string;
+  summary: string;
+  /** Plain text: render as text, verbatim ("" when absent). */
+  bodyText: string;
+  /** Absolute http(s) URL of an external document ("" when absent). */
+  documentUrl: string;
+  documentSha256: string;
+  version: string;
+  /** What is paused until this is approved. */
+  blocking: string;
+  /** true = blocking; false = informational. */
+  required: boolean;
+  /**
+   * RFC 3339 instant a required legal item starts blocking ("" = blocking
+   * now). Before it the item is still required but nothing is paused yet.
+   */
+  deferrableUntil: string;
+  /** False when Fleet's action is outside the harness allowlist: not approvable here. */
+  approveAllowed: boolean;
+  /** Informational item the harness sends nothing for: "Not now" hides it on this device only. */
+  localDismiss: boolean;
+}
+
+/** Mirrors settings.PendingApprovalsView. */
+export interface PendingApprovals {
+  signedIn: boolean;
+  /** This Fleet serves the hub (false on an older Fleet). */
+  available: boolean;
+  items: PendingApprovalItem[];
+  requiredCount: number;
+  /** An approval was stale or its item gone: `items` is the fresh list. */
+  changed?: boolean;
+  fleetError?: string;
+}
+
+/** Mirrors settings.FleetSyncView. */
+export interface FleetSyncView {
+  contextSync: FleetSyncLaneView;
+  unitPoll: FleetSyncLaneView;
+  telemetry: FleetSyncLaneView;
+  /**
+   * The catalog revocation sweep (skill-library-01SKLIB01 WP03): removing
+   * the user's own copies of catalog versions the org revoked. Optional for
+   * a backend that predates the lane.
+   */
+  catalogRevocation?: FleetSyncLaneView;
+}
+
+/**
+ * FleetSessionView — the single fleet-session snapshot every surface reads.
+ * Returned by Settings_FleetSession and pushed on `fleet:session-changed`.
+ * Mirrors core/rpc/views/settings.FleetSessionView.
+ */
+export interface FleetSessionView {
+  state: FleetSessionState;
+  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled | node_removed */
+  reason?: string;
+  /** Raw error text behind `reason` (humanize before showing). */
+  message?: string;
+  /** False once automatic identity refresh has stopped (not provisioned). */
+  autoRetry: boolean;
+  nextRetryAt?: string;
+  lastAttemptAt?: string;
+  identity?: FleetIdentity;
+  /** 'enroll' | 'cache' */
+  identitySource?: string;
+  /** 'enroll' | 'token_claim' */
+  emailSource?: string;
+  nameSource?: string;
+  /** Stored tokens still authenticate (signing_in + true = a re-auth). */
+  tokensUsable: boolean;
+  /**
+   * Opaque, non-PII key for the signed-in Fleet account (hashed realm +
+   * subject); absent when signed out. Per-account local state is scoped by
+   * it and dropped when it changes.
+   */
+  accountKey?: string;
+  claims: { hasSubject: boolean; hasOrgClaim: boolean };
+  capabilities: CapabilitiesView;
+  profile?: FleetProfileInfo;
+  sync: FleetSyncView;
+  /**
+   * This device's key-registration outcome at the last enroll
+   * (device-keys-handoff-01DEVKH01). Absent until an enroll ran.
+   */
+  deviceKeys?: FleetDeviceKeysView;
+  /**
+   * A Kameas-staff "pause paid features" hold is on the org (kenaz-fleet
+   * PR 206). Surfaces show OrgPausedBanner instead of tier / upsell copy;
+   * data-rights actions stay enabled. Optional for older snapshots.
+   */
+  paused?: boolean;
+  /** billing_review | security | abuse | legal | other while paused. */
+  pausedCategory?: string;
+  updatedAt: string;
+}
+
+/** Mirrors settings.FleetDeviceKeysView. */
+export interface FleetDeviceKeysView {
+  /** registered | too_many_devices | invalid_key | unavailable */
+  status: string;
+  /** Human copy when this device cannot receive shared sessions. */
+  message?: string;
+  handoffFingerprint?: string;
+}
+
+/**
  * FleetConfigPullStatusView — wire projection of the config-pull poller state.
  * Mirrors core/rpc/views/settings.FleetConfigPullStatusView.
  * (fleet-config-pull-01NDFSEX10 WP02)
@@ -4195,7 +5181,9 @@ export interface FleetConfigPullStatusView {
 export interface FleetHealthView {
   /** true when a fleet signing key is wired in this binary. */
   configDistributionEnabled: boolean;
-  /** "fleet" | "stale-cache" | "default-deny-degraded" | "no-key" */
+  /** "fleet" | "stale-cache" | "default-deny-degraded" | "no-key" | "unknown-key"
+   *  ("unknown-key": the latest bundle was signed with a key this build never
+   *  pinned — the install must update; configLastError says which key_id). */
   configSource: string;
   /** Most recent error from the config poller, or empty string. */
   configLastError: string;
@@ -4262,6 +5250,16 @@ export interface UnitSyncStatusView {
   pushCount: number;
   pullCount: number;
   conflictCount: number;
+  /** Pulled nodes skipped because they are not unit kinds (WP03). */
+  skippedUnknownKinds?: number;
+  /** Unit nodes the local store refused as invalid. */
+  skippedInvalid?: number;
+  /** Dirty units refused before the wire (artifact / capability metadata). */
+  pushRefused?: number;
+  /** load_policy=always units held: identity roles unknown (re-sign-in). */
+  pushHeldLoadAlways?: number;
+  /** Case-variant "_unit" metadata keys stripped before push. */
+  strippedUnitKeys?: number;
 }
 
 // ── Catalog types (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────
@@ -4304,6 +5302,10 @@ export interface CatalogItemView {
   published_at?: string;
   /** true when this version is installed in the local DataDir. */
   installed: boolean;
+  /** Org lifecycle of this version; absent = active (skill-library-01SKLIB01). */
+  lifecycle?: string;
+  lifecycle_reason?: string;
+  superseded_by?: string;
 }
 
 // ── Sync types (fleet-share-and-sync-01NDFSEX14 WP05) ───────────────────────
@@ -4321,6 +5323,61 @@ export interface SyncStatusView {
   last_pull_at?: string;
   /** Non-empty when the last push/pull errored. */
   last_error?: string;
+  /**
+   * Which layers this kind participates in ("user" | "org" | "team"),
+   * read from the SyncKind registry. Empty when no registry is wired or
+   * this category has no registration (fleet-generic-sync-framework-
+   * 01NSYNC02 WP06, FR-007).
+   */
+  scopes?: string[];
+  /**
+   * RFC3339 timestamp of this kind's most recent successful org_config
+   * apply, or absent if it has never been org-provisioned on this
+   * device. The WP03 generic org-provenance signal.
+   */
+  org_applied_at?: string;
+  /**
+   * True when the category is enabled but its upload waits for the user's
+   * one-time confirmation (Sync_ConfirmUploads). Pulls still run.
+   */
+  awaiting_confirmation?: boolean;
+  /** True when Fleet does not accept this category; it stays on this device. */
+  local_only?: boolean;
+  /**
+   * True when another device changed this category after this one last
+   * synced, so this device's change was not uploaded. Push
+   * (Sync_ForcePush) keeps this device's settings; Pull (Sync_ForcePull)
+   * takes the other device's. Automatic sync leaves it alone until then.
+   */
+  conflict?: boolean;
+  /**
+   * True when personal sync for this category is not built yet
+   * (fleet.SyncKind.UserSyncNotBuilt — provider_profiles, mcp_recipes):
+   * nothing is uploaded or applied, so the panel offers no toggle and the
+   * upload confirmation never lists it.
+   */
+  not_syncing_yet?: boolean;
+  /**
+   * Non-empty when this category's uploads are held because the settings
+   * that record the upload confirmation could not be read. Confirming
+   * cannot fix it, so awaiting_confirmation is false on such a row.
+   */
+  uploads_blocked_reason?: string;
+  /**
+   * True when uploads_blocked_reason is set because the settings file itself
+   * cannot be read. The UI then offers "Reset settings"
+   * (Settings_ResetUnreadable).
+   */
+  settings_unreadable?: boolean;
+}
+
+/**
+ * SettingsResetUnreadableResult — Settings_ResetUnreadable's answer
+ * (Go: settings.ResetUnreadableResult). backupPath is where the unreadable
+ * settings.json was kept (settings.json.corrupt-<UTC timestamp>).
+ */
+export interface SettingsResetUnreadableResult {
+  backupPath: string;
 }
 
 /**
@@ -4350,6 +5407,20 @@ export interface SiteSummary {
 }
 
 /**
+ * SiteEnvEntry — one declared env var NAME + metadata for a site
+ * (fleet-enforcement-truth-01PMZ505 WP09). Never carries a value —
+ * Sites_EnvList is read-only over names; Sites_EnvSet is the only way to
+ * set one, and it is write-only (core/fleet/sites.go's SiteEnvEntry doc:
+ * "Values are never returned"). Mirrors core/rpc/views/sites.SiteEnvEntry.
+ */
+export interface SiteEnvEntry {
+  name: string;
+  description?: string;
+  /** RFC3339; absent/zero when never set. */
+  setAt?: string;
+}
+
+/**
  * DeployProgressEvent — emitted on the "sites:deploy:progress" topic
  * while Sites_Deploy is running. Mirrors core/rpc/views/sites.DeployProgressEvent.
  */
@@ -4364,11 +5435,19 @@ export interface DeployProgressEvent {
  * harness boot phase. A non-empty field means that subsystem failed to
  * start; empty means healthy (FR-008 / agent-loop-robustness-parity WP08).
  * Mirrors core/rpc.BootHealthReport.
+ *
+ * permissionsInitError (trust-surfaces-that-fire-01PMZ202 WP24 review
+ * finding) is non-empty when <DataDir>/mcp_servers.json existed but
+ * failed to parse at boot — the resolver degrades to confirm_each for
+ * every tool rather than silently defaulting to auto_allow, but the
+ * user still needs to know their configured allow/deny rules are not
+ * in force until the file is repaired.
  */
 export interface BootHealthReport {
   mcpInitError?: string;
   skillsInitError?: string;
   fleetInitError?: string;
+  permissionsInitError?: string;
 }
 
 // ── ACP peer management (acp-orchestration-integration-01NDFSEX06) ────────────
@@ -4481,24 +5560,50 @@ export interface FleetTeamMemberView {
 
 /**
  * FleetInboxItemView — one item in the handoff inbox (Handoff_Inbox).
- * Mirrors contextsync.InboxItemView.
+ * Mirrors contextsync.InboxItemView EXACTLY (the previous shape here —
+ * itemID/fromUserID/sessionTitle — never matched the wire; nothing read
+ * it beyond the item count).
  */
 export interface FleetInboxItemView {
-  itemID: string;
-  fromUserID: string;
-  fromDisplayName: string;
-  sessionTitle: string;
+  inboxItemID: string;
+  sessionID: string;
+  senderUserID: string;
+  senderEmail: string;
   /** RFC3339 timestamp when the share was received. */
   receivedAt: string;
+  /**
+   * None of the item's key wraps targets a still-active device key of
+   * this user (the device it was sent to was removed / its key rotated):
+   * it can never be opened (device-keys-handoff-01DEVKH01).
+   */
+  undecryptable: boolean;
 }
 
 /**
  * FleetAcceptedSessionView — returned by Handoff_Accept.
- * Mirrors contextsync.AcceptedSessionView.
- * Only the event count crosses the RPC boundary — no session content.
+ * Mirrors contextsync.AcceptedSessionView. No session content crosses the
+ * RPC boundary — only the new local session's id and title.
  */
 export interface FleetAcceptedSessionView {
+  /** The new local session holding the shared transcript. */
+  localSessionID: string;
   eventCount: number;
+  title: string;
+  /** True when this item was accepted before on this device (no re-fetch). */
+  alreadyAccepted: boolean;
+}
+
+/**
+ * FleetRecipientDeviceView — one receiving device of a teammate
+ * (Handoff_RecipientDevices). Mirrors contextsync.RecipientDeviceView.
+ * Fleet is a trusted key directory; the fingerprint is what a cautious
+ * user compares out of band.
+ */
+export interface FleetRecipientDeviceView {
+  keyID: string;
+  /** sha256:<hex> of the device's handoff public key. */
+  fingerprint: string;
+  createdAt?: string;
 }
 
 /**
@@ -4518,4 +5623,250 @@ export interface ComplianceStatus {
   enabled: boolean;
   /** True when the background archiver goroutine is running. */
   archiverRunning: boolean;
+  /**
+   * Why a stopped archiver is stopped, when known. "endpoint_unsupported":
+   * the connected fleet server has no audit-append route — local audit is
+   * unaffected; archival resumes on the next fleet sign-in.
+   */
+  stoppedReason?: string;
+  /** "payload_too_large": fleet refused a batch (413); paused until next sign-in. */
+  pausedReason?: string;
+  /** Events fleet refused per-event (skipped, not archived). */
+  rejectedEvents?: number;
+}
+
+// ── Capabilities: the one install framework (install-framework-01DOGF0B) ───
+//
+// Wire shapes of core/install (served by the Capability_* bindings). Field
+// names are the Go json tags verbatim — the generated wailsjs models use
+// the same spelling, so no adapter sits between them.
+
+/** One install path. The four fleet catalog kinds keep their wire values. */
+export type CapabilityKind = 'mcp_recipe' | 'skill' | 'workflow' | 'bundle' | 'agent_pack';
+
+/** FR-4 source filter. */
+export type CapabilitySource = 'builtin' | 'registry' | 'org_catalog' | 'team_catalog' | 'local';
+
+export type CapabilityRequirementKind = 'key' | 'oauth' | 'directory' | 'config' | 'consent' | 'file';
+
+/** One input an install needs; `satisfied` = the device already holds it. */
+export interface CapabilityRequirement {
+  kind: CapabilityRequirementKind;
+  name: string;
+  display?: string;
+  required: boolean;
+  satisfied: boolean;
+}
+
+/** Installed state AS THE RUNTIME CONSUMER REPORTS IT — never a side flag. */
+export interface CapabilityState {
+  installed: boolean;
+  version?: string;
+  update_available?: boolean;
+  /** The consumer that confirmed it, e.g. "MCP supervisor". */
+  consumer?: string;
+  /** Consumer-specific status text (e.g. "running"). */
+  detail?: string;
+}
+
+export interface CapabilityItem {
+  kind: CapabilityKind;
+  id: string;
+  version?: string;
+  name: string;
+  description?: string;
+  category?: string;
+  source: CapabilitySource;
+  keywords?: string[];
+  state: CapabilityState;
+  read_only?: boolean;
+  read_only_reason?: string;
+  requirements?: CapabilityRequirement[];
+  /**
+   * The fleet catalog version's org lifecycle (skill-library-01SKLIB01):
+   * "deprecated", "revoked", or a future state shown verbatim. Absent =
+   * active / not a catalog item. Mirrors install.Item.Lifecycle.
+   */
+  lifecycle?: string;
+  lifecycle_reason?: string;
+  superseded_by?: string;
+}
+
+/** A source a provider could not list — rendered as a reason row (P-5). */
+export interface CapabilityUnavailable {
+  kind: CapabilityKind;
+  source: CapabilitySource | '';
+  /** Stable code: "signed_out" | "fleet_disabled" | "error" | … */
+  reason: string;
+  message?: string;
+}
+
+export interface CapabilityListing {
+  items: CapabilityItem[];
+  unavailable?: CapabilityUnavailable[];
+}
+
+export interface CapabilityFilter {
+  kind?: CapabilityKind;
+  source?: CapabilitySource;
+  query?: string;
+}
+
+/** Payload of `capability:installed` / `capability:uninstalled`. */
+export interface CapabilityEvent {
+  kind: CapabilityKind;
+  id: string;
+  version?: string;
+  installed: boolean;
+  via: 'install' | 'update' | 'uninstall' | 'flow';
+  verify_method?: 'builtin' | 'local' | 'signature';
+  verified: boolean;
+  verify_reason?: string;
+  consumer?: string;
+}
+
+// ── tool-context-budget-01TCBUD01 WP02 ────────────────────────────────
+// Wire shapes of core/toolexposure (Settings_/Projects_/Sessions_
+// {Get,Set}ToolExposure). Field names match the Go JSON tags.
+
+/** How much of a tool the model sees on a call (spec §2.1). */
+export type ToolExposureTier = 'full' | 'summary' | 'off';
+
+/** One server's setting at one layer; `tools` is keyed by bare tool name. */
+export interface ToolServerExposure {
+  tier?: ToolExposureTier;
+  tools?: Record<string, ToolExposureTier>;
+}
+
+/** One layer's tier settings (user, project or session). */
+export interface ToolExposure {
+  servers?: Record<string, ToolServerExposure>;
+}
+
+/** One tool a session has loaded on demand. */
+export interface ToolActivation {
+  name: string;
+  server: string;
+  lastUsedTurn: number;
+  sticky: boolean;
+}
+
+/**
+ * The user's tool-exposure settings. schemaBudgetTokens /
+ * activationTtlTurns are the stored values (0 = harness default) and are
+ * what a write persists; the effective* fields are read-only (what
+ * applies today) and are ignored on write, so writing back an unedited
+ * read never pins the current default.
+ */
+export interface ToolExposureSettings {
+  exposure: ToolExposure;
+  schemaBudgetTokens: number;
+  activationTtlTurns: number;
+  effectiveSchemaBudgetTokens: number;
+  effectiveActivationTtlTurns: number;
+  /** Read-only: the organisation's entries; ignored on write. */
+  org: ToolExposureOrg;
+}
+
+/**
+ * One organisation entry (Go toolexposure.OrgSetting, WP07). `tool` is
+ * the bare tool name; absent means the server-wide tier. `pinned` entries
+ * are read-only ("set by your organisation", pinnedBy "org"); unpinned
+ * ones are org defaults the user may override.
+ */
+export interface ToolExposureOrgSetting {
+  server: string;
+  tool?: string;
+  tier: ToolExposureTier;
+  pinned: boolean;
+  pinnedBy?: 'org';
+}
+
+/**
+ * The organisation's tool-exposure entries from the last applied fleet
+ * config bundle (read-only). schemaBudgetTokens is 0 when the budget is
+ * not pinned; bundleId is 0 when no bundle carries the section.
+ */
+export interface ToolExposureOrg {
+  settings: ToolExposureOrgSetting[];
+  schemaBudgetTokens: number;
+  bundleId: number;
+}
+
+/** A session's override layer and activated set, plus the org's entries. */
+export interface SessionToolExposure {
+  exposure: ToolExposure;
+  activations: ToolActivation[];
+  /** Read-only: the organisation's entries. */
+  org: ToolExposureOrg;
+}
+
+/** One requested name Sessions_LoadTools could not load, and why. */
+export interface LoadToolsNotLoaded {
+  name: string;
+  reason: string;
+}
+
+/**
+ * Sessions_LoadTools result (Go loadtools.Result): loaded tools counted
+ * per server (named in `loaded` only when there are at most 10), tools
+ * that arrive only from the next turn, every name that was not loaded
+ * with its reason, and a one-line summary.
+ */
+export interface LoadToolsResult {
+  loaded: string[];
+  loaded_by_server: Record<string, number>;
+  next_turn?: string[];
+  not_loaded: LoadToolsNotLoaded[];
+  summary: string;
+}
+
+// ── tool-context-budget-01TCBUD01 WP06 ────────────────────────────────
+// Tools_SchemaCosts wire shapes (Go loadtools.ServerCost / ToolCost).
+
+/** The layer that decided a tool's tier (Go toolexposure.Level). */
+export type ToolExposureLevel =
+  | 'org_pin'
+  | 'session'
+  | 'project'
+  | 'user'
+  /** An organisation entry marked pinned:false: below the user layer (WP07). */
+  | 'org_default'
+  | 'default'
+  /** The organisation added the tool to the hot set (hot_set_extra): always full (WP07). */
+  | 'org_hot_set'
+  | 'invariant'
+  | '';
+
+/** One tool's schema cost and resolved tier; `name` is the bare tool name. */
+export interface ToolSchemaCost {
+  name: string;
+  tokenEst: number;
+  tier: ToolExposureTier;
+  source: ToolExposureLevel;
+  activated: boolean;
+  /** True when a call in this scope sends this tool's schema. */
+  sendable: boolean;
+  /** One of the built-in hot set (full by harness default). */
+  hot: boolean;
+}
+
+/**
+ * One server's schema cost and resolved tier in one scope. `tier` is
+ * 'mixed' when its tools differ; `source` is '' when they came from
+ * different layers. A server that is not running reports no tools.
+ */
+export interface ServerSchemaCost {
+  server: string;
+  state: string;
+  running: boolean;
+  toolCount: number;
+  tokenEst: number;
+  tier: ToolExposureTier | 'mixed';
+  source: ToolExposureLevel;
+  /** An organisation pin decided at least one tool's tier. */
+  pinned: boolean;
+  /** Tokens of the tools a call in this scope sends. */
+  sendableTokenEst: number;
+  tools: ToolSchemaCost[];
 }

@@ -189,3 +189,34 @@ func TestMCPToolDiscoverer_PoolErrorPropagates(t *testing.T) {
 		t.Fatal("expected pool error to propagate")
 	}
 }
+
+// probeRecordingResolver records whether each Resolve ctx was marked as a
+// visibility probe.
+type probeRecordingResolver struct {
+	marked, unmarked int
+}
+
+func (r *probeRecordingResolver) Resolve(ctx context.Context, _, server, tool string) (toolloop.Resolution, error) {
+	if toolloop.IsVisibilityProbe(ctx) {
+		r.marked++
+	} else {
+		r.unmarked++
+	}
+	return toolloop.Resolution{Server: server, Tool: tool, Policy: toolloop.PolicyAutoAllow}, nil
+}
+
+// TestMCPToolDiscoverer_ResolvesAsVisibilityProbe (model-harness-toolset-
+// 01MHTS001 WP02): listing must reach the resolver marked as a probe, so
+// the scheduled-run allowlist arm hides off-list tools WITHOUT recording a
+// blocked request for each one. Mutation: drop WithVisibilityProbe in
+// Tools -> unmarked != 0.
+func TestMCPToolDiscoverer_ResolvesAsVisibilityProbe(t *testing.T) {
+	pool := &stubPool{tools: []mcp.Tool{{Server: "s", Name: "a"}, {Server: "s", Name: "b"}}}
+	r := &probeRecordingResolver{}
+	if _, err := NewMCPToolDiscoverer(pool, r).Tools(context.Background(), "sess-1"); err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	if r.marked != 2 || r.unmarked != 0 {
+		t.Fatalf("marked=%d unmarked=%d, want 2/0", r.marked, r.unmarked)
+	}
+}

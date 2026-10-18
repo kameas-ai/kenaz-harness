@@ -14,9 +14,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/anthropic"
 	"github.com/kameas-ai/kenaz-harness/core/llm/azure"
@@ -26,6 +28,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/llm/custom"
 	"github.com/kameas-ai/kenaz-harness/core/llm/events"
 	"github.com/kameas-ai/kenaz-harness/core/llm/gemini"
+	"github.com/kameas-ai/kenaz-harness/core/llm/genaitrace"
 	"github.com/kameas-ai/kenaz-harness/core/llm/ollama"
 	"github.com/kameas-ai/kenaz-harness/core/llm/openai"
 	"github.com/kameas-ai/kenaz-harness/core/llm/openrouter"
@@ -44,17 +47,55 @@ type Options struct {
 	Catalog  *capabilities.Catalog
 	Resolver *credref.Resolver
 	Emitter  *events.Emitter
-	Policy   llm.PolicyGuard
-	Cost     CostReducer
+	// Policy is the optional policy-guard collaborator. Nil falls back
+	// to llm.AllowAllGuard{} (see New(), below). Production wires a real
+	// PolicyGuard at two construction sites: core/rpc/api.go's
+	// newLLMStack (the harness UI chassis, the cedar-backed guard) and
+	// cmd/harness-vm/agentexec.go:221's newLLMExecutor (the in-VM
+	// dispatch RPC service — a separate `package main` production
+	// binary, not a test/smoke path; its guard argument is the caller's
+	// real Cedar engine, never AllowAllGuard{} by omission — see that
+	// function's own doc comment). PR #332 review round: an earlier
+	// version of this comment named newLLMStack as "the ONE" site,
+	// which the tool's own header (scripts/ci/cmd/checknilopts/main.go)
+	// self-contradicted by naming HV-03's harness-vm site as one of the
+	// six motivating P0s — corrected here to name both.
+	Policy llm.PolicyGuard
+	// Cost is the optional usage→cost stage (WP11). If nil, resp.Cost
+	// is left {Indeterminate: true} unless the provider adapter already
+	// supplied a Source:"provider" cost (see audited_stream.go's
+	// cost-derivation switch, which documents why the provider-sourced
+	// check must run before the reducer branch). Production wires a
+	// real CostReducer at two construction sites: core/rpc/api.go's
+	// newLLMStack and cmd/harness-vm/agentexec.go's newLLMExecutor (via
+	// resolveCostReducer — best-effort: it falls back to leaving Cost
+	// unset, logging a warning, only when the on-disk cost table itself
+	// fails to load, not by omission).
+	Cost CostReducer
 	// Cache is the capability probe cache (model-settings-reach-the-
 	// model-01PMZ101 WP14 / FR-017). Nil defaults to
 	// capabilities.DefaultCache(nil) — an in-process MemoryCache with
-	// no persistence across restarts. Production callers that want the
-	// SQLite-backed provider_capabilities table pass
-	// capabilities.NewSQLiteCache(realDB) here explicitly (mirrors how
-	// Cost is wired at the ONE production construction site — see
-	// core/rpc/api.go's newLLMStack).
+	// no persistence across restarts. The harness UI's construction
+	// site (core/rpc/api.go's newLLMStack) passes
+	// capabilities.NewSQLiteCache(realDB) explicitly for the
+	// SQLite-backed provider_capabilities table; cmd/harness-vm's
+	// newLLMExecutor does not set Cache, so the in-VM dispatch path
+	// runs on the in-process MemoryCache default (no cross-restart
+	// persistence there — the VM process is short-lived by design).
 	Cache capabilities.CapabilityCache
+	// Audit is the optional structured-output audit sink
+	// (structured-output-is-reachable-01PMZE14 WP06). Nil means audit
+	// emission for llm.structured.response is silently skipped —
+	// contextaudit.MustEmit is nil-safe, so a caller that does not care
+	// about the audit trail (tests, cmd/harness-vm's in-VM dispatch)
+	// pays nothing for omitting it. Production wires
+	// core/rpc/api.go's newLLMStack with a Shape-1 bridge
+	// (&acpAuditBridge{impl: a.auditImpl}) — the same shape already used
+	// for KindMCPHealthChanged and the ACP envelope kind, forwarding
+	// into the durable event-log store wired by
+	// audit-that-tells-the-truth-01PMZA10 UNIT-4 (audit.WithStore) when
+	// a real storage.DB is available.
+	Audit contextaudit.Emitter
 }
 
 // Registry is the mutable in-memory implementation.
@@ -71,6 +112,7 @@ type Registry struct {
 	reducer   CostReducer
 	cache     capabilities.CapabilityCache
 	refresher *capabilities.Refresher
+	audit     contextaudit.Emitter
 
 	now func() time.Time
 }
@@ -124,6 +166,7 @@ func New(opts Options) (*Registry, error) {
 		policy:   policy,
 		reducer:  opts.Cost,
 		cache:    cache,
+		audit:    opts.Audit,
 		now:      time.Now,
 	}
 	// The refresher needs r (to resolve a profile's adapter and call
@@ -388,6 +431,48 @@ func (r *Registry) Profile(id string) (llm.ProviderProfile, error) {
 	return p, nil
 }
 
+// statsHTTPClient serves the provider stats pull (FetchProviderStats).
+var statsHTTPClient = &http.Client{Timeout: 15 * time.Second}
+
+// FetchProviderStats performs one provider-side stats pull for a finished
+// generation of profileID — today OpenRouter's GET /api/v1/generation?id=
+// (llm-call-telemetry-01LLMTEL01 WP02; the caller is the local model-call
+// store's StatsPuller, core/modelcalls). The profile's credential is
+// resolved here, copied for this one request and zeroed when it returns,
+// so the puller never holds a key. A profile whose provider offers no
+// stats pull is an error; an error wrapping llm.ErrProviderStatsNotReady
+// means "retry later". The values are raw: the caller applies
+// genaitrace.BoundProviderStats before storing anything.
+func (r *Registry) FetchProviderStats(ctx context.Context, profileID, generationID string) (genaitrace.RawProviderStats, error) {
+	prof, err := r.Profile(profileID)
+	if err != nil {
+		return genaitrace.RawProviderStats{}, err
+	}
+	if prof.Kind != openrouter.Kind {
+		return genaitrace.RawProviderStats{}, fmt.Errorf("llm: provider kind %q offers no stats pull", prof.Kind)
+	}
+	r.mu.RLock()
+	resolver := r.resolver
+	r.mu.RUnlock()
+	var credBytes []byte
+	if resolver != nil {
+		s, rerr := resolver.Resolve(ctx, prof.ID, prof.Cred)
+		if rerr != nil {
+			return genaitrace.RawProviderStats{}, rerr
+		}
+		uerr := s.Use(func(value []byte) error {
+			credBytes = append([]byte(nil), value...)
+			return nil
+		})
+		s.Destroy()
+		if uerr != nil {
+			return genaitrace.RawProviderStats{}, uerr
+		}
+	}
+	defer zero(credBytes)
+	return openrouter.FetchGenerationStats(ctx, statsHTTPClient, prof.Endpoint, credBytes, generationID)
+}
+
 // Profiles returns a snapshot list of loaded profiles in insertion-
 // order is not guaranteed; the order matches map iteration.
 func (r *Registry) Profiles() []llm.ProviderProfile {
@@ -462,6 +547,7 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	resolver := r.resolver
 	cache := r.cache
 	refresher := r.refresher
+	auditEmitter := r.audit
 	r.mu.RUnlock()
 
 	log.Info("registry.stream.dispatch",
@@ -488,25 +574,64 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		return nil, err
 	}
 
-	// Per-call model override: when the chat surface picks a model
-	// other than the profile default (and that model is in the
-	// authorised set), substitute prof.Model so the adapter,
-	// capability gate, and audit trail all see the actual model
-	// being called.
-	if req.Model != "" && req.Model != prof.Model {
-		allowed := prof.AvailableModels()
-		ok := false
-		for _, m := range allowed {
-			if m == req.Model {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return nil, fmt.Errorf("llm: model %q not authorised for profile %q (allowed: %v)", req.Model, req.ProfileID, allowed)
-		}
-		prof.Model = req.Model
+	// Only an adapter that places SystemVolatile after its cache marker
+	// sees the two system segments; every other adapter reads one System.
+	if _, ok := adapter.(llm.SystemVolatileAdapter); !ok {
+		req = llm.FoldSystemSegments(req)
 	}
+
+	// Per-call model override: when the chat surface (or a bundled/
+	// user agent profile forwarding its declared model as an override
+	// — core/agents.Profile.Model) picks a model other than the
+	// profile default, substitute prof.Model so the adapter,
+	// capability gate, and audit trail all see the actual model being
+	// called — but only after confirming the credential is actually
+	// authorised for it.
+	//
+	// This check now runs UNCONDITIONALLY on whatever model will
+	// actually reach the wire (the override when one was given,
+	// otherwise prof.Model itself), not only when req.Model differs
+	// from prof.Model (bundled-profile-model-preflight, WP18 /
+	// model-settings-reach-the-model-01PMZ101 UNIT-12, 2026-09-09).
+	// The narrower, override-only form shipped a real gap: a
+	// misconfigured profile whose own default Model isn't a member of
+	// its Models list (e.g. an OpenRouter multi-model profile whose
+	// stored default was seeded from a bundled agent profile's typoed
+	// model id) sailed straight past this guard whenever no override
+	// was in play, because `req.Model != prof.Model` was false —
+	// req.Model was simply empty. The bad id then reached the adapter
+	// and failed at the wire as an opaque provider auth/payment error
+	// instead of here, before any request was sent. This is the
+	// authoritative check every LLMRequest funnels through (registry.
+	// Stream is step 6 of the pipeline documented at the top of this
+	// file, ahead of CredentialResolver and the adapter call) — same
+	// principle as the "default" sentinel fix at
+	// core/rpc/views/agentgraph/chat/llm_provider_adapter.go:581
+	// (resolve at the one choke point, not by teaching every producer
+	// or by adding a second, rival validation elsewhere).
+	wantModel := prof.Model
+	if req.Model != "" {
+		wantModel = req.Model
+	}
+	allowed := prof.AvailableModels()
+	authorised := false
+	for _, m := range allowed {
+		if m == wantModel {
+			authorised = true
+			break
+		}
+	}
+	if !authorised {
+		return nil, fmt.Errorf(
+			"llm: model %q is not authorised for profile %q (this profile only serves: %v) — "+
+				"fix the model id at its source: if it came from an agent profile's `model:` "+
+				"field (core/agents/bundled/*.yaml or a user-authored override under "+
+				"<DataDir>/agents/), correct it to one of the models above; if it is this "+
+				"profile's own default or allowed-models list, fix it in Settings → Providers → %[2]q",
+			wantModel, req.ProfileID, allowed,
+		)
+	}
+	prof.Model = wantModel
 
 	// 1b. Capability cache overlay + background refresh
 	// (model-settings-reach-the-model-01PMZ101 WP14 / FR-017, register
@@ -665,8 +790,18 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		_ = emitter.RetryAttempted(ctx, req, prof, attempt, plannedMS, actualMS, msg)
 	})
 	start := r.now()
+	// gen_ai.chat span per provider call (llm-call-telemetry-01LLMTEL01
+	// WP01). This closure is the one place every attempt reaches the
+	// adapter, so it is the instrumentation choke point: each retry here,
+	// each chat-layer retry and each fallback hop (which re-enter
+	// registry.Stream) is its own span; no adapter touches OTel.
+	ctx = genaitrace.WithCallSequence(ctx)
+	traceCall := genaitrace.CallFromRequest(req, prof)
+	spanCost := func(resp llm.Response) llm.Cost { return deriveCost(resp, reducer, prof) }
 	stream, attempts, err := retry.Run(mw, ctx, policyP, func(c context.Context) (llm.Stream, error) {
-		return adapter.Stream(c, req, prof, credBytes)
+		return genaitrace.Instrument(c, traceCall, spanCost, func(c context.Context) (llm.Stream, error) {
+			return adapter.Stream(c, req, prof, credBytes)
+		})
 	})
 	if err != nil {
 		// Zeroize the adapter's credential copy on failure path.
@@ -691,6 +826,22 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 			_ = emitter.Error(ctx, req, prof, decorated)
 			return nil, decorated
 		}
+		// Same decoration for *ErrPaymentRequired (402) as ErrAuth above:
+		// the chat surface needs (provider, profileID) to tell the user
+		// which of their configured providers is out of credit — see
+		// ErrProviderPaymentRequired's doc comment.
+		var paymentErr *llm.ErrPaymentRequired
+		if errors.As(err, &paymentErr) {
+			decorated := &llm.ErrProviderPaymentRequired{
+				Provider:  prof.Kind,
+				ProfileID: prof.ID,
+				ModelID:   prof.Model,
+				Reason:    paymentErr.Message,
+				Cause:     paymentErr,
+			}
+			_ = emitter.Error(ctx, req, prof, decorated)
+			return nil, decorated
+		}
 		_ = emitter.Error(ctx, req, prof, err)
 		return nil, err
 	}
@@ -704,19 +855,25 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	var pipelineStream llm.Stream = stream
 	if rf := req.ResponseFormat; rf != nil && (rf.Mode == "json" || rf.Mode == "json_schema") {
 		pipelineStream = &structuredStream{
-			inner:  stream,
-			schema: rf.Schema,
-			mode:   rf.Mode,
-			strict: rf.StrictValidation,
-			ctx:    ctx,
+			inner:    stream,
+			schema:   rf.Schema,
+			mode:     rf.Mode,
+			strict:   rf.StrictValidation,
+			ctx:      ctx,
+			provider: prof.Kind,
+			model:    prof.Model,
+			audit:    auditEmitter,
 			retry: func(rctx context.Context, priorResp llm.Response, hint string) (llm.Response, error) {
 				req2 := req
 				req2.Messages = append(append([]llm.Message{}, req.Messages...),
 					llm.Message{Role: llm.RoleAssistant, Content: priorResp.Content},
 					llm.NewTextMessage(llm.RoleUser, hint),
 				)
-				s2, _, rerr := retry.Run(mw, rctx, policyP, func(c context.Context) (llm.Stream, error) {
-					return adapter.Stream(c, req2, prof, credBytes)
+				repairCall := genaitrace.CallFromRequest(req2, prof)
+				s2, _, rerr := retry.Run(mw, genaitrace.WithCallSequence(rctx), policyP, func(c context.Context) (llm.Stream, error) {
+					return genaitrace.Instrument(c, repairCall, spanCost, func(c context.Context) (llm.Stream, error) {
+						return adapter.Stream(c, req2, prof, credBytes)
+					})
 				})
 				if rerr != nil {
 					return llm.Response{}, rerr
@@ -730,14 +887,17 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		}
 	}
 
-	// 7. Wrap the returned stream so we can attach the cost reducer and
-	// audit terminal events on Final()/Cancel().
+	// 7. Wrap the returned stream so we can audit terminal events on
+	// Final()/Cancel(). The cost readout is NOT derived here any more: the
+	// gen_ai.chat choke point above (genaitrace.Instrument with spanCost)
+	// derives it once per provider call and stamps it onto the response
+	// the span reports, so the chat surface and the span show one number
+	// and the reducer runs once (llm-call-telemetry-01LLMTEL01 WP01).
 	wrapped := &auditedStream{
 		inner:    pipelineStream,
 		req:      req,
 		prof:     prof,
 		emitter:  emitter,
-		reducer:  reducer,
 		started:  start,
 		attempts: attempts,
 		credBuf:  credBytes,

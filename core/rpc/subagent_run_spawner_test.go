@@ -31,6 +31,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/hooks"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
@@ -51,6 +52,7 @@ type subagentSpawnerTestStack struct {
 	seam        *graphview.BranchSeamAdapter
 	tasks       *coretasks.Registry
 	model       *fakeModel
+	core        *core.Core
 }
 
 func buildSubagentSpawnerTestStack(t *testing.T, responseText string) *subagentSpawnerTestStack {
@@ -66,7 +68,9 @@ func buildSubagentSpawnerTestStack(t *testing.T, responseText string) *subagentS
 // a coreag.LLMProvider shape fakeModel doesn't offer (e.g. one that
 // blocks on ctx.Done() to prove a stream was actually cancelled, not just
 // that the task row was marked cancelled — containment finding B2).
-func buildSubagentSpawnerTestStackWithLLM(t *testing.T, llm coreag.LLMProvider) *subagentSpawnerTestStack {
+// opts adjust the chat.Config before chat.New (ml-producer WP04 wires its
+// recorder in as ToolCalls / TurnUsage); existing callers pass none.
+func buildSubagentSpawnerTestStackWithLLM(t *testing.T, llm coreag.LLMProvider, opts ...func(*chat.Config)) *subagentSpawnerTestStack {
 	t.Helper()
 	dataDir := t.TempDir()
 	c, err := core.New(core.Options{DataDir: dataDir})
@@ -96,7 +100,7 @@ func buildSubagentSpawnerTestStackWithLLM(t *testing.T, llm coreag.LLMProvider) 
 
 	graph := loadChatDefaultGraph(t)
 
-	runner, err := chat.New(chat.Config{
+	cfg := chat.Config{
 		Kernel:        coreag.NewKernel(),
 		Registry:      dispatcherTestRegistry{},
 		Broker:        broker,
@@ -107,7 +111,11 @@ func buildSubagentSpawnerTestStackWithLLM(t *testing.T, llm coreag.LLMProvider) 
 		EnvDefaults: func(env *coreag.Env) {
 			env.LLM = llm
 		},
-	})
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	runner, err := chat.New(cfg)
 	if err != nil {
 		t.Fatalf("chat.New: %v", err)
 	}
@@ -143,6 +151,7 @@ func buildSubagentSpawnerTestStackWithLLM(t *testing.T, llm coreag.LLMProvider) 
 		bus:         bus,
 		seam:        seam,
 		tasks:       taskReg,
+		core:        c,
 	}
 }
 
@@ -156,6 +165,23 @@ func (s *subagentSpawnerTestStack) armSpawner(t *testing.T, timeout time.Duratio
 		Tasks:          s.tasks,
 		DefaultProfile: func() string { return "test-profile" },
 		Timeout:        timeout,
+	}))
+}
+
+// armSpawnerWithHookRunner is armSpawner plus a HookRunner (UNIT-7,
+// FR-007) — a separate helper rather than widening armSpawner's
+// signature, so the many existing armSpawner(t, timeout) call sites
+// above stay untouched (a nil HookRunner is the default, already
+// covered by every one of those).
+func (s *subagentSpawnerTestStack) armSpawnerWithHookRunner(t *testing.T, timeout time.Duration, hr *hooks.Runner) {
+	t.Helper()
+	s.seam.SetRunSpawner(NewSubagentRunSpawner(SubagentRunSpawnerDeps{
+		LLM:            s.llmAPI,
+		Bus:            s.bus,
+		Tasks:          s.tasks,
+		DefaultProfile: func() string { return "test-profile" },
+		Timeout:        timeout,
+		HookRunner:     hr,
 	}))
 }
 
@@ -210,6 +236,203 @@ func TestSubagentSpawnRoundTrip(t *testing.T) {
 	// stub that fabricated the reply).
 	if len(stack.model.snapshotRequests()) == 0 {
 		t.Fatal("fake model was never called — the spawner didn't actually start a run")
+	}
+}
+
+// gatedLLM is a coreag.LLMProvider that signals modelCalled the instant
+// Generate is entered, then BLOCKS until release is closed (or ctx is
+// cancelled). Built for
+// TestSubagentSpawnRoundTrip_FiresSubagentStartBeforeFirstTurn: a naive
+// "sample the hook-fire count at the same wall-clock moment the model
+// was called" check is racy against real goroutine scheduling (the chat
+// runner's first turn does not run synchronously inside StartStream —
+// confirmed while writing this test: an earlier draft that merely
+// snapshotted state passed even after the fire call was moved to AFTER
+// StartStream, because the mutated fire still consistently won the race
+// against the runner's background goroutine reaching the model). Gating
+// the model turns "did the hook fire before the model was called" into a
+// real causal fact instead of a timing coincidence: the test does not
+// release the model until it has positively observed the hook fired
+// AND positively observed the model had not yet been entered.
+type gatedLLM struct {
+	modelCalled chan struct{}
+	release     chan struct{}
+	response    string
+	once        sync.Once
+}
+
+func (g *gatedLLM) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
+	g.once.Do(func() { close(g.modelCalled) })
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+		return coreag.LLMResponse{}, ctx.Err()
+	}
+	if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
+		sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: g.response})
+	}
+	return coreag.LLMResponse{Content: g.response, FinishReason: "stop"}, nil
+}
+
+// TestSubagentSpawnRoundTrip_FiresSubagentStartBeforeFirstTurn is AC-08's
+// falsifiable claim: hooks.EventSubagentStart fires exactly once per
+// dispatch, and — the part occurrence alone cannot prove — strictly
+// BEFORE the child run's first turn. A real *hooks.Runner backed by a
+// real in-memory Registry + a registered test builtin drives this (per
+// CLAUDE.md blind spot #2's spirit: a fake HookRunnerIface would only
+// prove the spawner calls *some* function, not that a real hooks.Runner
+// dispatch actually threads through).
+//
+// gatedLLM (above) makes the ordering claim a real causal fact: the test
+// waits for the hook to fire, THEN positively asserts the model has not
+// been entered yet (a non-blocking read on modelCalled), THEN releases
+// the model to proceed. A naive "read counters at the same instant"
+// version of this test does NOT work — measured while writing it: moving
+// the Fire call to immediately after deps.LLM.StartStream (still
+// synchronous, still before the driving goroutine yields) passed just as
+// often as the correct position, because StartStream does not run the
+// first turn synchronously — the actual model call happens on a
+// separately-scheduled goroutine, so two placements that are both
+// "before that goroutine gets scheduled" are not an observable ordering
+// difference at all. That sub-case is NOT claimed as caught below; a
+// gate on wall-clock/scheduling coincidence would be exactly the
+// "adjacent to the property it claims" defect class CLAUDE.md's quality
+// bar warns about, so it is recorded here as a known limit rather than
+// papered over with a flaky assertion.
+//
+// Mutation, RAN by hand against core/rpc/subagent_run_spawner.go while
+// writing this test:
+//   - Delete the fire block entirely: reddens with "timed out waiting
+//     for subagent_start to fire" (hookFired never closes).
+//   - Move the fire call to after the run has actually finished — inside
+//     the `go awaitSubagentRun(...)` goroutine, after it returns, so the
+//     event can only fire once the model has already been called AND
+//     returned: reddens with the same "timed out" message. This is
+//     correct, not just convenient — the mutation makes hookFired and
+//     gated.release mutually dependent (Fire cannot run until Generate
+//     has returned, which this test will not allow until hookFired has
+//     already closed), so a real deadlock is the true consequence of
+//     that reordering, and the test times out rather than hanging
+//     forever only because of its own 5s bound.
+//   - Moving the fire call to immediately after StartStream returns (the
+//     race described above) is NOT caught by this test — see the
+//     paragraph above.
+func TestSubagentSpawnRoundTrip_FiresSubagentStartBeforeFirstTurn(t *testing.T) {
+	gated := &gatedLLM{
+		modelCalled: make(chan struct{}),
+		release:     make(chan struct{}),
+		response:    "sub-agent worker done",
+	}
+	stack := buildSubagentSpawnerTestStackWithLLM(t, gated)
+
+	reg, err := hooks.NewRegistry("")
+	if err != nil {
+		t.Fatalf("hooks.NewRegistry: %v", err)
+	}
+	builtins := hooks.NewBuiltinRegistry()
+
+	var (
+		mu            sync.Mutex
+		fireCount     int
+		capturedEvent string
+	)
+	hookFired := make(chan struct{})
+	var hookFiredOnce sync.Once
+	builtins.RegisterGenericFire("test.subagent_start_probe",
+		func(_ context.Context, event string, _ any, _ map[string]any) (hooks.HookOutput, error) {
+			mu.Lock()
+			fireCount++
+			capturedEvent = event
+			mu.Unlock()
+			hookFiredOnce.Do(func() { close(hookFired) })
+			return hooks.HookOutput{}, nil
+		},
+		hooks.BuiltinDescriptor{
+			ID:     "test.subagent_start_probe",
+			Name:   "subagent_start probe",
+			Events: []string{hooks.EventSubagentStart},
+		})
+	if err := reg.Add(hooks.Hook{
+		ID: "h", Name: "n", Event: hooks.EventSubagentStart, Kind: hooks.KindBuiltin,
+		Enabled: true, Builtin: "test.subagent_start_probe",
+	}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	runner := hooks.NewRunner(hooks.Config{Registry: reg, Builtins: builtins})
+
+	stack.armSpawnerWithHookRunner(t, 5*time.Second, runner)
+
+	parent, err := stack.sessionsAPI.Create(context.Background(), "parent session")
+	if err != nil {
+		t.Fatalf("create parent session: %v", err)
+	}
+
+	tool := coresubagent.New(coresubagent.Options{
+		DataDir: t.TempDir(),
+		Seam:    stack.seam,
+	})
+	ctx := toolloop.WithSessionID(context.Background(), parent.ID)
+	args := json.RawMessage(`{"profile":"explore","prompt":"find all usages","run_in_background":false}`)
+
+	type callResult struct {
+		raw json.RawMessage
+		err error
+	}
+	done := make(chan callResult, 1)
+	go func() {
+		raw, err := tool.Call(ctx, args)
+		done <- callResult{raw: raw, err: err}
+	}()
+
+	select {
+	case <-hookFired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for subagent_start to fire")
+	}
+
+	// The causal check: at the instant the hook has fired, the model
+	// must NOT have been entered yet. A non-blocking read — if
+	// modelCalled were already closed, this test would be proving
+	// nothing about ordering.
+	select {
+	case <-gated.modelCalled:
+		t.Fatal("model was already called before subagent_start fired")
+	default:
+	}
+
+	close(gated.release)
+
+	var res callResult
+	select {
+	case res = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for tool.Call to finish")
+	}
+	if res.err != nil {
+		t.Fatalf("Call: unexpected Go error: %v", res.err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(res.raw, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, _ := result["status"].(string); got != "complete" {
+		t.Fatalf("status=%q, want complete; full result=%+v", got, result)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if fireCount != 1 {
+		t.Fatalf("subagent_start hook fired %d times, want exactly 1", fireCount)
+	}
+	if capturedEvent != hooks.EventSubagentStart {
+		t.Errorf("captured event = %q, want %q", capturedEvent, hooks.EventSubagentStart)
+	}
+	// Ground truth the run actually reached the model, so "fired before
+	// a turn that never happened" cannot pass vacuously.
+	select {
+	case <-gated.modelCalled:
+	default:
+		t.Fatal("model was never called — the spawner didn't actually start a run")
 	}
 }
 
@@ -324,6 +547,11 @@ func TestSubagentDispatchRegisteredInProductionWiring(t *testing.T) {
 		t.Fatalf("core.New: %v", err)
 	}
 	api := New(c, WithSettingsStore(newTestStore(t)))
+	// Blocker 2 (review of finding #61, 2026-09-11): New(c) with a real
+	// DataDir now starts api.pruneScheduler's background goroutine
+	// unconditionally; Shutdown must run so it doesn't leak past this
+	// test.
+	t.Cleanup(api.Shutdown)
 
 	registry := api.Builtins()
 	if registry == nil {
@@ -463,6 +691,217 @@ func TestAbort_StopsSpawnedSubagentStream(t *testing.T) {
 	t.Fatal("Abort did not stop the underlying LLM stream — blockingModel's context was never cancelled")
 }
 
+// TestTimeout_StopsSpawnedSubagentStream is the timeout-path counterpart
+// to TestAbort_StopsSpawnedSubagentStream above, proving the SAME
+// underlying defect for the path a human never touches: when
+// awaitSubagentRun's deadline fires before the run's stream ever closes,
+// the run must actually stop, not merely be reported as stopped.
+//
+// Before this fix, the <-deadline.C branch in awaitSubagentRun set
+// outcome/exitCode and called taskReg.End directly — it never routed
+// through the SAME stopStream/LLM.StopStream mechanism
+// TestAbort_StopsSpawnedSubagentStream already exercises for the
+// human-initiated Abort path. taskReg.End would report a terminal task
+// status (failed, exit -1) while blockingModel.Generate stayed parked on
+// <-ctx.Done() indefinitely: the LLM stream, its driver goroutine and its
+// token spend all kept running past the reported timeout. Ground truth
+// here is deliberately the SAME as TestAbort_StopsSpawnedSubagentStream's:
+// the model's own context observing cancellation, not the task row's
+// Status field (which reaches a terminal value on either side of the fix,
+// since awaitSubagentRun's pre-fix build already called taskReg.End on
+// the timeout branch — that call was always the lie, not a missing one).
+//
+// Mutation: comment out the `if stopStream != nil { stopStream(...) }`
+// block in the <-deadline.C case of awaitSubagentRun (core/rpc/
+// subagent_run_spawner.go). Must revert to this test's pre-fix failure.
+func TestTimeout_StopsSpawnedSubagentStream(t *testing.T) {
+	blocking := &blockingModel{started: make(chan struct{})}
+	stack := buildSubagentSpawnerTestStackWithLLM(t, blocking)
+	// Short enough that the test doesn't stall, but long enough that
+	// blocking.started is reliably observed before the deadline fires —
+	// the whole point is to catch the run genuinely mid-generation when
+	// the timeout hits, not to race the spawn itself.
+	stack.armSpawner(t, 200*time.Millisecond)
+
+	parent, err := stack.sessionsAPI.Create(context.Background(), "parent session")
+	if err != nil {
+		t.Fatalf("create parent session: %v", err)
+	}
+
+	tool := coresubagent.New(coresubagent.Options{
+		DataDir: t.TempDir(),
+		Seam:    stack.seam,
+	})
+	ctx := toolloop.WithSessionID(context.Background(), parent.ID)
+	args := json.RawMessage(`{"profile":"explore","prompt":"long-running task"}`) // run_in_background defaults true
+
+	raw, err := tool.Call(ctx, args)
+	if err != nil {
+		t.Fatalf("Call: unexpected Go error: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, _ := result["status"].(string); got != "running" {
+		t.Fatalf("status=%q, want running; full result=%+v", got, result)
+	}
+
+	// Confirm the model was actually mid-generation — otherwise the
+	// timeout firing before Generate even started would prove nothing
+	// about stopping a LIVE stream.
+	select {
+	case <-blocking.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blockingModel.Generate was never called — the spawner never actually started a run")
+	}
+
+	// Do NOT call Abort. Just wait past the spawner's 200ms timeout and
+	// assert the model's OWN context observed cancellation — ground
+	// truth that the run actually stopped, not that a task row somewhere
+	// says it did.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if blocking.wasCancelled() {
+			goto stopped
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timeout did not stop the underlying LLM stream — blockingModel's context was never cancelled")
+
+stopped:
+	// Ground truth #2: the task registry must ALSO report the run as
+	// terminal (this half already worked pre-fix — taskReg.End was
+	// always called on the timeout branch, which is exactly what made
+	// the pre-fix behaviour a lie: a true terminal status paired with a
+	// stream that was still running). Both must hold post-fix.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, tk := range stack.tasks.List() {
+			if tk.Kind == coretasks.KindSubagent && tk.IsTerminal() {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("no terminal subagent task found after the stream was stopped")
+}
+
+// wedgedStopLLM is a minimal llmview.LLMConnectorAPI fake (embeds stubLLM
+// for every method this test doesn't care about) whose StopStream call
+// NEVER returns — not even when the context it's handed is cancelled,
+// mirroring the real production hazard this fixture exists to guard
+// against: ChatRunner.StopStream's own ctx parameter is `_` (chat_runner.go),
+// so it cannot be short-circuited by a caller-side context.WithTimeout
+// either. This is the fake for PR #315's second falsification: proving
+// awaitSubagentRun's OWN bound (subagentStopTimeout) protects the await
+// goroutine even when the underlying stop call is genuinely, permanently
+// stuck — not just slow.
+//
+// This substitutes deps.LLM directly rather than going through the real
+// ChatRunner (unlike blockingModel, which fakes only the model beneath a
+// real ChatRunner). That is deliberate here: the property under test —
+// "does awaitSubagentRun's select still return when stopStream itself
+// never does" — lives entirely inside awaitSubagentRun and the stopStream
+// closure (`deps.LLM.StopStream`), so faking LLM at that boundary still
+// drives the REAL awaitSubagentRun function, the REAL select/goroutine
+// bound, and the REAL taskReg.End call — it does not drive a real
+// ChatRunner, but the real ChatRunner is not what this bound protects
+// against; a wedged StopStream implementation is.
+type wedgedStopLLM struct {
+	stubLLM
+	subID      string
+	stopCalled chan struct{}
+}
+
+func (w *wedgedStopLLM) StartStream(_ context.Context, _, _, _ string) (string, error) {
+	return w.subID, nil
+}
+
+func (w *wedgedStopLLM) StopStream(_ context.Context, _ string) error {
+	close(w.stopCalled)
+	select {} // never returns, regardless of ctx — the hazard itself.
+}
+
+// TestTimeout_StopCallWedged_TaskStillReachesTerminal is the bounded-stop
+// counterpart to TestTimeout_StopsSpawnedSubagentStream: it proves that
+// when the STOP CALL ITSELF (not just the run) is stuck, awaitSubagentRun
+// does not wedge forever waiting on it — subagentStopTimeout bounds that
+// wait, and the task still reaches a terminal state.
+//
+// Ground truth is deliberately structural, matching the file's existing
+// standard (not "the stop func was called" — TestAbort_StopsSpawnedSubagentStream
+// already proved calling isn't the same as stopping): here it's "does
+// run.Wait() return at all" and "does the task registry reach a terminal
+// state", neither of which the pre-bound code could guarantee once
+// stopStream itself never returns.
+//
+// Mutation: replace the bounded select/goroutine block in the
+// <-deadline.C case of awaitSubagentRun with a direct, unbounded
+// `stopStream(context.Background())` call (the PR's own prior shape).
+// Must fail — this test's own external bound (well past
+// subagentStopTimeout) times out waiting for run.Wait() to return.
+func TestTimeout_StopCallWedged_TaskStillReachesTerminal(t *testing.T) {
+	bus := NewEventBus()
+	taskReg := coretasks.NewRegistry(coretasks.Options{})
+	fakeLLM := &wedgedStopLLM{subID: "wedged-sub-1", stopCalled: make(chan struct{})}
+
+	spawn := NewSubagentRunSpawner(SubagentRunSpawnerDeps{
+		LLM:            fakeLLM,
+		Bus:            bus,
+		Tasks:          taskReg,
+		DefaultProfile: func() string { return "test-profile" },
+		Timeout:        50 * time.Millisecond, // short: the outer wait should give up fast
+	})
+
+	run, err := spawn(context.Background(), "branch-1", "child-session-1", coreag.ForkRequest{
+		ParentSessionID: "parent-1",
+		Title:           "wedged stop test",
+	})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if run.TaskID == "" {
+		t.Fatal("spawn produced no TaskID")
+	}
+
+	// Confirm StopStream was actually invoked — otherwise a fast pass
+	// here would prove nothing about the bound (it could just mean the
+	// timeout branch was never reached).
+	select {
+	case <-fakeLLM.stopCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopStream was never called — the spawner's timeout branch never fired")
+	}
+
+	// Ground truth #1: Wait() must return within a bounded time even
+	// though wedgedStopLLM.StopStream never does. Give it generous
+	// headroom over subagentStopTimeout (5s) so this isn't a flaky race
+	// against the bound itself — 15s total is still far short of
+	// "forever", which is the only alternative if the bound is missing.
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- run.Wait(context.Background()) }()
+	select {
+	case werr := <-waitDone:
+		if werr == nil {
+			t.Fatal("Wait() returned nil error for a run that never completed")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Wait() did not return within 15s — the await goroutine wedged on the stuck stop call")
+	}
+
+	// Ground truth #2: the task must still reach a terminal state. A
+	// wedged stop call must not leave the Tasks panel showing "running"
+	// forever any more than the original defect this PR fixes did.
+	tk, ok := taskReg.Get(run.TaskID)
+	if !ok {
+		t.Fatal("task not found in registry")
+	}
+	if !tk.IsTerminal() {
+		t.Fatalf("task status = %q, want a terminal status", tk.Status)
+	}
+}
+
 // TestSubagentDispatch_DepthLimitRefusesRecursion is N2's falsification
 // proof: chain kenaz__subagent_dispatch's own seam (BranchSeamAdapter.Fork)
 // graphview.MaxForkDepth times, each dispatch's child session becoming
@@ -516,5 +955,76 @@ func TestSubagentDispatch_DepthLimitRefusesRecursion(t *testing.T) {
 	}
 	if branchID, _ := result["branch_id"].(string); branchID != "" {
 		t.Errorf("a branch_id was returned (%q) even though the dispatch should have been refused", branchID)
+	}
+}
+
+// TestSubagentDispatch_ChildOfContainedRunInheritsAllowlist (security
+// review M3, model-harness-toolset-01MHTS001 WP02): a scheduled run
+// contained to [kenaz__subagent_dispatch] dispatches a sub-agent through
+// the real tool, the real BranchSeamAdapter and the production spawner;
+// the CHILD session is bound by the same allowlist, so its off-list tool
+// is DENIED by the production merged resolver. Mutation: disable the
+// spawner's Inherit call -> the child's kenaz__bash resolves allow and
+// this test fails.
+func TestSubagentDispatch_ChildOfContainedRunInheritsAllowlist(t *testing.T) {
+	stack := buildSubagentSpawnerTestStack(t, "sub-agent worker done")
+	registry := NewScheduledRunContainmentRegistry(nil)
+	inner := NewSubagentRunSpawner(SubagentRunSpawnerDeps{
+		LLM:            stack.llmAPI,
+		Bus:            stack.bus,
+		Tasks:          stack.tasks,
+		DefaultProfile: func() string { return "test-profile" },
+		Timeout:        5 * time.Second,
+		Containment:    registry,
+	})
+	var mu sync.Mutex
+	var child string
+	stack.seam.SetRunSpawner(func(ctx context.Context, branchID, childSessionID string, req coreag.ForkRequest) (graphview.SpawnedRun, error) {
+		mu.Lock()
+		child = childSessionID
+		mu.Unlock()
+		return inner(ctx, branchID, childSessionID, req)
+	})
+
+	parent, err := stack.sessionsAPI.Create(context.Background(), "Scheduled: parent")
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	registry.Contain(parent.ID, "cr-parent", []string{coresubagent.ToolName})
+
+	tool := coresubagent.New(coresubagent.Options{DataDir: t.TempDir(), Seam: stack.seam})
+	raw, err := tool.Call(toolloop.WithSessionID(context.Background(), parent.ID),
+		json.RawMessage(`{"profile":"explore","prompt":"look around","run_in_background":false}`))
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	mu.Lock()
+	childID := child
+	mu.Unlock()
+	if childID == "" {
+		t.Fatalf("spawner never ran; result=%s", raw)
+	}
+
+	engine := buildCedarEngineOrNil(stack.core.DataDir(), nil)
+	if engine == nil {
+		t.Fatal("no cedar engine")
+	}
+	arm := newCedarSessionKindResolver(stack.core.SessionManager(), engine)
+	arm.SetScheduledRunContainment(registry)
+	perms := toolloop.NewMergedResolver(nil, arm)
+
+	res, err := perms.Resolve(context.Background(), childID, "kenaz", "bash")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Policy != toolloop.PolicyDeny {
+		t.Fatalf("child of a contained run: kenaz__bash = %+v, want deny (containment not inherited)", res)
+	}
+	res, err = perms.Resolve(context.Background(), childID, "kenaz", "subagent_dispatch")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Policy == toolloop.PolicyDeny {
+		t.Fatalf("child's on-list tool denied: %+v", res)
 	}
 }

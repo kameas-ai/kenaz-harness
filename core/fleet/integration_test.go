@@ -51,10 +51,14 @@ func TestIntegration_AllCapabilityKeys(t *testing.T) {
 		t.Errorf("AllCapabilities() missing CapSitesHosting")
 	}
 
-	// Total count gate: 22 baseline + CapContextSync + CapTeamSessionHandoff
-	// + CapContextBootstrap = 25.
-	if len(all) != 25 {
-		t.Errorf("AllCapabilities() len = %d, want 25", len(all))
+	// Total count gate: 26 as of the fleet-contract conformance fix (#380:
+	// 22 baseline + CapContextSync + CapTeamSessionHandoff
+	// + CapContextBootstrap + CapOrgGraphSharing), then v0.93.0 added
+	// CapCedarPresetPolicies + CapCedarCustomPolicies (cedar policy
+	// sharing) + CapMemorySync (memory-sync-01MEMSY01) = 29, then
+	// CapHostedInference was re-added (ml-producer-01MLPRD01 WP01) = 30.
+	if len(all) != 30 {
+		t.Errorf("AllCapabilities() len = %d, want 30", len(all))
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/zalando/go-keyring"
+	"github.com/kameas-ai/kenaz-harness/core/keyring"
 )
 
 // keychainSet stores a plaintext value in the OS keychain under service+key.

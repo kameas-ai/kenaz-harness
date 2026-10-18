@@ -17,10 +17,19 @@ import type { PermissionMode } from '@/lib/types';
 
 const client = useHarnessClient();
 
+// Labels + notes describe the ACTUAL wired behavior
+// (permission-mode-wiring, 2026-09-16): this dial sets the risk-rated-
+// autonomy-01PMRA01 layer-3 threshold (core/rpc/api.go
+// permissionModeRiskThreshold: strict=0, normal=40, permissive=80). An
+// explicit Cedar allow/deny always wins regardless of this setting —
+// it only governs calls Cedar has no opinion on. Destructive or
+// unrecognized-tool calls always confirm at every mode (the family
+// floor in core/policy/risk/floor.go sits above every reachable
+// threshold here).
 const PERMISSION_MODES: ReadonlyArray<{ value: PermissionMode; label: string; note?: string }> = [
-  { value: 'strict', label: 'Strict', note: 'every call prompts' },
-  { value: 'normal', label: 'Normal', note: 'default' },
-  { value: 'permissive', label: 'Permissive', note: 'non-dangerous skip prompt' },
+  { value: 'strict', label: 'Strict', note: 'every unmatched call prompts' },
+  { value: 'normal', label: 'Normal', note: 'default — low-risk calls skip the prompt' },
+  { value: 'permissive', label: 'Permissive', note: 'most calls skip the prompt' },
 ];
 
 const permissionMode = ref<PermissionMode>('normal');
@@ -135,7 +144,9 @@ onMounted(async () => {
         Permission mode
       </h2>
       <p class="mt-1 font-ui text-[11px] text-ink-dim">
-        Controls when permission prompts appear across all resource families (bash, filesystem, credentials, tools).
+        Controls how much risk a tool call may carry before it must ask you, when there is
+        no explicit allow/deny rule for it. An explicit rule always wins over this setting.
+        Destructive or unrecognized tools always confirm, at every mode.
       </p>
       <div class="mt-2">
         <RadioStrip
@@ -161,7 +172,7 @@ onMounted(async () => {
         class="mt-3 font-ui text-[11px] text-signal-warn"
         data-testid="permissive-active-warning"
       >
-        Permissive: non-dangerous ops skip the prompt. Dial back to Strict / Normal at any time.
+        Permissive: only destructive or unrecognized-tool calls still prompt. Dial back to Strict / Normal at any time.
       </p>
       <!-- Explicit error state for security-significant permission mode failures. -->
       <p

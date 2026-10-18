@@ -36,6 +36,7 @@ exports[`MessageList — classic (pre-moves) session > renders byte-identically 
           <!--v-if-->
           <!-- Archived row tag + jump-to-summary chip (WP07). -->
           <!--v-if-->
+          <!--v-if-->
           <!-- tool-call rows: namespaced monospace line each -->
           <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>What does the config do?</p>
 </span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
@@ -90,6 +91,7 @@ exports[`MessageList — classic (pre-moves) session > renders byte-identically 
           <!--v-if-->
           <!-- Archived row tag + jump-to-summary chip (WP07). -->
           <!--v-if-->
+          <!--v-if-->
           <!-- tool-call rows: namespaced monospace line each -->
           <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>It selects the provider.</p>
 </span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
@@ -128,6 +130,7 @@ exports[`MessageList — classic (pre-moves) session > renders byte-identically 
            synthetic summary row regardless of toggle state. -->
           <!--v-if-->
           <!-- Archived row tag + jump-to-summary chip (WP07). -->
+          <!--v-if-->
           <!--v-if-->
           <!-- tool-call rows: namespaced monospace line each -->
           <ul class="space-y-1 mb-2">
@@ -185,6 +188,7 @@ exports[`MessageList — classic (pre-moves) session > renders byte-identically 
           <!--v-if-->
           <!-- Archived row tag + jump-to-summary chip (WP07). -->
           <!--v-if-->
+          <!--v-if-->
           <!-- tool-call rows: namespaced monospace line each -->
           <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>Model switched to sonnet.</p>
 </span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
@@ -240,6 +244,7 @@ exports[`MessageList — classic (pre-moves) session > renders byte-identically 
            synthetic summary row regardless of toggle state. -->
           <!--v-if-->
           <!-- Archived row tag + jump-to-summary chip (WP07). -->
+          <!--v-if-->
           <!--v-if-->
           <!-- tool-call rows: namespaced monospace line each -->
           <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>And the fallback?</p>
@@ -299,6 +304,7 @@ exports[`MessageList — classic (pre-moves) session > renders byte-identically 
               <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"></path>
             </svg><span> Summary of 1 turn</span></div><!-- Archived row tag + jump-to-summary chip (WP07). -->
           <!--v-if-->
+          <!--v-if-->
           <!-- tool-call rows: namespaced monospace line each -->
           <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>Falls back to the secondary profile.</p>
 </span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
@@ -357,7 +363,9 @@ exports[`MessageList — classic (pre-moves) session > renders byte-identically 
               <rect width="20" height="5" x="2" y="3" rx="1"></rect>
               <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path>
               <path d="M10 12h4"></path>
-            </svg><span>archived</span><button type="button" class="ml-2 normal-case tracking-normal text-[11px] text-accent hover:underline" data-testid="message-archived-jump" data-summary-id="c-6"> → summary </button></div><!-- tool-call rows: namespaced monospace line each -->
+            </svg><span>archived</span><button type="button" class="ml-2 normal-case tracking-normal text-[11px] text-accent hover:underline" data-testid="message-archived-jump" data-summary-id="c-6"> → summary </button></div>
+          <!--v-if-->
+          <!-- tool-call rows: namespaced monospace line each -->
           <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>An older turn.</p>
 </span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
           <!--v-if-->
@@ -411,6 +419,7 @@ exports[`MessageList — classic (pre-moves) session > renders byte-identically 
            synthetic summary row regardless of toggle state. -->
           <!--v-if-->
           <!-- Archived row tag + jump-to-summary chip (WP07). -->
+          <!--v-if-->
           <!--v-if-->
           <!-- tool-call rows: namespaced monospace line each -->
           <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>Interrupted repl</p>

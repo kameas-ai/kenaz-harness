@@ -100,6 +100,24 @@ func (f *migFakeDB) Query(ctx context.Context, query string, args ...any) (migra
 	// answer from that map rather than guessing — see
 	// TestMigration0332_PreservesArtifactVersionRows in
 	// core/storage/sqlite for the real-sqlite half of this behaviour.
+	// Migration 0337's first (and, when it finds no candidates, only)
+	// query: find sessions carrying at least one condition-1 checkpoint
+	// candidate. The fake has no row store, so report none — the
+	// row-level contract (all three shapes, real sqlite) is pinned by
+	// TestMigration0337_RepairsCheckpointRowsWithoutTouchingRealPartials
+	// in core/storage/sqlite.
+	if strings.HasPrefix(q, "select distinct session_id from session_messages") {
+		return &migEmptyRows{}, nil
+	}
+	// Migration 0341 (chat-single-writer-01DOGF0G) has the same shape:
+	// one cross-session candidate query, then per-session work. No row
+	// store, so no candidates — the row-level contract is pinned against
+	// real upgraded snapshots by
+	// TestMigration0341_DedupesDoubledTurnsAgainstUpgradedDatabase in
+	// core/storage/sqlite.
+	if strings.HasPrefix(q, "select distinct a.session_id from session_messages a join session_messages b") {
+		return &migEmptyRows{}, nil
+	}
 	if strings.HasPrefix(q, "select count(*) from sqlite_master where type='table' and name=?") {
 		n := 0
 		if len(args) == 1 {
@@ -453,14 +471,25 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// 0334 move_fidelity (model-moves-transcript-01PMCH01 WP03) +
 	// 0335 search_fts_tool_rows (model-moves-transcript-01PMCH01 WP06) +
 	// 0336 stream_checkpoints (chat-turn-integrity-01PMZ606 WP02) +
+	// 0337 repair_checkpoint_rows (chat-turn-integrity-01PMZ606 WP05) +
+	// 0338 blocked_permission_requests (model-scheduled-jobs-01PMSJ01
+	// WP06) + 0339 scheduled_chat_runs_trigger (model-scheduled-jobs-
+	// 01PMSJ01 WP08; both registered BELOW the already-shipped 0340 per
+	// the reservation in migrations_blocked_permission_requests.go /
+	// migrations_scheduled_chat_runs_trigger.go) +
 	// 0340 scheduled_chat_runs_created_by (model-scheduled-jobs-01PMSJ01
-	// WP09; 0337-0339 are reserved for sibling WPs and were not
-	// registered as of WP09)) =
-	// 40 applied entries (2 chassis bootstrap + 38 sessions migrations).
-	if got := len(db.ledger); got != 40 {
-		t.Fatalf("ledger size = %d, want 40", got)
+	// WP09) + 0341 dedupe_user_turns (chat-single-writer-01DOGF0G WP05) +
+	// 0342 session_turn_runs (agentgraph-settings-linkage-01DOGF0D WP03) +
+	// 0343 agent_graph_run_specs (feat/graph-resolved-spec WP01) +
+	// 0344 turn_run_outcome (undelivered-message-retry) +
+	// 0345 scheduled_chat_history_model_cost (dogfood 2026-10-08 r2) +
+	// 0346 session_usage_cache_tokens (tool-context-budget-01TCBUD01 WP01) +
+	// 0347 tool_exposure (tool-context-budget-01TCBUD01 WP02)) =
+	// 50 applied entries (2 chassis bootstrap + 48 sessions migrations).
+	if got := len(db.ledger); got != 50 {
+		t.Fatalf("ledger size = %d, want 50", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 340}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347}
 
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {

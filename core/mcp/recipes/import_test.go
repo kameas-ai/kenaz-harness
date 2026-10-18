@@ -1,14 +1,21 @@
 package recipes_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	stdhttp "net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
+	httptransport "github.com/kameas-ai/kenaz-harness/core/mcp/transport/http"
+	ssetransport "github.com/kameas-ai/kenaz-harness/core/mcp/transport/sse"
 )
 
 // TestImport_OldShape_StdioEntry exercises the dominant real-world
@@ -85,36 +92,217 @@ func TestImport_OldShape_StdioEntry(t *testing.T) {
 	}
 }
 
-func TestImport_HTTPType_Unsupported(t *testing.T) {
-	payload := `{
+// TestImport_HTTPType_TranslatesAndOpens is AC-1: a pasted
+// {"type":"http",...} entry imports as an enabled, openable recipe —
+// proven by opening it against a local test server and seeing its
+// tools, not by asserting Status == ok. This (with its SSE sibling
+// below) is the replacement coverage for the two deleted
+// WP03/WP04-pinning tests: paste-import-accepts-what-we-support-01PMZG16
+// AC-3 requires the replacement round-trip tests exist before those
+// tests are removed, precisely because the old tests only checked
+// Reason/Status — which is exactly what let a refusal read as a pass.
+func TestImport_HTTPType_TranslatesAndOpens(t *testing.T) {
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			stdhttp.Error(w, err.Error(), stdhttp.StatusBadRequest)
+			return
+		}
+		var req struct {
+			ID json.RawMessage `json:"id"`
+		}
+		_ = json.Unmarshal(body, &req)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"remote_tool"}]}}`, string(req.ID))
+	}))
+	defer srv.Close()
+
+	payload := fmt.Sprintf(`{
 		"mcpServers": {
 			"my-http": {
 				"type": "http",
-				"url": "https://api.example.com/mcp",
+				"url": %q,
 				"headers": {"Authorization": "Bearer ${MY_TOKEN}"}
 			}
 		}
-	}`
+	}`, srv.URL)
+
 	report, err := recipes.ImportClaudeDesktop([]byte(payload), nil)
 	if err != nil {
 		t.Fatalf("ImportClaudeDesktop: %v", err)
 	}
-	if report.KeptCount != 0 {
-		t.Errorf("KeptCount = %d, want 0", report.KeptCount)
+	if report.KeptCount != 1 {
+		t.Fatalf("KeptCount = %d, want 1 (entries=%+v)", report.KeptCount, report.Entries)
 	}
-	if report.UnsupportedCount != 1 {
-		t.Errorf("UnsupportedCount = %d, want 1", report.UnsupportedCount)
+	entry := report.Entries[0]
+	if entry.Status != recipes.ImportStatusKept {
+		t.Fatalf("Status = %q, want %q (Reason=%q)", entry.Status, recipes.ImportStatusKept, entry.Reason)
 	}
-	e := report.Entries[0]
-	if e.Status != recipes.ImportStatusUnsupported {
-		t.Errorf("Status = %q, want %q", e.Status, recipes.ImportStatusUnsupported)
+	if entry.Recipe.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want %q", entry.Recipe.Transport, recipes.TransportHTTP)
 	}
-	if !strings.Contains(e.Reason, "WP03") {
-		t.Errorf("Reason = %q, want a reference to WP03", e.Reason)
+	if entry.Recipe.URL != srv.URL {
+		t.Errorf("URL = %q, want %q", entry.Recipe.URL, srv.URL)
+	}
+	if entry.Recipe.HeadersTemplate["Authorization"] != "Bearer ${MY_TOKEN}" {
+		t.Errorf("HeadersTemplate[Authorization] = %q", entry.Recipe.HeadersTemplate["Authorization"])
+	}
+	if err := entry.Recipe.Validate(); err != nil {
+		t.Fatalf("translated recipe fails Validate: %v", err)
+	}
+
+	// Open the translated recipe against the local test server and prove
+	// its tools are reachable through the real HTTP transport — not just
+	// that the import layer reports success.
+	conn := httptransport.NewConnection(httptransport.Spec{
+		ID:              entry.Recipe.ID,
+		URL:             entry.Recipe.URL,
+		HeadersTemplate: entry.Recipe.HeadersTemplate,
+		Env:             map[string]string{"MY_TOKEN": "secret-value"},
+		HTTPClient:      srv.Client(),
+	}, nil)
+	if err := conn.Open(context.Background()); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.Send(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	msg, err := conn.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if msg.Error != nil {
+		t.Fatalf("server returned error: %+v", msg.Error)
+	}
+	if !strings.Contains(string(msg.Result), "remote_tool") {
+		t.Errorf("tools/list result = %s, want it to contain remote_tool", string(msg.Result))
 	}
 }
 
-func TestImport_SSEType_Unsupported(t *testing.T) {
+// TestImport_SSEType_TranslatesAndOpens is AC-2: the same proof for
+// type: "sse", including PostURL — opened against a local test server
+// (a real SSE stream + a real POST endpoint), with the tool asserted
+// from the response, not the import Status.
+func TestImport_SSEType_TranslatesAndOpens(t *testing.T) {
+	outCh := make(chan []byte, 4)
+	mux := stdhttp.NewServeMux()
+	mux.HandleFunc("/stream", func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		flusher, ok := w.(stdhttp.Flusher)
+		if !ok {
+			stdhttp.Error(w, "streaming not supported", stdhttp.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(stdhttp.StatusOK)
+		flusher.Flush()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case data := <-outCh:
+				fmt.Fprintf(w, "data: %s\n\n", data)
+				flusher.Flush()
+			}
+		}
+	})
+	mux.HandleFunc("/rpc", func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			stdhttp.Error(w, err.Error(), stdhttp.StatusBadRequest)
+			return
+		}
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if req.Method == "tools/list" {
+			resp, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result":  map[string]any{"tools": []map[string]any{{"name": "remote_sse_tool"}}},
+			})
+			outCh <- resp
+		}
+		w.WriteHeader(stdhttp.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	payload := fmt.Sprintf(`{
+		"mcpServers": {
+			"my-sse": {
+				"type": "sse",
+				"url": %q,
+				"post_url": %q
+			}
+		}
+	}`, srv.URL+"/stream", srv.URL+"/rpc")
+
+	report, err := recipes.ImportClaudeDesktop([]byte(payload), nil)
+	if err != nil {
+		t.Fatalf("ImportClaudeDesktop: %v", err)
+	}
+	if report.KeptCount != 1 {
+		t.Fatalf("KeptCount = %d, want 1 (entries=%+v)", report.KeptCount, report.Entries)
+	}
+	entry := report.Entries[0]
+	if entry.Status != recipes.ImportStatusKept {
+		t.Fatalf("Status = %q, want %q (Reason=%q)", entry.Status, recipes.ImportStatusKept, entry.Reason)
+	}
+	if entry.Recipe.Transport != recipes.TransportSSE {
+		t.Errorf("Transport = %q, want %q", entry.Recipe.Transport, recipes.TransportSSE)
+	}
+	if entry.Recipe.URL != srv.URL+"/stream" {
+		t.Errorf("URL = %q, want %q", entry.Recipe.URL, srv.URL+"/stream")
+	}
+	if entry.Recipe.PostURL != srv.URL+"/rpc" {
+		t.Errorf("PostURL = %q, want %q", entry.Recipe.PostURL, srv.URL+"/rpc")
+	}
+	if err := entry.Recipe.Validate(); err != nil {
+		t.Fatalf("translated recipe fails Validate: %v", err)
+	}
+
+	conn := ssetransport.NewConnection(ssetransport.Spec{
+		ID:         entry.Recipe.ID,
+		URL:        entry.Recipe.URL,
+		PostURL:    entry.Recipe.PostURL,
+		HTTPClient: srv.Client(),
+	}, nil)
+	if err := conn.Open(context.Background()); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.Send(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	msg, err := conn.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if msg.Error != nil {
+		t.Fatalf("server returned error: %+v", msg.Error)
+	}
+	if !strings.Contains(string(msg.Result), "remote_sse_tool") {
+		t.Errorf("tools/list result = %s, want it to contain remote_sse_tool", string(msg.Result))
+	}
+}
+
+// TestImport_SSEType_MissingPostURL_Malformed is AC-4: an entry the
+// harness genuinely cannot import — here, an SSE entry that (like most
+// real-world Claude Desktop / Cursor "sse" configs) carries only "url"
+// and relies on the classic SSE "endpoint" discovery event this
+// harness's SSE transport does not implement — still refuses, with a
+// reason that names the actual gap (a missing post_url/postUrl field)
+// and no work package.
+func TestImport_SSEType_MissingPostURL_Malformed(t *testing.T) {
 	payload := `{
 		"mcpServers": {
 			"my-sse": {
@@ -127,12 +315,20 @@ func TestImport_SSEType_Unsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ImportClaudeDesktop: %v", err)
 	}
-	if report.UnsupportedCount != 1 {
-		t.Errorf("UnsupportedCount = %d, want 1", report.UnsupportedCount)
+	if report.MalformedCount != 1 {
+		t.Fatalf("MalformedCount = %d, want 1 (entries=%+v)", report.MalformedCount, report.Entries)
 	}
 	e := report.Entries[0]
-	if !strings.Contains(e.Reason, "WP04") {
-		t.Errorf("Reason = %q, want a reference to WP04", e.Reason)
+	if e.Status != recipes.ImportStatusMalformed {
+		t.Errorf("Status = %q, want %q", e.Status, recipes.ImportStatusMalformed)
+	}
+	if !strings.Contains(e.Reason, "post_url") && !strings.Contains(e.Reason, "postUrl") {
+		t.Errorf("Reason = %q, want it to name the missing post_url field", e.Reason)
+	}
+	for _, wp := range []string{"WP01", "WP02", "WP03", "WP04"} {
+		if strings.Contains(e.Reason, wp) {
+			t.Errorf("Reason = %q, must not name a work package (%s)", e.Reason, wp)
+		}
 	}
 }
 

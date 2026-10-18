@@ -8,20 +8,27 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 )
 
 // AutonomyKnobValues is the wire shape for a ResolvedKnobs payload.
 // Concrete typed fields for every knob plus the per-knob source trace.
 // (autonomy-dial-01KR3M2A WP03)
 type AutonomyKnobValues struct {
-	MaxIterations            int               `json:"maxIterations"`
-	AskOnAmbiguity           string            `json:"askOnAmbiguity"`
-	AutoApproveFamilies      []string          `json:"autoApproveFamilies"`
-	TokenCeilingPerTurn      int               `json:"tokenCeilingPerTurn"`
-	RecapStyle               string            `json:"recapStyle"`
-	ContinueOnError          string            `json:"continueOnError"`
-	DestructiveActionPosture string            `json:"destructiveActionPosture"`
-	SourceTrace              map[string]string `json:"sourceTrace"`
+	MaxIterations            int      `json:"maxIterations"`
+	AskOnAmbiguity           string   `json:"askOnAmbiguity"`
+	AutoApproveFamilies      []string `json:"autoApproveFamilies"`
+	TokenCeilingPerTurn      int      `json:"tokenCeilingPerTurn"`
+	RecapStyle               string   `json:"recapStyle"`
+	ContinueOnError          string   `json:"continueOnError"`
+	DestructiveActionPosture string   `json:"destructiveActionPosture"`
+	// RiskThreshold is risk-rated-autonomy-01PMRA01 FR-003's dial (0-100,
+	// see autonomy.KnobRiskThreshold's doc comment). Surfaced here so the
+	// Settings autonomy panel can render it like the other seven knobs
+	// (WP03's "Settings surface" requirement) without a second RPC.
+	RiskThreshold int               `json:"riskThreshold"`
+	SourceTrace   map[string]string `json:"sourceTrace"`
 	// Tier is the effective tier label resolved from the highest-priority
 	// layer that contributed a Level (session > project > global > default).
 	Tier string `json:"tier"`
@@ -84,7 +91,43 @@ type Session struct {
 	// BranchDepth is 0 for top-level sessions; pre-computed by iterative
 	// ancestor walks capped at 32.
 	BranchDepth int `json:"branchDepth,omitempty"`
+
+	// LastUsage is the per-turn token/cost snapshot most recently
+	// persisted for this session (chat-turn-integrity-01PMZ606 WP11,
+	// task #37). Populated from session.Manager.GetLastUsage, which
+	// reads the sessions.last_usage_json column (migration
+	// sessions/0322-last-usage-json). nil when no turn has completed yet
+	// — distinct from a genuine zero-cost turn, which round-trips as a
+	// non-nil pointer with zero fields. The frontend's composer footer
+	// and context-window meter both read this via useSession.ts's
+	// load(), which is what makes the readout survive a session reopen
+	// instead of resetting to 0 tok · $0.0000 until the next live turn.
+	LastUsage *LastUsage `json:"lastUsage,omitempty"`
 }
+
+// LastUsage is the wire mirror of session.LastUsage (chat-turn-integrity-
+// 01PMZ606 WP11). Field names/JSON tags match the session.usage.updated
+// broker event payload (frontend SessionUsagePayload in useSession.ts) so
+// the reload path and the live-event path hand the composer footer /
+// context-meter byte-identical shapes.
+type LastUsage struct {
+	PromptTokens     int     `json:"promptTokens"`
+	CompletionTokens int     `json:"completionTokens"`
+	TotalTokens      int     `json:"totalTokens"`
+	CostUSD          float64 `json:"costUsd"`
+	CostSource       string  `json:"costSource"`
+}
+
+// SessionKnobs is the wire mirror of llm.RequestKnobs for the
+// session-level default override (model-settings-reach-the-model-
+// 01PMZ101 UNIT-6 / WP10). A type alias, not a copy: llm.RequestKnobs'
+// own json tags (openai_effort, anthropic_thinking_budget nested under
+// "reasoning"; top_p, top_k, ...) ARE the wire shape — SessionTunePanel
+// posts a llm.ReasoningConfig-shaped object today (see
+// frontend/src/lib/types.ts's ReasoningConfig), and this alias keeps
+// the Go and TS sides byte-identical to core/llm's own struct without a
+// second field-by-field struct to drift out of sync with it.
+type SessionKnobs = llm.RequestKnobs
 
 // ToolCall mirrors the frontend ToolCall shape for tool-use rendering.
 type ToolCall struct {
@@ -153,6 +196,10 @@ type Message struct {
 	PromptTokens     *int     `json:"promptTokens,omitempty"`
 	CompletionTokens *int     `json:"completionTokens,omitempty"`
 	CostUSD          *float64 `json:"costUsd,omitempty"`
+	// CachedTokens is the part of PromptTokens the provider served from
+	// its prompt cache. PromptTokens is the whole prompt under either
+	// provider convention, so CachedTokens never adds to it.
+	CachedTokens *int `json:"cachedTokens,omitempty"`
 	// MessageCostSource mirrors the token-cost-telemetry taxonomy:
 	// "provider" | "derived" | "mixed" | "unknown". Empty on rows
 	// with no usage data.
@@ -238,6 +285,47 @@ type DeleteOptions struct {
 // FR-014 default).
 func (o DeleteOptions) DeleteArtifactsCascade() bool { return !o.PreserveArtifacts }
 
+// TurnRun links one chat turn to the agent-graph run that executed it
+// (agentgraph-settings-linkage-01DOGF0D WP03). The transcript keys a
+// turn by TurnSpanID (Message.TurnSpanID on every move of the turn) and
+// links to /agentgraph/run/:runId/graph and /agentgraph/run/:runId.
+// Turns with no TurnRun predate the mapping (migration 0342) and must
+// not be linked: pre-fix run ids were reused across restarts.
+type TurnRun struct {
+	RunID      string `json:"runId"`
+	TurnSpanID string `json:"turnSpanId"`
+	GraphID    string `json:"graphId"`
+	// SpecDigest identifies which version of GraphID the run executed
+	// ("sha256:<hex>").
+	SpecDigest string `json:"specDigest"`
+	// CreatedAt is RFC3339Nano.
+	CreatedAt string `json:"createdAt"`
+
+	// Outcome is how the run ended (undelivered-message-retry, migration
+	// sessions/0344): "completed" | "failed" | "stopped", or "" while the
+	// run is in flight and for every run that predates the column. The
+	// surface renders "" as nothing — never as NOT DELIVERED.
+	Outcome string `json:"outcome"`
+	// Delivered reports whether the model accepted the request (any
+	// streamed output, or a completion). Meaningful only when Outcome is
+	// non-empty. A failed run with Delivered=false is a user message that
+	// never reached the model.
+	Delivered bool `json:"delivered"`
+	// FailureClass is "user_actionable" | "transient" | "unknown" for a
+	// failed run (llm.FailureClass); FailureCode the stable discriminator
+	// ("payment_required", "auth_invalid", "rate_limited", …);
+	// FailureStatus the provider HTTP status (0 = none); FailureProvider
+	// the adapter kind; FailureSummary one-line copy ("Out of credits
+	// with OpenRouter"); FailureMessage the provider's own text,
+	// sanitized (credential shapes redacted, length-capped).
+	FailureClass    string `json:"failureClass,omitempty"`
+	FailureCode     string `json:"failureCode,omitempty"`
+	FailureStatus   int    `json:"failureStatus,omitempty"`
+	FailureProvider string `json:"failureProvider,omitempty"`
+	FailureSummary  string `json:"failureSummary,omitempty"`
+	FailureMessage  string `json:"failureMessage,omitempty"`
+}
+
 // SessionUsage is the per-session cumulative token + cost aggregate
 // returned by GetUsage (token-cost-telemetry-01KQ8TD7 WP03).
 type SessionUsage struct {
@@ -256,6 +344,43 @@ type SessionUsage struct {
 	// PricingDataDate is the last_updated date of the pricing table
 	// ("YYYY-MM-DD") so the UI tooltip can surface data age.
 	PricingDataDate string `json:"pricingDataDate"`
+	// CachedTokens is the sum of provider-reported prompt-cache reads
+	// across the session's assistant rows (session_messages.cached_tokens).
+	CachedTokens int `json:"cachedTokens"`
+	// Composition is the most recent model call's prompt by part, from
+	// the session's last-usage snapshot. nil until a measured call has
+	// completed.
+	Composition *UsageComposition `json:"composition,omitempty"`
+}
+
+// UsageComposition is the wire mirror of session.UsageComposition: one
+// model call's prompt by part, in tokens. Every part but Cached is the
+// harness estimate (tool definitions at 2.5 bytes per token, text at ~4 characters per token); Cached is provider-reported.
+type UsageComposition struct {
+	System      int `json:"system"`
+	Tools       int `json:"tools"`
+	History     int `json:"history"`
+	Attachments int `json:"attachments"`
+	Memory      int `json:"memory"`
+	Cached      int `json:"cached"`
+	// ToolsFull is the number of tool definitions the call carried.
+	ToolsFull int `json:"toolsFull"`
+	// ToolsSummary is the number of tools listed only by summary.
+	ToolsSummary int `json:"toolsSummary"`
+	// SchemaBudget is the tool-schema budget the call was fitted to; 0
+	// when none was applied.
+	SchemaBudget int `json:"schemaBudget,omitempty"`
+	// ToolsEvicted is how many loaded tools were left out of the call to
+	// fit SchemaBudget.
+	ToolsEvicted int `json:"toolsEvicted,omitempty"`
+	// PinnedOverBudgetBy is how much of the overage pinned tools account
+	// for, in tokens (at most their total size); > 0 is the composer's
+	// "Pinned tools exceed the schema budget by N tokens" warning.
+	PinnedOverBudgetBy int `json:"pinnedOverBudgetBy,omitempty"`
+	// HotOverBudgetBy is how far the always-sent core tools alone exceed
+	// SchemaBudget, in tokens; > 0 means the model's window is too small
+	// for the core tools.
+	HotOverBudgetBy int `json:"hotOverBudgetBy,omitempty"`
 }
 
 // SessionsAPI is the view-scoped accessor for session CRUD + streams.
@@ -339,6 +464,11 @@ type SessionsAPI interface {
 	// data yet.
 	GetUsage(ctx context.Context, id string) (SessionUsage, error)
 
+	// TurnRuns returns the session's recorded chat turn -> agent-graph
+	// run mappings, oldest first (agentgraph-settings-linkage-01DOGF0D
+	// WP03). Empty for a session whose turns all predate the mapping.
+	TurnRuns(ctx context.Context, sessionID string) ([]TurnRun, error)
+
 	// ResumeMessage opens a continuation stream against the partial
 	// assistant row identified by messageID. The returned subscription
 	// id is the same shape the LLM view's StartStream returns — the
@@ -365,6 +495,31 @@ type SessionsAPI interface {
 	// folding global → project → session layers. Returns the resolved
 	// knobs plus the three input layers so panels can render badges.
 	ResolveAutonomy(ctx context.Context, id string) (ResolvedAutonomy, error)
+
+	// GetKnobsDefault returns the session-level RequestKnobs override
+	// (reasoning effort, sampling knobs), or nil when none has been set
+	// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10, migration
+	// sessions/0330-knobs). SessionTunePanel reads this on open.
+	GetKnobsDefault(ctx context.Context, id string) (*SessionKnobs, error)
+	// SetKnobsDefault persists the session-level RequestKnobs override.
+	// Passing nil clears any existing override. The stored value is
+	// merged onto every GenerationRequest.Knobs the session issues
+	// (core/rpc/views/agentgraph/chat.LLMProviderAdapter.Generate) — this
+	// is the "reaches the model" half; without it the column round-trips
+	// but nothing downstream ever reads it.
+	SetKnobsDefault(ctx context.Context, id string, knobs *SessionKnobs) error
+
+	// GetToolExposure returns the session's tool-exposure override layer
+	// and activated set (migration sessions/0347-tool-exposure).
+	GetToolExposure(ctx context.Context, id string) (SessionToolExposure, error)
+	// SetToolExposure validates and persists the session's override
+	// layer; a zero Exposure clears it.
+	SetToolExposure(ctx context.Context, id string, e toolexposure.Exposure) error
+	// LoadTools activates tools for the session — server names, exact
+	// tool names or "server__prefix*" globs — exactly as the model's
+	// kenaz__load_tools call does, and reports what was and was not
+	// loaded and why. sticky activations survive TTL expiry.
+	LoadTools(ctx context.Context, id string, servers, tools []string, sticky bool) (loadtools.Result, error)
 
 	// Export serialises a session transcript to the local filesystem.
 	// format is "markdown" or "json". The file-picker dialog is opened

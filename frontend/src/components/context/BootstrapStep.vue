@@ -133,6 +133,13 @@ async function start(): Promise<void> {
         <span class="font-ui text-xs text-ink-muted">Phase: {{ phase }}</span>
         <span class="font-ui text-xs text-ink-muted">{{ totalNodes }} nodes</span>
       </div>
+      <p
+        v-if="status.sharing_skipped"
+        class="font-ui text-xs text-ink-muted"
+        data-testid="bootstrap-sharing-skipped"
+      >
+        Saved on this device only. To share an entry with your team, open it in Knowledge › Curated and choose Share.
+      </p>
       <ul class="flex flex-col gap-0.5">
         <li
           v-for="c in connectors"

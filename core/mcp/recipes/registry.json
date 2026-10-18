@@ -249,7 +249,8 @@
         "default": false
       },
       "primary_auth": "oauth",
-      "warning": "OAuth sign-in requires the Kameas Slack app to be registered (client_id placeholder — set KAMEAS_SLACK_OAUTH_CLIENT_ID at build time or register the app and bake the client_id). Advanced: use the token-based stdio server below (id: slack-tokens)."
+      "warning": "OAuth sign-in is not available for Slack in this version — no client ID is configured for this connector and Slack does not support dynamic client registration. Use the token-based stdio server below (id: slack-tokens) instead.",
+      "warning_severity": "danger"
     },
     {
       "id": "slack-tokens",
@@ -524,6 +525,42 @@
         "default": false
       },
       "warning": "npm fetch on first run can take 5–15 s. First spawn also downloads browser binaries (~300 MB).",
+      "primary_auth": "none"
+    },
+    {
+      "id": "computer-use",
+      "display_name": "Computer Use",
+      "description": "Give the model direct control of this computer: screenshot the screen, move and click the mouse, type, and press keys. Implements Anthropic's computer-use tool shape locally via nut.js. Controls YOUR desktop — not a sandboxed browser.",
+      "category": "automation",
+      "aliases": [
+        "computer use",
+        "desktop control",
+        "screen control",
+        "mouse and keyboard",
+        "gui automation"
+      ],
+      "command": [
+        "npx",
+        "-y",
+        "computer-use-mcp@1.8.0"
+      ],
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/domdomegg/computer-use-mcp",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Gives the model COMPLETE control of your computer — screen, mouse and keyboard. The upstream author's own warning: models \"make frequent mistakes and are vulnerable to prompt injections\\u2026 this could do a lot of damage\", and advises treating it \"like giving a hyperactive toddler access to your computer\" — supervise closely, and prefer a sandboxed user account. Anything the model reads on screen or from a page can attempt to steer it. First npm fetch can take 10–30 s; nut.js pulls native binaries. macOS additionally requires Accessibility and Screen Recording permission for the spawning app.",
+      "warning_severity": "danger",
       "primary_auth": "none"
     },
     {

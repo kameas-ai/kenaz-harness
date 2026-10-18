@@ -18,15 +18,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/mlproducer/activity"
+	"github.com/kameas-ai/kenaz-harness/core/modelcalls"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 )
 
 // FileStore is a SettingsStore backed by a single JSON file. Safe for
@@ -106,6 +113,36 @@ func (s *FileStore) loadLocked() (Settings, error) {
 
 // SaveAll persists every field atomically via a temp-file rename.
 func (s *FileStore) SaveAll(in Settings) error {
+	if err := validateFileSave(in); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveLocked(in)
+}
+
+// Update reads, modifies and writes the settings under the store's lock, so
+// no other write (another Update, SaveAll, or a Save* helper) can land
+// between the read and the write and be lost. fn edits the loaded value in
+// place; an error from fn, or a read error, aborts without writing.
+func (s *FileStore) Update(fn func(*Settings) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	if err := fn(&cur); err != nil {
+		return err
+	}
+	if err := validateFileSave(cur); err != nil {
+		return err
+	}
+	return s.saveLocked(cur)
+}
+
+// validateFileSave is every check FileStore applies before writing.
+func validateFileSave(in Settings) error {
 	if err := validateCompactionFields(in); err != nil {
 		return err
 	}
@@ -118,9 +155,40 @@ func (s *FileStore) SaveAll(in Settings) error {
 	if err := validateBranchFields(in); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.saveLocked(in)
+	if err := in.toolExposureSettings().Validate(); err != nil {
+		return err
+	}
+	if err := validateModelCallFields(in); err != nil {
+		return err
+	}
+	if err := validateMLLocalActivityFields(in); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ErrInvalidModelCallRetentionDays is returned when the model-call
+// retention window is negative or above modelcalls.MaxRetentionDays. Zero
+// is valid (the 30-day default).
+var ErrInvalidModelCallRetentionDays = fmt.Errorf("settings: invalid modelCallRetentionDays — must be 0 (default) or in [1, %d]", modelcalls.MaxRetentionDays)
+
+// ErrInvalidMLLocalActivityRetentionDays is returned when the local ML
+// activity retention is negative or above activity.MaxRetentionDays. Zero
+// is valid (the 90-day default).
+var ErrInvalidMLLocalActivityRetentionDays = fmt.Errorf("settings: invalid mlLocalActivityRetentionDays — must be 0 (default) or in [1, %d]", activity.MaxRetentionDays)
+
+func validateMLLocalActivityFields(in Settings) error {
+	if in.MLLocalActivityRetentionDays < 0 || in.MLLocalActivityRetentionDays > activity.MaxRetentionDays {
+		return ErrInvalidMLLocalActivityRetentionDays
+	}
+	return nil
+}
+
+func validateModelCallFields(in Settings) error {
+	if in.ModelCallRetentionDays < 0 || in.ModelCallRetentionDays > modelcalls.MaxRetentionDays {
+		return ErrInvalidModelCallRetentionDays
+	}
+	return nil
 }
 
 // ErrInvalidCompactionAggressiveness is the typed error Save returns
@@ -914,6 +982,28 @@ func (s *FileStore) SaveMCPAutoRestart(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadToolExposure returns the stored tool-exposure layer, budget and
+// TTL (0 = default).
+func (s *FileStore) LoadToolExposure() (toolexposure.Settings, error) {
+	got, err := s.LoadAll()
+	return got.toolExposureSettings(), err
+}
+
+// SaveToolExposure validates and persists the tool-exposure layer,
+// budget and TTL under the store lock.
+func (s *FileStore) SaveToolExposure(ts toolexposure.Settings) error {
+	if err := ts.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	return s.saveLocked(got.withToolExposureSettings(ts))
+}
+
 // LoadAutoTitleEnabled returns whether session auto-titling is on.
 // Default true (zero-value Disabled → feature enabled).
 func (s *FileStore) LoadAutoTitleEnabled() (bool, error) {
@@ -1432,6 +1522,20 @@ type API struct {
 	// fleet holds the optional fleet client and data dir. Populated via
 	// SetFleetClient during chassis boot; nil when fleet is not wired.
 	fleet *fleetState
+	// memorySync is the Fleet learned-memory sync lane
+	// (memory-sync-01MEMSY01 WP08), installed by SetMemorySync after the
+	// lane is built. Atomic: boot installs it while the UI may read.
+	memorySync atomic.Pointer[fleet.MemorySync]
+	// mlShipping is the ML producer's shipping-status source
+	// (ml-producer-01MLPRD01; installed by WP03 via
+	// SetMLShippingStatusProvider). Atomic: boot installs it while the UI
+	// may read.
+	mlShipping atomic.Pointer[mlShippingHolder]
+
+	// exposureGuard vets SetToolExposure's user layer against the live
+	// catalog (spec FR-E3), installed by SetToolExposureGuard at boot.
+	// Atomic: boot installs it while the UI may write.
+	exposureGuard atomic.Pointer[toolexposure.WriteGuard]
 
 	// syncNotify is the optional fleet-sync mutation hook
 	// (harness-fleet-sync-activation-01NSYNC01 gap #1). When set via
@@ -1439,6 +1543,14 @@ type API struct {
 	// fleet Syncer can schedule a debounced push. nil when fleet sync is not
 	// wired; the call is a no-op in that case.
 	syncNotify func(category string)
+
+	// embedderNotify is the optional embedder-change hook (AN-12,
+	// chat-turn-integrity-01PMZ606 WP13). When set via
+	// SetEmbedderNotifier, SetEmbedderConfig calls it after a
+	// successful persist so the rpc layer can push the newly-selected
+	// provider onto the live corpus.Manager. nil is safe — the config
+	// still persists, it just has nothing to notify.
+	embedderNotify func()
 
 	// auditRetentionEnforced backs AuditSettings.RetentionEnforced
 	// (audit-that-tells-the-truth-01PMZA10 UNIT-4). Set via
@@ -1495,6 +1607,38 @@ func (a *API) notifySync(category string) {
 	}
 }
 
+// Updater is a SettingsStore that can read-modify-write atomically.
+// FileStore and the in-memory store implement it.
+type Updater interface {
+	Update(fn func(*Settings) error) error
+}
+
+// fallbackUpdateMu serialises Update for stores that are not Updaters.
+var fallbackUpdateMu sync.Mutex
+
+// Update is the one way to change some settings fields and keep the rest:
+// it reads, lets fn edit, and writes, with no other write able to land in
+// between. Every read-modify-write of the settings record goes through it
+// (settings.API.Set, Sync_ConfirmUploads, Sync_Toggle, the sync appliers,
+// the Settings_Set* bindings). A bare LoadAll then SaveAll can lose a
+// concurrent write, e.g. a whole-settings save reverting the upload
+// confirmation made between its read and its write.
+func Update(store SettingsStore, fn func(*Settings) error) error {
+	if u, ok := store.(Updater); ok {
+		return u.Update(fn)
+	}
+	fallbackUpdateMu.Lock()
+	defer fallbackUpdateMu.Unlock()
+	cur, err := store.LoadAll()
+	if err != nil {
+		return err
+	}
+	if err := fn(&cur); err != nil {
+		return err
+	}
+	return store.SaveAll(cur)
+}
+
 // NewAPI constructs a SettingsAPI backed by the given store. nil
 // store falls back to an in-memory implementation so tests can run
 // without touching the filesystem.
@@ -1516,10 +1660,50 @@ func (a *API) Get(_ context.Context) (Settings, error) {
 }
 
 // Set persists every field.
-func (a *API) Set(_ context.Context, s Settings) error {
-	if err := a.store.SaveAll(s); err != nil {
+func (a *API) Set(ctx context.Context, s Settings) error {
+	// A whole-settings save is also a tool-exposure write: vet the user
+	// layer like SetToolExposure does, but only when it differs from the
+	// stored one, so an unrelated save is never refused over a layer the
+	// user did not touch.
+	if g := a.exposureGuard.Load(); g != nil && *g != nil {
+		next := s.toolExposureSettings().Exposure
+		if cur, err := a.store.LoadToolExposure(); err != nil || !reflect.DeepEqual(cur.Exposure, next) {
+			if err := (*g).CheckLayerWrite(ctx, toolexposure.LayerWrite{Level: toolexposure.LevelUser, Exposure: next}); err != nil {
+				return err
+			}
+		}
+	}
+	// Fields that are not Set's to write; it always keeps the stored value:
+	//   - SettingsSyncUploadsConfirmed is the H1 upload consent. Only
+	//     Sync_ConfirmUploads, which the user reaches through the "Start
+	//     syncing" notice, may write it. Keeping it in BOTH directions means
+	//     a whole-settings save can neither clear it (a stale copy) nor set
+	//     it (a payload with settingsSyncUploadsConfirmed:true would
+	//     otherwise grant consent without the notice ever being shown).
+	//   - SettingsSyncEnabledCategories is owned by Sync_Toggle, so a copy
+	//     loaded before a toggle cannot silently revert it.
+	//   - "Share model-call telemetry with Fleet" and its consent evidence
+	//     (text revision, accepted-at) are written only by
+	//     SetModelCallTelemetry (the panel action). A stale copy must not
+	//     turn sharing back on without the user seeing the opt-in text
+	//     (legal D82).
+	// The keep happens inside Update, under the store lock, so a
+	// confirmation or toggle landing between the read and the write cannot
+	// be reverted. If the stored settings cannot be read the save is
+	// refused (nothing is written), so consent is never taken from the
+	// caller's copy.
+	if err := Update(a.store, func(cur *Settings) error {
+		s.SettingsSyncUploadsConfirmed = cur.SettingsSyncUploadsConfirmed
+		s.SettingsSyncEnabledCategories = cur.SettingsSyncEnabledCategories
+		s.ShareModelCallTelemetryWithFleet = cur.ShareModelCallTelemetryWithFleet
+		s.ShareModelCallTelemetryTextRevision = cur.ShareModelCallTelemetryTextRevision
+		s.ShareModelCallTelemetryAcceptedAt = cur.ShareModelCallTelemetryAcceptedAt
+		*cur = s
+		return nil
+	}); err != nil {
 		return err
 	}
+	a.applyModelCallSharing(s.modelCallSharingEffective())
 	// Schedule a debounced push of the ui_theme category (the credential-free
 	// surface this full-settings save can affect). The Syncer no-ops when the
 	// category is disabled (harness-fleet-sync-activation-01NSYNC01 gap #1).
@@ -1527,6 +1711,116 @@ func (a *API) Set(_ context.Context, s Settings) error {
 	// core/fleet import to keep the OSS-first boundary clean.
 	a.notifySync("ui_theme")
 	return nil
+}
+
+// GetModelCallTelemetry returns the model-call telemetry settings
+// (llm-call-telemetry-01LLMTEL01 WP02).
+func (a *API) GetModelCallTelemetry(_ context.Context) (ModelCallTelemetrySettings, error) {
+	s, err := a.store.LoadAll()
+	if err != nil {
+		return ModelCallTelemetrySettings{}, err
+	}
+	return s.modelCallTelemetry(), nil
+}
+
+// SetModelCallTelemetry validates and persists the three model-call
+// telemetry settings (EffectiveRetentionDays is ignored) and applies the
+// Fleet-sharing opt-in to the live pipeline at once.
+func (a *API) SetModelCallTelemetry(_ context.Context, mc ModelCallTelemetrySettings) error {
+	var effective bool
+	if err := Update(a.store, func(s *Settings) error {
+		s.ModelCallStatsPullDisabled = !mc.StatsPullEnabled
+		s.ModelCallRetentionDays = mc.RetentionDays
+		// Consent evidence: which wording was agreed to, and when. Stamped
+		// only on a real opt-in, i.e. off (or an outdated revision) → on. A
+		// later panel save while sharing stays on (e.g. a retention change)
+		// keeps the original agreement time.
+		if mc.ShareWithFleet && !s.modelCallSharingEffective() {
+			s.ShareModelCallTelemetryTextRevision = ModelCallOptInTextRevision
+			s.ShareModelCallTelemetryAcceptedAt = time.Now().UTC().Format(time.RFC3339)
+		}
+		s.ShareModelCallTelemetryWithFleet = mc.ShareWithFleet
+		effective = s.modelCallSharingEffective()
+		return nil
+	}); err != nil {
+		return err
+	}
+	a.applyModelCallSharing(effective)
+	return nil
+}
+
+// modelCallSharingEffective is the opt-in as the pipeline applies it: on
+// only when the user agreed to the CURRENT opt-in text revision.
+func (s Settings) modelCallSharingEffective() bool {
+	// Equality, not >=: after a downgrade to a build with an older text, an
+	// opt-in given under a newer text must not count as agreement to the
+	// text this build shows.
+	return s.ShareModelCallTelemetryWithFleet && s.ShareModelCallTelemetryTextRevision == ModelCallOptInTextRevision
+}
+
+func (s Settings) modelCallTelemetry() ModelCallTelemetrySettings {
+	return ModelCallTelemetrySettings{
+		StatsPullEnabled:       !s.ModelCallStatsPullDisabled,
+		RetentionDays:          s.ModelCallRetentionDays,
+		EffectiveRetentionDays: modelcalls.EffectiveRetentionDays(s.ModelCallRetentionDays),
+		ShareWithFleet:         s.modelCallSharingEffective(),
+	}
+}
+
+// ModelCallStatsPullEnabled reads "Fetch OpenRouter generation stats"
+// fresh from the store (the StatsPuller's Enabled closure). A read error
+// keeps the default (on).
+func (a *API) ModelCallStatsPullEnabled() bool {
+	if a == nil || a.store == nil {
+		return true
+	}
+	s, err := a.store.LoadAll()
+	if err != nil {
+		return true
+	}
+	return !s.ModelCallStatsPullDisabled
+}
+
+// MLLocalActivityRetentionDays reads the local ML activity retention
+// fresh (activity.Pruner's closure). Only a SUCCESSFUL read of 0 means the
+// 90-day default: a read or parse error is returned, never folded into 0,
+// because the pruner deletes on this value and a member who chose 3650
+// days must not lose everything past 90 to an unreadable settings file.
+// No settings store at all (a test chassis) is (0, nil): the default.
+func (a *API) MLLocalActivityRetentionDays() (int, error) {
+	if a == nil || a.store == nil {
+		return 0, nil
+	}
+	s, err := a.store.LoadAll()
+	if err != nil {
+		return 0, err
+	}
+	return s.MLLocalActivityRetentionDays, nil
+}
+
+// SetMLLocalActivityRetentionDays validates and persists the local ML
+// activity retention (0 = default). The pruner reads it on its next pass.
+func (a *API) SetMLLocalActivityRetentionDays(_ context.Context, days int) error {
+	// Under the store lock (Update), never a bare LoadAll → SaveAll: a
+	// stale copy written back here would revert a concurrent Update, e.g.
+	// a model-call opt-out (legal D82) or a settings-sync toggle.
+	return Update(a.store, func(s *Settings) error {
+		s.MLLocalActivityRetentionDays = days
+		return validateMLLocalActivityFields(*s)
+	})
+}
+
+// ModelCallRetentionDays reads the stored retention setting fresh (the
+// Pruner's closure; 0 = default). A read error yields 0 (the default).
+func (a *API) ModelCallRetentionDays() int {
+	if a == nil || a.store == nil {
+		return 0
+	}
+	s, err := a.store.LoadAll()
+	if err != nil {
+		return 0
+	}
+	return s.ModelCallRetentionDays
 }
 
 // LoadAutonomyProfile delegates to the store. Returns the empty Layer
@@ -1550,6 +1844,78 @@ func (a *API) GetMCPAutoRestart(_ context.Context) (bool, error) {
 func (a *API) SetMCPAutoRestart(_ context.Context, enabled bool) error {
 	return a.store.SaveMCPAutoRestart(enabled)
 }
+
+// GetToolExposure returns the user's tool-exposure layer with budget
+// and TTL as stored (0 = default) and the read-only Effective* fields
+// filled. Reads settings.json in full on every call.
+//
+// Org carries the organisation's entries (pinned ones read-only) and an
+// org-pinned budget replaces EffectiveSchemaBudgetTokens.
+func (a *API) GetToolExposure(ctx context.Context) (toolexposure.Settings, error) {
+	ts, err := a.store.LoadToolExposure()
+	if err != nil {
+		return toolexposure.Settings{}, err
+	}
+	ts = ts.WithEffective()
+	org, err := a.ToolExposurePolicy(ctx)
+	if err != nil {
+		return toolexposure.Settings{}, err
+	}
+	ts.Org = org.View()
+	if org.SchemaBudgetTokens > 0 {
+		ts.EffectiveSchemaBudgetTokens = org.SchemaBudgetTokens
+	}
+	return ts, nil
+}
+
+// SetToolExposure validates and persists the user's tool-exposure
+// layer, budget and TTL; the Effective* fields are ignored. A layer that
+// would turn kenaz__load_tools off while summary tools exist is refused
+// by the installed guard.
+//
+// An entry or budget the organisation pinned cannot be changed: the write
+// is refused with a *toolexposure.PinnedError naming it.
+func (a *API) SetToolExposure(ctx context.Context, ts toolexposure.Settings) error {
+	if err := ts.Validate(); err != nil {
+		return err
+	}
+	org, err := a.ToolExposurePolicy(ctx)
+	if err != nil {
+		return err
+	}
+	if !org.IsZero() {
+		stored, err := a.store.LoadToolExposure()
+		if err != nil {
+			return err
+		}
+		if err := toolexposure.CheckOrgBudget(org, stored.SchemaBudgetTokens, ts.SchemaBudgetTokens); err != nil {
+			return err
+		}
+		if err := toolexposure.CheckOrgPins(org, stored.Exposure, ts.Exposure); err != nil {
+			return err
+		}
+	}
+	if g := a.exposureGuard.Load(); g != nil && *g != nil {
+		if err := (*g).CheckLayerWrite(ctx, toolexposure.LayerWrite{
+			Level: toolexposure.LevelUser, Exposure: ts.Exposure,
+		}); err != nil {
+			return err
+		}
+	}
+	return a.store.SaveToolExposure(ts)
+}
+
+// SetToolExposureGuard installs the guard SetToolExposure consults
+// after validation. nil removes it.
+func (a *API) SetToolExposureGuard(g toolexposure.WriteGuard) {
+	if g == nil {
+		a.exposureGuard.Store(nil)
+		return
+	}
+	a.exposureGuard.Store(&g)
+}
+
+var _ toolexposure.SettingsSource = (*API)(nil)
 
 // GetAutoTitleEnabled returns whether session auto-titling is on.
 // (p0-wiring-fixes-3TVMG0MX WP05)
@@ -1604,7 +1970,6 @@ func parseInt64Positive(s string) (int64, error) {
 	return n, nil
 }
 
-
 // GetEmbedderConfig returns the persisted (profileID, modelOverride)
 // pair for the memory embedder.  Empty strings mean "auto-pick".
 // (v0.5.2 universal-embedder fix)
@@ -1614,9 +1979,28 @@ func (a *API) GetEmbedderConfig(_ context.Context) (profileID, modelOverride str
 
 // SetEmbedderConfig persists the embedder provider selection and
 // optional model override.  Empty strings reset to auto-pick /
-// per-Kind-default behaviour.
+// per-Kind-default behaviour. Fires embedderNotify on a successful
+// persist (AN-12, chat-turn-integrity-01PMZ606 WP13) so a live
+// corpus.Manager can recompute its embedder without a restart — this
+// is the RPC the embedder-config panel calls, so it is the natural
+// "the user configured a provider" signal ruling X-4 refers to.
 func (a *API) SetEmbedderConfig(_ context.Context, profileID, modelOverride string) error {
-	return a.store.SaveEmbedderConfig(profileID, modelOverride)
+	if err := a.store.SaveEmbedderConfig(profileID, modelOverride); err != nil {
+		return err
+	}
+	if a.embedderNotify != nil {
+		a.embedderNotify()
+	}
+	return nil
+}
+
+// SetEmbedderNotifier wires the embedder-change hook (AN-12, chat-turn-
+// integrity-01PMZ606 WP13). The rpc layer connects this to
+// API.RefreshEmbedder so SetEmbedderConfig's persist reaches the live
+// corpus.Manager. Safe to leave unset — SetEmbedderConfig still
+// persists normally, it just has no live consumer to notify.
+func (a *API) SetEmbedderNotifier(fn func()) {
+	a.embedderNotify = fn
 }
 
 // ── Memory narrative layer API methods (memory-narrative-layer-01KQ8TD1) ──
@@ -1640,6 +2024,17 @@ func (a *API) GetChatCustomInstructions(_ context.Context) (string, error) {
 // SetChatCustomInstructions persists the chat custom-instructions text.
 func (a *API) SetChatCustomInstructions(_ context.Context, text string) error {
 	return a.store.SaveChatCustomInstructions(text)
+}
+
+// GetRiskRaterBenchmark returns the vendored risk-rater model comparison
+// (owner ruling 2026-09-15, mission risk-rated-autonomy-01PMRA01, task
+// #109: 234 calls / 9 models) that the Settings picker UI renders
+// alongside each candidate rating model. Static data — parsed fresh from
+// the embedded core/policy/risk/data/rater_benchmark.json on every call,
+// same "cheap and always fresh, no store dependency" shape as
+// Compaction.GetTierExplain.
+func (a *API) GetRiskRaterBenchmark(_ context.Context) (risk.RiskRaterBenchmark, error) {
+	return risk.Benchmark()
 }
 
 // GetMemoryNarrativeEnabled returns the narrative-layer opt-in.
@@ -1734,19 +2129,42 @@ func (m *memoryStore) LoadAll() (Settings, error) {
 }
 
 func (m *memoryStore) SaveAll(s Settings) error {
-	if err := validateCompactionFields(s); err != nil {
-		return err
-	}
-	if err := validateUpdateFields(s); err != nil {
+	if err := validateMemorySave(s); err != nil {
 		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.saveLocked(s)
+	return nil
+}
+
+// Update is FileStore.Update for the in-memory store.
+func (m *memoryStore) Update(fn func(*Settings) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur := m.data
+	if err := fn(&cur); err != nil {
+		return err
+	}
+	if err := validateMemorySave(cur); err != nil {
+		return err
+	}
+	m.saveLocked(cur)
+	return nil
+}
+
+// validateMemorySave is validateFileSave: the in-memory store applies
+// exactly the checks the real settings.json store does, so a test built on
+// it cannot accept a save production would reject.
+func validateMemorySave(s Settings) error {
+	return validateFileSave(s)
+}
+
+func (m *memoryStore) saveLocked(s Settings) {
 	if s.SchemaVersion == 0 {
 		s.SchemaVersion = 1
 	}
 	m.data = s
-	return nil
 }
 
 func (m *memoryStore) LoadRoute() (string, error) {
@@ -2038,6 +2456,22 @@ func (m *memoryStore) SaveMCPAutoRestart(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.MCPAutoRestartDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadToolExposure() (toolexposure.Settings, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.toolExposureSettings(), nil
+}
+
+func (m *memoryStore) SaveToolExposure(ts toolexposure.Settings) error {
+	if err := ts.Validate(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data = m.data.withToolExposureSettings(ts)
 	return nil
 }
 

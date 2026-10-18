@@ -93,6 +93,18 @@ func (f *fakeAuditSock) snapshot() []auditRecord {
 
 // waitForKinds polls until at least n records have arrived or the deadline
 // elapses, then returns the snapshot.
+//
+// CAUTION: a count threshold is only a valid synchronization signal when n is
+// at least the total number of records the run under test can ever produce
+// before the one the caller actually cares about. A multi-node graph run
+// emits a task.start plus a tool_call/tool_result pair PER NODE before its
+// terminal task.complete/error record — so waitForCount(2) is satisfied by
+// the FIRST two of those, long before the terminal record lands, on any
+// machine slow or contended enough to expose the gap (this raced CI while
+// passing locally under `TestRealModePolicyDenialOverWire` — see
+// waitForRecord below, which is what that test now uses instead). When the
+// property under test is "a specific record eventually appears", wait for
+// that record with waitForRecord, not for an arbitrary count.
 func (f *fakeAuditSock) waitForCount(t *testing.T, n int, timeout time.Duration) []auditRecord {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -103,6 +115,29 @@ func (f *fakeAuditSock) waitForCount(t *testing.T, n int, timeout time.Duration)
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("waitForCount: timed out waiting for %d records; saw %d (%v)", n, len(snap), snap)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitForRecord polls until a record satisfying pred has arrived, or the
+// deadline elapses, then returns the snapshot at that point. Unlike
+// waitForCount, this is a correct synchronization primitive for "wait until
+// THIS record exists" regardless of how many unrelated records the run also
+// produces first — it does not return early just because some other,
+// non-matching record pushed the total count over an arbitrary threshold.
+func (f *fakeAuditSock) waitForRecord(t *testing.T, timeout time.Duration, pred func(auditRecord) bool) []auditRecord {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		snap := f.snapshot()
+		for _, r := range snap {
+			if pred(r) {
+				return snap
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waitForRecord: timed out waiting for a matching record; saw %d (%v)", len(snap), snap)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

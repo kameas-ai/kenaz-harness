@@ -63,6 +63,38 @@ type toolCallContext struct {
 	// call is the node itself.
 	CallID   string
 	ToolName string
+	// StartedAt is when the caller began this invocation, stamped where the
+	// toolCallContext is built. toolPostDispatch reports the elapsed time to
+	// Env.ToolUsage. Zero means "unknown" and is reported as zero latency.
+	StartedAt time.Time
+}
+
+// ToolUsageObserver receives one call per COMPLETED tool invocation.
+//
+// The signature is the privacy boundary: a tool's arguments and its output
+// are not parameters, so an implementation cannot forward them. toolName is
+// the runtime name and may be user-authored (an MCP server or tool name);
+// reducing it to an exportable vocabulary is the implementation's job.
+//
+// A call blocked before dispatch (policy deny, hook deny, schema rejection)
+// is not an invocation and is not reported. Implementations must not block:
+// this runs on the tool-dispatch path, inside the parallel fan-out.
+type ToolUsageObserver interface {
+	ToolInvoked(ctx context.Context, sessionID, toolName string, latency time.Duration, success bool)
+}
+
+// reportToolUsage is the single reporting site. success means the call
+// returned without a transport/dispatch error AND the tool did not flag its
+// own result as an error.
+func reportToolUsage(ctx context.Context, env *Env, tc toolCallContext, tr ToolResult, callErr error) {
+	if env == nil || env.ToolUsage == nil {
+		return
+	}
+	var latency time.Duration
+	if !tc.StartedAt.IsZero() {
+		latency = time.Since(tc.StartedAt)
+	}
+	env.ToolUsage.ToolInvoked(ctx, env.SessionID, tc.ToolName, latency, callErr == nil && !tr.IsError)
 }
 
 // eventPayload builds the common {tool, call_id, node_kind} shape the
@@ -152,10 +184,29 @@ func toolPreDispatch(
 		}
 	}
 
-	if merged.AdditionalContext != "" && env.PendingContext != nil {
-		_ = env.PendingContext.AppendSystemContext(ctx, env.SessionID, merged.AdditionalContext)
-	}
+	forwardHookContext(ctx, env, merged.AdditionalContext)
 	return outArgs, argsJSON, rewritten, nil, events
+}
+
+// forwardHookContext hands a hook's additional_context to
+// env.PendingContext for the session's next LLM turn. A nil
+// PendingContext (graph runs outside the chat runner) drops it — and
+// says so in the log, which the field's doc has always promised but
+// which used to be a silent drop.
+func forwardHookContext(ctx context.Context, env *Env, text string) {
+	if text == "" {
+		return
+	}
+	if env.PendingContext == nil {
+		logging.L().Info("agentgraph.hook_context.dropped",
+			"run_id", env.RunID, "session_id", env.SessionID,
+			"reason", "no PendingContext on this run", "len", len(text))
+		return
+	}
+	if err := env.PendingContext.AppendSystemContext(ctx, env.SessionID, text); err != nil {
+		logging.L().Warn("agentgraph.hook_context.append_failed",
+			"run_id", env.RunID, "session_id", env.SessionID, "err", err.Error())
+	}
 }
 
 // chargeToolIteration applies the FR-010 iteration gate: a passive tool
@@ -195,10 +246,18 @@ func toolPostDispatch(
 ) (ToolResult, EventBatch) {
 	var events EventBatch
 
+	// Usage telemetry: before the hooks, so a slow or failing user hook
+	// neither inflates the reported latency nor suppresses the report.
+	reportToolUsage(ctx, env, tc, tr, callErr)
+
 	if callErr != nil {
 		if env.LifecycleHooks != nil {
-			_, _ = env.LifecycleHooks.FirePostToolUse(ctx, env.SessionID, tc.ToolName,
+			// post_tool_use_failure: only additional_context is honoured
+			// (there is no result to rewrite) — it used to be discarded
+			// with the rest of the merge (v0.86.0 unwired sweep).
+			failMerged, _ := env.LifecycleHooks.FirePostToolUse(ctx, env.SessionID, tc.ToolName,
 				argsJSON, nil, true, callErr.Error(), "", "")
+			forwardHookContext(ctx, env, failMerged.AdditionalContext)
 		}
 		return tr, events
 	}
@@ -237,9 +296,7 @@ func toolPostDispatch(
 			tr.Content = updatedContent
 		}
 	}
-	if merged.AdditionalContext != "" && env.PendingContext != nil {
-		_ = env.PendingContext.AppendSystemContext(ctx, env.SessionID, merged.AdditionalContext)
-	}
+	forwardHookContext(ctx, env, merged.AdditionalContext)
 	return tr, events
 }
 

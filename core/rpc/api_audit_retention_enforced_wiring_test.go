@@ -45,6 +45,11 @@ func TestAuditRetentionEnforced_TrueWithRealBackend_FalseWithout(t *testing.T) {
 			t.Fatalf("core.New: %v", err)
 		}
 		api := New(c)
+		// Blocker 2 (review of finding #61, 2026-09-11): New(c) with a
+		// real DataDir now starts api.pruneScheduler's background
+		// goroutine unconditionally; Shutdown must run so it doesn't
+		// leak past this subtest.
+		t.Cleanup(api.Shutdown)
 		if api.localAuditRetentionScheduler == nil {
 			t.Fatal("localAuditRetentionScheduler is nil with a real DataDir — construction gate did not fire")
 		}

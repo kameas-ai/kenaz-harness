@@ -194,6 +194,89 @@ if [[ ${#GO_FILES[@]} -gt 0 ]]; then
   }
 fi
 
+# --- Precompute pass 2b (Go PUBLISHER): a call matching
+# `.Publish<AnySuffix>(` anywhere in non-test Go — e.g. `.Publish(`,
+# `.PublishHealthChange(`. This is what "or when a publisher exists"
+# (spec.md §1.12 R-6, this file's header below) actually checks: a
+# genuinely different call SHAPE from `.Subscribe(`/`EventsOn(`, so it
+# carries no self-registration ambiguity — a topic's own declaring
+# file publishing it for real is real coverage, unlike that same file
+# merely subscribing to its own topic (see the self-exclusion
+# G-0 note below pass 2's per-topic check).
+GO_PUBLISH_WINDOW=""
+if [[ ${#GO_FILES[@]} -gt 0 ]]; then
+  GO_PUBLISH_WINDOW=$(grep -A3 -E '\.Publish[A-Za-z]*\(' "${GO_FILES[@]}") || {
+    rc=$?
+    if [[ $rc -ge 2 ]]; then
+      echo "${GATE} ERROR: Go publisher scan failed (grep exit ${rc}) — refusing to judge topics against a partial window." >&2
+      exit 1
+    fi
+  }
+fi
+
+# --- G-0 (spec.md §1.12 R-6, connector-lifecycle-truth-01PMZ303
+# UNIT-8): "declaring the topic constant enables
+# check-broker-topic-consumers.sh to cover it" was the register's
+# stated gate-extension obligation for shipping live MCP health
+# (ruling A-2) — and it does not work. Pass 2's `-A3` window is
+# satisfied by ANY `.Subscribe(`/`EventsOn(` call that mentions the
+# topic, including the exact call that REGISTERS the topic in the
+# first place (`core/rpc/views/mcp/impl.go`'s own
+# `a.broker.Subscribe(ctx, "mcp", TopicMCPHealthChanged, ch)`) — a
+# subscribe-site registration is not a downstream consumer, but
+# nothing distinguished it from one. UNIT-0's independent
+# reproduction (a scratch `Topic*` const + one `.Subscribe` + no
+# publisher) confirmed the gate exits 0 on exactly that shape.
+#
+# The correction: for each topic, Go-pass (pass 2) evidence from the
+# SAME FILE the topic is declared in does not count — only a
+# `.Subscribe(`/`EventsOn(` site in a DIFFERENT file, or ANY
+# `.Publish*(` site (pass 2b, any file, self or not — see that pass's
+# comment for why publishing carries no self-registration ambiguity),
+# counts as real coverage. This is coarser than excluding just the
+# one offending line (a same-file, genuinely-unrelated second
+# `.Subscribe` would also be excluded) — a deliberate, documented
+# trade-off for tractability in bash; the concrete violation shape
+# this fixes (one file: const + Subscribe, nothing else) is what the
+# planted-violation proof below and gates_can_fail_test.go's Go
+# counterpart both pin.
+#
+# GO_WINDOW_EXCLUDING_FILE[f] is precomputed ONCE per DISTINCT
+# declaring file among DEFS (typically far fewer than the topic count
+# or the total Go file count — many topics share a declaring file),
+# not once per topic or once per file in the repo. Each entry costs
+# one grep over "every Go file except f", so this pass costs
+# O(distinct declaring files) full-ish scans instead of O(1) — still
+# nowhere near the O(topics × files) shape this script's header
+# documents rejecting.
+declare -A GO_WINDOW_EXCLUDING_FILE
+if [[ ${#GO_FILES[@]} -gt 0 ]]; then
+  for def in "${DEFS[@]}"; do
+    declfile="./${def%%:*}"
+    if [[ -n "${GO_WINDOW_EXCLUDING_FILE[$declfile]+set}" ]]; then
+      continue
+    fi
+    OTHER_GO_FILES=()
+    for gf in "${GO_FILES[@]}"; do
+      if [[ "$gf" != "$declfile" ]]; then
+        OTHER_GO_FILES+=("$gf")
+      fi
+    done
+    if [[ ${#OTHER_GO_FILES[@]} -gt 0 ]]; then
+      w=$(grep -A3 -E '(EventsOn\(|\.Subscribe\()' "${OTHER_GO_FILES[@]}") || {
+        rc=$?
+        if [[ $rc -ge 2 ]]; then
+          echo "${GATE} ERROR: Go subscriber scan (excluding ${declfile}) failed (grep exit ${rc}) — refusing to judge topics against a partial window." >&2
+          exit 1
+        fi
+      }
+      GO_WINDOW_EXCLUDING_FILE["$declfile"]="$w"
+    else
+      GO_WINDOW_EXCLUDING_FILE["$declfile"]=""
+    fi
+  done
+fi
+
 # --- Precompute pass 3 (passthroughTopics, served mode): the body of
 # wsstream.go's passthroughTopics slice literal.
 PASSTHROUGH_BLOCK=""
@@ -255,16 +338,31 @@ for def in "${DEFS[@]}"; do
     frontend_hit=1
   fi
 
-  # --- pass 2: Go subscriber. Either the literal string, or the const's
-  # own identifier (qualified or bare) followed by a non-identifier
-  # character, appears within the precomputed EventsOn(/.Subscribe( call
-  # window. ([^A-Za-z0-9_]|$) replaces the old grep \> word boundary —
-  # bash =~ uses the platform's POSIX ERE, where \> is a non-portable
-  # GNU extension.
+  # --- pass 2: Go subscriber, EXCLUDING the topic's own declaring file
+  # (G-0, spec.md §1.12 R-6 — see the precompute block above for why).
+  # Either the literal string, or the const's own identifier (qualified
+  # or bare) followed by a non-identifier character, appears within a
+  # `.Subscribe(`/`EventsOn(` window in some OTHER Go file.
+  # ([^A-Za-z0-9_]|$) replaces the old grep \> word boundary — bash =~
+  # uses the platform's POSIX ERE, where \> is a non-portable GNU
+  # extension.
+  declfile="./${file}"
+  go_window_other="${GO_WINDOW_EXCLUDING_FILE[$declfile]:-$GO_WINDOW}"
   go_hit=0
-  if [[ "$GO_WINDOW" == *"\"${value}\""* || "$GO_WINDOW" == *"'${value}'"* \
-      || "$GO_WINDOW" =~ ${ident}([^A-Za-z0-9_]|$) ]]; then
+  if [[ "$go_window_other" == *"\"${value}\""* || "$go_window_other" == *"'${value}'"* \
+      || "$go_window_other" =~ ${ident}([^A-Za-z0-9_]|$) ]]; then
     go_hit=1
+  fi
+
+  # --- pass 2b: Go PUBLISHER (G-0's "or when a publisher exists" half).
+  # A `.Publish*(` call site — ANY file, including the topic's own
+  # declaring file, since publishing carries no self-registration
+  # ambiguity (see the precompute block's comment) — mentions the
+  # topic.
+  go_publish_hit=0
+  if [[ "$GO_PUBLISH_WINDOW" == *"\"${value}\""* || "$GO_PUBLISH_WINDOW" == *"'${value}'"* \
+      || "$GO_PUBLISH_WINDOW" =~ ${ident}([^A-Za-z0-9_]|$) ]]; then
+    go_publish_hit=1
   fi
 
   # --- pass 3: passthroughTopics (served mode). The const's identifier
@@ -279,21 +377,21 @@ for def in "${DEFS[@]}"; do
   fi
 
   covered=0
-  if [[ $allow_hit -eq 1 || $frontend_hit -eq 1 || $go_hit -eq 1 || $passthrough_hit -eq 1 ]]; then
+  if [[ $allow_hit -eq 1 || $frontend_hit -eq 1 || $go_hit -eq 1 || $go_publish_hit -eq 1 || $passthrough_hit -eq 1 ]]; then
     covered=1
   fi
 
   if [[ $REPORT_MODE -eq 1 ]]; then
-    printf '  %-32s = %-40s frontend=%d go=%d passthrough=%d allowlist=%d -> %s\n' \
-      "$ident" "$value" "$frontend_hit" "$go_hit" "$passthrough_hit" "$allow_hit" \
+    printf '  %-32s = %-40s frontend=%d go=%d go_publish=%d passthrough=%d allowlist=%d -> %s\n' \
+      "$ident" "$value" "$frontend_hit" "$go_hit" "$go_publish_hit" "$passthrough_hit" "$allow_hit" \
       "$([[ $covered -eq 1 ]] && echo covered || echo DEAD)"
   fi
 
   if [[ $covered -eq 0 ]]; then
     fail=1
     echo "" >&2
-    echo "${GATE} FAIL: ${ident} = \"${value}\" (${file}:${line}) has no frontend subscriber, no Go subscriber, no passthroughTopics entry, and no dated allowlist line." >&2
-    echo "  Fix: wire a real subscriber (frontend useEventStream/EventsOn/onServedEvent, or Go wailsruntime.EventsOn/broker.Subscribe), add it to core/serve/wsstream.go's passthroughTopics if served mode needs it, or add a dated line to ${ALLOWLIST}." >&2
+    echo "${GATE} FAIL: ${ident} = \"${value}\" (${file}:${line}) has no frontend subscriber, no Go subscriber outside its own declaring file, no Go publisher, no passthroughTopics entry, and no dated allowlist line." >&2
+    echo "  Fix: wire a real subscriber (frontend useEventStream/EventsOn/onServedEvent, or a Go wailsruntime.EventsOn/broker.Subscribe call in a DIFFERENT file from the const's declaration — G-0, spec.md §1.12 R-6: the declaring file's own Subscribe call is not a consumer), wire a real Go publisher (.Publish*( call anywhere), add it to core/serve/wsstream.go's passthroughTopics if served mode needs it, or add a dated line to ${ALLOWLIST}." >&2
   fi
 done
 

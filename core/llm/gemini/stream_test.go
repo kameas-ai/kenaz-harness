@@ -1,9 +1,11 @@
 package gemini
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -102,6 +104,205 @@ func TestGeminiStream_SimpleText(t *testing.T) {
 	}
 	if resp.Usage.InputTokens != 5 || resp.Usage.OutputTokens != 2 {
 		t.Errorf("unexpected usage: %+v", resp.Usage)
+	}
+}
+
+// TestGeminiStream_ReasoningEmitsStreamReasoning drives the real adapter
+// against a recorded provider-shaped SSE stream (httptest, not a
+// hand-built llm.StreamEvent fixture) containing a thought-summary part
+// (`"thought": true`) and asserts:
+//
+//  1. The request wire body sets thinkingConfig.includeThoughts=true
+//     alongside thinkingBudget — before WP09, includeThoughts was never
+//     set, so the model spent (and the caller paid for) thinking tokens
+//     but the API never returned thought content at all.
+//  2. The adapter emits llm.StreamReasoning for the thought part, and
+//     the thought's Text does NOT leak into the StreamText/answer
+//     stream (thought parts carry a non-empty Text field too, so the
+//     dispatch order matters).
+//
+// (model-settings-reach-the-model-01PMZ101 WP09, AC-008)
+func TestGeminiStream_ReasoningEmitsStreamReasoning(t *testing.T) {
+	t.Parallel()
+	frames := []geminiResponse{
+		{
+			Candidates: []geminiCandidate{{
+				Content: &geminiContent{
+					Role:  "model",
+					Parts: []geminiPart{{Thought: true, Text: "Reasoning about the question. "}},
+				},
+				Index: 0,
+			}},
+		},
+		{
+			Candidates: []geminiCandidate{{
+				Content: &geminiContent{
+					Role:  "model",
+					Parts: []geminiPart{{Thought: true, Text: "Concluded."}},
+				},
+				Index: 0,
+			}},
+		},
+		{
+			Candidates: []geminiCandidate{{
+				Content: &geminiContent{
+					Role:  "model",
+					Parts: []geminiPart{{Text: "42"}},
+				},
+				FinishReason: "STOP",
+				Index:        0,
+			}},
+			UsageMetadata: &geminiUsage{
+				PromptTokenCount:     5,
+				CandidatesTokenCount: 2,
+				ThoughtsTokenCount:   12,
+			},
+		},
+	}
+
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		capturedBody = body
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, f := range frames {
+			_, _ = w.Write(buildSSEFrame(f))
+		}
+	}))
+	defer srv.Close()
+
+	a := New(WithHTTPClient(srv.Client()))
+	prof := llm.ProviderProfile{
+		Kind:  Kind,
+		Model: "gemini-2.5-pro",
+		Cred:  llm.CredentialReference{Kind: "keychain", Locator: "test"},
+	}
+	a.httpc = &http.Client{
+		Transport: &roundTripperFunc{fn: func(req *http.Request) (*http.Response, error) {
+			req.URL.Host = strings.TrimPrefix(srv.URL, "http://")
+			req.URL.Scheme = "http"
+			return srv.Client().Do(req)
+		}},
+	}
+
+	ctx := context.Background()
+	stream, err := a.Stream(ctx, llm.GenerationRequest{
+		ProfileID: "test",
+		Messages:  []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		Reasoning: &llm.ReasoningSpec{Enabled: true, BudgetTokens: 4096},
+	}, prof, []byte("fake-api-key"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	var reasoning, texts []string
+	for ev := range stream.Events() {
+		switch ev.Kind {
+		case llm.StreamReasoning:
+			if ev.Reasoning == nil || ev.Reasoning.Content == "" {
+				t.Fatalf("StreamReasoning event with empty content: %+v", ev)
+			}
+			reasoning = append(reasoning, ev.Reasoning.Content)
+		case llm.StreamText:
+			texts = append(texts, ev.Text)
+		}
+	}
+	if _, err := stream.Final(); err != nil {
+		t.Fatalf("Final: %v", err)
+	}
+
+	gotReasoning := strings.Join(reasoning, "")
+	wantReasoning := "Reasoning about the question. Concluded."
+	if gotReasoning != wantReasoning {
+		t.Fatalf("reasoning content = %q, want %q", gotReasoning, wantReasoning)
+	}
+	gotText := strings.Join(texts, "")
+	if gotText != "42" {
+		t.Fatalf("text content = %q, want %q (reasoning must not leak into the answer stream)", gotText, "42")
+	}
+
+	// Wire-shape assertion: the request must have asked for thoughts.
+	var wireReq struct {
+		GenerationConfig struct {
+			ThinkingConfig struct {
+				ThinkingBudget  int  `json:"thinkingBudget"`
+				IncludeThoughts bool `json:"includeThoughts"`
+			} `json:"thinkingConfig"`
+		} `json:"generationConfig"`
+	}
+	if err := json.Unmarshal(capturedBody, &wireReq); err != nil {
+		t.Fatalf("unmarshal request body: %v\nbody=%s", err, capturedBody)
+	}
+	if !wireReq.GenerationConfig.ThinkingConfig.IncludeThoughts {
+		t.Fatalf("request thinkingConfig.includeThoughts = false, want true (body=%s)", capturedBody)
+	}
+	if wireReq.GenerationConfig.ThinkingConfig.ThinkingBudget != 4096 {
+		t.Fatalf("request thinkingConfig.thinkingBudget = %d, want 4096", wireReq.GenerationConfig.ThinkingConfig.ThinkingBudget)
+	}
+}
+
+// TestGeminiStream_NoReasoning_NoReasoningEvent is the no-reasoning
+// control: an ordinary response with no thought parts must not produce
+// any StreamReasoning event, and must not set includeThoughts on the
+// wire.
+func TestGeminiStream_NoReasoning_NoReasoningEvent(t *testing.T) {
+	t.Parallel()
+	frames := []geminiResponse{
+		{
+			Candidates: []geminiCandidate{{
+				Content: &geminiContent{
+					Role:  "model",
+					Parts: []geminiPart{{Text: "hello"}},
+				},
+				FinishReason: "STOP",
+				Index:        0,
+			}},
+		},
+	}
+
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		capturedBody = body
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, f := range frames {
+			_, _ = w.Write(buildSSEFrame(f))
+		}
+	}))
+	defer srv.Close()
+
+	a := New(WithHTTPClient(srv.Client()))
+	prof := llm.ProviderProfile{
+		Kind:  Kind,
+		Model: "gemini-2.0-flash",
+		Cred:  llm.CredentialReference{Kind: "keychain", Locator: "test"},
+	}
+	a.httpc = &http.Client{
+		Transport: &roundTripperFunc{fn: func(req *http.Request) (*http.Response, error) {
+			req.URL.Host = strings.TrimPrefix(srv.URL, "http://")
+			req.URL.Scheme = "http"
+			return srv.Client().Do(req)
+		}},
+	}
+
+	ctx := context.Background()
+	stream, err := a.Stream(ctx, llm.GenerationRequest{
+		ProfileID: "test",
+		Messages:  []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+	}, prof, []byte("fake-api-key"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for ev := range stream.Events() {
+		if ev.Kind == llm.StreamReasoning {
+			t.Fatalf("unexpected StreamReasoning event for a no-reasoning response: %+v", ev)
+		}
+	}
+	if _, err := stream.Final(); err != nil {
+		t.Fatalf("Final: %v", err)
+	}
+	if bytes.Contains(capturedBody, []byte("includeThoughts")) {
+		t.Fatalf("request body should not set includeThoughts when reasoning is disabled: %s", capturedBody)
 	}
 }
 

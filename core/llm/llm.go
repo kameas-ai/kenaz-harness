@@ -82,8 +82,67 @@ func (d CapabilityDescriptor) Has(cap Capability) bool {
 type CredentialReference struct {
 	// Kind is one of: env | keychain | file | aws_profile | kms.
 	Kind string `json:"kind" yaml:"kind"`
-	// Locator is the kind-specific lookup key.
+	// Locator is the kind-specific lookup key. For a Fleet-sourced
+	// reference (Source org|team|user_sync) the locator is derived from
+	// Source + CredentialID at resolution time and this field is ignored
+	// (it may be empty).
 	Locator string `json:"locator" yaml:"locator"`
+	// Source says who owns the key this reference points at
+	// (provider-credentials-client-01PCCLI01 B1). Empty means
+	// CredSourceLocal, so every profile written before this field
+	// existed keeps its meaning and round-trips byte-identically
+	// (omitempty).
+	Source CredentialSource `json:"source,omitempty" yaml:"source,omitempty"`
+	// CredentialID is Fleet's credential id. Required for a Fleet source,
+	// rejected for a local one. It is an identifier, never key material.
+	CredentialID string `json:"credential_id,omitempty" yaml:"credential_id,omitempty"`
+}
+
+// CredentialSource is the ownership of a provider key
+// (provider-credentials-client-01PCCLI01 B1, §7a H2).
+type CredentialSource string
+
+// CredentialSource values. The zero value ("") means CredSourceLocal.
+const (
+	// CredSourceLocal is a key the user entered on this device; it lives
+	// at the keychain locator kenaz-harness/<profileID>.
+	CredSourceLocal CredentialSource = "local"
+	// CredSourceUserSync is one of the user's own keys synced end-to-end
+	// encrypted from their other devices (WP06).
+	CredSourceUserSync CredentialSource = "user_sync"
+	// CredSourceOrg is a key the user's organization delivers through
+	// Fleet (WP05).
+	CredSourceOrg CredentialSource = "org"
+	// CredSourceTeam is a key one of the user's teams delivers through
+	// Fleet (WP05).
+	CredSourceTeam CredentialSource = "team"
+)
+
+// Effective returns s with the zero value mapped to CredSourceLocal.
+func (s CredentialSource) Effective() CredentialSource {
+	if s == "" {
+		return CredSourceLocal
+	}
+	return s
+}
+
+// Valid reports whether s is empty or one of the four known sources.
+func (s CredentialSource) Valid() bool {
+	switch s {
+	case "", CredSourceLocal, CredSourceUserSync, CredSourceOrg, CredSourceTeam:
+		return true
+	}
+	return false
+}
+
+// IsFleet reports whether the key arrives through Fleet (org, team or a
+// synced user key) rather than being entered on this device.
+func (s CredentialSource) IsFleet() bool {
+	switch s {
+	case CredSourceUserSync, CredSourceOrg, CredSourceTeam:
+		return true
+	}
+	return false
 }
 
 // String returns a human-readable, redaction-safe rendering used in error
@@ -161,6 +220,19 @@ func (p ProviderProfile) AvailableModels() []string {
 		return []string{p.Model}
 	}
 	return nil
+}
+
+// DispatchModel returns the model id a request on this profile is sent
+// with: override when non-empty, else Model. It mirrors the registry's
+// dispatch resolution exactly (registry.Stream sets the adapter's model
+// to req.Model, falling back to prof.Model) and deliberately does NOT
+// fall back to Models[0] — no adapter sends that, so reporting it would
+// name a model that never ran. Empty means the profile has no default.
+func (p ProviderProfile) DispatchModel(override string) string {
+	if override != "" {
+		return override
+	}
+	return p.Model
 }
 
 // Role enumerates the message roles in a multi-turn conversation (FR-005).
@@ -297,10 +369,23 @@ type ToolResult struct {
 }
 
 // ToolSpec declares a callable tool the model may invoke (FR-006).
+//
+// Name, Description and InputSchema are the provider-facing definition.
+// Server and TokenEst are harness-side catalog metadata: they
+// are tagged `json:"-"` and no adapter reads them, so a request's wire
+// payload is identical whether or not they are set.
 type ToolSpec struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema"`
+
+	// Server is the catalog source: the MCP server id for pool tools,
+	// "kenaz" for built-ins. Empty when the producer did not say.
+	Server string `json:"-"`
+	// TokenEst is EstimateToolSpecTokens of this definition, computed by
+	// the producer at discovery. 0 means "not computed"; ToolSpecTokens
+	// falls back to computing it.
+	TokenEst int `json:"-"`
 }
 
 // Attachment carries non-text input for a message (vision images, audio,
@@ -446,10 +531,21 @@ type GenerationRequest struct {
 	// When set and present in profile.AvailableModels(), the registry
 	// substitutes prof.Model = req.Model before dispatching to the
 	// adapter. Empty means "use the profile default."
-	Model    string     `json:"model,omitempty"`
-	System   string     `json:"system,omitempty"`
-	Messages []Message  `json:"messages"`
-	Tools    []ToolSpec `json:"tools,omitempty"`
+	Model  string `json:"model,omitempty"`
+	System string `json:"system,omitempty"`
+	// SystemVolatile is per-call system material (date, workspace state,
+	// hook context). Adapters that mark a cacheable prefix send it after
+	// the marker; the registry folds it into System for every other
+	// adapter (FoldSystemSegments). Empty means System is the whole
+	// system prompt.
+	SystemVolatile string     `json:"system_volatile,omitempty"`
+	Messages       []Message  `json:"messages"`
+	Tools          []ToolSpec `json:"tools,omitempty"`
+	// CacheStableTools is the number of leading Tools that form the
+	// stable, cacheable segment: the cache marker goes on tool
+	// CacheStableTools-1. 0 means all of Tools; negative means none
+	// (CacheMarkerToolIndex).
+	CacheStableTools int `json:"cache_stable_tools,omitempty"`
 	// Deprecated: use Message.Content blocks (ContentBlock with Type "image"
 	// or "document") instead. The legacy Attachment slice is still honoured by
 	// RequestedCapabilities and the registry's capability gate so existing
@@ -686,6 +782,15 @@ type ReasoningBlock struct {
 }
 
 // Usage aggregates per-request token accounting (FR-011).
+//
+// CachedInputRead is the prompt tokens the provider served from its
+// prompt cache; CachedInputWrite is the prompt tokens it wrote to the
+// cache on this call. Whether InputTokens already includes them is the
+// provider's convention, kept as reported: Anthropic's input_tokens
+// excludes both, while OpenAI-compatible prompt_tokens (OpenRouter) and
+// Gemini's promptTokenCount include them.
+//
+// PromptTokensTotal normalises the two conventions.
 type Usage struct {
 	InputTokens      int `json:"input_tokens"`
 	OutputTokens     int `json:"output_tokens"`
@@ -718,14 +823,35 @@ type Cost struct {
 
 // Response is the terminal result of a generation (FR-011).
 type Response struct {
-	Content      []ContentBlock   `json:"content"`
-	ToolCalls    []ToolUse        `json:"tool_calls,omitempty"`
+	Content   []ContentBlock `json:"content"`
+	ToolCalls []ToolUse      `json:"tool_calls,omitempty"`
+	// Reasoning has no production writer today — no adapter accumulates
+	// reasoning content into the terminal Response; every provider
+	// (Anthropic, Bedrock, Gemini) emits reasoning only as
+	// StreamEvent{Kind: StreamReasoning} during streaming.
+	// StreamEvent.Reasoning is the live carrier; see
+	// docs/unwired-ledger.md 2026-09-10 for the dated justification
+	// (model-settings-reach-the-model-01PMZ101 WP09) for why this field
+	// is kept rather than deleted.
 	Reasoning    []ReasoningBlock `json:"reasoning,omitempty"`
 	FinishReason string           `json:"finish_reason"`
 	Usage        Usage            `json:"usage"`
 	Cost         Cost             `json:"cost"`
 	Attempts     int              `json:"attempts"`
 	SnapshotID   string           `json:"snapshot_id,omitempty"`
+
+	// Composition is what the request that produced this response sent,
+	// by part. Set by the caller that built the request (the chat
+	// adapter), never by a provider adapter; nil when the caller did not
+	// measure it. Not part of any wire or persisted Response encoding.
+	Composition *PromptComposition `json:"-"`
+
+	// Meta is the provider-returned call metadata (ids, served model,
+	// provider extras) the adapter read off this call's own response.
+	// Read only by core/llm/genaitrace for the gen_ai.chat span; nil when
+	// the adapter maps nothing. Not part of any wire or persisted
+	// Response encoding. (llm-call-telemetry-01LLMTEL01 WP01)
+	Meta *CallMeta `json:"-"`
 }
 
 // ProviderAdapter is the per-provider plug-in contract (FR-018).
@@ -754,6 +880,11 @@ type ModelInfo struct {
 	// cap in that case. Sourced from the capabilities catalog
 	// (backend-context-window-length-01KQ8TD3 WP01).
 	MaxOutputTokens int `json:"max_output_tokens,omitempty"` // max completion tokens per turn; 0 = unknown
+	// SupportsPromptCache reports whether requests for this model carry
+	// explicit cache_control markers. Written only by the OpenRouter
+	// adapter (the curated SupportsPromptCache table, vetoed by the
+	// model list's cache pricing) and read by its request path.
+	SupportsPromptCache bool `json:"supports_prompt_cache,omitempty"`
 }
 
 // ModelLister is the optional capability adapters opt into when their

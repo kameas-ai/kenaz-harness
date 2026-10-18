@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -182,10 +183,23 @@ type PolicyFile struct {
 	Embedded bool   `json:"embedded"`
 	ParseOK  bool   `json:"parse_ok"`
 	ParseErr string `json:"parse_err,omitempty"`
+	// EvalErrors lists this file's policies that parsed but failed to
+	// evaluate on a request since the last Reload. Filled by
+	// ListPolicies; empty when none has.
+	EvalErrors []PolicyEvalError `json:"eval_errors,omitempty"`
 }
 
 // Options configures a new Engine.
 type Options struct {
+	// DeviceKind is stamped on every request's context as
+	// `context.device_kind`, overriding any caller value ("desktop" when
+	// empty; the phone facade passes "mobile"; anything else is
+	// ErrInvalidDeviceKind). Admins can then write
+	// device-specific rules (provider-credentials-client-01PCCLI01 H6.3).
+	// It is always present, so a policy reading it can't error, and an
+	// erroring forbid fails closed.
+	DeviceKind string
+
 	// DataDir is the harness data root. The engine reads policy files
 	// from filepath.Join(DataDir, PolicyDir). Required when LoadFromDisk
 	// is true; ignored otherwise (in-memory engines for tests).
@@ -235,7 +249,20 @@ type Engine struct {
 	filesMu sync.RWMutex
 	files   []PolicyFile
 
+	// snippets retains every source LoadHarnessSnippets installed, keyed
+	// by virtual filename, so Reload can re-apply them into the rebuilt
+	// PolicySet (graph-fs-gate-01GFSG01 WP04). Before this, Reload
+	// rebuilt from embedded + disk only and silently uninstalled the
+	// harness-self and graph-authoring policies — including on the
+	// "fix your policy file and reload" path WP01's banner points at.
+	// Guarded by reloadMu.
+	snippets map[string][]byte
+
 	decisions DecisionStore
+
+	// evalErrors records every policy whose evaluation errored since
+	// the last Reload / SetPolicyText (PolicyEvalErrors, ListPolicies).
+	evalErrors evalErrorTracker
 }
 
 // NewEngine constructs an Engine and runs an initial Reload. When
@@ -244,6 +271,11 @@ type Engine struct {
 // applies) and returns the engine without error. A genuine I/O or
 // parse error is surfaced.
 func NewEngine(opts Options) (*Engine, error) {
+	switch opts.DeviceKind {
+	case "", DeviceKindDesktop, DeviceKindMobile:
+	default:
+		return nil, fmt.Errorf("%w (got %q)", ErrInvalidDeviceKind, opts.DeviceKind)
+	}
 	e := &Engine{opts: opts}
 	if opts.Decisions != nil {
 		e.decisions = opts.Decisions
@@ -276,6 +308,7 @@ func (e *Engine) SetPolicyText(name string, source []byte) error {
 		return fmt.Errorf("cedar: parse %s: %w", name, err)
 	}
 	e.policies.Store(ps)
+	e.evalErrors.reset()
 	e.filesMu.Lock()
 	e.files = []PolicyFile{{
 		Name:    name,
@@ -327,8 +360,9 @@ func (e *Engine) Reload(ctx context.Context) error {
 		}
 		for _, em := range embedded {
 			sources = append(sources, policySource{
-				name:  em.name,
-				bytes: em.bytes,
+				name:    em.name,
+				bytes:   em.bytes,
+				fileIdx: len(files),
 			})
 			files = append(files, PolicyFile{
 				Name:     em.name,
@@ -366,8 +400,9 @@ func (e *Engine) Reload(ctx context.Context) error {
 					continue
 				}
 				sources = append(sources, policySource{
-					name:  ent.Name(),
-					bytes: body,
+					name:    ent.Name(),
+					bytes:   body,
+					fileIdx: len(files),
 				})
 				files = append(files, PolicyFile{
 					Name:    ent.Name(),
@@ -399,16 +434,14 @@ func (e *Engine) Reload(ctx context.Context) error {
 	for srcIdx, src := range sources {
 		fileSet, perr := cedar.NewPolicySetFromBytes(src.name, src.bytes)
 		if perr != nil {
-			// Mark the file's status as failed; keep going.
-			for i := range files {
-				if files[i].Name == src.name {
-					files[i].ParseOK = false
-					files[i].ParseErr = perr.Error()
-					break
-				}
-			}
+			// Mark THIS source's entry failed (by index — see
+			// policySource.fileIdx); keep going.
+			files[src.fileIdx].ParseOK = false
+			files[src.fileIdx].ParseErr = perr.Error()
 			continue
 		}
+		files[src.fileIdx].ParseOK = true
+		files[src.fileIdx].ParseErr = ""
 		anyOK = true
 		idx := 0
 		for _, p := range fileSet.Map() {
@@ -419,14 +452,34 @@ func (e *Engine) Reload(ctx context.Context) error {
 	}
 
 	if !anyOK && len(sources) > 0 {
-		// Every source failed; keep the prior set active.
+		// Every source failed; keep the prior set active. It already
+		// holds the retained snippets, so only the LISTING is rebuilt —
+		// never write into the live set Evaluate is reading (WP05,
+		// review F2).
+		for name, body := range e.snippets {
+			files = listSnippet(files, name, len(body))
+		}
 		e.filesMu.Lock()
 		e.files = files
 		e.filesMu.Unlock()
 		return errors.New("cedar: every policy source failed to parse")
 	}
 
+	// WP04: re-apply retained LoadHarnessSnippets sources. They parsed
+	// when first installed, so a failure here is not expected; it is
+	// logged and that snippet skipped rather than failing a reload the
+	// on-disk half of which succeeded (Reload's error contract is about
+	// the disk/embedded sources).
+	if len(e.snippets) > 0 {
+		var serr error
+		files, _, serr = applySnippets(ps, files, e.snippets)
+		if serr != nil {
+			slog.Error("cedar.reload_snippet_reapply_failed", "err", serr.Error())
+		}
+	}
+
 	e.policies.Store(ps)
+	e.evalErrors.reset()
 	e.filesMu.Lock()
 	e.files = files
 	e.filesMu.Unlock()
@@ -436,11 +489,27 @@ func (e *Engine) Reload(ctx context.Context) error {
 
 // ListPolicies returns the per-file parse status from the last Reload.
 // Empty until the first Reload completes.
+//
+// Each entry's EvalErrors lists the policies from that file that failed
+// to evaluate on at least one request since the last Reload (see
+// PolicyEvalErrors) — the status surface for "this rule parses but is
+// broken at runtime".
 func (e *Engine) ListPolicies() []PolicyFile {
 	e.filesMu.RLock()
-	defer e.filesMu.RUnlock()
 	out := make([]PolicyFile, len(e.files))
 	copy(out, e.files)
+	e.filesMu.RUnlock()
+	evalErrs := e.evalErrors.snapshot()
+	if len(evalErrs) == 0 {
+		return out
+	}
+	for i := range out {
+		for _, pe := range evalErrs {
+			if pe.File != "" && pe.File == out[i].Name {
+				out[i].EvalErrors = append(out[i].EvalErrors, pe)
+			}
+		}
+	}
 	return out
 }
 
@@ -461,9 +530,12 @@ func (e *Engine) RecentDecisions(limit int) []Decision {
 //
 // Evaluate is the hot path — it MUST NOT block on I/O. It performs
 // the cedar.Authorize call, classifies the result, and writes the
-// audit record. Errors are not returned: a Cedar-level evaluation
-// error is mapped to a Deny decision with the diagnostic message in
-// Reason so the caller can refuse the action and surface why.
+// audit record. Errors are not returned. A policy whose evaluation
+// errors (cedar-go skips it and lists it in diag.Errors) is handled by
+// fromCedar: an erroring forbid yields Deny (fail-closed), an erroring
+// permit is treated as not matching. Every such error is recorded in
+// the engine's eval-error tracker (PolicyEvalErrors / ListPolicies) so
+// the policy author can see the rule is broken.
 func (e *Engine) Evaluate(
 	ctx context.Context,
 	principal cedar.EntityUID,
@@ -482,6 +554,7 @@ func (e *Engine) Evaluate(
 		ps = cedar.NewPolicySet()
 	}
 	contextAttrs = populateFamilyContext(action, resource, contextAttrs)
+	contextAttrs = withDeviceKind(contextAttrs, e.opts.DeviceKind)
 	req := cedar.Request{
 		Principal: principal,
 		Action:    ActionUID(action),
@@ -489,7 +562,10 @@ func (e *Engine) Evaluate(
 		Context:   cedar.NewRecord(contextAttrs),
 	}
 	dec, diag := cedar.Authorize(ps, cedar.EntityMap{}, req)
-	out := fromCedar(action, principal, resource, dec, diag, e.opts.DefaultDeny)
+	if len(diag.Errors) > 0 {
+		e.evalErrors.record(ps, diag.Errors)
+	}
+	out := fromCedar(action, principal, resource, dec, diag, ps, e.opts.DefaultDeny)
 	e.decisions.Append(out)
 	return out
 }
@@ -558,6 +634,12 @@ func (e *PolicyDeniedError) DeniedSummary() string {
 type policySource struct {
 	name  string
 	bytes []byte
+	// fileIdx is this source's own entry in Reload's files slice.
+	// Parse status is attributed by THIS index, never by Name: a user
+	// file may share its name with an embedded default (WP05, review
+	// F1 — name matching pinned the error on the embedded entry and
+	// left the corrupt user file reported ParseOK).
+	fileIdx int
 }
 
 // Context-attr keys consulted by the family-default policies. Exported
@@ -612,6 +694,37 @@ const (
 	CtxKeySecretAgentKind       = "agent_kind"
 )
 
+// CtxKeyDeviceKind is `context.device_kind`: "desktop" | "mobile"
+// (Options.DeviceKind). Present on every request.
+const CtxKeyDeviceKind = "device_kind"
+
+// DeviceKindDesktop is the default Options.DeviceKind.
+const DeviceKindDesktop = "desktop"
+
+// DeviceKindMobile is the phone facade's Options.DeviceKind.
+const DeviceKindMobile = "mobile"
+
+// ErrInvalidDeviceKind: Options.DeviceKind must be "", "desktop" or
+// "mobile" exactly, so a typo ("Mobile") fails at construction instead of
+// silently matching no policy.
+var ErrInvalidDeviceKind = errors.New(`cedar: Options.DeviceKind must be "desktop" or "mobile"`)
+
+// withDeviceKind returns attrs with device_kind set to the ENGINE's value.
+// The device is a fact about the process, so a caller-supplied
+// device_kind never overrides it. The caller's map is never mutated.
+func withDeviceKind(attrs map[cedar.String]cedar.Value, kind string) map[cedar.String]cedar.Value {
+	k := cedar.String(CtxKeyDeviceKind)
+	if kind == "" {
+		kind = DeviceKindDesktop
+	}
+	out := make(map[cedar.String]cedar.Value, len(attrs)+1)
+	for key, v := range attrs {
+		out[key] = v
+	}
+	out[k] = cedar.String(kind)
+	return out
+}
+
 // populateFamilyContext fills in context-attribute defaults for the
 // four WP01 resource families. Caller-provided keys ALWAYS win — this
 // helper only fills in attributes the caller did not set, derived
@@ -621,8 +734,10 @@ const (
 //
 //  1. The bundled default policies reference these attrs in `when {
 //     ... }` clauses; a request that omits a referenced attr produces
-//     a Cedar evaluation error and lands as Deny. Filling sane
-//     zero-values keeps the request well-formed.
+//     a Cedar evaluation error. cedar-go skips the erroring policy, so
+//     an erroring permit silently does not match and an erroring
+//     forbid makes fromCedar return Deny (fail-closed). Filling sane
+//     zero-values keeps the request well-formed so neither happens.
 //  2. Derived attrs (server_name from a "<server>__<tool>" UID,
 //     pattern from a BashCommand UID, canonical_path from a
 //     FilesystemOp UID) are 1:1 with the resource id. Computing them
@@ -719,8 +834,9 @@ func populateFamilyContext(
 		// Mirror the resource id as recipe_id; callers supply the
 		// fuller recipe_command and recipe_transport via the context
 		// map. We ensure zero-values here so the policy's `when`
-		// clauses never see a missing attribute (Cedar evaluation error
-		// on a missing attr lands as Deny).
+		// clauses never see a missing attribute (a missing attr is a
+		// Cedar evaluation error: an erroring forbid denies, an erroring
+		// permit silently does not match).
 		ensure(CtxKeyRecipeID, resourceID)
 		ensure(CtxKeyRecipeCommand, "")
 		ensure(CtxKeyRecipeTransport, "stdio")
@@ -756,40 +872,70 @@ func (e *Engine) LoadHarnessSnippets(snippets map[string][]byte) error {
 	}
 	ps := current
 
+	e.filesMu.Lock()
+	files, applied, err := applySnippets(ps, e.files, snippets)
+	e.files = files
+	e.filesMu.Unlock()
+	// Retain exactly what was applied (on error, the snippets applied
+	// before the failing one stay installed, as before) so Reload
+	// re-applies the same set — graph-fs-gate-01GFSG01 WP04.
+	if e.snippets == nil {
+		e.snippets = make(map[string][]byte, len(snippets))
+	}
+	for _, name := range applied {
+		e.snippets[name] = snippets[name]
+	}
+	if err != nil {
+		return err
+	}
+	e.policies.Store(ps)
+	return nil
+}
+
+// applySnippets adds each snippet's policies to ps under the
+// deterministic "harness-self/<filename>#<n>" IDs and records each in
+// files (marked Embedded, ParseOK) — the shared apply loop for
+// LoadHarnessSnippets and Reload's re-application (WP04). Returns the
+// updated files slice, the names applied, and the first parse error;
+// snippets before the failing one (in map order) stay applied, matching
+// the original LoadHarnessSnippets contract. Caller holds reloadMu.
+func applySnippets(ps *cedar.PolicySet, files []PolicyFile, snippets map[string][]byte) ([]PolicyFile, []string, error) {
+	var applied []string
 	for name, body := range snippets {
 		fileSet, err := cedar.NewPolicySetFromBytes(name, body)
 		if err != nil {
-			return fmt.Errorf("cedar: LoadHarnessSnippets parse %s: %w", name, err)
+			return files, applied, fmt.Errorf("cedar: LoadHarnessSnippets parse %s: %w", name, err)
 		}
+		applied = append(applied, name)
 		idx := 0
 		for _, p := range fileSet.Map() {
 			id := cedar.PolicyID(fmt.Sprintf("harness-self/%s#%d", name, idx))
 			ps.Add(id, p)
 			idx++
 		}
-		// Track in the files list so ListPolicies shows the snippets.
-		e.filesMu.Lock()
-		found := false
-		for i, f := range e.files {
-			if f.Name == name {
-				e.files[i].ParseOK = true
-				e.files[i].ParseErr = ""
-				found = true
-				break
-			}
-		}
-		if !found {
-			e.files = append(e.files, PolicyFile{
-				Name:     name,
-				Bytes:    len(body),
-				Embedded: true,
-				ParseOK:  true,
-			})
-		}
-		e.filesMu.Unlock()
+		files = listSnippet(files, name, len(body))
 	}
-	e.policies.Store(ps)
-	return nil
+	return files, applied, nil
+}
+
+// listSnippet records snippet name as an installed embedded source in
+// files. It matches ONLY an existing Embedded entry of that name — a
+// user file of the same name is a different source, and marking it
+// ParseOK would wipe its parse error on every Reload (WP05, review F1).
+func listSnippet(files []PolicyFile, name string, size int) []PolicyFile {
+	for i, f := range files {
+		if f.Embedded && f.Name == name {
+			files[i].ParseOK = true
+			files[i].ParseErr = ""
+			return files
+		}
+	}
+	return append(files, PolicyFile{
+		Name:     name,
+		Bytes:    size,
+		Embedded: true,
+		ParseOK:  true,
+	})
 }
 
 // isFamilyAction reports whether action is one of the WP01

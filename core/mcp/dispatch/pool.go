@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 	mcphttp "github.com/kameas-ai/kenaz-harness/core/mcp/transport/http"
@@ -81,6 +82,26 @@ type RemoteSubPool interface {
 	// connection. Returns an error naming the server when it is not
 	// present in the sub-pool.
 	CloseOne(ctx context.Context, id string) error
+	// RecipeStatus returns the live status snapshot for a server, or
+	// ok=false if id is not present. Added by
+	// connector-lifecycle-truth-01PMZ303 UNIT-7: before this, neither
+	// http.Pool nor sse.Pool exposed any status accessor at all, which
+	// is exactly why dispatch.Pool.RecipeStatus had to synthesise a
+	// permanent "running" instead of asking the sub-pool — see this
+	// file's RecipeStatus for the fix.
+	RecipeStatus(id string) (stdio.RecipeStatus, bool)
+	// AllRecipeStatuses returns status snapshots for every server the
+	// sub-pool currently tracks. UNIT-7: same motivation as
+	// RecipeStatus — this is the accessor AllRecipeStatuses (below)
+	// now delegates to instead of synthesising.
+	AllRecipeStatuses() []stdio.RecipeStatus
+	// SetHealthObserver installs a callback invoked whenever any
+	// server's live-probed health state changes.
+	// connector-lifecycle-truth-01PMZ303 UNIT-8: the push signal that
+	// makes a dead-then-alive (or alive-then-dead) transition
+	// observable without polling — see dispatch.Pool.SetHealthObserver
+	// (below), which forwards to both http.Pool and sse.Pool.
+	SetHealthObserver(fn transport.HealthObserver)
 }
 
 // Compile-time witnesses: the concrete http/sse pools satisfy
@@ -241,15 +262,22 @@ func (d *Pool) Open(ctx context.Context, specs []coremcp.ServerSpec) error {
 				mu.Unlock()
 				return
 			}
-			if err := sp.Open(ctx, bucket); err != nil {
+			openErr := sp.Open(ctx, bucket)
+			if openErr != nil {
 				mu.Lock()
-				errs = append(errs, err.Error())
+				errs = append(errs, openErr.Error())
 				mu.Unlock()
-				return
 			}
+			// A sub-pool's Open is partial-success: one bad spec does not
+			// stop the others from coming up. Ownership is recorded for
+			// every server the sub-pool actually holds, so one failing
+			// recipe cannot leave the healthy ones listed by Tools but
+			// unreachable by Call.
 			d.mu.Lock()
 			for _, s := range bucket {
-				d.ownership[s.Name] = tag
+				if openErr == nil || d.subPoolHoldsLocked(tag, s.Name) {
+					d.ownership[s.Name] = tag
+				}
 			}
 			d.mu.Unlock()
 		}()
@@ -278,17 +306,112 @@ func (d *Pool) Close(ctx context.Context) error {
 
 // Tools aggregates tool lists from all sub-pools. Per-pool errors are
 // swallowed so a pool with no servers yet doesn't fail the aggregate.
+//
+// Visibility matches reachability: a tool is listed only when Call could
+// route it AND its server is in a state that can answer — not failed,
+// not stopped. A sub-pool's cached tool list outlives its process (a
+// crashed stdio server keeps its last tools/list), so the cache alone
+// would advertise tools whose every call fails.
 func (d *Pool) Tools(ctx context.Context) ([]coremcp.Tool, error) {
 	var out []coremcp.Tool
+	serves := map[string]bool{}
 	for _, sp := range d.activePools() {
 		tools, err := sp.Tools(ctx)
 		if err != nil {
 			// Non-fatal: one dead sub-pool should not hide the others.
 			continue
 		}
-		out = append(out, tools...)
+		for _, t := range tools {
+			ok, seen := serves[t.Server]
+			if !seen {
+				ok = d.canServe(t.Server)
+				serves[t.Server] = ok
+				if !ok {
+					logging.L().Info("mcp.tools.omitted_unservable", "server", t.Server)
+				}
+			}
+			if ok {
+				out = append(out, t)
+			}
+		}
 	}
 	return out, nil
+}
+
+// canServe reports whether a Call to server could be dispatched and
+// answered: it has an owning sub-pool and that sub-pool does not report
+// it failed or stopped.
+func (d *Pool) canServe(server string) bool {
+	tag, ok := d.ownerOf(server)
+	if !ok {
+		return false
+	}
+	if tag == "inprocess" {
+		return true
+	}
+	st, ok := d.statusByTag(tag, server)
+	if !ok {
+		return false
+	}
+	switch transport.State(st.State) {
+	case transport.StateFailed, transport.StateStopped:
+		return false
+	}
+	return true
+}
+
+// ownerOf resolves the sub-pool tag for server. A server present in a
+// sub-pool but missing from the ownership map — opened on the sub-pool
+// directly, as the persisted-recipe bootstrap does on the stdio pool —
+// is adopted rather than reported unknown: it is running, its tools are
+// listed, and refusing its calls was the "server not in pool" defect.
+func (d *Pool) ownerOf(server string) (string, bool) {
+	d.mu.RLock()
+	tag, ok := d.ownership[server]
+	d.mu.RUnlock()
+	if ok {
+		return tag, true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if tag, ok := d.ownership[server]; ok {
+		return tag, true
+	}
+	for _, tag := range []string{"stdio", "http", "sse"} {
+		if d.subPoolHoldsLocked(tag, server) {
+			d.ownership[server] = tag
+			logging.L().Info("mcp.dispatch.adopted_server", "server", server, "transport", tag)
+			return tag, true
+		}
+	}
+	return "", false
+}
+
+// subPoolHoldsLocked reports whether the tag's sub-pool currently tracks
+// server. Reads only the sub-pool (never d.ownership), so it is safe
+// under d.mu.
+func (d *Pool) subPoolHoldsLocked(tag, server string) bool {
+	_, ok := d.statusByTag(tag, server)
+	return ok
+}
+
+// statusByTag asks the tag's own sub-pool for server's live status.
+func (d *Pool) statusByTag(tag, server string) (stdio.RecipeStatus, bool) {
+	switch tag {
+	case "stdio":
+		if d.stdioPool != nil {
+			return d.stdioPool.RecipeStatus(server)
+		}
+	case "http":
+		if d.httpPool != nil {
+			return d.httpPool.RecipeStatus(server)
+		}
+	case "sse":
+		if d.ssePool != nil {
+			return d.ssePool.RecipeStatus(server)
+		}
+	}
+	return stdio.RecipeStatus{}, false
 }
 
 // SetCallObserver installs a metadata-only observer invoked with
@@ -303,20 +426,35 @@ func (d *Pool) SetCallObserver(fn func(server, tool string)) {
 // Call dispatches tools/call to the sub-pool that opened server.
 func (d *Pool) Call(ctx context.Context, server, tool string, args json.RawMessage) (json.RawMessage, error) {
 	d.mu.RLock()
-	tag, ok := d.ownership[server]
 	observer := d.callObserver
 	d.mu.RUnlock()
 	if observer != nil {
 		observer(server, tool)
 	}
+	tag, ok := d.ownerOf(server)
 	if !ok {
-		return nil, fmt.Errorf("%w: %q", stdio.ErrServerNotFound, server)
+		err := fmt.Errorf("%w: %q", stdio.ErrServerNotFound, server)
+		logCallFailed(server, tool, "", err)
+		return nil, err
 	}
 	sp := d.subPoolFor(tag)
 	if sp == nil {
-		return nil, fmt.Errorf("dispatch: sub-pool for transport %q no longer wired", tag)
+		err := fmt.Errorf("dispatch: sub-pool for transport %q no longer wired", tag)
+		logCallFailed(server, tool, tag, err)
+		return nil, err
 	}
-	return sp.Call(ctx, server, tool, args)
+	out, err := sp.Call(ctx, server, tool, args)
+	if err != nil {
+		logCallFailed(server, tool, tag, err)
+	}
+	return out, err
+}
+
+// logCallFailed records a failed MCP tool call in the app log. Metadata
+// and the error only — never the call's arguments or result.
+func logCallFailed(server, tool, transportTag string, err error) {
+	logging.L().Warn("mcp.tool.call.failed",
+		"server", server, "tool", tool, "transport", transportTag, "err", err.Error())
 }
 
 // ─── PoolController surface ───────────────────────────────────────────────────
@@ -433,13 +571,18 @@ func (d *Pool) closeOneByTag(ctx context.Context, tag, id string) error {
 }
 
 // RecipeStatus returns the live status snapshot for a server.
-// For stdio servers it delegates to the stdioPool.RecipeStatus.
-// For http/sse servers it synthesises a "running" status because
-// those pools have no per-server status API yet.
+//
+// stdio, http and sse each delegate to their own sub-pool's real,
+// live-probed accessor (connector-lifecycle-truth-01PMZ303 UNIT-7 —
+// before this, http/sse hardcoded a permanent "running" here; see
+// spec.md §1.4). inprocess is genuinely different, not an
+// unaddressed instance of the same bug: a Go-native in-process server
+// has no network liveness to lose — RegisterInProcess succeeding
+// means its channels are live in THIS process, and if the process
+// were gone this call could not run either. "running" here is a fact
+// about the process, not a probe result nothing ran.
 func (d *Pool) RecipeStatus(id string) (stdio.RecipeStatus, bool) {
-	d.mu.RLock()
-	tag, ok := d.ownership[id]
-	d.mu.RUnlock()
+	tag, ok := d.ownerOf(id)
 	if !ok {
 		return stdio.RecipeStatus{}, false
 	}
@@ -449,16 +592,23 @@ func (d *Pool) RecipeStatus(id string) (stdio.RecipeStatus, bool) {
 		if d.stdioPool != nil {
 			return d.stdioPool.RecipeStatus(id)
 		}
-	case "http", "sse", "inprocess":
-		// Synthesised: the ownership entry proves the server was opened
-		// (registered, for inprocess) successfully. None of these three
-		// pools provide a richer per-server status today.
-		return stdio.RecipeStatus{
-			ID:        id,
-			Enabled:   true,
-			State:     string(transport.StateRunning),
-			UpdatedAt: time.Now().UTC(),
-		}, true
+	case "http":
+		if d.httpPool != nil {
+			return d.httpPool.RecipeStatus(id)
+		}
+	case "sse":
+		if d.ssePool != nil {
+			return d.ssePool.RecipeStatus(id)
+		}
+	case "inprocess":
+		if d.inprocessPool != nil {
+			return stdio.RecipeStatus{
+				ID:        id,
+				Enabled:   true,
+				State:     string(transport.StateRunning),
+				UpdatedAt: time.Now().UTC(),
+			}, true
+		}
 	}
 	return stdio.RecipeStatus{}, false
 }
@@ -470,9 +620,7 @@ func (d *Pool) RecipeStatus(id string) (stdio.RecipeStatus, bool) {
 // server's tools/list round-trip is a few Go function calls, cheap
 // enough that a cache buys nothing.
 func (d *Pool) ServerTools(id string) []coremcp.Tool {
-	d.mu.RLock()
-	tag, ok := d.ownership[id]
-	d.mu.RUnlock()
+	tag, ok := d.ownerOf(id)
 	if !ok {
 		return nil
 	}
@@ -482,8 +630,15 @@ func (d *Pool) ServerTools(id string) []coremcp.Tool {
 	return nil
 }
 
-// AllRecipeStatuses returns status snapshots from all sub-pools.
-// This satisfies the mcp-health view's HealthPool interface.
+// AllRecipeStatuses returns status snapshots from all sub-pools. This
+// satisfies the mcp-health view's HealthPool interface — the site
+// HealthSnapshot (and, via UNIT-8's publisher, mcp:health-changed)
+// actually reads. connector-lifecycle-truth-01PMZ303 UNIT-7: http and
+// sse now delegate to their own real, live-probed
+// AllRecipeStatuses instead of synthesising "running" for every
+// owned id (spec.md §1.4, FR-005, AC-005). inprocess keeps its
+// synthesis — see RecipeStatus's doc comment for why that case is
+// honest, not fabricated.
 func (d *Pool) AllRecipeStatuses() []stdio.RecipeStatus {
 	var out []stdio.RecipeStatus
 	if d.stdioPool != nil {
@@ -491,27 +646,53 @@ func (d *Pool) AllRecipeStatuses() []stdio.RecipeStatus {
 			out = append(out, s...)
 		}
 	}
+	if d.httpPool != nil {
+		out = append(out, d.httpPool.AllRecipeStatuses()...)
+	}
+	if d.ssePool != nil {
+		out = append(out, d.ssePool.AllRecipeStatuses()...)
+	}
 
-	// Append synthesised statuses for http/sse/inprocess owned servers.
+	// inprocess servers still synthesise "running" — see RecipeStatus's
+	// case "inprocess" comment for why that is honest, not fabricated.
 	d.mu.RLock()
-	type entry struct{ id, tag string }
-	var remote []entry
+	var inprocessIDs []string
 	for id, tag := range d.ownership {
-		if tag == "http" || tag == "sse" || tag == "inprocess" {
-			remote = append(remote, entry{id, tag})
+		if tag == "inprocess" {
+			inprocessIDs = append(inprocessIDs, id)
 		}
 	}
 	d.mu.RUnlock()
 
-	for _, e := range remote {
+	for _, id := range inprocessIDs {
 		out = append(out, stdio.RecipeStatus{
-			ID:        e.id,
+			ID:        id,
 			Enabled:   true,
 			State:     string(transport.StateRunning),
 			UpdatedAt: time.Now().UTC(),
 		})
 	}
 	return out
+}
+
+// SetHealthObserver installs a callback invoked whenever a remote
+// (http/sse) server's live-probed health state changes
+// (connector-lifecycle-truth-01PMZ303 UNIT-8's mcp:health-changed
+// publisher). Forwards to both sub-pools; either may be nil (no
+// sub-pool wired), in which case that transport contributes no
+// events. stdio has no equivalent here: its AllRecipeStatuses already
+// reflects the supervisor's real-time state on every poll (see
+// transport.HealthObserver's doc comment for the full reasoning).
+func (d *Pool) SetHealthObserver(fn transport.HealthObserver) {
+	d.mu.RLock()
+	httpPool, ssePool := d.httpPool, d.ssePool
+	d.mu.RUnlock()
+	if httpPool != nil {
+		httpPool.SetHealthObserver(fn)
+	}
+	if ssePool != nil {
+		ssePool.SetHealthObserver(fn)
+	}
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────

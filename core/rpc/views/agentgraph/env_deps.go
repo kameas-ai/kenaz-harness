@@ -80,6 +80,18 @@ type EnvDeps struct {
 	// three call sites, but core/hooks.LifecycleRunnerAdapter, the only
 	// implementation, was never constructed.
 	LifecycleHooks coreag.LifecycleHookRunner
+
+	// ToolUsage receives one report per completed tool invocation (name,
+	// latency, success — never arguments or output). Set once here so both
+	// production Env literals (chat runs and library-graph runs) count tool
+	// calls identically. nil disables usage reporting.
+	ToolUsage coreag.ToolUsageObserver
+
+	// ToolCalls is told about every exit of a model-emitted tool call
+	// with a typed outcome (ml-producer-01MLPRD01: the harness ML
+	// producer's recorder, core/rpc/mlproducer_wiring.go). Set once here
+	// so chat and library-graph runs report identically. nil disables it.
+	ToolCalls coreag.ToolCallObserver
 }
 
 // WithEnvDeps installs production seams onto the Manager. The seams
@@ -198,6 +210,12 @@ func (d EnvDeps) applyTo(env *coreag.Env) {
 	}
 	if d.LifecycleHooks != nil {
 		env.LifecycleHooks = d.LifecycleHooks
+	}
+	if d.ToolUsage != nil {
+		env.ToolUsage = d.ToolUsage
+	}
+	if d.ToolCalls != nil {
+		env.ToolCalls = d.ToolCalls
 	}
 
 	// Arm the growth watermark for every graph-authored run that did not

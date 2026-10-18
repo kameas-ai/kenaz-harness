@@ -51,7 +51,24 @@ defaults:
 # keyword ("opus" -> large) is listed; the routed OpenAI/other Claude
 # models matched no keyword under the old heuristic either, so they
 # resolve via the medium default above — unchanged behaviour.
+#
+# The three exact (non-glob) rows below were added (model-settings-
+# reach-the-model-01PMZ101 UNIT-10 / WP17) so KnownModels("openrouter")
+# returns real candidates for the branch recommender — before this, every
+# row here was a glob ("anthropic/claude-opus*"), which KnownModels
+# deliberately skips ("glob rows classify a model rather than name one"),
+# so an openrouter parent session could never get a same-provider branch
+# recommendation no matter how core/rpc/branches_wiring.go's provider
+# list was widened. "anthropic/claude-sonnet-4.5" and
+# "anthropic/claude-haiku-4.5" are real, dot-separated OpenRouter model
+# ids — confirmed against openrouter.ai on 2026-09-09 by the
+# bundled-profile-model-preflight fix (core/agents/bundled/*.yaml; see
+# that commit's message for the verification), not guessed here.
 tiers:
+  - match: "anthropic/claude-haiku-4.5"
+    tier: small
+  - match: "anthropic/claude-sonnet-4.5"
+    tier: medium
   - match: "anthropic/claude-opus*"
     tier: large
 models:

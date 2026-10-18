@@ -17,7 +17,7 @@ permissions:
 jobs:
   conventional-commits:
     name: Conventional Commits
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     steps:
       - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
         env:

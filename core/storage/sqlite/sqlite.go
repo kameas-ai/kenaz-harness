@@ -15,8 +15,12 @@ import (
 	"path/filepath"
 	"sync"
 
+	advicelabels "github.com/kameas-ai/kenaz-harness/core/advice/labels"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/mlproducer/mlstore"
+	"github.com/kameas-ai/kenaz-harness/core/modelcalls"
+	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
@@ -164,6 +168,53 @@ func Open(cfg storage.Config) (storage.DB, error) {
 	if err := eventlog.RegisterMigrations(registry); err != nil {
 		db.closeOnError()
 		return nil, fmt.Errorf("storage: register event-log migrations: %w", err)
+	}
+	// cedar-policy: finding-58-cedar-decision-persistence. Creates
+	// policy_decisions (version 1300), the durable backing table for
+	// cedar.SQLDecisionStore — the fix for the Cedar engine's
+	// audit-decision log having no persistent backing in production
+	// (it silently fell back to a 256-entry in-memory ring, lost on
+	// every restart). Registering here is what makes the table exist
+	// on every install, including upgraded ones whose ledger
+	// high-water mark already sits well above the 1300-1399 block —
+	// see core/storage/sqlite/upgrade_path_test.go.
+	if err := cedarpolicy.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register cedar-policy migrations: %w", err)
+	}
+	// laya-advisors: laya-advisors-01LAYA001 WP08. Creates advice_labels
+	// (version 1600), the durable training-label corpus backing
+	// core/advice/labels.CaptureAdvisor — every advisor recommendation +
+	// user action becomes a labeled row (spec §4). Registering here is
+	// what makes the table exist on every install, including upgraded
+	// ones whose ledger high-water mark already sits well above the
+	// 1600-1699 block — see core/storage/sqlite/upgrade_path_test.go
+	// (this is the first migration to replay against a snapshot lineage
+	// whose `units` table already carries real rows: v0.83.0).
+	if err := advicelabels.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register laya-advisors migrations: %w", err)
+	}
+	// ml-producer: ml-producer-01MLPRD01 WP02. Creates ml_outbox +
+	// ml_tasks (version 1700), the harness ML producer's durable outbox
+	// and task counters (core/mlproducer/mlstore). Registered here so the
+	// tables exist on every install, including upgraded ones — see
+	// core/storage/sqlite/upgrade_path_test.go and
+	// ml_producer_upgrade_test.go.
+	if err := mlstore.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register ml-producer migrations: %w", err)
+	}
+	// model-calls: llm-call-telemetry-01LLMTEL01 WP02. Creates model_calls
+	// (version 1800), the durable local store of every LLM provider call
+	// (allowlisted gen_ai.* / kenaz.* attributes only, never content —
+	// check-genai-span-no-content.sh covers its columns). Registered here
+	// so it applies on every install, including upgraded ones whose ledger
+	// high-water mark already sits below or above the 1800-1899 block —
+	// see core/storage/sqlite/upgrade_path_test.go.
+	if err := modelcalls.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register model-calls migrations: %w", err)
 	}
 	db.registry = registry
 

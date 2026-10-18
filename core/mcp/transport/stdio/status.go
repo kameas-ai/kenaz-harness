@@ -48,8 +48,8 @@ func (s *ServerInstance) RecipeStatus() RecipeStatus {
 		ServerName:      negotiated.ServerInfo.Name,
 		ServerVersion:   negotiated.ServerInfo.Version,
 		ToolCount:       len(tools),
-		ResourceCount:   0,
-		PromptCount:     0,
+		ResourceCount:   s.ResourceCount(),
+		PromptCount:     s.PromptCount(),
 		StderrTail:      tail,
 		UpdatedAt:       s.opts.Now(),
 	}

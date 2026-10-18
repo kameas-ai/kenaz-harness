@@ -61,7 +61,7 @@ func TestPromote_TeamToOrg(t *testing.T) {
 	// Pre-seed the local cache with a team entry.
 	syncer.mu.Lock()
 	syncer.pulled = append(syncer.pulled, ContextNodeEntry{
-		ID:             "node-promote",
+		ID:             "6b2f6f0e-1c1a-4a57-9a51-0d6b1a9e0001",
 		Layer:          contextpack.LayerTeam,
 		Classification: ClassTeamShared,
 		Kind:           "guidance",
@@ -73,7 +73,7 @@ func TestPromote_TeamToOrg(t *testing.T) {
 	syncer.mu.Unlock()
 
 	ctx := context.Background()
-	result, err := syncer.Promote(ctx, "node-promote")
+	result, err := syncer.Promote(ctx, "6b2f6f0e-1c1a-4a57-9a51-0d6b1a9e0001")
 	if err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestPromote_TeamToOrg(t *testing.T) {
 
 	// Local cache should now show org layer.
 	for _, e := range syncer.PulledEntries() {
-		if e.ID == "node-promote" {
+		if e.ID == "6b2f6f0e-1c1a-4a57-9a51-0d6b1a9e0001" {
 			if e.Layer != contextpack.LayerOrg {
 				t.Errorf("local cache layer=%q, want org after promote", e.Layer)
 			}

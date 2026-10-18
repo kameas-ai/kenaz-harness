@@ -12,8 +12,11 @@
 //   - builtin hook: looked up in the BuiltinRegistry the embedder
 //     supplies. Receives the event and may return a mutated copy
 //     (PreSend) or only an error (PostSend).
-//   - mcp hook: stubbed for v1. Logged + skipped. The seam returns the
-//     event unchanged so adding real MCP wiring later is additive.
+//   - mcp hook: dispatched through the MCPInvoker seam (see MCPInvoker's
+//     doc below). When no invoker is configured (Config.MCP == nil) the
+//     hook fails with an explicit "not configured" error, logged +
+//     skipped — the same visible-failure behaviour as any other
+//     dispatch error, never a silent no-op.
 //
 // The runner is safe to call from any goroutine; the underlying
 // Registry locks its own state.
@@ -60,24 +63,24 @@ type PostSendEvent struct {
 // ElicitationOption is one selectable choice in an elicitation event.
 // Mirrors the frontend Option shape so hooks can add/modify choices.
 type ElicitationOption struct {
-	Key             string `json:"key"`
-	Label           string `json:"label"`
-	Description     string `json:"description,omitempty"`
-	DisabledReason  string `json:"disabled_reason,omitempty"`
-	Badge           string `json:"badge,omitempty"`
+	Key            string `json:"key"`
+	Label          string `json:"label"`
+	Description    string `json:"description,omitempty"`
+	DisabledReason string `json:"disabled_reason,omitempty"`
+	Badge          string `json:"badge,omitempty"`
 }
 
 // ElicitationEvent is the payload that fires before the ask dialog renders
 // (EventElicitation). Hooks may add options, change layout, or block the ask.
 // The Decision field in the response signals whether to allow/block.
 type ElicitationEvent struct {
-	SessionID   string              `json:"session_id"`
-	AskID       string              `json:"ask_id"`
-	Kind        string              `json:"kind"`
-	Prompt      string              `json:"prompt"`
-	LayoutHint  string              `json:"layout_hint,omitempty"`
-	Options     []ElicitationOption `json:"options,omitempty"`
-	Extra       map[string]any      `json:"extra,omitempty"`
+	SessionID  string              `json:"session_id"`
+	AskID      string              `json:"ask_id"`
+	Kind       string              `json:"kind"`
+	Prompt     string              `json:"prompt"`
+	LayoutHint string              `json:"layout_hint,omitempty"`
+	Options    []ElicitationOption `json:"options,omitempty"`
+	Extra      map[string]any      `json:"extra,omitempty"`
 }
 
 // ElicitationEventResult is the output a hook returns for EventElicitation.
@@ -85,7 +88,7 @@ type ElicitationEventResult struct {
 	// Decision: "allow" (default) or "block".
 	Decision string `json:"decision,omitempty"`
 	// Reason is populated when Decision == "block".
-	Reason  string              `json:"reason,omitempty"`
+	Reason string `json:"reason,omitempty"`
 	// Options overrides the question's option list when non-nil.
 	Options []ElicitationOption `json:"options,omitempty"`
 	// LayoutHint overrides the layout when non-empty.
@@ -206,8 +209,21 @@ func (b *BuiltinRegistry) Describe() []BuiltinDescriptor {
 }
 
 // MCPInvoker is the seam the runner uses to dispatch kind=mcp hooks.
-// v1 implementations are stubs; the contract is here so wiring an
-// MCP-pool-backed dispatcher later does not touch the runner's API.
+// The production implementation (core/rpc's mcpHookInvokerAdapter,
+// hooks_mcp_invoker.go) routes to the same MCP dispatch pool every
+// other tool-call path in the harness uses (finding #71 — this seam
+// used to have no production implementation at all: Config.MCP was
+// never set, so every kind=mcp hook failed on every dispatch).
+//
+// Implementations MUST tolerate InvokeTool being called concurrently
+// with the underlying transport being closed (e.g. process shutdown):
+// RunPostSend and FireAsync dispatch through Runner's detached async
+// worker pool, and Runner.Shutdown abandons — rather than kills — any
+// dispatch still running past its drain deadline (fire.go's
+// asyncShutdownDrainTimeout). A still-running InvokeTool call can
+// therefore observe the pool it dispatches to being closed by an
+// unrelated shutdown path. It must return an error in that case, never
+// panic or write through a freed resource.
 type MCPInvoker interface {
 	InvokeTool(ctx context.Context, tool string, payload []byte) ([]byte, error)
 }
@@ -374,7 +390,7 @@ func (r *Runner) dispatchElicitation(ctx context.Context, h Hook, ev Elicitation
 		return r.runShellElicitation(ctx, h, ev)
 	case KindMCP:
 		if r.mcp == nil {
-			return ElicitationEventResult{}, errors.New("mcp invoker not configured (v1 stub)")
+			return ElicitationEventResult{}, errors.New("mcp invoker not configured")
 		}
 		body, _ := json.Marshal(ev)
 		out, _ := r.mcp.InvokeTool(ctx, h.MCPTool, body)
@@ -400,7 +416,7 @@ func (r *Runner) dispatchElicitationResult(ctx context.Context, h Hook, ev Elici
 		return r.runShellElicitationResult(ctx, h, ev)
 	case KindMCP:
 		if r.mcp == nil {
-			return ElicitationResultEventResult{}, errors.New("mcp invoker not configured (v1 stub)")
+			return ElicitationResultEventResult{}, errors.New("mcp invoker not configured")
 		}
 		body, _ := json.Marshal(ev)
 		out, _ := r.mcp.InvokeTool(ctx, h.MCPTool, body)
@@ -436,17 +452,94 @@ func (r *Runner) runShellElicitationResult(ctx context.Context, h Hook, ev Elici
 	return ElicitationResultEventResult{}, nil
 }
 
-// RunPostSend fires every enabled post_send hook for the event. Errors
-// are logged and skipped — there is no return-side mutation.
+// RunPostSend fires every enabled post_send hook for the event.
+// Dispatch is asynchronous, via the same bounded worker pool Fire /
+// FireAsync use for v2 events (finding #61 GAP-2): post_send is
+// documented as side-effect only — there is no return-side mutation
+// flowing back to the caller — so nothing observes the outcome
+// synchronously. Before this, RunPostSend dispatched every hook
+// in-line on the caller's goroutine, and the memory.persist builtin's
+// OpenAIEmbedder.Embed call is a real blocking HTTP round-trip to
+// api.openai.com. Once post_send was wired onto the live chat send
+// path (ledger #46 / this ledger's #61), that HTTP call sat directly
+// on StartStream's critical path: a slow or hanging embeddings
+// endpoint delayed every turn for any user with memory enabled.
+//
+// RunPostSend now enqueues each hook and returns immediately. The
+// dispatch itself still calls Embed() and Store.Add() in the normal
+// order inside the worker — a chunk is only ever written AFTER its
+// embedding succeeds, exactly as before. This deliberately avoids
+// introducing a "row persisted without its embedding" state (which
+// would need a pending marker, a backfill path, and a store schema
+// change — a mission-sized addition, not a patch-lane latency fix):
+// on success the row lands slightly later than the turn that produced
+// it; on error or timeout it is dropped and logged, which is the same
+// data-loss behavior an Embed() failure already had synchronously
+// (RunPostSend's contract has never propagated post_send errors back
+// to the send path). The dispatch context is detached from the
+// caller's ctx (context.WithoutCancel, mirroring FireAsync) so
+// cancelling/completing the turn does not abort an in-flight embed,
+// and is bounded by the hook's TimeoutMs (default
+// DefaultAsyncTimeoutMs = 60s) so a hanging endpoint cannot leak the
+// goroutine forever. The pool itself is bounded (asyncPoolSize
+// workers, a size*4 buffered queue) and non-blocking: a saturated
+// queue drops the work and logs, it never blocks the caller. Runner.
+// Shutdown drains the pool so no queued embed outlives process
+// shutdown.
+//
+// Ordering (review of finding #61, 2026-09-11): the async dispatch is
+// a genuine semantic change to this public extensibility surface, not
+// just an internal latency fix — post_send now completes strictly
+// AFTER the turn that triggered it closes (StartStream/the chat send
+// path returns before any post_send hook has run, not after), so a
+// fast next turn on the same session can race a still-in-flight
+// post_send write. This is judged best-effort-acceptable: the turn's
+// actual content already lives in the real conversation transcript
+// regardless of post_send's outcome, and long-term memory (the one
+// production consumer today, via memory.persist) is a supplementary
+// retrieval aid, not the record of truth — losing or delaying one
+// write to it is a materially different risk than losing or delaying
+// the turn itself. This is the necessary trade for getting a blocking
+// HTTP embed off the send path; callers that need a synchronization
+// point (e.g. a test asserting on a post_send side effect) must call
+// Shutdown to drain the pool first — see core/hooks/runner_test.go's
+// TestRunner_BuiltinPostSendFiresOnce and
+// core/rpc/views/agentgraph/chat/post_send_hook_integration_test.go's
+// TestPostSendHook_MemoryPersist_WritesRealRow for the pattern. This
+// applies uniformly to every post_send hook kind, not just the
+// memory.persist builtin: a user-authored KindShell or KindMCP
+// post_send hook gets the same async, detached, timeout-bounded
+// dispatch and is subject to the same race against a fast next turn.
 func (r *Runner) RunPostSend(ctx context.Context, ev PostSendEvent) {
 	if r == nil || r.registry == nil {
 		return
 	}
 	hookList := r.registry.EnabledForEvent(EventPostSend, ev.SessionID, ev.Kind, ev.Model)
+	if len(hookList) == 0 {
+		return
+	}
+	pool := r.lazyPool()
+	// Detach from the caller's context — the turn that triggered this
+	// event may finish (and cancel its context) long before the
+	// embedding call the hook makes completes.
+	asyncCtx := context.WithoutCancel(ctx)
 	for _, h := range hookList {
-		if err := r.safeDispatchPostSend(ctx, h, ev); err != nil {
-			r.logger.Warn("hooks.postsend.dispatch_failed",
-				"id", h.ID, "kind", h.Kind, "err", err.Error())
+		h := h // capture loop variable
+		work := asyncWork{fn: func() {
+			timeoutMs := h.TimeoutMs
+			if timeoutMs <= 0 {
+				timeoutMs = DefaultAsyncTimeoutMs
+			}
+			tctx, cancel := context.WithTimeout(asyncCtx, time.Duration(timeoutMs)*time.Millisecond)
+			defer cancel()
+			if err := r.safeDispatchPostSend(tctx, h, ev); err != nil {
+				r.logger.Warn("hooks.postsend.dispatch_failed",
+					"id", h.ID, "kind", h.Kind, "err", err.Error())
+			}
+		}}
+		if !pool.submit(work) {
+			r.logger.Warn("hooks.postsend.pool_saturated",
+				"id", h.ID, "event", EventPostSend, "dropped", true)
 		}
 	}
 }
@@ -485,12 +578,16 @@ func (r *Runner) dispatchPreSend(ctx context.Context, h Hook, ev PreSendEvent) (
 		return out, nil
 	case KindMCP:
 		if r.mcp == nil {
-			return ev, errors.New("mcp invoker not configured (v1 stub)")
+			return ev, errors.New("mcp invoker not configured")
 		}
-		// Stub: invoke the tool with the JSON event and discard the
-		// result for now — v1 does not yet thread mcp output back into
-		// the message list. The seam is here so the wiring lands cleanly
-		// in a future mission.
+		// Invokes the tool with the JSON event but discards the result —
+		// pre_send does not thread mcp output back into the message
+		// list (a separate, larger feature from finding #71's scope,
+		// which is only that the dispatch reaches a live invoker at
+		// all). Note pre_send itself has no production fire site today
+		// (see frontend/src/lib/hooks.ts's FIRING_HOOK_EVENTS doc and
+		// scripts/ci/allowlists/i17-eventless-hook-events.txt) — this
+		// branch is reachable only via Fire/dry-run today.
 		body, _ := json.Marshal(ev)
 		_, _ = r.mcp.InvokeTool(ctx, h.MCPTool, body)
 		return ev, nil
@@ -515,7 +612,7 @@ func (r *Runner) dispatchPostSend(ctx context.Context, h Hook, ev PostSendEvent)
 		return err
 	case KindMCP:
 		if r.mcp == nil {
-			return errors.New("mcp invoker not configured (v1 stub)")
+			return errors.New("mcp invoker not configured")
 		}
 		body, _ := json.Marshal(ev)
 		_, _ = r.mcp.InvokeTool(ctx, h.MCPTool, body)

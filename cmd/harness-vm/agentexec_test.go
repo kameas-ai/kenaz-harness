@@ -594,7 +594,17 @@ func TestRealModePolicyDenialOverWire(t *testing.T) {
 	mu.Unlock()
 
 	// --- The audit sink's exitCode (NOT the ledger phase). ---
-	recs := sock.waitForCount(t, 2, 3*time.Second) // task.start + terminal
+	//
+	// The two-node plan->run graph emits a tool_call/tool_result pair per node
+	// BEFORE the terminal task.complete record — so a plain "wait for N
+	// records" threshold (N=2) is satisfied by task.start + the plan node's
+	// own tool_call/tool_result, well before the terminal record is written,
+	// and would let this assertion run against a snapshot that structurally
+	// cannot contain it yet. waitForRecord waits for the terminal record
+	// itself, which is the actual signal this assertion depends on.
+	recs := sock.waitForRecord(t, 3*time.Second, func(r auditRecord) bool {
+		return r.Kind == auditKindTaskComplete && r.TaskID == "t-denied" && r.ExitCode != 0
+	})
 	var sawNonZeroTerminal bool
 	for _, r := range recs {
 		if r.Kind == auditKindTaskComplete && r.TaskID == "t-denied" && r.ExitCode != 0 {

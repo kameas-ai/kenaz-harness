@@ -117,20 +117,59 @@ func New(opts Options) *Tool {
 	}
 }
 
-// newHardenedClient returns an *http.Client whose CheckRedirect callback
-// re-validates each redirect target against the IP block list and the Cedar
-// network gate. This prevents a server from redirecting the tool to a
-// protected address (e.g. 169.254.169.254) even if the initial URL passed
-// the gate.
+// newHardenedClient returns an *http.Client whose Transport dials only the
+// address that was just validated — there is no window between the
+// block-list check and the connection.
+//
+// Historically this function built a client with CheckRedirect set but the
+// Transport field left nil, so the actual connection was made by
+// http.DefaultTransport, which performs its own, unvalidated resolution.
+// CheckRedirect only inspects the redirect *target URL*; it does not
+// control what address the transport ends up dialing. A hostname that
+// answers with a public address when looked up for the check and a
+// private one when the transport resolves it to connect — the classic
+// DNS-rebinding TOCTOU — reached the private address regardless of what
+// the block list said, for the initial request and identically for every
+// redirect hop. The function's own name asserted a property the code did
+// not have.
+//
+// The fix: Transport.DialContext is pinnedDialContext, which resolves the
+// dial's hostname itself, validates every candidate address against the
+// F-002 block list, and connects only to a validated address. Because
+// http.Transport invokes DialContext identically for the first connection
+// and every redirect-driven reconnection, this closes the gap on both legs
+// through one code path rather than two that can drift apart.
+// CheckRedirect's block-list check below is retained as a fast pre-flight
+// (an obviously-blocked redirect target fails before a TCP handshake is
+// even attempted) and as the sole place the Cedar network gate is
+// consulted for a redirect target — DialContext has no policy concept,
+// only the address-level check.
 func newHardenedClient(g cedar.Gate) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	// Mirrors net/http's DefaultTransport tuning (Proxy, idle-conn pool,
+	// TLS/ExpectContinue timeouts, HTTP/2) so legitimate fetches behave
+	// exactly as before — only DialContext changes.
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           pinnedDialContext(net.DefaultResolver.LookupIPAddr, dialer.DialContext),
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	return &http.Client{
-		Timeout: time.Duration(DefaultTimeoutMs) * time.Millisecond,
+		Timeout:   time.Duration(DefaultTimeoutMs) * time.Millisecond,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if req == nil {
 				return nil
 			}
 			host := req.URL.Hostname()
-			if err := blockListCheck(host); err != nil {
+			if err := blockListCheck(req.Context(), host); err != nil {
 				return err
 			}
 			if g != nil {
@@ -228,7 +267,7 @@ func (t *Tool) call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 	}
 	targetHost := parsedURL.Hostname()
 	if !t.skipBlockList {
-		if err := blockListCheck(targetHost); err != nil {
+		if err := blockListCheck(ctx, targetHost); err != nil {
 			return errorResult(err.Error()), nil
 		}
 	}
@@ -293,6 +332,15 @@ func (t *Tool) call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 	// ── Build + execute request ──────────────────────────────────────────
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
+	if t.skipBlockList {
+		// FOR TESTING ONLY (see Options.SkipBlockList): exempt exactly the
+		// originally-requested host from pinning at dial time, so a
+		// hardened *http.Client (no HTTPClient override) can still reach
+		// an httptest server bound to loopback. This does NOT extend to
+		// any other host encountered later — a redirect target is a
+		// different host and gets full pinning + block-list enforcement.
+		reqCtx = withAllowedHost(reqCtx, targetHost)
+	}
 
 	var bodyReader io.Reader
 	if resolvedBody != "" && args.Method != http.MethodGet && args.Method != http.MethodHead {
@@ -371,7 +419,16 @@ func init() {
 // blockListCheck resolves host to its IP addresses and returns an error if any
 // resolved address falls within a blocked range. The check runs unconditionally
 // before Cedar — it is defense-in-depth against SSRF.
-func blockListCheck(host string) error {
+//
+// This is a pre-flight convenience (fails fast, before secret resolution or
+// request construction) — it is NOT what closes the DNS-rebinding gap. That
+// enforcement lives in pinnedDialContext below, which re-resolves and
+// re-validates at the moment of connection. blockListCheck and
+// pinnedDialContext deliberately share the same policy (fail the whole host
+// if any candidate address is blocked) so a host presenting a mixed
+// public/private address set is rejected consistently by both, rather than
+// one silently permitting what the other would refuse.
+func blockListCheck(ctx context.Context, host string) error {
 	if host == "" {
 		return nil
 	}
@@ -383,21 +440,124 @@ func blockListCheck(host string) error {
 	if ip := net.ParseIP(host); ip != nil {
 		return checkIP(ip)
 	}
-	// Slow path: resolve hostname.
-	addrs, err := net.LookupHost(host)
+	// Slow path: resolve hostname. Goes through net.DefaultResolver (same
+	// resolver pinnedDialContext uses) so both checks observe the same
+	// answer for a given lookup in production, and so tests can override
+	// resolution for both by swapping net.DefaultResolver.
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		// If resolution fails, allow the request to proceed (the HTTP client
 		// will fail with its own error). We don't want to block on DNS failures.
 		return nil
 	}
 	for _, addr := range addrs {
-		if ip := net.ParseIP(addr); ip != nil {
-			if err := checkIP(ip); err != nil {
-				return err
-			}
+		if err := checkIP(addr.IP); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// ── DNS-rebinding fix: pin the dial to the address that was validated ───────
+//
+// allowedHostKey is the context key carrying the FOR-TESTING-ONLY host
+// exemption set up by Options.SkipBlockList (see call() and
+// newHardenedClient). Never set outside tests.
+type allowedHostKey struct{}
+
+// withAllowedHost marks host as exempt from block-list / pinning enforcement
+// for dials made using ctx. Scoped to exactly one host so the exemption
+// does not silently cover a redirect target, which is a different host.
+func withAllowedHost(ctx context.Context, host string) context.Context {
+	return context.WithValue(ctx, allowedHostKey{}, host)
+}
+
+func allowedHostFromContext(ctx context.Context) (string, bool) {
+	h, ok := ctx.Value(allowedHostKey{}).(string)
+	return h, ok
+}
+
+// resolveIPFunc abstracts hostname resolution for pinnedDialContext.
+// Production always passes net.DefaultResolver.LookupIPAddr; tests
+// exercising pinnedDialContext's validation/multi-address logic in
+// isolation substitute a fake, so those tests need no real DNS server and
+// no real (possibly slow or platform-dependent) network I/O. This is
+// distinct from — and does not replace — the DNS-rebinding regression
+// tests in webfetch_rebinding_test.go, which deliberately drive the real
+// net.DefaultResolver end to end because that resolution path is the
+// subject of the finding.
+type resolveIPFunc func(ctx context.Context, host string) ([]net.IPAddr, error)
+
+// dialFunc abstracts the underlying connect primitive for pinnedDialContext,
+// for the same reason: production passes a *net.Dialer's DialContext
+// method value; tests substitute a fake that records calls and returns
+// synthetic results without touching a socket.
+type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// pinnedDialContext returns the http.Transport.DialContext implementation
+// that closes the DNS-rebinding TOCTOU: it resolves the dial's hostname
+// itself, validates every candidate address against the F-002 block list,
+// and connects only to a validated address. There is no separate
+// "check" step whose result the connection can silently disagree with —
+// resolution and validation happen right here, immediately before dialing.
+//
+// http.Transport invokes DialContext identically for the first connection
+// of a request and for every redirect-driven reconnection, so this single
+// function is what protects both legs (AC-3) — there is no parallel
+// redirect-specific dialing path to drift out of sync with this one.
+//
+// Multi-address hosts (CDNs, dual-stack IPv4/IPv6) keep working: every
+// candidate address must pass the block list, then each is tried in order
+// until one connects (matching the standard net/http fallback behaviour
+// for a multi-A-record host). A host that resolves to both a public and a
+// private address is rejected outright, matching blockListCheck's policy —
+// presenting a mixed address set is itself a known SSRF/rebinding
+// technique, so this code does not try to cherry-pick "the safe one."
+func pinnedDialContext(resolve resolveIPFunc, dial dialFunc) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+
+		if allowed, ok := allowedHostFromContext(ctx); ok && strings.EqualFold(allowed, host) {
+			return dial(ctx, network, addr)
+		}
+
+		// Fast path: dial target is already an IP literal (no DNS involved,
+		// so there is no rebinding window — but it can still be a blocked
+		// address the caller wrote directly, or an address a hostname's
+		// resolution above just handed us).
+		if ip := net.ParseIP(host); ip != nil {
+			if err := checkIP(ip); err != nil {
+				return nil, err
+			}
+			return dial(ctx, network, addr)
+		}
+
+		addrs, err := resolve(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		if len(addrs) == 0 {
+			return nil, fmt.Errorf("web_fetch: could not resolve host %q", host)
+		}
+		for _, a := range addrs {
+			if err := checkIP(a.IP); err != nil {
+				return nil, err
+			}
+		}
+
+		var lastErr error
+		for _, a := range addrs {
+			conn, dialErr := dial(ctx, network, net.JoinHostPort(a.IP.String(), port))
+			if dialErr == nil {
+				return conn, nil
+			}
+			lastErr = dialErr
+		}
+		return nil, lastErr
+	}
 }
 
 // checkIP returns an error if ip falls in a blocked range.

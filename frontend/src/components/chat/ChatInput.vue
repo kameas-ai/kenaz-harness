@@ -875,14 +875,25 @@ onMounted(() => {
   // Best-effort fetch — when the harness boots without a wired
   // slashcmd registry (test harness path), the surface returns an
   // empty list. The composer renders nothing and stays usable.
-  void client.slash
-    .list()
-    .then((list) => {
-      slashCommands.value = list;
-    })
-    .catch(() => {
-      slashCommands.value = [];
-    });
+  //
+  // User-defined (global) commands are candidates too, so "/bug" finds
+  // the user's /bughunt. Built-ins win a name clash, matching the
+  // composer's routing precedence.
+  void Promise.all([
+    client.slash.list().catch(() => [] as readonly SlashCommandInfo[]),
+    client.slashcmd.list('').catch(() => []),
+  ]).then(([builtins, user]) => {
+    // Built-ins win a clash; fleet skills do not (user > skill).
+    const names = new Set(builtins.filter((c) => !c.isSkill).map((c) => c.name));
+    const userInfos: SlashCommandInfo[] = user
+      .filter((u) => !u.hiddenFromPanel && !names.has(u.name))
+      .map((u) => ({ name: u.name, description: u.description, comingSoon: false, isUser: true }));
+    const userNames = new Set(userInfos.map((u) => u.name));
+    slashCommands.value = [
+      ...builtins.filter((c) => !(c.isSkill && userNames.has(c.name))),
+      ...userInfos,
+    ];
+  });
 });
 
 /**

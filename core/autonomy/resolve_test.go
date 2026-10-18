@@ -34,6 +34,8 @@ func expectKnob(t *testing.T, r ResolvedKnobs, k Knob, wantVal any, wantSrc Sour
 		got = r.ContinueOnError
 	case KnobDestructiveActionPosture:
 		got = r.DestructiveActionPosture
+	case KnobRiskThreshold:
+		got = r.RiskThreshold
 	}
 	if !knobValueEqual(got, wantVal) {
 		t.Errorf("knob %s: value = %v, want %v", k, got, wantVal)

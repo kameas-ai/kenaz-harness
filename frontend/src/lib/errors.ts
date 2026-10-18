@@ -197,6 +197,40 @@ export function friendlyUnsupportedFeatureError(err: unknown): string | null {
   return `Feature "${parsed.feature}" is not supported by model "${parsed.modelId}".`;
 }
 
+// ── ErrUserNotProvisioned (fleet-enroll-not-provisioned) ─────────────────
+
+/**
+ * isUserNotProvisionedError matches core/fleet.ErrUserNotProvisioned's
+ * Error() text: "fleet: this Zitadel user has no Fleet account; finish
+ * signup at the SPA host". That prefix is the STABLE sentinel-wrapper text
+ * from `fmt.Errorf("%w (server: %s)", ErrUserNotProvisioned, msg)` in
+ * core/fleet/identity.go — match against it, never against the raw fleet
+ * server JSON body appended after it, which is not part of the contract.
+ *
+ * TERMINAL, not transient: the same tokens will 403 with this code on
+ * every retry until the user finishes signup out-of-band at the SPA host.
+ * The backend session cadence stops automatic retries on it
+ * (core/rpc/views/settings/fleet_session_events.go sessionEnrollDue) and
+ * the FleetSession snapshot reports it as degraded/not_provisioned
+ * (fleet-session-truth-01DOGF0A FR-4); no frontend code polls enroll.
+ */
+export function isUserNotProvisionedError(err: unknown): boolean {
+  const raw = toErrorString(err);
+  return raw.includes('this Zitadel user has no Fleet account');
+}
+
+/**
+ * friendlyUserNotProvisionedError returns an actionable message for
+ * ErrUserNotProvisioned, or null for unrelated errors. Callers that also
+ * have a FleetProfileInfo (fetched on every AccountPanel mount) should
+ * render profile.fleetBaseUrl as a real link alongside this text rather
+ * than concatenating the URL into the string — see AccountPanel.vue.
+ */
+export function friendlyUserNotProvisionedError(err: unknown): string | null {
+  if (!isUserNotProvisionedError(err)) return null;
+  return "You signed in with Zitadel, but this account hasn't finished Fleet signup yet. Finish signup, then sign in again.";
+}
+
 // ── Structured RPC error envelope (agent-loop-robustness-parity WP08) ────
 
 /**
@@ -351,6 +385,8 @@ export function friendly(err: unknown): string {
   if (attachment) return attachment;
   const unsupported = friendlyUnsupportedFeatureError(err);
   if (unsupported) return unsupported;
+  const notProvisioned = friendlyUserNotProvisionedError(err);
+  if (notProvisioned) return notProvisioned;
   if (isServedUnsupportedError(err)) return err.friendly();
   const raw = toErrorString(err);
   if (!raw) return 'An unexpected error occurred.';
@@ -381,4 +417,27 @@ function extractAfter(s: string, prefix: string): string | null {
   const i = s.indexOf(prefix);
   if (i === -1) return null;
   return s.slice(i + prefix.length);
+}
+
+// ── Materialize: reused pre-fix chat run id (agentgraph-settings-linkage-01DOGF0D) ─
+
+/**
+ * The backend's ErrRunIDReused text (core/agentgraph/materialize.go). The
+ * backend refuses only TRUE reuse — a run started again after it had
+ * completed, or several starts under a pre-ULID "chat-<n>" id — never a
+ * resumed or overflow-redriven run. Matched on this stable fragment.
+ */
+const RUN_ID_REUSED_MARKER = 'run id was reused by several runs';
+
+/**
+ * materializeErrorMessage turns a Graph_MaterializeRun failure into the
+ * sentence the run views show (review L6): the reused-run-id refusal in
+ * plain words, anything else as-is.
+ */
+export function materializeErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (raw.includes(RUN_ID_REUSED_MARKER)) {
+    return 'This run graph cannot be shown: its run id was used by more than one run (this happens to turns recorded before run ids were made unique), so its steps cannot be separated from the other runs\'.';
+  }
+  return raw;
 }

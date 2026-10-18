@@ -191,7 +191,23 @@ fi
 # rules out every assignment and every string literal), then a
 # backquoted span that ENDS the line. Go raw strings cannot contain a
 # backtick at all, so no line of a multi-line SQL literal can match it.
-SQL_ALLOWED='^(core/session/store\.go|core/session/migrations_moves\.go|core/session/migrations_move_fidelity\.go|core/session/migrations\.go|core/session/moves\.go)$'
+#
+# MIGRATIONS ADDED 2026-10-05 (release/v0.87.0):
+#   - core/session/migrations_dedupe_user_turns.go — sessions/0341
+#     (chat-single-writer-01DOGF0G). A one-shot destructive repair of
+#     user turns the pre-fix double writer persisted twice: it must READ
+#     kind / turn_span_id to classify pairs and RE-POINT turn_span_id
+#     from the deleted twin to the survivor. That is schema repair of
+#     rows the seam already wrote, inside the migration runner's tx — it
+#     cannot go through AppendTranscriptEntry (which only appends). Same
+#     category as migrations_move_fidelity.go.
+#   - core/session/migrations_session_turn_runs.go — sessions/0342
+#     (artifacts-as-units-01DOGF0C). Names turn_span_id only as a column
+#     of the NEW side table session_turn_runs (CREATE TABLE); it never
+#     touches session_messages.
+# Both are migrations, frozen once shipped; the allowlist entries die
+# with the files if the migrations are ever squashed.
+SQL_ALLOWED='^(core/session/store\.go|core/session/migrations_moves\.go|core/session/migrations_move_fidelity\.go|core/session/migrations_dedupe_user_turns\.go|core/session/migrations_session_turn_runs\.go|core/session/migrations\.go|core/session/moves\.go)$'
 # Committed .sql FIXTURES are not writers. upgrade-path-coverage-01PMUG01
 # added core/storage/sqlite/testdata/upgrade/<tag>/dump.sql — a normalised
 # dump of a database a PREVIOUS RELEASE produced, replayed through the
@@ -206,11 +222,27 @@ SQL_ALLOWED='^(core/session/store\.go|core/session/migrations_moves\.go|core/ses
 SQL_FIXTURE_EXCLUDE='/testdata/.+\.sql$'
 SQL_COMMENT_LINE_RE='^[^:]*:[0-9]+:[[:space:]]*//'
 SQL_STRUCT_TAG_LINE_RE='^[^:]*:[0-9]+:[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[][*A-Za-z0-9_.]+[[:space:]]+`[^`]*`,?[[:space:]]*(//.*)?$'
+# PRECISION (2026-10-05, release/v0.87.0): a third skipped shape — a Go
+# MAP-KEY assignment whose key is exactly the column name and whose
+# right-hand side is a bare identifier/selector, e.g. agentgraph's
+#
+#     startPayload["turn_span_id"] = env.TurnSpanID
+#
+# which names the run_start EVENT-LOG payload key (a wire field mirroring
+# the column, like the json tags above), not SQL. Anchored as tightly as
+# the struct-tag shape: the key literal is the only string on the line
+# (the RHS admits no quote, backtick or `=`), so a line that also carries
+# SQL text — `m["turn_span_id"] = "UPDATE session_messages SET …"` —
+# still fails (probe single-move-writer/map-key-line-carrying-sql). A
+# multi-line raw-string SQL line cannot take this shape either: it would
+# have to open with an identifier and `["…"] =`, which is not SQL.
+SQL_MAP_KEY_LINE_RE='^[^:]*:[0-9]+:[[:space:]]*[A-Za-z_][A-Za-z0-9_.]*\["(move_index|turn_span_id|model_tool_args)"\][[:space:]]*=[[:space:]]*[A-Za-z_][A-Za-z0-9_.]*[[:space:]]*(//.*)?$'
 sql_offenders=$(grep -rn 'move_index\|turn_span_id\|model_tool_args' \
   --include='*.go' --include='*.sql' core/ 2>/dev/null |
   grep -v '^[^:]*_test\.go:' |
   grep -vE "$SQL_COMMENT_LINE_RE" |
   grep -vE "$SQL_STRUCT_TAG_LINE_RE" |
+  grep -vE "$SQL_MAP_KEY_LINE_RE" |
   cut -d: -f1 |
   grep -vE "$SQL_FIXTURE_EXCLUDE" |
   grep -vE "$SQL_ALLOWED" |

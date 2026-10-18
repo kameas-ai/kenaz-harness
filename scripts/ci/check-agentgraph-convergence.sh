@@ -181,6 +181,19 @@ check_against_allowlist() {
 # manifests (which start with "_" and are not callable).
 all_kinds=$(find "$MANIFEST_DIR" -maxdepth 1 -name '*.yaml' ! -name '_archetype.*' -exec basename {} .yaml \; | sort -u)
 
+# Discovery floor (Finding #74, CI-gate-hardening, 2026-09-14): I3/I6
+# below both DERIVE their candidate set from all_kinds. A renamed
+# MANIFEST_DIR, a moved archetype-naming convention, or a broken find
+# invocation would make all_kinds empty — and comm -23 against an empty
+# LHS produces zero I3/I6 violations, i.e. a silent, vacuous "clean".
+# This repo is known to ship dozens of callable node-kind manifests.
+if [[ -z "$all_kinds" ]]; then
+  echo "${GATE} FAIL: found zero callable node-kind manifests under ${MANIFEST_DIR} (excluding _archetype.*)." >&2
+  echo "${GATE} This is almost certainly a broken MANIFEST_DIR path or a changed archetype-naming" >&2
+  echo "${GATE} convention, not a repository that shipped every node kind as an archetype." >&2
+  exit 1
+fi
+
 # extract_kinds <file...> — every `kind: <value>` scalar in the given
 # graph/activity YAML file(s), alias-resolved, one per line.
 extract_kinds() {

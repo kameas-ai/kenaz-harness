@@ -94,6 +94,15 @@ type spawnOutcome struct {
 	err error // non-nil when the spawner itself failed to start the run
 }
 
+// subagentSpawnMeta is what Fork records against a branch id when the
+// ForkRequest carried a ProfileID (subagent-control-and-background-
+// tasks-01PMZB11 UNIT-9) — see BranchSeamAdapter.meta's doc.
+type subagentSpawnMeta struct {
+	ProfileID    string
+	BudgetTokens int
+	BudgetTimeS  int
+}
+
 // BranchSeamAdapter wraps core/conversation.Manager + session.Manager
 // onto the agentgraph.BranchSeam interface. The kernel's ForkNode and
 // MergeNode call into this for child-session lifecycle; production
@@ -119,6 +128,23 @@ type BranchSeamAdapter struct {
 
 	genMu       sync.Mutex
 	generations map[string]int // sessionID -> fork generation, populated by Fork, read by Fork on the NEXT fork off that session. Never evicted (unlike runs): a child session must stay lookupable for as long as the process might see it dispatch again.
+
+	metaMu sync.Mutex
+	// meta is branchID -> the dispatching profile's id + declared
+	// budgets, populated by Fork whenever req.ProfileID is non-empty
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-9). Only
+	// kenaz__subagent_dispatch sets ForkRequest.ProfileID — the
+	// agentgraph `branch` node and edit-and-resend Fork calls leave it
+	// empty, so a present entry here IS the "this branch is a
+	// dispatched sub-agent" signal core/rpc/views/branches needs (NOT
+	// conversation.Branch.SubagentBranch, which is the older,
+	// unrelated branch-advisor-recommendation flag). Never evicted,
+	// same rationale as generations above: core/rpc/views/branches.
+	// ListBranches needs profileId/budgetTokens/budgetTimeS to keep
+	// rendering for the life of the process, including after
+	// WaitForChildRun has evicted the branch's runs[] entry (merge,
+	// or the rare synchronous-dispatch path).
+	meta map[string]subagentSpawnMeta
 }
 
 // NewBranchSeamAdapter constructs the adapter. Both managers may be nil
@@ -260,7 +286,46 @@ func (a *BranchSeamAdapter) Fork(ctx context.Context, req coreag.ForkRequest) (c
 		a.runsMu.Unlock()
 	}
 
+	// UNIT-9: record the dispatching profile's id + declared budgets
+	// against the new branch id, independent of whether a spawner is
+	// wired or the spawn itself succeeded — the metadata describes the
+	// dispatch request, not the run's outcome, and
+	// core/rpc/views/branches wants it even in a degraded-spawner boot.
+	if req.ProfileID != "" {
+		a.metaMu.Lock()
+		if a.meta == nil {
+			a.meta = make(map[string]subagentSpawnMeta)
+		}
+		a.meta[br.ID] = subagentSpawnMeta{
+			ProfileID:    req.ProfileID,
+			BudgetTokens: req.BudgetTokens,
+			BudgetTimeS:  req.BudgetTimeS,
+		}
+		a.metaMu.Unlock()
+	}
+
 	return coreag.BranchHandle{BranchID: br.ID, ChildSessionID: child.ID}, nil
+}
+
+// SubagentMeta returns the profile id + declared budgets Fork recorded
+// for branchID, when the fork carried a non-empty ProfileID
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-9 — the
+// discriminator core/rpc/views/branches uses to decide whether a
+// branch is a dispatched sub-agent at all; ok=false for every ordinary
+// fork, exactly the AC-11 negative case). A nil receiver reports
+// not-found rather than panicking, matching TaskIDForBranch's
+// nil-safety contract.
+func (a *BranchSeamAdapter) SubagentMeta(branchID string) (profileID string, budgetTokens, budgetTimeS int, ok bool) {
+	if a == nil {
+		return "", 0, 0, false
+	}
+	a.metaMu.Lock()
+	defer a.metaMu.Unlock()
+	m, ok := a.meta[branchID]
+	if !ok {
+		return "", 0, 0, false
+	}
+	return m.ProfileID, m.BudgetTokens, m.BudgetTimeS, true
 }
 
 // PullChildTail returns the most-recent N messages on the branch's
@@ -326,6 +391,41 @@ func (a *BranchSeamAdapter) WaitForChildRun(ctx context.Context, branchID string
 		return nil
 	}
 	return outcome.run.Wait(ctx)
+}
+
+// TaskIDForBranch returns the core/tasks.Registry id backing branchID's
+// spawned child run, when one was recorded by Fork (subagent-control-
+// and-background-tasks-01PMZB11 UNIT-8 — Subagent_Abort's lookup from
+// a branch id to the task Registry.Abort actually needs).
+//
+// Deliberately a READ, unlike WaitForChildRun which evicts a.runs[branchID]
+// on the same lookup: WaitForChildRun's eviction is correct for its own
+// contract (called at most once per branch, by the merge path, to hand
+// back the terminal outcome) but would be wrong here — Abort must be
+// able to find the same branch's task id on every call for as long as
+// the run hasn't been waited on yet, including a second Abort call
+// against an already-terminal task (the idempotency case AC-09
+// requires: Abort must still resolve the same task id so
+// Registry.Abort's own ErrAlreadyTerminal path — not a "task not
+// found" error masking it — is what the caller sees).
+//
+// ok is false when Fork never recorded an outcome for this branch (no
+// spawner wired, WaitForChildRun already evicted it, or the spawner
+// itself failed to start — SpawnedRun.TaskID is only ever set on a
+// success path, see subagent_run_spawner.go), or when a spawner ran
+// but no task registry was wired (deps.Tasks nil — SpawnedRun.TaskID
+// stays "").
+func (a *BranchSeamAdapter) TaskIDForBranch(branchID string) (string, bool) {
+	if a == nil {
+		return "", false
+	}
+	a.runsMu.Lock()
+	outcome, ok := a.runs[branchID]
+	a.runsMu.Unlock()
+	if !ok || outcome.err != nil || outcome.run.TaskID == "" {
+		return "", false
+	}
+	return outcome.run.TaskID, true
 }
 
 // AppendToParent appends a message to the parent session of the

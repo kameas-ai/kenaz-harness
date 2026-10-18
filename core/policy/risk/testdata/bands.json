@@ -1,0 +1,40 @@
+{
+  "_comment": "Committed fixture for risk-rated-autonomy-01PMRA01 spec FR-002. Cross-checked against core/policy/risk/bands.go's BandAnchors by TestBandAnchorsMatchFixture — this file and the Go table must never drift apart silently.",
+  "bands": [
+    {
+      "band": "low",
+      "min": 0,
+      "max": 19,
+      "meaning": "read-only, reversible, local",
+      "examples": ["read a file", "list a directory", "search"]
+    },
+    {
+      "band": "moderate",
+      "min": 20,
+      "max": 39,
+      "meaning": "local write, reversible",
+      "examples": ["edit a file in the workspace", "write a scratch file"]
+    },
+    {
+      "band": "elevated",
+      "min": 40,
+      "max": 59,
+      "meaning": "external read, or a write with blast radius",
+      "examples": ["HTTP GET", "install a dependency"]
+    },
+    {
+      "band": "high",
+      "min": 60,
+      "max": 79,
+      "meaning": "outbound side effect, or hard-to-reverse local change",
+      "examples": ["send a request that mutates", "rewrite many files", "git push to a branch"]
+    },
+    {
+      "band": "critical",
+      "min": 80,
+      "max": 100,
+      "meaning": "destructive, exfiltrating, or irreversible",
+      "examples": ["delete data", "force-push", "rotate a credential", "post to a third party", "spend money"]
+    }
+  ]
+}

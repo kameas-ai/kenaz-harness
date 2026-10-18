@@ -298,6 +298,152 @@ func TestLiveRegister_TriggerShadowed(t *testing.T) {
 	}
 }
 
+// ── Re-install replaces the skill's own registration (install-framework WP05) ─
+
+// TestLiveRegister_ReinstallReplacesOwnRegistration: an update re-registers a
+// skill already in the store. Before the fix the skill's previous
+// registration occupied its own trigger, so every update failed as shadowed.
+// A re-install of a shadowed skill must still never evict the command that
+// shadows it.
+func TestLiveRegister_ReinstallReplacesOwnRegistration(t *testing.T) {
+	t.Parallel()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	reg, err := slashcmd.NewRegistry(slashcmd.Deps{})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	v1 := slashcmd.Skill{ID: "s", CatalogID: "cat-s", Source: slashcmd.SkillSourceCatalog, Trigger: "scmd", Kind: slashcmd.KindText, Body: "v1", Version: "1.0.0"}
+	if err := slashcmd.LiveRegister(store, reg, v1); err != nil {
+		t.Fatalf("v1: %v", err)
+	}
+	if err := slashcmd.RenameLocalTrigger(store, reg, "s", "mys"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	v2 := v1
+	v2.Body, v2.Version = "v2", "2.0.0"
+	if err := slashcmd.LiveRegister(store, reg, v2); err != nil {
+		t.Fatalf("re-install (update) failed: %v", err)
+	}
+	got, err := store.Get("s")
+	if err != nil || got.Version != "2.0.0" || got.LocalTrigger != "mys" {
+		t.Fatalf("stored = %+v, %v — want v2 with the user's local alias kept", got, err)
+	}
+	if _, ok := reg.Lookup("mys"); !ok {
+		t.Fatal("updated skill not registered under its local alias")
+	}
+
+	// A shadowed skill re-installed must not evict the built-in /help.
+	shadow := slashcmd.Skill{ID: "h", CatalogID: "cat-h", Source: slashcmd.SkillSourceCatalog, Trigger: "help", Kind: slashcmd.KindText, Body: "x"}
+	_ = slashcmd.LiveRegister(store, reg, shadow)
+	if err := slashcmd.LiveRegister(store, reg, shadow); !errors.Is(err, slashcmd.ErrTriggerShadowed) {
+		t.Fatalf("re-install of a shadowed skill = %v, want ErrTriggerShadowed", err)
+	}
+	if cmd, ok := reg.Lookup("help"); !ok || cmd.Description() == "" {
+		t.Fatal("built-in /help was evicted by a shadowed skill's re-install")
+	}
+}
+
+// ── Ownership is the catalog item, not the payload's ID (review H3) ──────────
+
+// TestLiveRegister_DifferentCatalogItemSameIDRefused: catalog item B
+// shipping a payload with A's skill ID must not replace A (nor inherit A's
+// local alias). Before the fix "own registration" was decided by the
+// payload-controlled ID alone.
+func TestLiveRegister_DifferentCatalogItemSameIDRefused(t *testing.T) {
+	t.Parallel()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	reg, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	a := slashcmd.Skill{ID: "dup", CatalogID: "cat-a", Source: slashcmd.SkillSourceCatalog, Trigger: "acmd", Kind: slashcmd.KindText, Body: "A"}
+	if err := slashcmd.LiveRegister(store, reg, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := slashcmd.RenameLocalTrigger(store, reg, "dup", "myalias"); err != nil {
+		t.Fatal(err)
+	}
+	b := slashcmd.Skill{ID: "dup", CatalogID: "cat-b", Source: slashcmd.SkillSourceCatalog, Trigger: "bcmd", Kind: slashcmd.KindText, Body: "B"}
+	if err := slashcmd.LiveRegister(store, reg, b); !errors.Is(err, slashcmd.ErrSkillIDCollision) {
+		t.Fatalf("got %v, want ErrSkillIDCollision", err)
+	}
+	got, err := store.Get("dup")
+	if err != nil || got.CatalogID != "cat-a" || got.Body != "A" || got.LocalTrigger != "myalias" {
+		t.Fatalf("A was replaced: %+v, %v", got, err)
+	}
+	if _, ok := reg.Lookup("myalias"); !ok {
+		t.Fatal("A's registration was removed")
+	}
+	if _, ok := reg.Lookup("bcmd"); ok {
+		t.Fatal("B was registered")
+	}
+}
+
+// TestLiveRegister_CatalogInstallCannotReplaceOrgMandated: a team-catalog
+// payload carrying a mandated skill's ID is refused; the mandated skill
+// stays stored as OrgManaged and keeps dispatching.
+func TestLiveRegister_CatalogInstallCannotReplaceOrgMandated(t *testing.T) {
+	t.Parallel()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	reg, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	m := slashcmd.Skill{ID: "policy", Source: slashcmd.SkillSourceMandated, OrgManaged: true, Trigger: "policy", Kind: slashcmd.KindText, Body: "org"}
+	if err := slashcmd.LiveRegister(store, reg, m); err != nil {
+		t.Fatal(err)
+	}
+	team := slashcmd.Skill{ID: "policy", CatalogID: "cat-team", Source: slashcmd.SkillSourceCatalog, Trigger: "policy", Kind: slashcmd.KindText, Body: "team"}
+	if err := slashcmd.LiveRegister(store, reg, team); !errors.Is(err, slashcmd.ErrSkillOrgManaged) {
+		t.Fatalf("got %v, want ErrSkillOrgManaged", err)
+	}
+	got, err := store.Get("policy")
+	if err != nil || !got.OrgManaged || got.Source != slashcmd.SkillSourceMandated || got.Body != "org" {
+		t.Fatalf("mandated skill replaced: %+v, %v", got, err)
+	}
+	if cmd, ok := reg.Lookup("policy"); !ok || cmd.Description() != m.Description {
+		t.Fatal("mandated dispatch was disturbed")
+	}
+	// The org itself may re-push it.
+	m2 := m
+	m2.Body = "org v2"
+	if err := slashcmd.LiveRegister(store, reg, m2); err != nil {
+		t.Fatalf("mandated re-push: %v", err)
+	}
+}
+
+// TestLiveUnregister_ShadowedSkillDoesNotEvictTheBuiltin (review L3):
+// uninstalling (or renaming) a skill whose trigger is shadowed by a built-in
+// must not remove the built-in.
+func TestLiveUnregister_ShadowedSkillDoesNotEvictTheBuiltin(t *testing.T) {
+	t.Parallel()
+	store := slashcmd.NewSkillStore(t.TempDir())
+	reg, _ := slashcmd.NewRegistry(slashcmd.Deps{})
+	sh := slashcmd.Skill{ID: "sh", CatalogID: "cat-sh", Source: slashcmd.SkillSourceCatalog, Trigger: "help", Kind: slashcmd.KindText, Body: "x"}
+	if err := slashcmd.LiveRegister(store, reg, sh); !errors.Is(err, slashcmd.ErrTriggerShadowed) {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := slashcmd.RenameLocalTrigger(store, reg, "sh", "myhelp"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if _, ok := reg.Lookup("help"); !ok {
+		t.Fatal("renaming a shadowed skill removed the built-in /help")
+	}
+	if err := slashcmd.LiveUnregister(store, reg, "sh"); err != nil {
+		t.Fatalf("LiveUnregister: %v", err)
+	}
+	if _, ok := reg.Lookup("help"); !ok {
+		t.Fatal("uninstalling a shadowed skill removed the built-in /help")
+	}
+	if _, ok := reg.Lookup("myhelp"); ok {
+		t.Fatal("the skill's own alias registration survived uninstall")
+	}
+
+	// And the shadowed-then-uninstalled path without a rename.
+	sh2 := slashcmd.Skill{ID: "sh2", CatalogID: "cat-sh2", Source: slashcmd.SkillSourceCatalog, Trigger: "help", Kind: slashcmd.KindText, Body: "y"}
+	_ = slashcmd.LiveRegister(store, reg, sh2)
+	if err := slashcmd.LiveUnregister(store, reg, "sh2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Lookup("help"); !ok {
+		t.Fatal("uninstalling a shadowed skill (no rename) removed the built-in /help")
+	}
+}
+
 // ── EffectiveTrigger uses LocalTrigger when set ───────────────────────────────
 
 func TestSkill_EffectiveTrigger(t *testing.T) {

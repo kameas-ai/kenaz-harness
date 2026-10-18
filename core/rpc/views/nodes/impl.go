@@ -284,9 +284,9 @@ func (a *Impl) ReloadOverrides(_ context.Context) (ReloadResult, error) {
 }
 
 // Doctor implements NodesAPI. Returns a one-shot summary of catalog
-// health for the frontend NodesView debug panel (WP08). Counters are
-// derived from the live catalog under a read lock; the report mutates
-// no state.
+// health for the node-override diagnostics panel mounted on
+// NodePalette.vue. Counters are derived from the live catalog under a
+// read lock; the report mutates no state.
 func (a *Impl) Doctor(_ context.Context) (DoctorReport, error) {
 	if a == nil || a.mgr == nil {
 		return DoctorReport{

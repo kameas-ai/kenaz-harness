@@ -98,7 +98,7 @@ func TestChatGraph_LifecycleHooks_PreToolUseBlocks(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := chatRunner.StartStream(context.Background(), "profile-1", "session-1", "", "search hello"); err != nil {
+	if _, err := chatRunner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("search hello")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
@@ -180,7 +180,7 @@ func TestChatGraph_LifecycleHooks_UpdatedInputRewritesArgs(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := chatRunner.StartStream(context.Background(), "profile-1", "session-1", "", "search original"); err != nil {
+	if _, err := chatRunner.StartStream(context.Background(), "profile-1", "session-1", "", testTurn("search original")); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)

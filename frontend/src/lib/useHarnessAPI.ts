@@ -16,6 +16,8 @@ import {
   readonly,
 } from 'vue';
 import { useHarnessClient } from './harnessClientContext';
+import { useEventStream } from './useEventStream';
+import { adaptHealthEntry, type WireHealthEntry } from './harnessClient';
 import type {
   Session,
   Project,
@@ -25,6 +27,7 @@ import type {
   RecipeListing,
   RecipeState,
   RecipeStatus,
+  HealthEntry,
   Artifact,
   ArtifactFilter,
   ArtifactScope,
@@ -542,6 +545,58 @@ export function useToolsRecipes(): UseToolsRecipesResult {
     recipes.value = next;
   }
 
+  // mergeHealthEntry — connector-lifecycle-truth-01PMZ303 UNIT-8 (ruling
+  // A-2): applies a `mcp:health-changed` PUSH event onto the matching
+  // row's status, independent of the 1 Hz poll above.
+  //
+  // This is NOT redundant with the poll. `hasNonTerminal` (top of file)
+  // treats `running` as terminal and stops polling once every row
+  // reaches it — correct for stdio, where a supervised process doesn't
+  // silently die without a restart event this composable would also
+  // see. It is the wrong assumption for a remote (http/sse) connector's
+  // live-probed health (UNIT-7): the probe can trip AFTER the row has
+  // gone terminal and polling has stopped, and nothing would re-check
+  // it. Before this unit, `MCP_SubscribeHealthChanges` had a Subscribe
+  // call and zero publishers and zero frontend callers, so this gap was
+  // real: a dead remote server's row stayed "running" until the next
+  // full `refresh()` (a manual navigation, not automatic). This handler
+  // is what makes the transition — "a server that dies stops reporting
+  // live" — observable without one.
+  //
+  // HealthEntry (transport-agnostic) is a narrower shape than
+  // RecipeStatus (stdio-process-centric — pid, keysPresent, resource/
+  // prompt counts); only the overlapping fields are overwritten, so a
+  // push event never blanks out fields it doesn't carry.
+  // The event carries the raw wire shape (snake_case JSON tags off
+  // `mcp.HealthEntry`, not the camelCase HealthEntry the rest of the
+  // app sees) — useEventStream forwards payloads verbatim, with no
+  // adaptation of its own (it is transport plumbing, not a client
+  // method). adaptHealthEntry is the SAME function healthSnapshot()
+  // uses, so a push event and a polled snapshot land in identical
+  // shape.
+  function handleHealthChanged(raw: WireHealthEntry): void {
+    mergeHealthEntry(adaptHealthEntry(raw));
+  }
+
+  function mergeHealthEntry(entry: HealthEntry): void {
+    const next = recipes.value.map((row) => {
+      if (row.recipe.id !== entry.id) return row;
+      const status: RecipeStatus = {
+        ...row.status,
+        state: entry.state,
+        lastError: entry.lastError,
+        restartAttempts: entry.restartAttempts,
+        stderrTail: entry.stderrTail ?? row.status.stderrTail,
+        toolCount: entry.toolCount,
+        serverName: entry.serverName ?? row.status.serverName,
+        serverVersion: entry.serverVersion ?? row.status.serverVersion,
+        protocolVersion: entry.protocolVersion ?? row.status.protocolVersion,
+      };
+      return { ...row, status };
+    });
+    recipes.value = next;
+  }
+
   async function install(
     id: string,
     env: Record<string, string>,
@@ -582,13 +637,40 @@ export function useToolsRecipes(): UseToolsRecipesResult {
     return client.tools.recipes.config(id);
   }
 
+  // connector-lifecycle-truth-01PMZ303 UNIT-8: register for the live
+  // push signal once per composable instance. subscribeHealthChanges()
+  // starts the backend broker forwarding PublishHealthChange calls onto
+  // the fixed `mcp:health-changed` Wails topic; useEventStream is what
+  // actually listens for the payloads (see mergeHealthEntry above for
+  // why this is not just a rename of the existing poll).
+  const healthStream = useEventStream<WireHealthEntry>(
+    'mcp:health-changed',
+    handleHealthChanged,
+  );
+  let healthSubID: string | null = null;
+
   onMounted(() => {
     void refresh();
+    client.mcp
+      .subscribeHealthChanges()
+      .then((id) => {
+        if (mounted) healthSubID = id;
+      })
+      .catch(() => {
+        // Best-effort: a failed subscribe leaves the row on the 1 Hz
+        // poll's coverage (stdio unaffected; a remote connector that
+        // dies after going terminal simply won't update until the next
+        // manual refresh — the pre-UNIT-8 behaviour, not a regression).
+      });
   });
 
   onBeforeUnmount(() => {
     mounted = false;
     stopPolling();
+    healthStream.unsubscribe();
+    if (healthSubID) {
+      void client.mcp.stopStream(healthSubID);
+    }
   });
 
   return {

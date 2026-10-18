@@ -7,8 +7,10 @@
 export const CAPABILITY_KEYS = [
   'launcher_updates',
   'iso_distribution',
-  'shared_team_graph',
+  'team_graph_sharing',
   'cross_team_graph_isolation',
+  'cedar_preset_policies',
+  'cedar_custom_policies',
   'opa_preset_policies',
   'opa_custom_rego',
   'attestation_tpm',
@@ -30,6 +32,9 @@ export const CAPABILITY_KEYS = [
   'context_sync',
   'team_session_handoff',
   'context_bootstrap',
+  'org_graph_sharing',
+  'memory_sync',
+  'hosted_inference',
 ] as const;
 
 export type Capability = (typeof CAPABILITY_KEYS)[number];

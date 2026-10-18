@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -177,7 +178,16 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 		return d, nil
 	case cedar.Deny:
 		return d, nil
-	case cedar.NotApplicable:
+	case cedar.NotApplicable, cedar.Confirm:
+		// risk-rated-autonomy-01PMRA01 WP01: Confirm is handled
+		// identically to NotApplicable here, explicitly rather than via
+		// a bare default. No producer sends Confirm through this gate
+		// today (layer 3 lives in the chat kernel tool adapter's
+		// resolver, not here), but this path already asks a human on
+		// NotApplicable — opts.Prompter defaults to NoOpPrompter, which
+		// denies rather than silently allowing — so folding Confirm in
+		// here is safe by construction, not merely convenient.
+		//
 		// Check transient cache first.
 		if g.hasTransientGrant(op, canonical) {
 			d.Outcome = cedar.Allow
@@ -259,6 +269,23 @@ func (g *Gate) addTransientGrant(op Op, canonical string) {
 	g.transientMu.Unlock()
 }
 
+// BuildFilesystemAllowSnippet returns the (filename, body) pair for a
+// persistent Cedar policy snippet permitting op on the exact canonical
+// path — the identical shape Gate.Evaluate's own PromptAllowExact branch
+// writes internally (buildExactSnippet + snippetName below), exported so
+// a caller can construct the same durable grant WITHOUT going through
+// the interactive Prompt flow.
+//
+// Used by model-scheduled-jobs-01PMSJ01 WP07's surfacing view: granting
+// a pending blocked_permission_requests row promotes it to a durable
+// permit via this exact snippet shape, written through the same
+// WritePolicySnippet path (core/rpc/views/cedarpolicy.API) every other
+// persisted grant in the tree uses — AC-008's "a Cedar snippet
+// permitting Action::write_filesystem for that path" requirement.
+func BuildFilesystemAllowSnippet(op Op, canonicalPath string) (filename, body string) {
+	return snippetName(op, canonicalPath, "path"), buildExactSnippet(op, canonicalPath)
+}
+
 // buildExactSnippet returns the Cedar policy body for an
 // "allow this exact path" persistent grant.
 //
@@ -313,20 +340,44 @@ func buildDirectorySnippet(op Op, dir string) string {
 	)
 }
 
-// sanitizedPathSegment replaces all non-alphanumeric, non-hyphen,
-// non-underscore chars with underscores so the result is safe for a
-// filename. Leading/trailing underscores are stripped.
-var nonFileChars = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+// sanitizedPathSegment replaces every character outside [a-z0-9] with an
+// underscore so the result is safe for a filename AND satisfies
+// core/rpc/views/cedarpolicy's stricter WritePolicySnippet validator
+// (`^[a-z][a-z0-9_]{0,127}\.cedar$` — lowercase only, no hyphens).
+// Gate's own direct os.WriteFile path (writePolicySnippet below) never
+// validated against that pattern, so this used to silently "work" on
+// disk for a path like "/Users/Alec/My-Project/file.txt" while failing
+// the instant WP07's Grant flow reused the exact same name through the
+// stricter, shared WritePolicySnippet path — the two writers must agree
+// on what a safe name looks like, so this lowercases and drops hyphens
+// too, not just non-alphanumerics.
+var nonFileChars = regexp.MustCompile(`[^a-z0-9]+`)
 
 func sanitizePathForFilename(p string) string {
-	s := nonFileChars.ReplaceAllString(p, "_")
+	s := nonFileChars.ReplaceAllString(strings.ToLower(p), "_")
 	return strings.Trim(s, "_")
 }
 
+// maxSnippetStemLen bounds the filename STEM (before ".cedar") to stay
+// under core/rpc/views/cedarpolicy's `{0,127}` cap with headroom for the
+// "fs_allow_<op>_..._<scope>" scaffolding around the sanitized path
+// segment.
+const maxSnippetStemLen = 100
+
 // snippetName returns a deterministic filename for a cedar snippet.
-// Format: fs_allow_<op>_<sanitized>_<scope>.cedar
+// Format: fs_allow_<op>_<sanitized>_<scope>.cedar — falling back to a
+// short content-hash stem when the sanitized path segment would push the
+// filename over cedarpolicy's length/charset limits (a long or deeply
+// nested real path is not a hypothetical: t.TempDir() paths in this
+// repo's own test suite already exceed it — see
+// core/rpc/views/blockedrequests's AC-008 test).
 func snippetName(op Op, path, scope string) string {
-	return fmt.Sprintf("fs_allow_%s_%s_%s.cedar", op, sanitizePathForFilename(path), scope)
+	stem := fmt.Sprintf("fs_allow_%s_%s_%s", op, sanitizePathForFilename(path), scope)
+	if len(stem) > maxSnippetStemLen {
+		h := sha256.Sum256([]byte(path))
+		stem = fmt.Sprintf("fs_allow_%s_%s_%x", op, scope, h[:8])
+	}
+	return stem + ".cedar"
 }
 
 // writePolicySnippet writes body to PolicyDir/<name>. Best-effort:

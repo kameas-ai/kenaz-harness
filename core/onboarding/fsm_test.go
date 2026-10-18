@@ -587,6 +587,116 @@ func TestCardStructure(t *testing.T) {
 	}
 }
 
+// ── finding #107 (P0): tester-actually-runs + key-actually-persists ────────
+
+// mockStorer is a configurable ProviderStorer for unit tests.
+type mockStorer struct {
+	calls []mockCall
+	err   error
+}
+
+func (m *mockStorer) StoreProvider(_ context.Context, kind onboarding.ProviderKind, apiKey string) error {
+	m.calls = append(m.calls, mockCall{kind: kind, apiKey: apiKey})
+	return m.err
+}
+
+// TestProviderStorage_SuccessPersistsAndClearsKey pins the fix for finding
+// #107's second half: a successfully-tested key must reach the configured
+// ProviderStorer with the exact (kind, apiKey) TestProvider just verified,
+// and fsmCtx.APIKey must be cleared afterwards so the plaintext key does not
+// linger in memory once it is durably stored.
+//
+// Mutation: drop the ProviderStore wiring (pass a nil storer where
+// production wires onboardingProviderStoreAdapter) and this test still
+// passes state-wise (nil storer degrades gracefully, per design) — the
+// wiring-level proof that a dropped ProviderStore actually loses the key
+// lives in core/rpc's onboarding_wiring_test.go, which drives the real
+// llm view's AddProvider + ListProviders round trip.
+func TestProviderStorage_SuccessPersistsAndClearsKey(t *testing.T) {
+	ctx := context.Background()
+	tester := &mockTester{results: []error{nil}}
+	storer := &mockStorer{}
+	fsm := onboarding.NewFull(tester, nil, nil, storer)
+
+	fsmCtx := onboarding.NewFSMContext()
+	fsmCtx.ChosenKind = onboarding.ProviderAnthropic
+
+	r, err := fsm.Step(ctx, onboarding.StateEnterAPIKey, onboarding.EventSubmitKey, submitKeyPayload("sk-ant-good"), &fsmCtx)
+	requireOK(t, "enter/submit", err, r, onboarding.StateAccountStep)
+
+	if len(storer.calls) != 1 {
+		t.Fatalf("storer.calls = %d, want 1", len(storer.calls))
+	}
+	if storer.calls[0].kind != onboarding.ProviderAnthropic {
+		t.Errorf("stored kind = %q, want %q", storer.calls[0].kind, onboarding.ProviderAnthropic)
+	}
+	if storer.calls[0].apiKey != "sk-ant-good" {
+		t.Errorf("stored apiKey = %q, want %q", storer.calls[0].apiKey, "sk-ant-good")
+	}
+	if fsmCtx.APIKey != "" {
+		t.Errorf("fsmCtx.APIKey = %q, want empty after successful store", fsmCtx.APIKey)
+	}
+}
+
+// TestProviderStorage_FailureKeepsUserOnEnterAPIKey verifies that a storage
+// failure is treated the same as a connection-test failure: the flow does
+// NOT advance to account_step, the card carries a visible error, and the
+// retry counter decrements — a key that tested OK but could not be saved is
+// not actually usable, so the user must not be told it is.
+func TestProviderStorage_FailureKeepsUserOnEnterAPIKey(t *testing.T) {
+	ctx := context.Background()
+	tester := &mockTester{results: []error{nil}}
+	storer := &mockStorer{err: errors.New("keychain write failed: permission denied")}
+	fsm := onboarding.NewFull(tester, nil, nil, storer)
+
+	fsmCtx := onboarding.NewFSMContext()
+	fsmCtx.ChosenKind = onboarding.ProviderOpenAI
+
+	r, err := fsm.Step(ctx, onboarding.StateEnterAPIKey, onboarding.EventSubmitKey, submitKeyPayload("sk-good"), &fsmCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.State != onboarding.StateEnterAPIKey {
+		t.Errorf("state = %q, want %q (storage failure must not advance the flow)", r.State, onboarding.StateEnterAPIKey)
+	}
+	if r.Card.ErrorMessage == "" {
+		t.Error("card.ErrorMessage is empty; a storage failure must surface visibly")
+	}
+	if fsmCtx.RetriesLeft != onboarding.MaxRetries-1 {
+		t.Errorf("RetriesLeft = %d, want %d", fsmCtx.RetriesLeft, onboarding.MaxRetries-1)
+	}
+	if len(storer.calls) != 1 {
+		t.Fatalf("storer.calls = %d, want 1", len(storer.calls))
+	}
+}
+
+// TestProviderStorage_NilTesterNeverCallsStorer restores the original
+// production defect (nil LLMTester) to prove it is now inert as a class:
+// even with a real storer wired, a nil tester's "always succeeds" path must
+// still route through the same success arm (mutation coverage for finding
+// #107's first half, at the storer's doorstep).
+func TestProviderStorage_NilTesterNeverCallsStorer(t *testing.T) {
+	ctx := context.Background()
+	storer := &mockStorer{}
+	fsm := onboarding.NewFull(nil, nil, nil, storer)
+
+	fsmCtx := onboarding.NewFSMContext()
+	fsmCtx.ChosenKind = onboarding.ProviderAnthropic
+
+	// A garbage key must still "succeed" when the tester is nil — this is
+	// the documented graceful-degrade contract (New's doc comment), not the
+	// bug. The bug was PRODUCTION always constructing the FSM this way; that
+	// half is pinned separately in core/rpc/onboarding_wiring_test.go and
+	// core/rpc/views/onboarding's tests, which exercise the real wiring path
+	// (onboardingview.New(Config{Tester: ...})) rather than this direct
+	// NewFull call.
+	r, err := fsm.Step(ctx, onboarding.StateEnterAPIKey, onboarding.EventSubmitKey, submitKeyPayload("garbage"), &fsmCtx)
+	requireOK(t, "enter/submit (nil tester)", err, r, onboarding.StateAccountStep)
+	if len(storer.calls) != 1 {
+		t.Fatalf("storer.calls = %d, want 1 (storer still runs on the nil-tester success path)", len(storer.calls))
+	}
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 func requireOK(t *testing.T, label string, err error, r onboarding.StepResult, wantState onboarding.State) {

@@ -51,8 +51,18 @@ func WithEmitter(e EventEmitter) PipelineOption {
 	return func(p *Pipeline) { p.emitter = e }
 }
 
-// WithClock overrides the clock used for event timestamps. Tests use
-// this to make event payloads deterministic.
+// WithClock overrides the clock used for event timestamps.
+//
+// CK-04/CK-05/CK-06 justify(blocker: "compaction.Event (the
+// EventCompactionFired payload) has no timestamp field to stamp — the
+// clock this overrides is read (p.now / the cloned CompactOpts.Now
+// field) but never called anywhere in this package", owner: alec,
+// date: 2026-08-29; chat-turn-integrity-01PMZ606 WP13): this doc used
+// to say "Tests use this to make event payloads deterministic", but no
+// event payload carries a timestamp for a clock to make deterministic
+// — see compactor.go's Event struct. Wiring this for real means adding
+// a Timestamp field to Event and a call site that reads it, which is a
+// new capability, not a missing wire.
 func WithClock(now func() time.Time) PipelineOption {
 	return func(p *Pipeline) {
 		if now != nil {
@@ -458,6 +468,12 @@ func (p *Pipeline) Compact(ctx context.Context, in agentgraph.CompactionInput) (
 			NodeID:    in.NodeID,
 		},
 		Site: kernelSiteToSite(in.Site),
+		// Override forces Run to dispatch this specific strategy instead
+		// of falling through to the resolved cascading config (CHAT-07:
+		// before this, a compact node's `strategy` attr reached nothing
+		// but event-payload telemetry, so the event could report a
+		// strategy that never actually ran).
+		Override: Strategy(in.Strategy),
 		Input: ContextSlice{
 			Messages:      in.Messages,
 			SystemPrompt:  in.SystemPrompt,
@@ -476,5 +492,10 @@ func (p *Pipeline) Compact(ctx context.Context, in agentgraph.CompactionInput) (
 		TokensAfter: res.Compacted.TokensAfter,
 		Skipped:     res.Skipped,
 		Reason:      res.Reason,
+		// Strategy is the pipeline's resolved dispatch, not the
+		// caller's request — Run.CompactedContext.Strategy is set on
+		// every return path (skip or real dispatch), so this is always
+		// "what actually happened", never the unresolved attr.
+		Strategy: string(res.Compacted.Strategy),
 	}, nil
 }

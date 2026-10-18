@@ -13,16 +13,24 @@ type Capability string
 // The capability keys (fleet-capability-surface-01NDFSEX09).
 // Wire values are the snake_case strings the backend emits; the Go
 // constants use UpperCamelCase with a Cap prefix.
-//
-// NOTE: the fleet-hosted inference + kameas-ml capability constants
-// (hosted_inference, kameas_ml_general/team_tuned/org_tuned) were dropped
-// when the fleet-hosted-LLM surface was removed
-// (harness-fleet-sync-activation-01NSYNC01, dead-code cleanup).
 const (
-	CapLauncherUpdates             Capability = "launcher_updates"
-	CapISODistribution             Capability = "iso_distribution"
-	CapSharedTeamGraph             Capability = "shared_team_graph"
+	CapLauncherUpdates Capability = "launcher_updates"
+	CapISODistribution Capability = "iso_distribution"
+	// CapSharedTeamGraph gates team-scoped graph sharing. Its wire value
+	// is "team_graph_sharing" — the key kenaz-fleet actually serves in
+	// GET /api/v1/me/capabilities (Team and Enterprise tiers). It was
+	// "shared_team_graph" until 2026-10-05, a key the server never
+	// emitted, so every share gate was permanently disabled for everyone.
+	// The Go identifier is kept to avoid churning every call site.
+	CapSharedTeamGraph             Capability = "team_graph_sharing"
 	CapCrossTeamGraphIsolation     Capability = "cross_team_graph_isolation"
+	// Cedar policy capabilities. Renamed from the opa_* wire names on
+	// 2026-10-07 (owner-approved; the engine has been Cedar all along).
+	// Fleet phase 1 grants BOTH names; harness gates accept either until
+	// fleet phase 2 drops opa_*. The deprecated constants stay until then.
+	CapCedarPresetPolicies         Capability = "cedar_preset_policies"
+	CapCedarCustomPolicies         Capability = "cedar_custom_policies"
+	// Deprecated: transition aliases for the pre-rename wire names.
 	CapOPAPresetPolicies           Capability = "opa_preset_policies"
 	CapOPACustomRego               Capability = "opa_custom_rego"
 	CapAttestationTPM              Capability = "attestation_tpm"
@@ -63,6 +71,37 @@ const (
 	// gracefully offline / on the OSS tier.
 	// Mission: context-bootstrap-harness-integration.
 	CapContextBootstrap Capability = "context_bootstrap"
+
+	// CapOrgGraphSharing is the org-scoped graph-sharing key fleet serves
+	// (Enterprise only; Team tier has CapSharedTeamGraph alone). Wire
+	// value: "org_graph_sharing".
+	//
+	// Wiring note (2026-10-05): no harness gate branches on this yet —
+	// context_graph_sync.go's CapForClassification still gates org_shared on
+	// CapSharedTeamGraph ("same cap for v0"), which the current server
+	// accepts. Consumer: kenaz-fleet PR #173 makes the server require
+	// org_graph_sharing for org_shared pushes (403 capability_not_in_tier
+	// otherwise); when #173 merges, CapForClassification(org_shared) moves to
+	// this constant. Owner: the harness change that lands against #173.
+	// Until then it is decoded, cached and surfaced in the capability
+	// snapshot / CAPABILITY_KEYS like every other key.
+	CapOrgGraphSharing Capability = "org_graph_sharing"
+
+	// CapMemorySync gates cross-device learned-memory sync (Pro, Team,
+	// Enterprise). Wire value "memory_sync" (kenaz-fleet
+	// docs/contract-harness-memory.md §1). Consumer: MemorySync
+	// (memory_sync.go) — no request is made without it.
+	// Mission: memory-sync-01MEMSY01 WP07.
+	CapMemorySync Capability = "memory_sync"
+
+	// CapHostedInference is the tier-only hosted-inference key (pro, team,
+	// enterprise; kenaz-fleet docs/contract-harness-ml.md "Capability vs
+	// consent"). It says the plan MAY use Fleet's ML lane; consent lives in
+	// GET /me/ml (ml.go). Consumers: the Cloud ML settings panel (hidden
+	// without it, no /me/ml read is made) and the ML producer's send gate
+	// (ml-producer-01MLPRD01, spec §4 gate 2). Re-added after the
+	// 01NSYNC01 dead-code cleanup dropped it while it had no consumer.
+	CapHostedInference Capability = "hosted_inference"
 )
 
 // AllCapabilities returns every known Capability constant in declaration
@@ -73,6 +112,8 @@ func AllCapabilities() []Capability {
 		CapISODistribution,
 		CapSharedTeamGraph,
 		CapCrossTeamGraphIsolation,
+		CapCedarPresetPolicies,
+		CapCedarCustomPolicies,
 		CapOPAPresetPolicies,
 		CapOPACustomRego,
 		CapAttestationTPM,
@@ -94,6 +135,9 @@ func AllCapabilities() []Capability {
 		CapContextSync,
 		CapTeamSessionHandoff,
 		CapContextBootstrap,
+		CapOrgGraphSharing,
+		CapMemorySync,
+		CapHostedInference,
 	}
 }
 
@@ -115,6 +159,13 @@ type Capabilities struct {
 	// Source records where this snapshot came from.
 	// Not sent by the wire protocol; populated by the harness on load.
 	Source string `json:"source,omitempty"`
+	// Paused is true while a Kameas-staff "pause paid features" hold is on
+	// the org (kenaz-fleet #206): the tier is kept, every capability is
+	// false. Additive; absent on the wire means not paused.
+	Paused bool `json:"paused,omitempty"`
+	// PausedCategory is one of billing_review / security / abuse / legal /
+	// other while Paused; empty otherwise.
+	PausedCategory string `json:"paused_category,omitempty"`
 }
 
 // Has reports true when the capability is explicitly enabled AND the

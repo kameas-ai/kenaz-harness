@@ -32,6 +32,29 @@ type Branch struct {
 	SubagentBranch   bool     `json:"subagentBranch,omitempty"`
 	RecommendationID string   `json:"recommendationId,omitempty"`
 	AdvisorSignals   []string `json:"advisorSignals,omitempty"`
+
+	// Dispatched-sub-agent fields (subagent-control-and-background-
+	// tasks-01PMZB11 UNIT-9). Populated only for branches created by
+	// kenaz__subagent_dispatch — NOT the same population as
+	// SubagentBranch above, which is the older branch-advisor flag.
+	// Mirror frontend/src/lib/types.ts's SubagentBranch interface
+	// (subagentStatus/profileId/tokensUsed/budgetTokens/elapsedS/
+	// budgetTimeS); all omitempty so an ordinary branch's JSON simply
+	// omits them (AC-11's negative half).
+	//
+	// SubagentStatus's value set MUST stay a subset of frontend
+	// SubagentStatus's union ("running" | "awaiting-merge" | "paused" |
+	// "complete" | "error" | "aborted") — pinned by
+	// TestSubagentStatusValuesAreInTSUnion in impl_test.go. Go never
+	// emits "awaiting-merge" as of UNIT-9 (that state needs the
+	// profile's MergePolicy, out of this unit's scope) — a value not
+	// yet produced is fine; a value outside the union is not.
+	SubagentStatus string `json:"subagentStatus,omitempty"`
+	ProfileID      string `json:"profileId,omitempty"`
+	TokensUsed     int    `json:"tokensUsed,omitempty"`
+	BudgetTokens   int    `json:"budgetTokens,omitempty"`
+	ElapsedS       int    `json:"elapsedS,omitempty"`
+	BudgetTimeS    int    `json:"budgetTimeS,omitempty"`
 }
 
 // CreateBranchOptions is the request body for CreateBranch.
@@ -41,9 +64,12 @@ type CreateBranchOptions struct {
 	// (branching-ux-polish-01KQ8TD7 WP02). When non-empty, CreateBranch
 	// delegates to CreateBranchAtMessage internally.
 	ParentMessageID string `json:"parentMessageId,omitempty"`
-	// CreationPath is "explicit" | "edit_resend" | "unknown". Defaults to
-	// "unknown" when unset; "explicit" is set by the "Branch from this
-	// turn" menu item.
+	// CreationPath is "explicit" | "edit_resend" | "unknown" | "auto_act"
+	// | "model_tool". Defaults to "unknown" when unset; "explicit" is set
+	// by the "Branch from this turn" menu item. "auto_act" (advice hook)
+	// and "model_tool" (kenaz__fork_conversation) are internal-only:
+	// Bindings.Branches_Create coerces them to "unknown" via
+	// ClientCreationPath.
 	CreationPath string `json:"creationPath,omitempty"`
 	// Title is a short user-facing branch title.
 	Title string `json:"title,omitempty"`
@@ -124,10 +150,10 @@ type CommitReintegrationOptions struct {
 
 // BranchStatus + ChildRunStatus is the wire shape for GetBranchStatus.
 type BranchStatus struct {
-	Branch          Branch `json:"branch"`
-	ChildSessionID  string `json:"childSessionId"`
-	HasInflightRun  bool   `json:"hasInflightRun"`
-	LastActivityAt  string `json:"lastActivityAt,omitempty"`
+	Branch           Branch `json:"branch"`
+	ChildSessionID   string `json:"childSessionId"`
+	HasInflightRun   bool   `json:"hasInflightRun"`
+	LastActivityAt   string `json:"lastActivityAt,omitempty"`
 	LastAssistantMsg string `json:"lastAssistantMessage,omitempty"`
 }
 
@@ -190,6 +216,43 @@ type BranchesAPI interface {
 	// Depth is pre-computed server-side (iterative walk, cap 32).
 	// (branching-ux-polish-01KQ8TD7 WP02)
 	ListWithBranchTree(ctx context.Context, projectID string) ([]SessionWithBranchPointer, error)
+
+	// AbortSubagent stops a dispatched sub-agent's underlying run and
+	// marks its task cancelled — the branch-scoped alias of Tasks_Abort
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-8; NOT a
+	// second abort implementation, see Tasks_Abort). Gated by
+	// cedar.ActionToolSubagentAbort and audited exactly once per call
+	// that actually stops a running task; idempotent against an
+	// already-terminal sub-agent (returns nil, writes no additional
+	// audit record).
+	AbortSubagent(ctx context.Context, branchID string) error
+
+	// SteerSubagent appends a user message to a dispatched sub-agent's
+	// child session — the mirror of AppendToParent, but onto the child
+	// side (UNIT-8). Gated by cedar.ActionToolSubagentSteer and audited
+	// once per call (message text itself is never in the audit
+	// payload — see SubagentSteeredPayload).
+	SteerSubagent(ctx context.Context, branchID, message string) error
+
+	// PauseSubagent arms a dispatched sub-agent's turn-pause signal
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, owner
+	// ruling E-002): the run finishes whatever turn it is currently on
+	// and starts no further turn until ResumeSubagent clears the
+	// signal. NOT immediate — a long turn already in flight keeps
+	// running; a caller wanting to stop spend right now wants
+	// AbortSubagent, not this. Gated by cedar.ActionToolSubagentPause
+	// and audited once per call that actually arms the signal (a
+	// second Pause while already paused is a no-op, writes no
+	// additional audit record).
+	PauseSubagent(ctx context.Context, branchID string) error
+
+	// ResumeSubagent clears a dispatched sub-agent's turn-pause signal
+	// so its next turn begins again (UNIT-8). Gated by
+	// cedar.ActionToolSubagentResume and audited once per call that
+	// actually clears an armed signal (Resume on a branch that was
+	// never paused, or already resumed, is a no-op, writes no
+	// additional audit record).
+	ResumeSubagent(ctx context.Context, branchID string) error
 }
 
 // fmtTime renders a time.Time as RFC3339Nano UTC, returning "" for the

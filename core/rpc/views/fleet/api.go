@@ -64,6 +64,20 @@ type UnitSyncStatusView struct {
 	PullCount int `json:"pullCount"`
 	// ConflictCount is the number of currently surfaced conflicts.
 	ConflictCount int `json:"conflictCount"`
+	// SkippedUnknownKinds counts pulled nodes that are not unit kinds
+	// (skipped, never a lane-stalling error — WP03).
+	SkippedUnknownKinds int `json:"skippedUnknownKinds"`
+	// SkippedInvalid counts unit nodes the local store refused as invalid.
+	SkippedInvalid int `json:"skippedInvalid"`
+	// PushRefused counts dirty units refused before the wire (artifact /
+	// unknown kind, capability word in metadata); they stay dirty.
+	PushRefused int `json:"pushRefused"`
+	// PushHeldLoadAlways counts load_policy=always units held back because
+	// the identity carries no roles (re-sign-in to refresh) — review F9.
+	PushHeldLoadAlways int `json:"pushHeldLoadAlways"`
+	// StrippedUnitKeys counts case-variant "_unit" metadata keys stripped
+	// before push (review F13).
+	StrippedUnitKeys int `json:"strippedUnitKeys"`
 }
 
 // FleetAPI is the view-scoped RPC surface for fleet telemetry consent and
@@ -78,11 +92,12 @@ type FleetAPI interface {
 	// aggregate requires pro+, full requires team+).
 	SetTelemetryConsent(ctx context.Context, level string) error
 
-	// Unit_PromoteAsMergeRequest opens a merge request to promote a unit UP a
-	// classification level (personal→team→org) instead of writing the higher
-	// layer directly (WP16, write-up-reviewed). The source unit is untouched;
-	// the higher layer only changes when a reviewer accepts on fleet.
-	// toClassification is one of "team" | "org".
+	// Unit_PromoteAsMergeRequest promotes a unit UP a classification level
+	// (review F2, 2026-10-06): personal→team is a straight push of a team
+	// copy (Status "published", no MR); team→org pushes the team node then
+	// opens a merge request to org (the higher layer only changes when a
+	// reviewer accepts on fleet); personal→org does both. The source unit
+	// is untouched. toClassification is one of "team" | "org".
 	Unit_PromoteAsMergeRequest(ctx context.Context, unitID, toClassification, title, body string) (MergeRequestResult, error)
 
 	// Unit_ListConflicts returns the unresolved same-unit pull conflicts the

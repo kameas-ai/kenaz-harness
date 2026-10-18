@@ -20,6 +20,8 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trust"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/workflow"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 )
 
 // errNotWired is returned by every stub method. Feature missions replace
@@ -171,6 +173,9 @@ func (s *stubSessions) SuggestTitle(_ context.Context, _ string) (string, error)
 func (s *stubSessions) ClearTitle(_ context.Context, _ string) error {
 	return errNotWired
 }
+func (s *stubSessions) TurnRuns(_ context.Context, _ string) ([]sessions.TurnRun, error) {
+	return nil, errNotWired
+}
 func (s *stubSessions) ResumeMessage(_ context.Context, _, _ string) (sessions.ResumeMessageResult, error) {
 	return sessions.ResumeMessageResult{}, errNotWired
 }
@@ -182,6 +187,21 @@ func (s *stubSessions) SaveAutonomyProfile(_ context.Context, _ string, _ autono
 }
 func (s *stubSessions) ResolveAutonomy(_ context.Context, _ string) (sessions.ResolvedAutonomy, error) {
 	return sessions.ResolvedAutonomy{}, errNotWired
+}
+func (s *stubSessions) GetKnobsDefault(_ context.Context, _ string) (*sessions.SessionKnobs, error) {
+	return nil, errNotWired
+}
+func (s *stubSessions) SetKnobsDefault(_ context.Context, _ string, _ *sessions.SessionKnobs) error {
+	return errNotWired
+}
+func (s *stubSessions) GetToolExposure(_ context.Context, _ string) (sessions.SessionToolExposure, error) {
+	return sessions.SessionToolExposure{}, errNotWired
+}
+func (s *stubSessions) SetToolExposure(_ context.Context, _ string, _ toolexposure.Exposure) error {
+	return errNotWired
+}
+func (s *stubSessions) LoadTools(_ context.Context, _ string, _, _ []string, _ bool) (loadtools.Result, error) {
+	return loadtools.Result{}, errNotWired
 }
 func (s *stubSessions) Export(_ context.Context, _, _ string) (sessions.ExportResult, error) {
 	return sessions.ExportResult{}, errNotWired
@@ -318,6 +338,12 @@ func (s *stubProjects) LoadAutonomyProfile(_ context.Context, _ string) (autonom
 	return autonomy.Layer{}, nil
 }
 func (s *stubProjects) SaveAutonomyProfile(_ context.Context, _ string, _ autonomy.Layer) error {
+	return errNotWired
+}
+func (s *stubProjects) GetToolExposure(_ context.Context, _ string) (toolexposure.Exposure, error) {
+	return toolexposure.Exposure{}, errNotWired
+}
+func (s *stubProjects) SetToolExposure(_ context.Context, _ string, _ toolexposure.Exposure) error {
 	return errNotWired
 }
 

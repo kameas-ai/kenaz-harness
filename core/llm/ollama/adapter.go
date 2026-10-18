@@ -211,7 +211,8 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		return nil, classifyStatus(resp.StatusCode, snippet)
 	}
 
-	s := &chatStream{resp: resp, cancel: cancel, events: make(chan llm.StreamEvent, 16), done: make(chan struct{})}
+	s := &chatStream{resp: resp, cancel: cancel, events: make(chan llm.StreamEvent, 16), done: make(chan struct{}),
+		meta: llm.CallMeta{RequestID: openaiwire.RequestIDFromHeader(resp.Header)}}
 	go s.pump()
 	return s, nil
 }
@@ -391,6 +392,10 @@ func classifyStatus(status int, body []byte) error {
 	switch {
 	case status == 401 || status == 403:
 		return &llm.ErrAuth{Status: status, Message: msg}
+	case status == 402:
+		// Insufficient credits (hosted Ollama-compatible gateways) — never
+		// retryable (undelivered-message-retry, 2026-10-07).
+		return &llm.ErrPaymentRequired{Status: status, Message: msg}
 	case status == 429:
 		return &llm.ErrTransient{Status: status, Message: msg}
 	case status >= 500 && status < 600:
@@ -439,13 +444,18 @@ type chatStream struct {
 	events chan llm.StreamEvent
 	done   chan struct{}
 
-	mu          sync.Mutex
-	final       llm.Response
-	finalErr    error
-	cancelled   bool
-	textBuf     strings.Builder
-	usage       llm.Usage
-	finishStop  string
+	mu         sync.Mutex
+	final      llm.Response
+	finalErr   error
+	cancelled  bool
+	textBuf    strings.Builder
+	usage      llm.Usage
+	finishStop string
+
+	// meta is the provider-returned call metadata for the gen_ai.chat
+	// span (llm-call-telemetry-01LLMTEL01 WP01).
+	meta llm.CallMeta
+
 	toolPartial map[int]*toolCallState
 	toolOrder   []int
 	toolCalls   []llm.ToolUse
@@ -502,6 +512,7 @@ func (s *chatStream) pump() {
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
 			}
+			s.final.Meta = openaiwire.MetaPtr(s.meta)
 		}
 		s.mu.Unlock()
 		close(s.done)
@@ -550,6 +561,7 @@ func (s *chatStream) handleFrame(raw []byte) {
 		return
 	}
 	var env struct {
+		openaiwire.FrameMeta
 		Choices []struct {
 			Delta struct {
 				Content   string `json:"content"`
@@ -567,12 +579,20 @@ func (s *chatStream) handleFrame(raw []byte) {
 		Usage *struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
+
+			PromptTokensDetails *openaiwire.PromptTokensDetails `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(trimmed, &env); err != nil {
 		s.events <- llm.StreamEvent{Kind: llm.StreamError, Err: "ollama: malformed SSE frame: " + err.Error()}
 		return
 	}
+	s.mu.Lock()
+	env.FrameMeta.ApplyTo(&s.meta)
+	if env.Usage != nil && env.Usage.PromptTokensDetails != nil {
+		s.meta.CacheReadTokens = env.Usage.PromptTokensDetails.CachedTokens
+	}
+	s.mu.Unlock()
 	for _, ch := range env.Choices {
 		if ch.Delta.Content != "" {
 			s.mu.Lock()

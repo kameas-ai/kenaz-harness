@@ -152,6 +152,45 @@ describe('ConfirmToolModal', () => {
     w.unmount();
   });
 
+  // risk-rated-autonomy-01PMRA01 WP10: prompt shows score, threshold,
+  // tier and rationale for a risk-rated (layer 3) confirm.
+  it('shows score, tier, threshold and rationale for a risk-rated prompt', async () => {
+    const { w } = mountModal();
+    await flushPromises();
+    emit(
+      row({
+        call_id: 'c1',
+        tool: 'delete_branch',
+        has_risk_rating: true,
+        risk_score: 72,
+        risk_tier: 'high',
+        risk_threshold: 60,
+        risk_rationale: 'a hard-to-reverse remote mutation',
+      }),
+    );
+    await flushPromises();
+
+    const detail = q('confirm-tool-risk-c1');
+    expect(detail).not.toBeNull();
+    expect(detail!.textContent).toContain('high');
+    expect(detail!.textContent).toContain('72/100');
+    expect(detail!.textContent).toContain('threshold 60');
+    expect(q('confirm-tool-risk-rationale-c1')!.textContent).toContain(
+      'a hard-to-reverse remote mutation',
+    );
+    w.unmount();
+  });
+
+  it('shows no risk detail for a non-risk-rated (legacy) prompt', async () => {
+    const { w } = mountModal();
+    await flushPromises();
+    emit(row({ call_id: 'c1' }));
+    await flushPromises();
+
+    expect(q('confirm-tool-risk-c1')).toBeNull();
+    w.unmount();
+  });
+
   it('shows the structural args summary verbatim and never fabricates values', async () => {
     const { w } = mountModal();
     await flushPromises();

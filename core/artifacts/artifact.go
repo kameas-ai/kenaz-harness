@@ -8,9 +8,12 @@
 // ArtifactsRefcountSource so the on-disk file is only swept when no
 // attachments AND no artifacts row reference the hash.
 //
-// DIRECTIVE_001: this package is the single owner of the artifacts
-// table; all read/write access from rpc/views and hooks must go through
-// the public Manager API.
+// DIRECTIVE_001: this package is the single owner of the artifact rows —
+// since units/1104 (artifacts-as-units-01DOGF0C) the kind='artifact' rows
+// of the units / unit_versions tables; core/units owns those tables'
+// schema. All read/write access from rpc/views and hooks must go through
+// the public Manager / Store API. (Known exception, pre-existing: the
+// unified search adapter in rpc/views/search reads titles directly.)
 package artifacts
 
 import (
@@ -25,14 +28,17 @@ import (
 type Artifact struct {
 	// ID is a 26-char Crockford-base32 ULID minted at Insert time.
 	ID string
-	// SessionID is the session this artifact was captured under. FK
-	// to sessions.id with ON DELETE CASCADE — deleting the session
-	// removes its artifacts.
+	// SessionID is the session this artifact was captured under. Since
+	// units/1104 (artifacts-as-units-01DOGF0C) it is stored in the
+	// artifact unit's metadata with NO foreign key: deleting the session
+	// removes its session-scoped artifacts through the session.Manager
+	// delete observer (ScopePurger), and clears this field on artifacts
+	// promoted out of it.
 	SessionID string
 	// ProjectID is the project the artifact is rolled up under, or nil
-	// for session-only artifacts. FK ON DELETE SET NULL — deleting
-	// the project demotes the artifact's project link without losing
-	// the row.
+	// for session-only artifacts. No foreign key since units/1104:
+	// deleting the project removes its project-scoped artifacts and
+	// clears this link on the rest (projects.Manager delete observer).
 	ProjectID *string
 	// Title is a human-readable label. For code blocks, the captured
 	// filename hint; for tool outputs, the tool name + index; for

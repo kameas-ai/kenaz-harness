@@ -84,10 +84,13 @@ const (
 	// first Go call site.
 	ActionWorkflowNetworkFetch = "workflow.network.fetch"
 
-	// ActionArtifactUpdate gates the kenaz__update_artifact builtin
-	// (update-artifact-tool-01KQ8TD4). Default-allow under FSWriteEnabled;
-	// gated by the same FSWriteDisabled toggle as the write-family fs
-	// builtins. The resource UID is Artifact::"<artifact-id>".
+	// ActionArtifactUpdate names the kenaz__update_artifact write
+	// (update-artifact-tool-01KQ8TD4). DECLARED, NOT EVALUATED: no call
+	// site evaluates it, so it gates nothing (model-harness-toolset-
+	// 01MHTS001 WP03, finding H-3). The tool's live gates are the
+	// FSWriteEnabled dial and per-call use_tool resolution. Its presence
+	// in PlanModeDeniedActions is likewise inert for the builtin — see
+	// docs/unwired-ledger.md (H-3/H-4 follow-up).
 	ActionArtifactUpdate = "artifact.update"
 
 	// ── Builtin search-and-elicitation action families ──────────────────
@@ -108,9 +111,10 @@ const (
 	// FSReadEnabled is true; gated by the same FSReadDisabled toggle.
 	ActionToolReadGrep = "tool.read.grep"
 
-	// ActionToolTodoWrite gates kenaz__todo_write (structured task list
-	// write). Resource UID: TodoList::"session" (session-scoped list).
-	// Default-allow when TodoEnabled is true; gated by TodoDisabled toggle.
+	// ActionToolTodoWrite names kenaz__todo_write (structured task list
+	// write). DECLARED, NOT EVALUATED (model-harness-toolset-01MHTS001
+	// WP03, H-3): the live gates are the TodoEnabled dial and per-call
+	// use_tool resolution; a policy on this action has no effect.
 	// The action intentionally lives in the "tool.todo" family rather than
 	// "tool.write" so policy authors can grant todo access independently of
 	// the broader filesystem write surface.
@@ -201,8 +205,35 @@ const (
 	//   ActionToolSubagentMerge — gates explicit __subagent_merge(branch_id)
 	//     calls (MergePolicyManual path). Default-allow; admins can deny
 	//     to prevent the parent from absorbing a worker's output.
+	//
+	//   ActionToolSubagentAbort — gates Subagent_Abort (the branch-scoped
+	//     alias of Tasks_Abort — subagent-control-and-background-tasks-
+	//     01PMZB11 UNIT-8). Resource UID: SubagentBranch::"<branch-id>".
+	//     A user-initiated control verb that stops a running sub-agent's
+	//     LLM stream; trust-relevant per owner ruling C-5, so it is
+	//     gated and audited like every other verb that mutates a running
+	//     agent.
+	//
+	//   ActionToolSubagentSteer — gates Subagent_Steer (append a user
+	//     message to a dispatched sub-agent's child session — UNIT-8).
+	//     Resource UID: SubagentBranch::"<branch-id>". Default-allow;
+	//     policy authors can forbid steering a specific branch or all
+	//     sub-agent branches.
+	//
+	//   ActionToolSubagentPause — gates Subagent_Pause (owner ruling
+	//     E-002: pause means "stop after the current turn, start no
+	//     further turn"). Resource UID: SubagentBranch::"<branch-id>" —
+	//     same family as Abort/Steer above.
+	//
+	//   ActionToolSubagentResume — gates Subagent_Resume, clearing the
+	//     pause signal ActionToolSubagentPause arms so turns begin again
+	//     (UNIT-8). Same resource UID family as Pause.
 	ActionToolSubagentDispatch = "tool.subagent.dispatch"
 	ActionToolSubagentMerge    = "tool.subagent.merge"
+	ActionToolSubagentAbort    = "tool.subagent.abort"
+	ActionToolSubagentSteer    = "tool.subagent.steer"
+	ActionToolSubagentPause    = "tool.subagent.pause"
+	ActionToolSubagentResume   = "tool.subagent.resume"
 
 	// ── Model-side secret reference action family ──────────────────────────
 	// Introduced by mission model-secret-references-01KW7M5A.
@@ -215,19 +246,20 @@ const (
 	//     exposed_secrets set; forbid for untrusted agent_kind; forbid when the
 	//     per-session resolution budget is exhausted.
 	//
-	//   ActionToolListSecrets — gates the kenaz__list_secrets builtin tool.
-	//     Resource UID: Tool::"builtin__list_secrets". Default-allow so the
-	//     model can discover what references it may use; admins can disable
-	//     per-session with an explicit forbid rule.
+	//   ActionToolListSecrets — names the kenaz__list_secrets builtin tool.
+	//     DECLARED, NOT EVALUATED (model-harness-toolset-01MHTS001 WP03,
+	//     H-3): a forbid on this action has no effect; forbid use_tool on
+	//     "kenaz__list_secrets" instead.
 	ActionSecretReferenceResolve = "secret_reference.resolve"
 	ActionToolListSecrets        = "tool.list_secrets"
 
 	// ── Background task monitor action family ─────────────────────────────
 	// Introduced by mission background-task-monitor-01KZNP3C (WP03).
 	//
-	//   ActionToolTasksMonitor  — gates kenaz__monitor (drain + watch mode).
-	//     Resource UID: Task::"<task-id>". Default-allow (passive read-only);
-	//     can be restricted per-session with an explicit forbid rule.
+	//   ActionToolTasksMonitor  — names kenaz__monitor (drain + watch mode).
+	//     DECLARED, NOT EVALUATED (model-harness-toolset-01MHTS001 WP03,
+	//     H-3): a forbid on this action has no effect; forbid use_tool on
+	//     "kenaz__monitor" instead.
 	//   ActionToolTasksCancel   — gates Tasks_Abort RPC + Abort from the Tasks
 	//     panel. Resource UID: Task::"<task-id>".
 	ActionToolTasksMonitor = "tool.tasks.monitor"
@@ -513,6 +545,16 @@ const (
 	// take the shape Project::"<project-id>".
 	EntityTypeProject = "Project"
 
+	// EntityTypeSubagentBranch is the Cedar entity type for a dispatched
+	// sub-agent's branch row. Introduced by mission
+	// subagent-control-and-background-tasks-01PMZB11 (UNIT-8) for the
+	// Abort / Steer / Pause / Resume control-verb gates. Resource UIDs
+	// take the shape SubagentBranch::"<branch-id>" — the SAME branch id
+	// core/rpc/views/branches.Branch.ID already carries, not a separate
+	// task or session id, so a policy author can target one dispatched
+	// sub-agent without needing to know its backing task id.
+	EntityTypeSubagentBranch = "SubagentBranch"
+
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
 	// (NFR-005); the policy surface is built around this invariant.
@@ -524,6 +566,23 @@ const (
 // engine's DefaultDeny flag is false. Default-allow is the spec's
 // stance ("observable, not blocking by default; user opts in to
 // fail-closed"). Frontends pattern-match on this value.
+//
+// Confirm (risk-rated-autonomy-01PMRA01 WP01) is a fourth member added
+// alongside the original three. Engine.Evaluate / fromCedar (decisions.go)
+// NEVER produce it — Cedar itself has no confirm effect and the engine
+// parses no annotations (that is out of scope by design, see the
+// mission spec's non-goals). Confirm is produced ONLY by
+// cedar.ThreeLayerResolve (risk_layer.go), the layer-3 resolver wired
+// into the chat kernel tool adapter's confirm-each ladder: layer 1
+// forbid -> Deny, layer 2 permit -> Allow, layer 3 (Cedar had no
+// opinion) -> Confirm, pending a risk rating (WP03-WP06) deciding
+// whether that specific rung answers with Allow or leaves it as
+// Confirm. Every production switch on Outcome must treat Confirm
+// explicitly and never fold it into "not deny, so allow" — that fold is
+// exactly the fail-open hole this mission exists to close one layer up
+// (enforce()'s historical NotApplicable -> nil). See
+// outcome_confirm_audit_test.go for the enumerated list of switches
+// this invariant is pinned against.
 type Outcome int
 
 const (
@@ -535,6 +594,10 @@ const (
 	// NotApplicable — no policy matched AND DefaultDeny is false.
 	// Callers treat this as "allow with audit" by default.
 	NotApplicable
+	// Confirm — layer 3 (risk-rated-autonomy-01PMRA01) says a human
+	// decision is required. Never produced by Engine.Evaluate itself;
+	// only by cedar.ThreeLayerResolve. See the type doc comment above.
+	Confirm
 )
 
 // String renders Outcome for logs and audit lines.
@@ -546,6 +609,8 @@ func (o Outcome) String() string {
 		return "deny"
 	case NotApplicable:
 		return "not_applicable"
+	case Confirm:
+		return "confirm"
 	default:
 		return "unknown"
 	}
@@ -581,6 +646,8 @@ func (o *Outcome) UnmarshalJSON(b []byte) error {
 		*o = Deny
 	case "not_applicable":
 		*o = NotApplicable
+	case "confirm":
+		*o = Confirm
 	default:
 		return fmt.Errorf("cedar: unknown Outcome %q", s)
 	}
@@ -998,4 +1065,18 @@ func ProjectUID(id string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeProject, cedar.String(safeID))
+}
+
+// SubagentBranchUID builds a Cedar EntityUID for the SubagentBranch family
+// introduced by mission subagent-control-and-background-tasks-01PMZB11
+// (UNIT-8), gating Subagent_Abort / Subagent_Steer / Subagent_Pause /
+// Subagent_Resume. branchID is the core/rpc/views/branches.Branch.ID
+// primary key. Malformed ids are replaced with "invalid" so the
+// resulting UID never satisfies a real permit.
+func SubagentBranchUID(branchID string) cedar.EntityUID {
+	safeID := branchID
+	if !validateFamilyID(branchID) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeSubagentBranch, cedar.String(safeID))
 }

@@ -160,6 +160,25 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 		}, err
 	}
 
+	// automation-actually-runs-01PMZ404 UNIT-14 (A-11 / AC-015): reject
+	// a supplied enum input value outside its declared Options here, at
+	// the single choke point every caller passes through — RunWithOptions,
+	// InlineRun, and the /wf slash-command gateway (which builds a raw
+	// map[string]string with no input-kind awareness of its own). A
+	// client-side-only <select> constraint is discarded by any caller
+	// that is not the run form; this closes that gap for all of them at
+	// once instead of teaching each caller the same check.
+	if err := validateEnumInputs(wf, inputs); err != nil {
+		return &Run{
+			ID:         randomRunID(),
+			WorkflowID: wf.ID,
+			Status:     "failed",
+			StartedAt:  e.now(),
+			EndedAt:    e.now(),
+			Err:        err.Error(),
+		}, err
+	}
+
 	// rerun_policy gate. Honoured only when the engine has a cache
 	// wired AND the workflow declares a non-empty policy. The default
 	// (empty / "always" / "fresh") proceeds straight to dispatch.
@@ -563,6 +582,38 @@ func typedValuesAsAny(in map[string]TypedValue) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// validateEnumInputs rejects a supplied value for an InputKindEnum
+// input that is not one of the input's declared Options
+// (automation-actually-runs-01PMZ404 UNIT-14, A-11 / AC-015). Only
+// inputs the caller EXPLICITLY supplied are checked; an omitted
+// optional input falls through to mergeInputDefaults untouched, and an
+// empty supplied value (the run form's default state before the user
+// picks one) is not treated as a violation — Required enforcement, if
+// any, is a separate concern from "the value picked is not one of the
+// choices."
+func validateEnumInputs(wf Workflow, supplied map[string]TypedValue) error {
+	for _, in := range wf.Inputs {
+		if in.Kind != InputKindEnum {
+			continue
+		}
+		v, ok := supplied[in.Name]
+		if !ok || v.Text == "" {
+			continue
+		}
+		valid := false
+		for _, opt := range in.Options {
+			if v.Text == opt {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("workflows: input %q: value %q is not one of the declared options %v", in.Name, v.Text, in.Options)
+		}
+	}
+	return nil
 }
 
 func mergeInputDefaults(wf Workflow, supplied map[string]TypedValue) map[string]TypedValue {

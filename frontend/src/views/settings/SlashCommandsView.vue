@@ -23,6 +23,8 @@ import SlashCommandEditor from '@/views/settings/SlashCommandEditor.vue';
 import SkillsPanel from '@/views/settings/SkillsPanel.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { signedIn, capability } from '@/lib/featureFlags';
+import { fleetOrgPaused } from '@/lib/fleetSession';
+import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
 import { push as pushToast } from '@/composables/useToastQueue';
 import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import type {
@@ -40,10 +42,10 @@ const publishing = ref(false);
 
 /**
  * canPublishToTeam returns true when the user is signed in and has the
- * shared_team_graph capability (Team+ tier, FR-102).
+ * team_graph_sharing capability (Team+ tier, FR-102).
  */
 const canPublishToTeam = computed(
-  () => signedIn.value && capability('shared_team_graph'),
+  () => signedIn.value && capability('team_graph_sharing'),
 );
 
 async function handlePublishToTeam(): Promise<void> {
@@ -53,7 +55,7 @@ async function handlePublishToTeam(): Promise<void> {
   const ok = await confirm({
     title: `Publish /${cmd.name} to team?`,
     message:
-      'This skill will be visible to your whole team in the Marketplace. ' +
+      'This skill will be visible to your whole team in the fleet catalog (Capabilities › Skills). ' +
       'Make sure it contains no secrets or sensitive information.',
     confirmLabel: 'Publish',
   });
@@ -384,6 +386,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
           data-testid="slash-editor-panel"
         >
           <SlashCommandEditor
+            :key="editorCommand ? `${editorCommand.scope}:${editorCommand.projectId ?? ''}:${editorCommand.name}` : 'new'"
             :command="editorCommand"
             :saving="saving"
             @save="handleSave"
@@ -415,6 +418,9 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
             >
               {{ publishing ? 'Publishing…' : 'Publish to team' }}
             </Button>
+            <!-- A staff org pause (kenaz-fleet PR 206) withholds the capability:
+                 the paused line, not the Team+ upsell. -->
+            <OrgPausedBanner v-else-if="fleetOrgPaused" compact />
             <p
               v-else
               class="font-ui text-[11px] text-ink-muted"

@@ -86,7 +86,7 @@ func (f *fakeInProcessServer) Close() error {
 func TestInProcessSubPool_RegisterListCall(t *testing.T) {
 	t.Parallel()
 	p := dispatch.NewInProcessSubPool()
-	fake := newFakeInProcessServer("harness_read_get_status")
+	fake := newFakeInProcessServer("harness_read_list_providers")
 
 	if err := p.RegisterServer(context.Background(), "harness-self", fake); err != nil {
 		t.Fatalf("RegisterServer: %v", err)
@@ -96,11 +96,11 @@ func TestInProcessSubPool_RegisterListCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
-	if len(tools) != 1 || tools[0].Name != "harness_read_get_status" || tools[0].Server != "harness-self" {
-		t.Fatalf("Tools = %+v, want one harness_read_get_status tool owned by harness-self", tools)
+	if len(tools) != 1 || tools[0].Name != "harness_read_list_providers" || tools[0].Server != "harness-self" {
+		t.Fatalf("Tools = %+v, want one harness_read_list_providers tool owned by harness-self", tools)
 	}
 
-	result, err := p.Call(context.Background(), "harness-self", "harness_read_get_status", json.RawMessage(`{}`))
+	result, err := p.Call(context.Background(), "harness-self", "harness_read_list_providers", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}

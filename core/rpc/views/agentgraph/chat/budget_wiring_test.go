@@ -52,9 +52,13 @@ func TestApplyTokenCeilingKnob_GraphBudgetSurvivesWithNoKnob(t *testing.T) {
 func TestApplyTokenCeilingKnob_KnobLowersCeiling(t *testing.T) {
 	t.Parallel()
 	in := coreag.Budget{MaxTokensPerRun: 200000, MaxLLMCallsPerRun: 100}
-	got := applyTokenCeilingKnob(in, autonomy.ResolvedKnobs{TokenCeilingPerTurn: 50000})
-	if got.MaxTokensPerRun != 50000 {
-		t.Errorf("MaxTokensPerRun = %d, want 50000 (knob lowers)", got.MaxTokensPerRun)
+	// MaxIterations is load-bearing since the 2026-09-12 unit fix: the knob
+	// is a PER-TURN ceiling and MaxTokensPerRun is a PER-RUN cumulative cap,
+	// so the per-run figure is perTurn*maxIterations. 10000*4 = 40000, which
+	// is below the graph's 200000 and therefore lowers it.
+	got := applyTokenCeilingKnob(in, autonomy.ResolvedKnobs{TokenCeilingPerTurn: 10000, MaxIterations: 4})
+	if got.MaxTokensPerRun != 40000 {
+		t.Errorf("MaxTokensPerRun = %d, want 40000 (knob lowers: 10000/turn * 4 turns)", got.MaxTokensPerRun)
 	}
 	// The knob is token-scoped; it must not disturb the other caps.
 	if got.MaxLLMCallsPerRun != 100 {
@@ -65,7 +69,11 @@ func TestApplyTokenCeilingKnob_KnobLowersCeiling(t *testing.T) {
 func TestApplyTokenCeilingKnob_KnobCannotRaiseGraphCeiling(t *testing.T) {
 	t.Parallel()
 	in := coreag.Budget{MaxTokensPerRun: 200000}
-	got := applyTokenCeilingKnob(in, autonomy.ResolvedKnobs{TokenCeilingPerTurn: 999999})
+	// MaxIterations set deliberately: with it at zero the function returns
+	// early ("unbounded turns => no per-run opinion") and this test would
+	// pass without ever exercising the clamp it claims to check. 999999*3
+	// far exceeds the graph's 200000, so the clamp is genuinely under test.
+	got := applyTokenCeilingKnob(in, autonomy.ResolvedKnobs{TokenCeilingPerTurn: 999999, MaxIterations: 3})
 	if got.MaxTokensPerRun != 200000 {
 		t.Fatalf("MaxTokensPerRun = %d, want the graph's 200000 to hold — a Settings toggle must not defeat a graph-declared safety cap", got.MaxTokensPerRun)
 	}
@@ -75,9 +83,9 @@ func TestApplyTokenCeilingKnob_KnobCannotRaiseGraphCeiling(t *testing.T) {
 // zero on either side means "no opinion", not "unlimited wins".
 func TestApplyTokenCeilingKnob_KnobEstablishesCeilingWhenGraphHasNone(t *testing.T) {
 	t.Parallel()
-	got := applyTokenCeilingKnob(coreag.Budget{}, autonomy.ResolvedKnobs{TokenCeilingPerTurn: 12345})
-	if got.MaxTokensPerRun != 12345 {
-		t.Fatalf("MaxTokensPerRun = %d, want 12345", got.MaxTokensPerRun)
+	got := applyTokenCeilingKnob(coreag.Budget{}, autonomy.ResolvedKnobs{TokenCeilingPerTurn: 12345, MaxIterations: 2})
+	if got.MaxTokensPerRun != 24690 {
+		t.Fatalf("MaxTokensPerRun = %d, want 24690 (12345/turn * 2 turns)", got.MaxTokensPerRun)
 	}
 }
 

@@ -9,22 +9,53 @@ import (
 
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	"github.com/kameas-ai/kenaz-harness/core/attachments"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
 
 // newTestAPI constructs an API wired against in-memory stores rooted
 // at a tempdir. The session-project map drives the scope-promote
 // validation: sess-with-proj → "proj-1", every other session has no
 // project.
+//
+// WP-PI (artifacts-as-units-01DOGF0C, AC-PI-2): the in-memory fixture is
+// kept for the view-logic tests (Get decoding, Promote validation,
+// SaveFromMessage range handling). The tests that assert PERSISTENCE —
+// Delete's refcount-driven CAS sweep — also run against
+// newSQLTestAPI, the production shape: real sqlite, the units-backed
+// store, the SQL media store.
 func newTestAPI(t *testing.T) (*API, string, *fakeMessageReader) {
+	return newTestAPIOver(t, false)
+}
+
+// newSQLTestAPI is newTestAPI over real sqlite + the units-backed store.
+func newSQLTestAPI(t *testing.T) (*API, string, *fakeMessageReader) {
+	return newTestAPIOver(t, true)
+}
+
+func newTestAPIOver(t *testing.T, realSQL bool) (*API, string, *fakeMessageReader) {
 	t.Helper()
 	dir := t.TempDir()
-	media := attachments.NewMemoryMediaStore(dir)
-	store := coreart.NewMemoryStore(coreart.WithMemSessionProjectReader(
-		coreart.NewStaticSessionProjectReader(map[string]string{
-			"sess-with-proj":  "proj-1",
-			"sister-with-proj": "proj-1",
-		}),
-	))
+	reader := coreart.NewStaticSessionProjectReader(map[string]string{
+		"sess-with-proj":   "proj-1",
+		"sister-with-proj": "proj-1",
+	})
+	var (
+		media attachments.MediaStore
+		store coreart.Store
+	)
+	if realSQL {
+		db, err := storagesqlite.Open(storage.Config{DataDir: dir, EncryptionStatus: storage.EncryptionStatusDisabledWithDiskEncryption})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Close(context.Background()) })
+		media = attachments.NewSQLMediaStore(db, dir)
+		store = coreart.NewUnitsStore(db, coreart.WithSessionProjectReader(reader))
+	} else {
+		media = attachments.NewMemoryMediaStore(dir)
+		store = coreart.NewMemoryStore(coreart.WithMemSessionProjectReader(reader))
+	}
 	media.RegisterRefcountSource(coreart.ArtifactsRefcountSource{Store: store})
 	mgr := coreart.NewManager(store, &mediaPutShim{inner: media},
 		coreart.WithSessionReader(coreart.NewStaticSessionProjectReader(map[string]string{
@@ -103,7 +134,20 @@ func TestAPI_GetRoundTrip(t *testing.T) {
 // reclaims the file when no other reference remains.
 func TestAPI_DeleteSweepsCASOnZeroRefcount(t *testing.T) {
 	t.Parallel()
-	api, dir, _ := newTestAPI(t)
+	for _, fx := range []struct {
+		name  string
+		build func(*testing.T) (*API, string, *fakeMessageReader)
+	}{{"memory", newTestAPI}, {"sqlite-units", newSQLTestAPI}} {
+		fx := fx
+		t.Run(fx.name, func(t *testing.T) {
+			t.Parallel()
+			testAPI_DeleteSweepsCASOnZeroRefcount(t, fx.build)
+		})
+	}
+}
+
+func testAPI_DeleteSweepsCASOnZeroRefcount(t *testing.T, build func(*testing.T) (*API, string, *fakeMessageReader)) {
+	api, dir, _ := build(t)
 	ctx := context.Background()
 	captured, err := api.mgr.Capture(ctx, []coreart.CaptureCandidate{{
 		Title: "alone.txt", MimeType: "text/plain",
@@ -130,7 +174,20 @@ func TestAPI_DeleteSweepsCASOnZeroRefcount(t *testing.T) {
 // the same content hash, the file survives.
 func TestAPI_DeleteSkipsCASWhenSharedHash(t *testing.T) {
 	t.Parallel()
-	api, dir, _ := newTestAPI(t)
+	for _, fx := range []struct {
+		name  string
+		build func(*testing.T) (*API, string, *fakeMessageReader)
+	}{{"memory", newTestAPI}, {"sqlite-units", newSQLTestAPI}} {
+		fx := fx
+		t.Run(fx.name, func(t *testing.T) {
+			t.Parallel()
+			testAPI_DeleteSkipsCASWhenSharedHash(t, fx.build)
+		})
+	}
+}
+
+func testAPI_DeleteSkipsCASWhenSharedHash(t *testing.T, build func(*testing.T) (*API, string, *fakeMessageReader)) {
+	api, dir, _ := build(t)
 	ctx := context.Background()
 	body := []byte("dup-payload")
 	cap1, err := api.mgr.Capture(ctx, []coreart.CaptureCandidate{{

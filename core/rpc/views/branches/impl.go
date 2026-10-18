@@ -14,8 +14,11 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/conversation"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
+	"github.com/kameas-ai/kenaz-harness/core/usage"
 )
 
 // ErrManagerUnavailable signals the chassis booted without the
@@ -24,6 +27,123 @@ var ErrManagerUnavailable = errors.New("branches: manager unavailable")
 
 // ErrInvalidArg covers trivially invalid inputs.
 var ErrInvalidArg = errors.New("branches: invalid argument")
+
+// ErrHandoffSeedFailed is returned (wrapped, alongside the created
+// Branch) by CreateBranch's explicit path when the branch was created
+// but the requested SystemPromptOverride handoff could not be appended
+// to the child session.
+var ErrHandoffSeedFailed = errors.New("branches: branch created but handoff seed was not written")
+
+// CreationPathModelTool is the CreationPath kenaz__fork_conversation
+// stamps on the branches it creates, so the persisted row and the
+// branch.created audit record distinguish a model-initiated fork from a
+// human "Branch from this turn" click ("explicit").
+const CreationPathModelTool = "model_tool"
+
+// ClientCreationPath restricts a CreationPath received from the frontend
+// (Bindings.Branches_Create) to the human paths: "explicit" ("Branch from
+// this turn"), "edit_resend" and "unknown" (the "+ Fork" modal, which
+// sends none). Empty stays empty so each CreateBranch arm applies its own
+// default. Anything else — notably the internal "model_tool" and
+// "auto_act" — is coerced to "unknown": provenance the client cannot
+// prove is recorded as unknown rather than refused, so a stale or
+// malformed client still forks.
+func ClientCreationPath(p string) string {
+	switch strings.TrimSpace(p) {
+	case "":
+		return ""
+	case "explicit", "edit_resend", "unknown":
+		return strings.TrimSpace(p)
+	default:
+		return "unknown"
+	}
+}
+
+// ErrCedarDenied is returned when a cedar gate explicitly denies
+// AbortSubagent / SteerSubagent / PauseSubagent / ResumeSubagent
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8). Wrapped, not
+// swallowed, so callers can errors.Is(err, ErrCedarDenied) — same
+// convention as core/rpc/views/scheduledchat.ErrCedarDenied.
+var ErrCedarDenied = errors.New("branches: denied by cedar policy")
+
+// ErrSubagentUnavailable is returned by AbortSubagent / SteerSubagent
+// when the task registry or task-lookup dependency was not wired
+// (degraded boot — mirrors ErrManagerUnavailable's posture for the
+// rest of this API).
+var ErrSubagentUnavailable = errors.New("branches: subagent task tracking unavailable")
+
+// ErrSubagentTaskNotFound is returned by AbortSubagent when branchID
+// has no tracked background task — either it was never a spawner-
+// backed dispatch, or WaitForChildRun already consumed the mapping
+// (see BranchSeamAdapter.TaskIDForBranch's doc for when that happens).
+var ErrSubagentTaskNotFound = errors.New("branches: no tracked task for this branch")
+
+// SubagentTaskRegistry is the narrow core/tasks.Registry surface
+// AbortSubagent needs (subagent-control-and-background-tasks-01PMZB11
+// UNIT-8). Kept narrow — mirrors core/rpc/views/tasks.RegistryIface —
+// so this package depends on one method, not the registry's full
+// surface.
+type SubagentTaskRegistry interface {
+	Abort(ctx context.Context, id string) error
+	// Get returns the tracked task, when id is known (UNIT-9 — ListBranches
+	// reads Status/StartedAt/EndedAt off it to populate subagentStatus /
+	// elapsedS). Mirrors core/tasks.Registry.Get's exact signature so the
+	// production *coretasks.Registry instance already wired via Tasks
+	// (see AbortSubagent's doc) satisfies this with no adapter.
+	Get(id string) (coretasks.Task, bool)
+}
+
+// SubagentTaskLookup resolves per-branch sub-agent metadata recorded by
+// BranchSeamAdapter.Fork. Narrow interface over
+// *core/rpc/views/agentgraph.BranchSeamAdapter so this package does not
+// need to import agentgraph's full surface.
+type SubagentTaskLookup interface {
+	// TaskIDForBranch returns the core/tasks.Registry id backing
+	// branchID's spawned child run.
+	TaskIDForBranch(branchID string) (string, bool)
+	// SubagentMeta returns the profile id + declared budgets Fork
+	// recorded for branchID (UNIT-9). ok=false for any branch that was
+	// not created by kenaz__subagent_dispatch — this is the
+	// discriminator ListBranches uses to decide whether to enrich a row
+	// at all (AC-11's negative half: an ordinary branch gets none of
+	// the six subagent wire fields).
+	SubagentMeta(branchID string) (profileID string, budgetTokens, budgetTimeS int, ok bool)
+}
+
+// ErrSubagentPauseUnavailable is returned by PauseSubagent /
+// ResumeSubagent when Config.PauseControl was not wired (degraded
+// boot — mirrors ErrManagerUnavailable's posture for the rest of this
+// API).
+//
+// Named with the "Pause" infix (not the bare ErrSubagentUnavailable)
+// to avoid a same-package collision with ErrSubagentUnavailable above,
+// which guards a different degraded-boot condition (an unset task
+// registry / lookup, message "branches: subagent task tracking
+// unavailable") on the Abort/Steer surface. Both sentinels return
+// unwrapped through Subagent_Pause/Subagent_Resume and Subagent_Abort
+// to the Wails caller, so collapsing them to one literal would have
+// silently mislabeled one feature's degraded-boot error.
+var ErrSubagentPauseUnavailable = errors.New("branches: subagent pause control unavailable")
+
+// SubagentPauseControl is the narrow surface PauseSubagent /
+// ResumeSubagent need (subagent-control-and-background-tasks-01PMZB11
+// UNIT-8). Production binds this to the SAME
+// *chat.SubagentPauseRegistry instance ChatRunner.StartStream reads
+// from (core/rpc/api.go, via chatRunner.SubagentPause()) — not a
+// second, unread registry. Both methods report whether the call
+// actually changed the pause state, which PauseSubagent/ResumeSubagent
+// use to decide whether to write an audit record (idempotent re-calls
+// write none, mirroring Abort's contract).
+type SubagentPauseControl interface {
+	Pause(sessionID string) (changed bool)
+	Resume(sessionID string) (changed bool)
+	// IsPaused reports whether sessionID currently has an armed pause
+	// signal (UNIT-9 — ListBranches's subagentStatus computation).
+	// Mirrors chat.SubagentPauseRegistry.IsPaused's exact signature so
+	// the production *chat.SubagentPauseRegistry instance already
+	// wired via PauseControl satisfies this with no adapter.
+	IsPaused(sessionID string) bool
+}
 
 // BranchListBroker is the narrow publish surface the branches API needs
 // to emit session.list_changed events after a new branch session is created.
@@ -68,6 +188,43 @@ type Config struct {
 	// the zero value, which EffectiveBranchReintegrationMaxTokens
 	// already treats as "use the default".
 	Settings func() settings.Settings
+	// Tasks is the background-task registry AbortSubagent delegates to
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-8). nil
+	// degrades AbortSubagent to ErrSubagentUnavailable — matches this
+	// file's existing degraded-boot posture rather than panicking.
+	Tasks SubagentTaskRegistry
+	// TaskLookup resolves a branch id to its tracked task id.
+	// Production wiring is the SAME *BranchSeamAdapter instance
+	// core/rpc/api.go threads through EnvDeps.Branch (a.branchSeam) —
+	// not a second lookup path. nil degrades the same as Tasks == nil.
+	TaskLookup SubagentTaskLookup
+	// Cedar gates AbortSubagent / SteerSubagent / PauseSubagent /
+	// ResumeSubagent. nil default-allows (matches every other gate-hook
+	// call site in the harness — cedar.GateSubagentAbort /
+	// GateSubagentSteer / GateSubagentPause / GateSubagentResume's own
+	// nil-Gate contract), the pre-boot / test posture.
+	Cedar cedar.Gate
+	// PauseControl is the pause/resume side channel PauseSubagent /
+	// ResumeSubagent delegate to (UNIT-8). nil degrades both to
+	// ErrSubagentPauseUnavailable — matches this file's existing
+	// degraded-boot posture rather than panicking.
+	PauseControl SubagentPauseControl
+	// Usage resolves the per-session cumulative token aggregate
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-9) — the
+	// SAME *usage.Manager instance the token-cost-telemetry mission
+	// wired into the chat runner, not a second tracker. Read by
+	// ListBranches to populate SubagentBranch.tokensUsed off the
+	// dispatched sub-agent's child session id. nil degrades
+	// tokensUsed to always-omitted (matches this file's existing
+	// degraded-boot posture for every other optional dependency).
+	Usage UsageReader
+}
+
+// UsageReader is the narrow core/usage.Manager surface ListBranches
+// needs (UNIT-9). core/usage.Manager itself satisfies this with no
+// adapter.
+type UsageReader interface {
+	GetSession(ctx context.Context, sessionID string) (usage.Aggregate, error)
 }
 
 // API is the concrete BranchesAPI implementation.
@@ -127,9 +284,102 @@ func (a *API) ListBranches(ctx context.Context, parentSessionID string) ([]Branc
 	}
 	out := make([]Branch, 0, len(rows))
 	for _, b := range rows {
-		out = append(out, toWire(b))
+		wire := toWire(b)
+		a.enrichSubagentFields(ctx, &wire)
+		out = append(out, wire)
 	}
 	return out, nil
+}
+
+// enrichSubagentFields populates out's six dispatched-sub-agent wire
+// fields (subagentStatus/profileId/tokensUsed/budgetTokens/elapsedS/
+// budgetTimeS) when out.ID was created by kenaz__subagent_dispatch
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-9, FR-009). A
+// no-op — leaving every field at its zero value, which json:",omitempty"
+// then drops entirely — for any branch a.cfg.TaskLookup does not
+// recognise, which is both the degraded-boot case (TaskLookup nil) and
+// AC-11's negative half (an ordinary, non-subagent branch).
+func (a *API) enrichSubagentFields(ctx context.Context, out *Branch) {
+	if a == nil || a.cfg.TaskLookup == nil {
+		return
+	}
+	profileID, budgetTokens, budgetTimeS, ok := a.cfg.TaskLookup.SubagentMeta(out.ID)
+	if !ok {
+		return
+	}
+	out.ProfileID = profileID
+	out.BudgetTokens = budgetTokens
+	out.BudgetTimeS = budgetTimeS
+
+	// subagentStatus + elapsedS come off the tracked task, when one is
+	// still resolvable (TaskIDForBranch is evicted once WaitForChildRun
+	// has consumed the branch's outcome — see that method's doc — so a
+	// merged/synchronously-dispatched branch may have profile/budget
+	// info above but no live task snapshot here; that is a documented
+	// degrade, not a bug).
+	if a.cfg.Tasks != nil {
+		if taskID, tok := a.cfg.TaskLookup.TaskIDForBranch(out.ID); tok {
+			if task, gok := a.cfg.Tasks.Get(taskID); gok {
+				paused := a.cfg.PauseControl != nil && out.ChildSessionID != "" &&
+					a.cfg.PauseControl.IsPaused(out.ChildSessionID)
+				out.SubagentStatus = subagentStatusFromTask(task, paused)
+				out.ElapsedS = subagentElapsedSeconds(task, a.now())
+			}
+		}
+	}
+
+	// tokensUsed comes off the child session's cumulative usage
+	// aggregate — the SAME per-turn accounting the token-cost-telemetry
+	// mission already writes for every ordinary session, since a
+	// dispatched sub-agent's child session is chatted through the
+	// ordinary ChatRunner path.
+	if a.cfg.Usage != nil && out.ChildSessionID != "" {
+		if agg, uerr := a.cfg.Usage.GetSession(ctx, out.ChildSessionID); uerr == nil {
+			out.TokensUsed = agg.TotalTokens
+		}
+	}
+}
+
+// subagentStatusFromTask maps a tracked task's lifecycle state (plus
+// the pause side-channel, which the task registry does not itself
+// know about) onto frontend/src/lib/types.ts's SubagentStatus union.
+// Deliberately a strict subset of that union: "awaiting-merge" needs
+// the dispatching profile's MergePolicy, which this unit does not
+// thread through, so Go never emits it — see api.go's field doc and
+// TestSubagentStatusValuesAreInTSUnion, which pins that every value
+// this function CAN return is a member of the union (not that it
+// covers the whole union).
+func subagentStatusFromTask(task coretasks.Task, paused bool) string {
+	switch task.Status {
+	case coretasks.StatusCompleted:
+		return "complete"
+	case coretasks.StatusFailed, coretasks.StatusCrashed:
+		return "error"
+	case coretasks.StatusCancelled:
+		return "aborted"
+	default: // StatusPending, StatusRunning
+		if paused {
+			return "paused"
+		}
+		return "running"
+	}
+}
+
+// subagentElapsedSeconds returns whole seconds between task.StartedAt
+// and either task.EndedAt (terminal) or now (still running). Negative
+// durations (clock skew in a fake clock, or a task ended before it
+// reports having started) clamp to 0 rather than surfacing a
+// nonsensical negative elapsed time.
+func subagentElapsedSeconds(task coretasks.Task, now time.Time) int {
+	end := now
+	if task.EndedAt != nil {
+		end = *task.EndedAt
+	}
+	d := end.Sub(task.StartedAt)
+	if d < 0 {
+		return 0
+	}
+	return int(d.Seconds())
 }
 
 // CreateBranch allocates a new fork. When opts.ParentMessageID is set,
@@ -146,11 +396,22 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 
 	// Explicit-fork path: use CreateBranchAtMessage when ParentMessageID is set.
 	if opts.ParentMessageID != "" {
+		// CreationPath defaults to "explicit" here (the "Branch from this
+		// turn" menu item, which always sends it). A caller may name a
+		// more specific path — kenaz__fork_conversation sends
+		// CreationPathModelTool — so the persisted row and the audit
+		// record say who actually forked, instead of every anchored fork
+		// reading as a human menu click.
+		creationPath := strings.TrimSpace(opts.CreationPath)
+		if creationPath == "" || creationPath == "unknown" {
+			creationPath = "explicit"
+		}
 		br, _, err := a.cfg.Conversations.CreateBranchAtMessage(ctx, conversation.ForkAtMessageOptions{
 			ParentSessionID: opts.ParentSessionID,
 			ParentMessageID: opts.ParentMessageID,
 			Title:           opts.Title,
 			ChildName:       opts.ChildName,
+			CreationPath:    creationPath,
 		})
 		if err != nil {
 			return Branch{}, err
@@ -161,9 +422,26 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 				ParentSessionID: opts.ParentSessionID,
 				ParentMessageID: opts.ParentMessageID,
 				BranchSessionID: br.ChildSessionID,
-				CreationPath:    "explicit",
+				CreationPath:    br.CreationPath,
 			}, a.now())
 		a.publishBranchCreated(br.ChildSessionID)
+		// Optional handoff seed AFTER the replayed history. Only an
+		// explicit SystemPromptOverride seeds here — unlike the legacy
+		// path there is no TaskHint/Title fallback, because the anchored
+		// child already carries the conversation and the "Branch from
+		// this turn" menu never sends an override (its behaviour is
+		// unchanged). Written through the SAME appendHandoff seam the
+		// legacy path uses (one AppendMessage call site, see G-1).
+		//
+		// A failed seed is reported, not swallowed: the branch exists
+		// (returned alongside the error) but the caller asked for a
+		// handoff that did not land, and a tool result claiming it did
+		// would be a lie. errors.Is(err, ErrHandoffSeedFailed).
+		if seed := strings.TrimSpace(opts.SystemPromptOverride); seed != "" {
+			if err := a.appendHandoff(ctx, br.ChildSessionID, seed); err != nil {
+				return toWire(br), fmt.Errorf("%w: %v", ErrHandoffSeedFailed, err)
+			}
+		}
 		return toWire(br), nil
 	}
 
@@ -220,7 +498,7 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 	// message. v1 uses the system prompt override when non-empty; else
 	// a tiny placeholder ("<task hint or title>"). Bundle B's kernel
 	// can replace this once the compaction strategies wire in.
-	if a.cfg.Sessions != nil {
+	{
 		handoff := strings.TrimSpace(opts.SystemPromptOverride)
 		if handoff == "" {
 			handoff = strings.TrimSpace(opts.TaskHint)
@@ -229,10 +507,10 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 			handoff = strings.TrimSpace(opts.Title)
 		}
 		if handoff != "" {
-			_, _ = a.cfg.Sessions.AppendMessage(ctx, child.ID, session.Message{
-				Role:    session.RoleUser,
-				Content: handoff,
-			})
+			// Legacy behaviour preserved: a failed seed here has always
+			// been swallowed (the "+ Fork" modal has no partial-success
+			// surface). The explicit path above reports it instead.
+			_ = a.appendHandoff(ctx, child.ID, handoff)
 		}
 	}
 
@@ -263,6 +541,23 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 
 	a.publishBranchCreated(br.ChildSessionID)
 	return toWire(br), nil
+}
+
+// appendHandoff writes text as a user message on the child session — the
+// ONE branch-handoff writer in this file (G-1, scripts/ci/allowlists/
+// i-session-message-writers.txt). Both CreateBranch arms route their
+// seed through here so a new seeding caller (kenaz__fork_conversation)
+// adds no new session_messages call site. nil Sessions is a no-op, the
+// same degraded-boot posture the legacy path always had.
+func (a *API) appendHandoff(ctx context.Context, childSessionID, text string) error {
+	if a.cfg.Sessions == nil {
+		return nil
+	}
+	_, err := a.cfg.Sessions.AppendMessage(ctx, childSessionID, session.Message{
+		Role:    session.RoleUser,
+		Content: text,
+	})
+	return err
 }
 
 // ListWithBranchTree returns a flat list of sessions with parent pointers
@@ -348,8 +643,10 @@ func (a *API) GetBranchStatus(ctx context.Context, branchID string) (BranchStatu
 	if err != nil {
 		return BranchStatus{}, err
 	}
+	wire := toWire(br)
+	a.enrichSubagentFields(ctx, &wire)
 	out := BranchStatus{
-		Branch:         toWire(br),
+		Branch:         wire,
 		ChildSessionID: br.ChildSessionID,
 	}
 	// Best-effort child activity snapshot.
@@ -606,6 +903,148 @@ func (a *API) SetAdvisorDismissed(ctx context.Context, sessionID string, dismiss
 			Scope:  "session",
 			Reason: "dont_suggest_again",
 		}, a.now())
+	return nil
+}
+
+// AbortSubagent stops a dispatched sub-agent's underlying run and
+// marks its task cancelled (subagent-control-and-background-tasks-
+// 01PMZB11 UNIT-8). Delegates to Tasks.Abort for the actual stop — see
+// core/tasks.Registry.Abort's doc for the pid-vs-stopFunc mechanics —
+// this method is the branch-scoped resolver + gate + audit wrapper
+// around that existing call, not a second stop implementation.
+//
+// Idempotent: a second call against an already-terminal task (Abort
+// returns coretasks.ErrAlreadyTerminal) returns nil without writing a
+// second audit record — the state transition already happened once,
+// on whichever call produced it.
+func (a *API) AbortSubagent(ctx context.Context, branchID string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentAbort(ctx, a.cfg.Cedar, branchID); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	if a.cfg.Tasks == nil || a.cfg.TaskLookup == nil {
+		return ErrSubagentUnavailable
+	}
+	taskID, ok := a.cfg.TaskLookup.TaskIDForBranch(branchID)
+	if !ok {
+		return ErrSubagentTaskNotFound
+	}
+	if err := a.cfg.Tasks.Abort(ctx, taskID); err != nil {
+		if errors.Is(err, coretasks.ErrAlreadyTerminal) {
+			// Idempotent no-op: nothing changed, so nothing new to audit.
+			return nil
+		}
+		return fmt.Errorf("branches: abort subagent: %w", err)
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentAborted,
+		audit.SubagentAbortedPayload{BranchID: branchID, TaskID: taskID}, a.now())
+	return nil
+}
+
+// SteerSubagent appends a user message to a dispatched sub-agent's
+// child session (subagent-control-and-background-tasks-01PMZB11
+// UNIT-8) — the mirror of AppendToParent (used by the merge path
+// above), but onto br.ChildSessionID instead of br.ParentSessionID.
+func (a *API) SteerSubagent(ctx context.Context, branchID, message string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" || strings.TrimSpace(message) == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentSteer(ctx, a.cfg.Cedar, branchID, utf8.RuneCountInString(message)); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	br, err := a.cfg.Conversations.Get(ctx, branchID)
+	if err != nil {
+		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
+	}
+	if a.cfg.Sessions == nil {
+		return ErrManagerUnavailable
+	}
+	if _, err := a.cfg.Sessions.AppendMessage(ctx, br.ChildSessionID, session.Message{
+		Role:    session.RoleUser,
+		Content: message,
+	}); err != nil {
+		return fmt.Errorf("branches: append child: %w", err)
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentSteered,
+		audit.SubagentSteeredPayload{BranchID: branchID, MessageLength: utf8.RuneCountInString(message)}, a.now())
+	return nil
+}
+
+// PauseSubagent arms a dispatched sub-agent's turn-pause signal
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, owner ruling
+// E-002). Delegates to Config.PauseControl.Pause — see
+// chat.SubagentPauseRegistry / coreag.Env.TurnPause / the loop
+// executor's consult site (core/agentgraph/exec_control.go) for the
+// consumption half. This method is the branch-scoped resolver + gate +
+// audit wrapper, not a second storage mechanism.
+//
+// Idempotent: a second Pause while already paused (PauseControl.Pause
+// returns changed=false) returns nil without writing a second audit
+// record — mirrors Abort's idempotency contract.
+func (a *API) PauseSubagent(ctx context.Context, branchID string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentPause(ctx, a.cfg.Cedar, branchID); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	br, err := a.cfg.Conversations.Get(ctx, branchID)
+	if err != nil {
+		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
+	}
+	if a.cfg.PauseControl == nil {
+		return ErrSubagentPauseUnavailable
+	}
+	if !a.cfg.PauseControl.Pause(br.ChildSessionID) {
+		// Idempotent no-op: already paused, nothing new to audit.
+		return nil
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentPaused,
+		audit.SubagentPausedPayload{BranchID: branchID}, a.now())
+	return nil
+}
+
+// ResumeSubagent clears a dispatched sub-agent's turn-pause signal so
+// its next turn begins again (UNIT-8). Mirrors PauseSubagent's shape;
+// delegates to Config.PauseControl.Resume.
+//
+// Idempotent: Resume against a branch that was never paused, or
+// already resumed (PauseControl.Resume returns changed=false), returns
+// nil without writing a second audit record.
+func (a *API) ResumeSubagent(ctx context.Context, branchID string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentResume(ctx, a.cfg.Cedar, branchID); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	br, err := a.cfg.Conversations.Get(ctx, branchID)
+	if err != nil {
+		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
+	}
+	if a.cfg.PauseControl == nil {
+		return ErrSubagentPauseUnavailable
+	}
+	if !a.cfg.PauseControl.Resume(br.ChildSessionID) {
+		// Idempotent no-op: was not paused, nothing new to audit.
+		return nil
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentResumed,
+		audit.SubagentResumedPayload{BranchID: branchID}, a.now())
 	return nil
 }
 

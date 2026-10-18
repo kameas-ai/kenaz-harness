@@ -49,6 +49,20 @@ func (s *ServerInstance) healthPinger() {
 				"consecutive", consecutiveFailures,
 			)
 			if consecutiveFailures >= 2 {
+				if !s.autoRestartEnabled() {
+					// connector-lifecycle-truth-01PMZ303 UNIT-9:
+					// Settings.MCPAutoRestart is off. The server
+					// stays up but unresponsive rather than being
+					// cycled — log once per trip so the failure is
+					// still visible, then reset the counter exactly
+					// as the restart path does so a later recovery
+					// doesn't leave a stale count lying around.
+					s.logger.Warn("mcp.recipe.ping_failed.restart_disabled",
+						"recipe", s.id,
+					)
+					consecutiveFailures = 0
+					continue
+				}
 				// Trip a restart by signalling crash. The supervisor
 				// owns history accounting; we just close the
 				// channel.
@@ -78,4 +92,16 @@ func (s *ServerInstance) isRestarting() bool {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	return s.state == StateRestarting
+}
+
+// autoRestartEnabled reads s.opts.AutoRestartEnabled live — once per
+// trip decision, never cached — so a Settings toggle flipped mid-run
+// takes effect on the next ping-failure trip without a restart of the
+// harness itself. Nil (the option unset) defaults to enabled, matching
+// Settings.MCPAutoRestart's documented "Default true".
+func (s *ServerInstance) autoRestartEnabled() bool {
+	if s.opts.AutoRestartEnabled == nil {
+		return true
+	}
+	return s.opts.AutoRestartEnabled()
 }

@@ -56,6 +56,10 @@ type MetricsStore interface {
 	Get(ctx context.Context, chunkID string) (ChunkMetrics, error)
 	RollWindow(ctx context.Context, now time.Time) error
 	PromotionCandidates(ctx context.Context, threshold float64, weights PromotionWeights) ([]string, error)
+	// Delete drops chunkID's metrics row — called whenever the chunk
+	// itself is removed so its signals do not outlive it
+	// (memory-sync-01MEMSY01 WP09, H10). Missing rows are not an error.
+	Delete(ctx context.Context, chunkID string) error
 }
 
 // ---- In-memory implementation ----
@@ -93,6 +97,14 @@ func (s *MemMetricsStore) getOrCreate(chunkID string) *ChunkMetrics {
 		s.metrics[chunkID] = m
 	}
 	return m
+}
+
+// Delete implements MetricsStore.
+func (s *MemMetricsStore) Delete(_ context.Context, chunkID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.metrics, chunkID)
+	return nil
 }
 
 // IncrementRetrievals bumps the retrieval counter for chunkID.

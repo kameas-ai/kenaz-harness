@@ -66,7 +66,9 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/anthropic"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
@@ -236,7 +238,7 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
-	cedarEngine := buildCedarEngineOrNil(dataDir)
+	cedarEngine := buildCedarEngineOrNil(dataDir, nil)
 	if cedarEngine == nil {
 		t.Fatal("buildCedarEngineOrNil returned nil over a real DataDir — cannot prove the gate/grant interaction")
 	}
@@ -263,7 +265,7 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 	if memStore == nil {
 		t.Fatal("openMemoryStore returned nil over a real DataDir")
 	}
-	graphMgr, _, _ := newGraphManagerWithDeps(c, nil, nil, memStore, nil, bashStore, nil, cedarEngine, nil, nil)
+	graphMgr, _, _, _ := newGraphManagerWithDeps(c, nil, nil, memStore, nil, bashStore, nil, cedarEngine, nil, nil, nil)
 	if graphMgr == nil {
 		t.Fatal("newGraphManagerWithDeps returned a nil manager")
 	}
@@ -320,7 +322,18 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 
 	stack := newLLMStack(c, broker, store, nil, nil, func() bool { return false },
 		nil, nil, nil, bashStore, nil, graphMgr, nil, nil, nil, nil,
-		exposureIdx, nil, nil, nil, confirmAuditEmitter{}, cedarEngine, nil)
+		exposureIdx, nil, nil, nil, confirmAuditEmitter{}, nil, cedarEngine, nil, nil, nil, nil, nil)
+	// Blocker 2 follow-up (found by core/rpc/blocker2_goroutine_leak_test.go
+	// under the full package's -race run, 2026-09-11): newLLMStack itself
+	// calls sweepScheduler.Start() when it builds a non-nil compaction
+	// scheduler over a real DataDir — this is independent of, and bypasses,
+	// the New()-level pruneScheduler gate the rest of Blocker 2 audited.
+	// Every direct newLLMStack test call site over a real Core leaks a
+	// compaction.(*SweepScheduler).loop goroutine unless it stops the
+	// scheduler itself; there is no full *API here for Shutdown() to do it.
+	if stack.compactionScheduler != nil {
+		t.Cleanup(stack.compactionScheduler.Stop)
+	}
 
 	if stack.chatRunner == nil {
 		t.Fatal("newLLMStack produced no chatRunner — cannot drive StartStream")
@@ -347,7 +360,14 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 		t.Fatalf("SessionManager().Create: %v", err)
 	}
 	sessionID := sessRec.ID
-	if _, err := stack.chatRunner.StartStream(ctx, prof.ID, sessionID, "", "run it"); err != nil {
+	// The user turn is persisted by the caller, as every production
+	// caller does; the chat runner never writes it
+	// (chat-single-writer-01DOGF0G).
+	userRow, err := c.SessionManager().AppendMessage(ctx, sessionID, session.Message{Role: session.RoleUser, Content: "run it"})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if _, err := stack.chatRunner.StartStream(ctx, prof.ID, sessionID, "", chat.UserTurn{MessageID: userRow.ID, Text: "run it", Announce: true}); err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 
@@ -444,7 +464,7 @@ func TestB4_BackgroundSanitizerWiring_ResolvedSecretRedactedInTaskLog(t *testing
 		nil, // exposureIdx
 		nil, // budget
 		nil, // posture
-		taskReg,
+		taskReg, nil,
 	)
 	bashTool, ok := registry.Lookup(corebash.Name)
 	if !ok {

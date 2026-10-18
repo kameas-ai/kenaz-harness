@@ -199,6 +199,13 @@ type Options struct {
 	// SessionIDFromCtx extracts the owning session ID from a context.
 	// nil means the task is registered without an owner.
 	SessionIDFromCtx func(ctx context.Context) string
+	// EnvProvider returns extra environment entries for every process
+	// this tool spawns, foreground and background (ml-producer-01MLPRD01
+	// WP02: KENAZ_ACTOR=agent, KENAZ_SESSION=h(root session) — the
+	// markers that let the person-side daemon skip agent activity). When
+	// set, the child env is os.Environ() plus these entries (later wins).
+	// nil inherits the process env unchanged.
+	EnvProvider func(ctx context.Context) []string
 }
 
 // BackgroundSpawnFunc is the function the bash tool calls to register a
@@ -244,6 +251,7 @@ type Tool struct {
 	backgroundSetPID            BackgroundSetPIDFunc
 	backgroundEnd               BackgroundEndFunc
 	sessionIDFromCtx            func(ctx context.Context) string
+	envProvider                 func(ctx context.Context) []string
 }
 
 // New constructs a Tool with the given options. SandboxRoot must be
@@ -268,6 +276,7 @@ func New(opts Options) *Tool {
 		backgroundSetPID:            opts.BackgroundSetPID,
 		backgroundEnd:               opts.BackgroundEnd,
 		sessionIDFromCtx:            opts.SessionIDFromCtx,
+		envProvider:                 opts.EnvProvider,
 	}
 }
 
@@ -326,6 +335,17 @@ type callResult struct {
 	ExitCode  int    `json:"exit_code"`
 	Truncated bool   `json:"truncated"`
 	RunID     string `json:"run_id,omitempty"`
+	// Refused marks a result where bash's OWN gate (Cedar, the legacy
+	// allowlist, the working-dir sandbox, a declined permission prompt)
+	// refused the command: no process ran. NotRun marks a result where
+	// the command did not run for a non-policy reason (secret resolution
+	// failure, a background spawn that could not register or start).
+	// Both carry exit_code -1, which a real process can also report, so
+	// they are the explicit discriminator consumers key on
+	// (ml-producer-01MLPRD01 WP02: such calls are not `terminal` events).
+	// omitempty: a result of a command that ran is byte-for-byte unchanged.
+	Refused bool `json:"refused,omitempty"`
+	NotRun  bool `json:"not_run,omitempty"`
 }
 
 // backgroundResult is the JSON return shape when run_in_background=true.
@@ -387,6 +407,7 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			return marshalResult(callResult{
 				Stderr:    "command not allowed: " + progBase,
 				ExitCode:  -1,
+				Refused:   true,
 				Truncated: false,
 			})
 		}
@@ -399,6 +420,7 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			Stderr:    err.Error(),
 			ExitCode:  -1,
 			Truncated: false,
+			Refused:   true,
 		})
 	}
 
@@ -426,6 +448,7 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			return marshalResult(callResult{
 				Stderr:   "secret resolution failed: " + subErr.Error(),
 				ExitCode: -1,
+				NotRun:   true,
 			})
 		}
 		commandLine = sub
@@ -467,6 +490,7 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		Cwd:            cwd,
 		Timeout:        timeout,
 		MaxOutputBytes: DefaultMaxOutputBytes,
+		Env:            t.childEnv(ctx),
 	})
 	exitCode := res.ExitCode
 	rawStderr := string(res.Stderr)
@@ -509,6 +533,17 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		Truncated: res.Truncated,
 		RunID:     runID,
 	})
+}
+
+// childEnv is the environment for a spawned process: nil (inherit) when
+// no EnvProvider is wired, else os.Environ() plus the provider's entries.
+// exec.Cmd keeps the LAST value of a duplicated key, so the provider's
+// markers win over any inherited KENAZ_ACTOR / KENAZ_SESSION.
+func (t *Tool) childEnv(ctx context.Context) []string {
+	if t.envProvider == nil {
+		return nil
+	}
+	return append(os.Environ(), t.envProvider(ctx)...)
 }
 
 // allocRunID returns a unique run-id for the cache. Falls back to a
@@ -568,72 +603,115 @@ func (t *Tool) cedarGate(ctx context.Context, argv []string, workingDir string) 
 		res, _ := marshalResult(callResult{
 			Stderr:   "cedar policy denied: " + dec.Reason,
 			ExitCode: -1,
+			Refused:  true,
 		})
 		return false, res
 
-	default: // NotApplicable
+	case cedar.NotApplicable:
 		if t.promptRegistry == nil {
 			// No registry — default-allow stance.
 			t.logf("bash.gate.not_applicable.allow_unbooted", "pattern", pattern)
 			return true, nil
 		}
-		surface := cedar.PromptSurface{
-			Bash: &cedar.BashPromptSurface{
-				Pattern:    pattern,
-				Argv:       argv,
-				WorkingDir: workingDir,
-				Dangerous:  isDangerous,
-			},
-		}
-		resolution, err := t.promptRegistry.RequestInteractive(ctx, surface)
-		if err != nil {
-			// Context cancelled or invalid surface — deny.
-			t.logf("bash.gate.prompt_err", "err", err.Error())
+		return t.promptBashGate(ctx, pattern, argv, workingDir, isDangerous)
+
+	case cedar.Confirm:
+		// risk-rated-autonomy-01PMRA01 WP01: no producer sends Confirm
+		// through this gate today — layer 3 (cedar.ThreeLayerResolve)
+		// is wired into the chat kernel tool adapter's confirm-each
+		// ladder, not into t.cedarEngine.Evaluate here. This branch is
+		// explicit and defensive: it reuses the exact same interactive
+		// prompt path NotApplicable uses when a registry is wired, but
+		// UNLIKE NotApplicable it fails CLOSED with no registry.
+		// Confirm means "a human decision is required"; there is no
+		// pre-boot legacy reason to read that as allow the way an
+		// un-evaluated NotApplicable has.
+		if t.promptRegistry == nil {
+			t.logf("bash.gate.confirm.deny_unbooted", "pattern", pattern)
 			res, _ := marshalResult(callResult{
-				Stderr:   "permission prompt error: " + err.Error(),
+				Stderr:   "cedar policy requires confirmation but no prompt channel is available",
 				ExitCode: -1,
+				Refused:  true,
 			})
 			return false, res
 		}
+		return t.promptBashGate(ctx, pattern, argv, workingDir, isDangerous)
 
-		switch resolution.Decision {
-		case cedar.DecisionDeny:
-			t.logf("bash.gate.prompt_deny", "pattern", pattern, "reason", resolution.Reason)
-			res, _ := marshalResult(callResult{
-				Stderr:   "permission denied by user: " + resolution.Reason,
-				ExitCode: -1,
-			})
-			return false, res
+	default:
+		// Unreachable for the closed Outcome enum (Allow/Deny/
+		// NotApplicable/Confirm are all handled above); fail closed
+		// rather than silently proceed if that ever stops being true.
+		t.logf("bash.gate.unknown_outcome", "pattern", pattern)
+		res, _ := marshalResult(callResult{
+			Stderr:   "cedar policy: unrecognised outcome",
+			ExitCode: -1,
+			Refused:  true,
+		})
+		return false, res
+	}
+}
 
-		case cedar.DecisionAllowOnce:
-			t.logf("bash.gate.allow_once", "pattern", pattern)
-			return true, nil
+// promptBashGate runs the interactive RequestInteractive round trip
+// shared by the NotApplicable and Confirm branches of cedarGate.
+func (t *Tool) promptBashGate(ctx context.Context, pattern string, argv []string, workingDir string, isDangerous bool) (allow bool, result json.RawMessage) {
+	surface := cedar.PromptSurface{
+		Bash: &cedar.BashPromptSurface{
+			Pattern:    pattern,
+			Argv:       argv,
+			WorkingDir: workingDir,
+			Dangerous:  isDangerous,
+		},
+	}
+	resolution, err := t.promptRegistry.RequestInteractive(ctx, surface)
+	if err != nil {
+		// Context cancelled or invalid surface — deny.
+		t.logf("bash.gate.prompt_err", "err", err.Error())
+		res, _ := marshalResult(callResult{
+			Stderr:   "permission prompt error: " + err.Error(),
+			ExitCode: -1,
+			Refused:  true,
+		})
+		return false, res
+	}
 
-		case cedar.DecisionAllowAlways:
-			if isDangerous && !t.dangerousOpsCacheAllowed() {
-				// Demote to AllowOnce; emit audit annotation.
-				// The entry is already resolved by RequestInteractive so
-				// we cannot call Resolve again. Log the demotion scope
-				// and proceed — the transient grant from AllowOnce would
-				// require the user to have picked AllowOnce; since they
-				// picked AllowAlways and we demote, the next invocation
-				// re-prompts. This is intentional (§4.3 FR-015).
-				t.logf("bash.gate.allow_always.dangerous_demoted",
-					"pattern", pattern,
-					"scope", "once_dangerous_demoted",
-				)
-				return true, nil
-			}
-			// Non-dangerous AllowAlways (or dangerous + override): write
-			// a .cedar snippet so the next gate query resolves via Allow
-			// without a prompt.
-			t.writePolicySnippet(pattern)
-			return true, nil
+	switch resolution.Decision {
+	case cedar.DecisionDeny:
+		t.logf("bash.gate.prompt_deny", "pattern", pattern, "reason", resolution.Reason)
+		res, _ := marshalResult(callResult{
+			Stderr:   "permission denied by user: " + resolution.Reason,
+			ExitCode: -1,
+			Refused:  true,
+		})
+		return false, res
 
-		default:
-			// Unknown decision — allow conservatively.
+	case cedar.DecisionAllowOnce:
+		t.logf("bash.gate.allow_once", "pattern", pattern)
+		return true, nil
+
+	case cedar.DecisionAllowAlways:
+		if isDangerous && !t.dangerousOpsCacheAllowed() {
+			// Demote to AllowOnce; emit audit annotation.
+			// The entry is already resolved by RequestInteractive so
+			// we cannot call Resolve again. Log the demotion scope
+			// and proceed — the transient grant from AllowOnce would
+			// require the user to have picked AllowOnce; since they
+			// picked AllowAlways and we demote, the next invocation
+			// re-prompts. This is intentional (§4.3 FR-015).
+			t.logf("bash.gate.allow_always.dangerous_demoted",
+				"pattern", pattern,
+				"scope", "once_dangerous_demoted",
+			)
 			return true, nil
 		}
+		// Non-dangerous AllowAlways (or dangerous + override): write
+		// a .cedar snippet so the next gate query resolves via Allow
+		// without a prompt.
+		t.writePolicySnippet(pattern)
+		return true, nil
+
+	default:
+		// Unknown decision — allow conservatively.
+		return true, nil
 	}
 }
 

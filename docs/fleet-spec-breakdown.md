@@ -67,7 +67,7 @@ Key surfaces:
 - Per-feature gates: cloud surfaces (share buttons, catalog tabs, analytics links) consult `capability.Has(...)` before rendering
 - Fail-soft: when offline / not signed in, all cloud capabilities return `false`; no UI errors
 
-Acceptance: signed-in user with Pro tier sees `hosted_inference: true`, `shared_team_graph: false`, etc. Tier downgrade propagates within 5min. UI elements gated correctly. Logged-out state hides all cloud features.
+Acceptance: signed-in user with Pro tier sees `hosted_inference: true`, `team_graph_sharing: false` (the real fleet key; this doc originally said `shared_team_graph`, which fleet never served), etc. Tier downgrade propagates within 5min. UI elements gated correctly. Logged-out state hides all cloud features.
 
 ### C. `fleet-config-pull-01NDFSEX10` (v0.19.0, **M**, ~12h)
 

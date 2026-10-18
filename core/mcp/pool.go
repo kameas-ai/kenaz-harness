@@ -6,10 +6,10 @@ import (
 )
 
 type ServerSpec struct {
-	Name      string            `json:"name"`
-	Transport string            `json:"transport"`
-	Command   []string          `json:"command,omitempty"`
-	URL       string            `json:"url,omitempty"`
+	Name      string   `json:"name"`
+	Transport string   `json:"transport"`
+	Command   []string `json:"command,omitempty"`
+	URL       string   `json:"url,omitempty"`
 	// PostURL is the client→server endpoint for SSE recipes. Only
 	// populated when Transport=="sse".
 	PostURL string            `json:"post_url,omitempty"`
@@ -30,6 +30,27 @@ type ServerSpec struct {
 	// RequestTimeoutMs is the per-POST timeout for the http transport,
 	// in milliseconds. 0 → DefaultRequestTimeout (30 s).
 	RequestTimeoutMs int `json:"request_timeout_ms,omitempty"`
+	// InitTimeoutMs overrides the pool-wide post-spawn initialize
+	// deadline for this one server, in milliseconds. 0 → the pool's
+	// configured default (transport.DefaultInitTimeout when that is
+	// also unset). Populated from recipes.Recipe.InitTimeoutMs
+	// (connector-lifecycle-truth-01PMZ303 UNIT-12) — before this, every
+	// recipe's declared init_timeout_ms was discarded and every stdio
+	// server got the same process-wide 5s deadline regardless of what
+	// its own catalog entry declared.
+	InitTimeoutMs int `json:"init_timeout_ms,omitempty"`
+	// PingPeriodMs overrides the pool-wide health-ping cadence for this
+	// one server, in milliseconds. 0 → the pool's configured default.
+	// Populated from recipes.Recipe.PingPeriodMs.
+	PingPeriodMs int `json:"ping_period_ms,omitempty"`
+	// On401, when set, is called synchronously the first time the http
+	// transport observes a 401 response from this server. Used by
+	// served-mode OAuth connectors to invalidate a cached broker token
+	// so the next ConnectorToken call re-fetches rather than re-serving
+	// a token the upstream just rejected (fleet-enforcement-truth-
+	// 01PMZ505 WP14, AC-026). Not JSON-marshaled — a func value would
+	// fail json.Marshal if this struct is ever serialized.
+	On401 func() `json:"-"`
 }
 
 type Tool struct {

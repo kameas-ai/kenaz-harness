@@ -7,12 +7,22 @@
  * (via a control that appears when the active model has a reasoning knob).
  *
  * Architecture:
- *   - The panel receives the current session knobs as props and emits
- *     a 'change' event when the user saves.
- *   - The parent (SessionsView) owns the state and calls Sessions_SetKnobsDefault
- *     (migration 0330) to persist to the DB.
- *   - Until the backend RPC method is wired, the change event updates
- *     local session state so the UX is complete end-to-end.
+ *   - The panel receives the current session knobs as props and calls
+ *     client.sessions.setKnobsDefault(sessionId, knobs) directly on save
+ *     (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11) — this
+ *     persists to sessions.knobs_default (migration 0330) via
+ *     Sessions_SetKnobsDefault.
+ *   - The "Saved" badge renders ONLY after that call resolves. Before
+ *     this WP the badge rendered unconditionally after emit('change', …)
+ *     regardless of whether anything was ever persisted — this file's
+ *     own docstring conceded it ("Until the backend RPC method is
+ *     wired, the change event updates local session state"), and
+ *     Sessions_SetKnobsDefault did not exist anywhere in the tree
+ *     before WP10 landed it.
+ *   - The 'change' event still fires (with the persisted result) so the
+ *     parent's local activeReasoningConfig ref stays in sync without a
+ *     second round-trip — but the badge's truth now comes from the
+ *     persist call's outcome, not from the emit alone.
  *
  * ReasoningStyle routing:
  *   - 'effort_string'  → dropdown: minimal | low | medium | high
@@ -25,6 +35,9 @@
 
 import { ref, watch, computed } from 'vue';
 import type { ReasoningConfig, ReasoningStyle } from '@/lib/types';
+import { useHarnessClient } from '@/lib/harnessClientContext';
+
+const client = useHarnessClient();
 
 const props = defineProps<{
   sessionId: string;
@@ -87,13 +100,21 @@ function validate(): string | null {
   return null;
 }
 
-function onSave() {
+async function onSave() {
   saveError.value = null;
   saved.value = false;
 
   const err = validate();
   if (err) {
     saveError.value = err;
+    return;
+  }
+
+  if (!props.sessionId) {
+    // Defensive: sessionId is a required prop, but a caller that
+    // passes '' (ReasoningControl.vue defaults sessionId ?? '') would
+    // otherwise persist an override against no session at all.
+    saveError.value = 'No active session — cannot save.';
     return;
   }
 
@@ -105,18 +126,41 @@ function onSave() {
     const n = parseInt(tokenBudget.value, 10);
     if (n > 0) updated.anthropicThinkingBudget = n;
   }
+  const toSave = Object.keys(updated).length > 0 ? updated : null;
 
-  emit('change', Object.keys(updated).length > 0 ? updated : null);
+  try {
+    await client.sessions.setKnobsDefault(props.sessionId, toSave);
+  } catch (e) {
+    saveError.value = e instanceof Error ? e.message : String(e);
+    return;
+  }
+
+  // Only reached on a successful persist — the badge asserts "saved",
+  // not "the local form state changed."
+  emit('change', toSave);
   saved.value = true;
   setTimeout(() => {
     saved.value = false;
   }, 2000);
 }
 
-function onReset() {
+async function onReset() {
+  saveError.value = null;
+
+  if (!props.sessionId) {
+    saveError.value = 'No active session — cannot reset.';
+    return;
+  }
+
+  try {
+    await client.sessions.setKnobsDefault(props.sessionId, null);
+  } catch (e) {
+    saveError.value = e instanceof Error ? e.message : String(e);
+    return;
+  }
+
   effortLevel.value = '';
   tokenBudget.value = '';
-  saveError.value = null;
   emit('change', null);
 }
 </script>

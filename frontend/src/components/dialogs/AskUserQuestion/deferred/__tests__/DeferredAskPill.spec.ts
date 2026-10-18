@@ -18,8 +18,9 @@ function fireEvent(topic: string, payload: unknown) {
   for (const h of eventHandlers[topic] ?? []) h(payload);
 }
 
-function makeWrapper() {
+function makeWrapper(props: { sessionId?: string } = {}) {
   return mount(DeferredAskPill, {
+    props,
     attachTo: document.body,
     global: {
       plugins: [
@@ -90,5 +91,41 @@ describe('DeferredAskPill', () => {
     fireEvent('elicit:deferred', { ...fakeAsk, request_id: 'ask-d2', question: 'Another?' });
     await flushPromises();
     expect(wrapper.find('[data-testid="deferred-ask-pill"]').text()).toContain('2');
+  });
+
+  // ── UNIT-15 (automation-actually-runs-01PMZ404): session scoping ──
+  //
+  // "elicit:deferred" is a process-wide broker topic; SessionHeader
+  // mounts one DeferredAskPill per open session, so a pill mounted for
+  // session A must not surface session B's pending question.
+
+  it('sessionId prop filters out asks from a different session', async () => {
+    const wrapper = makeWrapper({ sessionId: 'sess-a' });
+    fireEvent('elicit:deferred', { ...fakeAsk, session_id: 'sess-b' });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="deferred-ask-pill"]').exists()).toBe(false);
+  });
+
+  it('sessionId prop shows asks that match the session', async () => {
+    const wrapper = makeWrapper({ sessionId: 'sess-a' });
+    fireEvent('elicit:deferred', { ...fakeAsk, session_id: 'sess-a' });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="deferred-ask-pill"]').exists()).toBe(true);
+  });
+
+  it('sessionId prop omitted shows every session (pre-UNIT-15 behavior, unfiltered)', async () => {
+    const wrapper = makeWrapper();
+    fireEvent('elicit:deferred', { ...fakeAsk, session_id: 'sess-a' });
+    fireEvent('elicit:deferred', { ...fakeAsk, request_id: 'ask-d2', session_id: 'sess-b' });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="deferred-ask-pill"]').text()).toContain('2');
+  });
+
+  it('a mixed batch with sessionId set counts only the matching session', async () => {
+    const wrapper = makeWrapper({ sessionId: 'sess-a' });
+    fireEvent('elicit:deferred', { ...fakeAsk, session_id: 'sess-a' });
+    fireEvent('elicit:deferred', { ...fakeAsk, request_id: 'ask-d2', session_id: 'sess-b' });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="deferred-ask-pill"]').text()).toContain('1');
   });
 });

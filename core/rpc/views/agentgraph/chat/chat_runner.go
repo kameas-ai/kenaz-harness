@@ -11,16 +11,22 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/advice"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/event"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/genaitrace"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
+	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
@@ -88,25 +94,52 @@ type SessionMessageReader interface {
 	History(ctx context.Context, sessionID string, n int) ([]coreag.Message, error)
 }
 
+// UserTurn is the already-persisted user message that opens a chat turn
+// — see llmview.UserTurn for the field contract. Aliased rather than
+// redeclared so the LLM view's ChatRunner interface and this runner name
+// one type.
+type UserTurn = llmview.UserTurn
+
 // TurnSpanReader resolves the id of the most recent user message in a
 // session — the id that IS a turn's span
 // (model-moves-transcript-01PMCH01 WP02).
 //
-// StartStream normally learns the span from its own write: it appends
-// the user turn and the seam hands back the row's id. But StartStream is
-// also called with an EMPTY userMessage on two live paths — the
-// keychain-rotation redrive (RedriveLastTurn) and the multimodal send,
-// where the frontend has already landed the user's row through
-// Sessions_SendMessageWithBlocks. Those turns have a span; this runner
-// just did not write it. Without a lookup their moves would be
-// span-less, which AppendTranscriptEntry rejects, so the whole turn
-// would silently fall back to the pre-mission single-row behaviour.
+// SINGLE WRITER (chat-single-writer-01DOGF0G). This runner never writes
+// the user turn: the row is persisted, once, by whoever asked for the
+// run (Sessions_AppendMessage / Sessions_SendMessageWithBlocks, the
+// scheduler, the sub-agent spawner, the resume starter). The caller
+// normally hands the row's id in on UserTurn.MessageID; this seam is the
+// fallback for a caller that could not resolve it.
+//
+// History: StartStream used to learn the span from its OWN append of the
+// user text, and consulted this reader only on the "empty userMessage"
+// paths, whose comment claimed the frontend had already landed the row
+// only for multimodal sends. In fact the frontend lands EVERY turn, so
+// every text turn was stored twice and the span pointed at the runner's
+// copy (dogfood F12). The lookup branch is now the only way a span is
+// resolved when the caller does not pass one.
 //
 // SessionMessageReader cannot answer this: coreag.Message carries no id
 // (deliberately — the kernel has no use for one), which is why this is a
 // separate, narrow seam rather than a widening of that one.
 type TurnSpanReader interface {
 	LatestUserMessageID(ctx context.Context, sessionID string) (string, error)
+}
+
+// UserTurnAnnouncer is the optional half of the HistoryWriter seam that
+// reports an existing user row to fleet context-sync without writing it
+// (chat-single-writer-01DOGF0G FR-1d).
+//
+// The runner's old re-append was the ONLY path by which a user turn
+// reached SessionSyncer.AppendEvent — the production writer fires the
+// sync hook on every AppendEntry, and the frontend's Sessions_AppendMessage
+// never touches it. Removing the second write without this seam would
+// have silently stopped every user turn reaching fleet session sync. The
+// production writer (core/rpc llmHistoryWriter) implements it with the
+// same hook and the same payload AppendEntry uses; a writer that does not
+// implement it simply has no sync to feed.
+type UserTurnAnnouncer interface {
+	AnnounceUserTurn(ctx context.Context, sessionID, messageID string)
 }
 
 // HistoryWriter is the persistence surface the SessionWriteNode kind
@@ -182,10 +215,49 @@ type GraphLoader func() (coreag.Graph, error)
 // cannot be shown as graphs.
 type RunSpecRecorder func(runID string, g coreag.Graph)
 
+// TurnRunRecorder persists which kernel run executed a chat turn
+// (agentgraph-settings-linkage-01DOGF0D WP03, migration
+// sessions/0342-session-turn-runs). RunSpecRecorder above is in-memory
+// and bounded; this is the durable half — it is what lets a transcript
+// turn from yesterday link to /agentgraph/run/:runId. *session.Manager
+// satisfies it. specDigest is agentgraph.SpecDigest of the resolved
+// spec: which version of graphID the run executed.
+//
+// RecordTurnOutcome stamps how the run ended onto the same row
+// (undelivered-message-retry, migration sessions/0344): whether the model
+// accepted the request (Delivered) and, for a failure, its classified
+// reason. It is written by driveRun BEFORE the llm:stream-closed emit, so
+// a surface that reloads Sessions_TurnRuns on close always sees it; it is
+// what makes a message's NOT DELIVERED state survive a reload.
+type TurnRunRecorder interface {
+	RecordTurnRun(ctx context.Context, sessionID, turnSpanID, runID, graphID, specDigest string) error
+	RecordTurnOutcome(ctx context.Context, sessionID, runID string, o session.TurnRunOutcome) error
+}
+
 // AnswerInjector pushes the latest user message answer into the
-// kernel's AskBus for the supplied (runID, askNodeID). The chassis
-// wires this to the agentgraph manager's askRouter so the chat
-// runner can reuse the existing pause/resume plumbing.
+// kernel's AskBus for the supplied (runID, askNodeID).
+//
+// CHAT-12 justify(blocker: "chat's ask/pause handling does not need
+// live injection into an already-running kernel", owner: alec, date:
+// 2026-08-29; chat-turn-integrity-01PMZ606 WP13): this type has zero
+// references anywhere in the tree — not even in chat.Config, and not
+// in a test. The doc line that used to claim "the chassis wires this
+// to the agentgraph manager's askRouter" was aspirational, not a
+// description of running code. Under A-0 this is not deleted.
+//
+// What actually happens instead: each chat turn constructs a FRESH
+// AskBus and pre-seeds it with the user's message before the kernel
+// run starts (StartStream, coreag.NewMemAskBus() + askBus.Answer(subID,
+// chatAskNodeID, turn.Text)) rather than resuming an already-paused
+// kernel mid-run. AnswerInjector's shape — inject an answer into a run
+// that is ALREADY executing, keyed by (runID, nodeID) — has no current
+// caller because chat never keeps a kernel run paused across a
+// send-message round trip; it starts a new run per turn. Wiring this
+// would need a use case that does not exist yet in the chat surface: an
+// ask node pausing mid-run that a follow-up user message resumes
+// WITHOUT starting a fresh kernel run. If that shape lands (e.g. a
+// multi-question ask flow inside one turn), this is the seam to wire it
+// through — do not build a second one.
 type AnswerInjector func(runID, nodeID, answer string)
 
 // ToolCatalogDiscoverer projects the chassis-side MCP pool catalog
@@ -208,16 +280,20 @@ type Config struct {
 	Broker        Broker
 	History       SessionMessageReader
 	HistoryWriter HistoryWriter
-	// TurnSpan resolves the turn's span id when StartStream is called
-	// without a user message (model-moves-transcript-01PMCH01 WP02).
-	// nil means such a turn writes classic entries, as it did before the
-	// mission — see TurnSpanReader for why that path exists at all.
+	// TurnSpan resolves the turn's span id when the caller's UserTurn
+	// carries no MessageID (model-moves-transcript-01PMCH01 WP02;
+	// chat-single-writer-01DOGF0G). nil means such a turn writes classic
+	// entries — see TurnSpanReader.
 	TurnSpan    TurnSpanReader
 	GraphLoader GraphLoader
 	MaxTurns    MaxTurnsResolver
 	// RunSpecRecorder registers each turn's resolved spec so the run can
 	// be materialized as a graph afterwards (WP12). Nil disables it.
 	RunSpecRecorder RunSpecRecorder
+	// TurnRuns records each turn's run id against its turn span (WP03 of
+	// agentgraph-settings-linkage-01DOGF0D). Nil means turns are not
+	// linkable to their run graphs after the fact; chat still runs.
+	TurnRuns TurnRunRecorder
 	// ReasoningBudget resolves the extended-thinking budget per run.
 	// Nil is safe and means "reasoning off" (today's behaviour).
 	ReasoningBudget ReasoningBudgetResolver
@@ -235,6 +311,17 @@ type Config struct {
 	// tool list. nil disables discovery — the chat path still works,
 	// but the model is never told about any tools.
 	ToolDiscoverer ToolCatalogDiscoverer
+	// ToolExposure decides, per model call, which discovered tools are
+	// sent in full and which are summarised in kenaz__load_tools'
+	// description (tool-context-budget-01TCBUD01 §2.1–2.3), and stops
+	// calls to tools the session was not sent. nil sends the whole
+	// discovered catalog on every call. Production wiring is
+	// *loadtools.Service.
+	ToolExposure ToolExposure
+	// ModelWindow returns a model's context window, which caps the tool
+	// schema budget at 15 % of it (spec FR-B1). nil (or 0) is an unknown
+	// window: the budget setting applies uncapped.
+	ModelWindow ModelWindowFunc
 	// Attachments resolves the session's system-kind attachments onto
 	// each LLMProviderAdapter (first-run-onboarding-01PMOB01 WP02). nil
 	// disables the layer — pre-existing behaviour for every session
@@ -245,6 +332,12 @@ type Config struct {
 	// ordinary session's attached context via NewSessionDialog.vue) is
 	// stored correctly but never reaches the model.
 	Attachments AttachmentsResolver
+	// KnobsDefault resolves the session-level RequestKnobs override onto
+	// each LLMProviderAdapter (model-settings-reach-the-model-01PMZ101
+	// UNIT-6 / WP10). nil disables the layer — every request's Knobs
+	// stays nil, pre-existing behaviour for every session before this
+	// field existed. Production wiring is *session.Manager.
+	KnobsDefault KnobsDefaultResolver
 	// EnvDefaults is an optional callback the runner invokes on the
 	// constructed Env before kernel.Run; production wiring threads
 	// Memory / Policy / Branch / Hooks-journal seams through it.
@@ -282,6 +375,30 @@ type Config struct {
 	// called yet), provider kind, model id, and the full llm.Response.
 	// nil disables usage capture entirely.
 	UsageHook UsageHookFunc
+
+	// PostSendHook is an optional callback that fires the core/hooks
+	// `post_send` event (fix for ledger #46 — "post_send hooks never
+	// fire, only 1 of 18 hook events works, and memory.persist rides on
+	// it"). Registered on the SAME HookPostLLM boundary as UsageHook, so
+	// it fires on the real send path (StartStream -> driveRun ->
+	// SessionWriteNode) instead of the legacy `(a *API) buildMessages`
+	// method in core/rpc/views/llm/impl.go, which has had zero
+	// production callers since the agent-kernel-graph-chat-migration
+	// cutover (commit f0b17126, 2026-04-27) — a call wired there would
+	// compile, pass a direct-invocation test, and still never run in a
+	// shipped build.
+	//
+	// The callback receives the session id, the user turn that started
+	// this run, the assistant text this LLM call produced, the provider
+	// kind, the model id, and the response's finish reason. nil disables
+	// post_send entirely (including the memory.persist builtin).
+	PostSendHook PostSendHookFunc
+
+	// TurnUsage is told when a user turn starts and when one fails. It is
+	// the usage-telemetry seam for the conversation lifecycle; per-response
+	// token usage reaches the same consumer through UsageHook. nil disables
+	// it. See TurnUsageObserver for what it may and may not be given.
+	TurnUsage TurnUsageObserver
 
 	// PartialPersister is the long-turn-resilience-01KR3PRS WP03 seam
 	// that handles the "kernel returned an error mid-stream" case: when
@@ -322,24 +439,57 @@ type Config struct {
 	// the adapter falls through to the permission resolver on every call
 	// (v0.3.0 baseline behaviour).
 	//
-	// KNOWN GAP (confirm-each-enforcement-01PMAG05): the doc line that
-	// used to sit here claimed "production wiring threads this from the
-	// session's resolved autonomy knobs at StartStream time". It does
-	// not — grep `AutonomyKnobs:` outside _test.go and there is no
-	// production call site. Every shipped build therefore leaves this
-	// nil, so the prompt-skip set never suppresses a confirmation and
-	// confirm_each always prompts.
+	// WIRED (chat-turn-integrity-01PMZ606 WP13, correcting a stale
+	// "KNOWN GAP" note): this field IS set in production —
+	// core/rpc/api.go's autonomyKnobsProvider closure (newLLMStack) is
+	// assigned to Config.AutonomyKnobs at the buildChatRunner call site
+	// (AutonomyKnobs: autonomyKnobsProvider). It is session-scoped, not
+	// global-only: the closure reads the global layer from Settings,
+	// then the session + project layers from c.SessionManager() /
+	// c.ProjectManager() keyed on the sessionID StartStream passes in,
+	// exactly the three-layer resolution the old comment said would
+	// require a signature change nobody had made. That change already
+	// happened (autonomy-knobs-live-01PMAG02 WP05).
 	//
-	// That is the SAFE direction, and it is why this was left rather
-	// than half-wired: the provider has no session parameter, so the
-	// only thing wireable here without a signature change is the global
-	// autonomy layer, and a global-only resolution would silently
-	// ignore per-project and per-session postures — a knob that lies
-	// about its scope is worse than a knob that is off. Wiring belongs
-	// with autonomy-knobs-live-01PMAG02 WP05, which owns the posture
-	// semantics; the mechanism (WP04) and its tests are complete and
-	// exercised at the adapter seam.
+	// If confirm_each is still prompting when the resolved knobs say it
+	// shouldn't, that is CHAT-05 (mission 01PMZ202, in flight alongside
+	// this one) — a separate defect in how the prompt-skip set built
+	// from AutoApproveFamilies is applied, not in whether this provider
+	// is reachable. Do not re-diagnose it here (spec.md E-001): this
+	// comment's job is only to stop asserting the provider has no
+	// production call site, which was false.
 	AutonomyKnobs AutonomyKnobsProvider
+
+	// SubagentBudgets is the session-keyed side channel a spawned
+	// sub-agent's profile-declared BudgetTokens/BudgetTimeS travels
+	// through (owner directive 2026-09-09, mission requirement 3). nil
+	// means no sub-agent profile ever clamps the tier-derived ceiling —
+	// every run's Budget comes from the graph + autonomy tier alone,
+	// today's behaviour for interactive sessions and for any build that
+	// hasn't wired core/rpc.NewSubagentRunSpawner's BudgetOverrides.
+	//
+	// Constructed once (New) and shared with the SAME instance
+	// NewSubagentRunSpawner writes into — see SubagentBudgets() below,
+	// which is how core/rpc's spawner wiring obtains the pointer without
+	// a second, drifting registry.
+	SubagentBudgets *SubagentBudgetRegistry
+
+	// SubagentPause is the session-keyed side channel
+	// core/rpc/views/branches.API.PauseSubagent/ResumeSubagent write
+	// into (subagent-control-and-background-tasks-01PMZB11 UNIT-8,
+	// owner ruling E-002). StartStream wires a gate backed by this
+	// registry onto every Env's TurnPause field — see
+	// core/agentgraph/executor.go's Env.TurnPause doc. nil (or an entry
+	// this session never has) means the run never pauses — today's
+	// behaviour for every interactive session and for any build that
+	// hasn't wired this registry.
+	//
+	// Constructed once (New) and shared with the SAME instance
+	// core/rpc/views/branches.Config.PauseControl wraps — see
+	// SubagentPause() below, mirroring SubagentBudgets()'s accessor
+	// shape so core/rpc's wiring obtains the pointer without a second,
+	// drifting registry.
+	SubagentPause *SubagentPauseRegistry
 
 	// Confirm is the confirm-each pause registry
 	// (confirm-each-enforcement-01PMAG05 WP02). It MUST be the same
@@ -430,6 +580,25 @@ type Config struct {
 	// g==nil branch — the same nil-tolerant posture every other
 	// Cedar-gated builtin in this package already has.
 	SecretGate cedar.Gate
+	// RiskGate is the Cedar gate risk-rated-autonomy-01PMRA01 WP02 wires
+	// into the kernel tool adapter's confirm-each ladder (rung 0, ahead
+	// of the autonomy-posture prompt-skip set): layer 1 forbid denies,
+	// layer 2 permit allows, layer 3 (Cedar had no opinion) forces the
+	// prompt rather than letting the tool's coarse family classification
+	// decide. nil disables the rung entirely — byte-identical to the
+	// pre-WP02 ladder. Production wiring passes the SAME live engine as
+	// SecretGate immediately above (core/rpc/api.go) — layers 1-2 must
+	// see the operator's real policy set, not a second, divergent one.
+	RiskGate cedar.Gate
+	// RiskRater is risk-rated-autonomy-01PMRA01 WP05's LLM implementation
+	// of the layer-3 risk score. Consulted by the kernel tool adapter's
+	// rung 0 ONLY when RiskGate is also wired and the resolved
+	// autonomy.ResolvedKnobs.RiskThreshold > 0 (FR-008: a call whose
+	// result cannot change the answer must not spend a model call). nil
+	// leaves layer 3 at the WP02/WP03 stub (always Confirm) —
+	// byte-identical to every caller that has not wired a rater.
+	// Production wiring is *risk.LLMRater (core/rpc/api.go).
+	RiskRater risk.RiskRater
 	// SecretBudget caps resolutions per locator (refs.DefaultBudget==50)
 	// across the process lifetime. nil is unlimited. Production wiring
 	// shares the SAME *refs.Budget the kenaz__list_secrets tool uses to
@@ -443,6 +612,20 @@ type Config struct {
 	// real one here: a durable audit sink is
 	// audit-that-tells-the-truth-01PMZA10 territory, not this WP's.
 	SecretAuditEmitter refs.AuditEmitter
+
+	// ── laya-advisors-01LAYA001 WP07: tiered advice delivery ───────────
+	//
+	// Advisor is the production advice.Advisor (core/rpc/api.go's
+	// chatAdvisor — a *labels.CaptureAdvisor wrapping a
+	// *advice.HeuristicAdvisor as of WP04-08). nil disables advice
+	// evaluation entirely: every call site below is nil-guarded, matching
+	// this package's every other optional collaborator.
+	Advisor advice.Advisor
+	// AdviceDeps bundles the session-state accessors and the auto-act
+	// executor the post-turn advice hook needs. nil is equivalent to
+	// Advisor being nil (see fireAdvice's guard) — a caller that wires
+	// Advisor without AdviceDeps gets no chips rather than a panic.
+	AdviceDeps *AdviceDeps
 }
 
 // PartialPersister is the resume-flow persistence seam. Invoked by
@@ -516,7 +699,53 @@ type StreamCheckpointStore interface {
 // alignment (backend-context-window-length-01KQ8TD3 WP06). The hook
 // must not block the chat turn — it should write async or accept the
 // latency.
-type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp corellm.Response)
+//
+// resp is the persisted row's OWN model call — the latest call, which is
+// what the context-window bar measures (last_usage_json /
+// session.usage.updated). billed is what to ADD to the session's
+// cumulative usage for this row: resp plus every earlier call in the turn
+// that produced no row of its own (a fire that only requested tools).
+// billed equals resp when there were none.
+type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp, billed corellm.Response)
+
+// TurnUsageObserver receives the conversation-lifecycle facts of a chat turn.
+//
+// As with agentgraph.ToolUsageObserver, the signature is the privacy boundary:
+// neither method has a parameter that could carry the user's message, the
+// model's text, or an error string. TurnFailed is given the output of
+// classifyPartialFailureKind — a closed set ("auth", "transient", "unknown")
+// — never the failure message it was derived from.
+//
+// Implementations must not block the turn.
+type TurnUsageObserver interface {
+	TurnStarted(ctx context.Context, sessionID, providerKind string)
+	TurnFailed(ctx context.Context, sessionID, failureKind string, recoverable bool)
+	// TurnEnded is called once per run that reached TurnStarted, beside
+	// the terminal outcome switch in driveRun (ml-producer-01MLPRD01
+	// WP02). outcome is the closed set TurnEndCompleted / TurnEndStopped /
+	// TurnEndFailed; modelCalls and toolCalls are the run's
+	// RunCounters.Snapshot(); dur runs from the TurnStarted point. ctx is
+	// the run's own context (it carries runposture), possibly already
+	// cancelled — implementations must read values from it, not wait on it.
+	TurnEnded(ctx context.Context, sessionID, outcome string, modelCalls, toolCalls int, dur time.Duration)
+}
+
+// Turn-end outcomes handed to TurnUsageObserver.TurnEnded.
+const (
+	TurnEndCompleted = "completed"
+	TurnEndStopped   = "stopped"
+	TurnEndFailed    = "failed"
+)
+
+// PostSendHookFunc is the callback signature for the core/hooks
+// `post_send` event. userTurn is the user message that started this
+// StartStream run; assistantTurn is the text this LLM call produced
+// (the same text SessionWriteNode just persisted). providerKind and
+// modelID mirror UsageHookFunc; finishReason is the response's
+// llm.Response.FinishReason ("stop", "tool_use", "error", …) — the
+// memory.persist builtin uses it to skip incomplete turns. The hook
+// must not block the chat turn.
+type PostSendHookFunc func(ctx context.Context, sessionID, userTurn, assistantTurn, providerKind, modelID, finishReason string)
 
 // CompactionDeps bundles every collaborator the pre-send compaction
 // hook needs. The runner reads the active aggressiveness tier on every
@@ -616,7 +845,11 @@ type pausedTurn struct {
 	sessionID     string
 	profileID     string
 	modelOverride string
-	pausedAt      time.Time
+	// turn is the paused run's own user turn, so the redrive re-runs the
+	// SAME persisted row — with its text still feeding the ask node, the
+	// post_send hook and the advisors — rather than a blank turn.
+	turn     UserTurn
+	pausedAt time.Time
 }
 
 // AuthFailedPayload is the broker payload emitted on the
@@ -644,6 +877,13 @@ type AuthFailedPayload struct {
 type AuthResumedPayload struct {
 	ProfileID string `json:"profile_id"`
 	NewSubID  string `json:"new_sub_id"`
+	// PausedSubID and SessionID identify the turn this redrive resumes,
+	// so a consumer that owns that turn can recognise NewSubID as the
+	// same run continuing (model-harness-toolset-01MHTS001 WP02 re-review:
+	// the scheduled-run dispatcher keeps its containment until the run's
+	// OWN streams end, redrives included).
+	PausedSubID string `json:"paused_sub_id,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
 }
 
 // RetryAfterRotationFailedPayload is the broker payload emitted on the
@@ -677,7 +917,21 @@ type ChatRunner struct {
 	mu         sync.Mutex
 	subs       map[string]*chatSub
 	pausedSubs map[string]*pausedTurn // keyed by profileID; last-write-wins
-	nextID     uint64
+	// adviceStates is laya-advisors-01LAYA001 WP07's per-session,
+	// process-lifetime bookkeeping for the post-turn advice hook (see
+	// advice_hook.go's sessionAdviceState doc comment). Protected by mu
+	// above, not a separate lock — reads/writes are cheap map lookups,
+	// never worth a dedicated mutex's added surface.
+	adviceStates map[string]*sessionAdviceState
+	// pendingContext is the env.PendingContext every chat run carries
+	// and every LLMProviderAdapter drains (v0.86.0 unwired sweep — see
+	// pending_context.go). Own lock; never nil on a New-constructed
+	// runner.
+	pendingContext *pendingContextQueue
+	// runs tracks driveRun goroutines and the work they spawn, so Drain /
+	// Shutdown can wait for them before the owner closes storage
+	// (run_drain.go).
+	runs runTracker
 }
 
 // chatSub is the per-StartStream bookkeeping entry.
@@ -686,9 +940,20 @@ type chatSub struct {
 	sessionID     string
 	profileID     string // retained for post-run auto-title trigger
 	modelOverride string // retained for post-run auto-title trigger
-	cancel        context.CancelFunc
-	done          chan struct{}
-	bridge        *StreamBridge
+	// turn is the user turn this run answers, retained so an auth-failure
+	// pause can hand it to RedriveLastTurn unchanged.
+	turn   UserTurn
+	cancel context.CancelFunc
+	done   chan struct{}
+	bridge *StreamBridge
+	// turnStartedAt is stamped where TurnUsage.TurnStarted fires; the
+	// TurnEnded duration runs from here.
+	turnStartedAt time.Time
+	// providerKind is the adapter kind of the run's profile, resolved
+	// once at StartStream so the terminal path can classify a failure
+	// with the provider's name ("Out of credits with OpenRouter") even
+	// when the typed error carries no registry decoration.
+	providerKind string
 	// journal is the turn's move journal
 	// (model-moves-transcript-01PMCH01 WP02). driveRun's terminal paths
 	// flush it, and the interrupt path records the partial through it so
@@ -712,6 +977,20 @@ type chatSub struct {
 	// ("inbound-ctx" — the signature of a desktop focus-loss / webview
 	// suspend killing the run). Empty until something cancels.
 	cancelCause atomic.Value // string
+	// effectiveTier is the autonomy.ResolvedKnobs.EffectiveTier resolved
+	// once at StartStream time (fix F8's single-resolution rule) and
+	// carried onto the sub so driveRun's terminal error handling can
+	// name which tier produced a budget cap without re-resolving
+	// (owner directive 2026-09-09: "agent reached the per-run budget
+	// cap" told the user nothing actionable).
+	effectiveTier autonomy.Tier
+	// pauseGen is the generation token SubagentPauseRegistry.BeginRun
+	// returned for this run (0 if SubagentPause is unwired). driveRun's
+	// cleanup defer passes it to EndRun so the pause-entry release is
+	// scoped to THIS run, never a later run that reused the same
+	// sessionID — see subagent_pause.go's BeginRun/EndRun doc for the
+	// race this closes (PR #334 review).
+	pauseGen uint64
 }
 
 // New constructs a ChatRunner. Every Config field is validated; a
@@ -751,19 +1030,26 @@ func New(cfg Config) (*ChatRunner, error) {
 		cfg.ReasoningBudget = func() int { return 0 }
 	}
 	return &ChatRunner{
-		cfg:        cfg,
-		subs:       map[string]*chatSub{},
-		pausedSubs: map[string]*pausedTurn{},
+		cfg:            cfg,
+		subs:           map[string]*chatSub{},
+		pausedSubs:     map[string]*pausedTurn{},
+		pendingContext: newPendingContextQueue(),
 	}, nil
 }
 
 // StartStream opens one chat run on the kernel's chat graph and
 // returns a subscription id. The runner spawns a goroutine that drives
 // the kernel; events fan onto the broker's "llm:stream-chunk" /
-// "llm:stream-closed" topics. The userMessage is the new turn — the
-// runner appends it to the session via cfg.HistoryWriter before
-// firing the kernel so HistoryReadNode picks it up at run start.
-func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, modelOverride, userMessage string) (string, error) {
+// "llm:stream-closed" topics.
+//
+// turn names the user message this run answers. It is ALREADY in the
+// session — HistoryReadNode reads it from there like every other row —
+// and this function has no path that writes it (chat-single-writer-
+// 01DOGF0G: the runner used to re-append the text it was given, which is
+// how every typed turn came to be stored, and sent to the model, twice).
+// turn.Text is consumed only: the ask-node pre-seed, the post_send hook,
+// the advisors.
+func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, modelOverride string, turn UserTurn) (string, error) {
 	if r == nil {
 		return "", errors.New("chat: nil runner")
 	}
@@ -773,32 +1059,53 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if sessionID == "" {
 		return "", errors.New("chat: session id required")
 	}
-
-	// Persist the user turn so HistoryReadNode sees it on the first
-	// fire of the kernel run.
-	//
-	// turnSpanID is this row's id. Every move the loop emits below
-	// carries it, and that shared id IS the turn's span
-	// (model-moves-transcript-01PMCH01 WP02). WP01 already returned it
-	// here and the value was discarded.
-	var turnSpanID string
-	if r.cfg.HistoryWriter != nil && userMessage != "" {
-		// Classic entry: the human turn itself is not a move. The move
-		// metadata goes on the entries the loop emits AFTER this one.
-		mid, werr := r.cfg.HistoryWriter.AppendEntry(ctx, sessionID, coreag.HistoryEntry{
-			Role:    "user",
-			Content: userMessage,
-		})
-		if werr != nil {
-			return "", fmt.Errorf("chat: persist user turn: %w", werr)
-		}
-		turnSpanID = mid
+	// Registered with the drain tracker up front (atomic with Shutdown's
+	// refusal); released on every early return, handed to driveRun on
+	// success.
+	if !r.runs.tryAdd() {
+		return "", ErrRunnerShutdown
 	}
+	runHandedOff := false
+	defer func() {
+		if !runHandedOff {
+			r.runs.done()
+		}
+	}()
+
+	// The turn's run id (agentgraph-settings-linkage-01DOGF0D WP02). It
+	// is both the stream subscription id the frontend holds and the
+	// kernel RunID every event of this turn is written under — and the
+	// event log is PERSISTENT (api.go buildAgentGraphEventLog ->
+	// NewSQLEventLog). It used to be "chat-<n>" from a per-process
+	// counter that restarted at 0 on every boot, so today's chat-1 and
+	// yesterday's chat-1 shared one run id in one durable log and
+	// materializing either projected both turns as one graph. A ULID is
+	// unique across restarts with no coordination. Allocated first, before
+	// anything this turn writes, so an allocation failure leaves no
+	// partial state behind (whichever writer owns the user row).
+	subID, err := newChatRunID()
+	if err != nil {
+		return "", err
+	}
+
+	// laya-advisors-01LAYA001 WP08: detect + audit a user-initiated model
+	// switch BEFORE this turn runs — see advice_hook.go's checkModelSwitch
+	// doc comment for why this fires here (synchronously, cheap) rather
+	// than from fireAdvice's goroutine.
+	r.checkModelSwitch(ctx, sessionID, profileID, modelOverride)
+
+	// Resolve the turn's span: the id of the persisted user row that
+	// opened it. Every move the loop emits below carries it, and that
+	// shared id IS the turn's span (model-moves-transcript-01PMCH01 WP02).
+	//
+	// SINGLE WRITER (chat-single-writer-01DOGF0G). The row was written by
+	// the caller's own append — never here. This block used to append
+	// `userMessage` through cfg.HistoryWriter and take the NEW row's id as
+	// the span, while the frontend had already landed the same turn via
+	// Sessions_AppendMessage: two rows per turn, the span on the runner's
+	// copy, the frontend's copy orphaned, and the model reading both.
+	turnSpanID := turn.MessageID
 	if turnSpanID == "" && r.cfg.TurnSpan != nil {
-		// The empty-userMessage paths (keychain redrive; the multimodal
-		// send, where the frontend already landed the user's row). The
-		// turn HAS a span — this runner just did not write it — so look
-		// it up rather than leaving the turn's moves unattributable.
 		if mid, serr := r.cfg.TurnSpan.LatestUserMessageID(ctx, sessionID); serr != nil {
 			logging.L().Warn("chat.turn_span.lookup_failed",
 				"session_id", sessionID, "err", serr.Error())
@@ -809,11 +1116,24 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if turnSpanID == "" {
 		// No user message anywhere in this session. Nothing to hang the
 		// turn's moves on, so the run writes classic entries exactly as
-		// it did before this mission. Loud, because in a real chat
-		// session it cannot happen.
+		// it did before model-moves. Loud, because in a real chat session
+		// it cannot happen.
 		logging.L().Warn("chat.turn_span.unresolved",
 			"session_id", sessionID,
 			"note", "turn writes classic entries; no user message to span from")
+	}
+	turn.MessageID = turnSpanID
+
+	// FR-1d: report the user turn to fleet context-sync exactly once.
+	// The runner's old re-append was the only path that fed the sync hook
+	// for user turns (it fired on the write); with the write gone, the
+	// same event is emitted for the existing row through the writer
+	// seam's announcer. Only a fresh turn announces — the keychain
+	// redrive re-runs a turn that already did.
+	if turn.Announce && turnSpanID != "" {
+		if announcer, ok := r.cfg.HistoryWriter.(UserTurnAnnouncer); ok {
+			announcer.AnnounceUserTurn(ctx, sessionID, turnSpanID)
+		}
 	}
 
 	// Compaction is no longer a pre-send pass here. It is a `compact`
@@ -845,6 +1165,16 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// ResolvedKnobs{} when no provider is wired, matching every
 	// consumer's existing nil-safe fallback.
 	resolvedKnobs := r.autonomyKnobs(ctx, sessionID)
+
+	// subagentBudget is the profile-declared BudgetTokens/BudgetTimeS
+	// for THIS session, when it was spawned by
+	// core/rpc.NewSubagentRunSpawner (mission requirement 3). Not-found
+	// for every interactive session — the registry is only ever Set for
+	// a spawned child session id. See applyProfileBudgetClamp below.
+	subagentBudget, hasSubagentBudget := SubagentBudget{}, false
+	if r.cfg.SubagentBudgets != nil {
+		subagentBudget, hasSubagentBudget = r.cfg.SubagentBudgets.Get(sessionID)
+	}
 
 	// model-scheduled-jobs-01PMSJ01 WP05: the per-run unattended posture
 	// (spec.md §5.4 / FR-003). Read from the INBOUND ctx — the caller
@@ -937,9 +1267,20 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if multimodalOutDisabledByEnv() {
 		imageCapturer = nil
 	}
+	// Tool exposure: one view per turn, shared by the LLM adapter (which
+	// picks each call's tools) and the tool adapter (which stops calls to
+	// tools the session was not sent). No catalog, no view.
+	var exposure *exposureTurn
+	if r.cfg.ToolExposure != nil && len(toolCatalog) > 0 {
+		exposure = newExposureTurn(ctx, r.cfg.ToolExposure, sessionID, toolCatalog)
+	}
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
+		withToolExposure(exposure).
+		withModelWindow(r.cfg.ModelWindow).
 		WithSessionID(sessionID).
 		WithAttachments(r.cfg.Attachments).
+		withPendingContext(r.pendingContext).
+		WithKnobsDefault(r.cfg.KnobsDefault).
 		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir, r.cfg.WorkspaceNote).
 		WithCustomInstructions(r.cfg.CustomInstructions).
 		// autonomy-knobs-live-01PMAG02 WP06: recapStyle was resolved
@@ -954,7 +1295,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		// (see buildAskBarBlock), so FR-005 holds with no AutonomyKnobs
 		// provider wired.
 		WithAskOnAmbiguity(func() autonomy.AskMode { return resolvedKnobs.AskOnAmbiguity })
-	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
+	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID).withToolExposure(exposure)
 	if r.cfg.AutonomyKnobs != nil {
 		// fix F8: pin the already-resolved value rather than handing the
 		// adapter r.cfg.AutonomyKnobs directly — Call() invokes this once
@@ -971,11 +1312,12 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// bus is still meaningful (it selects the headless policy) and the
 	// deps bundle's zero value is the safe configuration.
 	toolAdapter.withConfirm(r.cfg.Confirm).withConfirmDeps(r.cfg.ConfirmDeps)
-
-	r.mu.Lock()
-	r.nextID++
-	subID := fmt.Sprintf("chat-%d", r.nextID)
-	r.mu.Unlock()
+	// risk-rated-autonomy-01PMRA01 WP02: nil RiskGate leaves
+	// resolveConfirmEach's new rung 0 a no-op (pre-WP02 behaviour).
+	toolAdapter.withGate(r.cfg.RiskGate)
+	// risk-rated-autonomy-01PMRA01 WP05: nil RiskRater leaves rung 0's
+	// layer-3 branch at the WP02/WP03 stub (always Confirm).
+	toolAdapter.withRater(r.cfg.RiskRater)
 
 	bridge := NewStreamBridge(r.cfg.Broker, subID, sessionID)
 
@@ -989,9 +1331,23 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// resolved knobs and the tool catalog); the journal needs the
 	// bridge, which needs the sub id. Attaching afterwards keeps the
 	// construction order honest — the adapters hold pointers.
-	journal := newTurnJournal(r.cfg.HistoryWriter, bridge.Emit, sessionID, turnSpanID)
+	// r.cfg.UsageHook is threaded straight in (fix/usage-persists-on-
+	// every-move): the journal fires it directly for every persisted
+	// assistant-role row, final included (see moves.go's file header).
+	// Nil is fine — records() / fireUsage both nil-check before doing
+	// anything.
+	journal := newTurnJournal(r.cfg.HistoryWriter, bridge.Emit, sessionID, turnSpanID, r.cfg.UsageHook)
 	llmAdapter.WithMoveJournal(journal)
 	toolAdapter.withMoves(journal)
+	// Round 3 (fix/usage-persists-on-every-move): no separate wiring
+	// needed here for the revised-final case any more. LLMProviderAdapter
+	// .Generate calls journal.RecordCandidateUsage unconditionally for
+	// every fire with non-empty text — chat move or not — the instant
+	// each call's own response is computed, so AppendEntry can look up
+	// whichever call actually authored the persisted text by content,
+	// instead of reading a single mutable "last response" slot that
+	// exit_gate's own always-runs-last verdict call would otherwise own.
+	// See moves.go's RecordCandidateUsage / AppendEntry doc comments.
 	// env.HistoryWriter stays nil when nothing was configured, so
 	// applyEnvDefaults installs the kernel's ErrNoHistoryWriter stub and
 	// session_write still fails loudly. Interposing the journal there
@@ -1014,6 +1370,19 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		// (H-1) and cedar.Registry.RequestInteractive (H-3) read.
 		streamCtx = runposture.Unattended(streamCtx)
 	}
+	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04), post-review fix:
+	// stamp THIS turn's resolved posture onto streamCtx via ctx
+	// propagation (same mechanism as runposture.Unattended above)
+	// rather than mutating a.promptRegistry's shared r.posture field the
+	// way an earlier version of this WP did — a.promptRegistry is an
+	// explicit process-wide singleton, so a global SetPosture call let
+	// one session's resolved tier leak into every OTHER concurrently-
+	// running session's interactive prompts (a Strict-tier session's
+	// confirmations could be silently auto-allowed by a looser-tier
+	// sibling tab or subagent), and was a genuine unsynchronized read
+	// under -race besides. See applyPromptPostureToCtx and
+	// cedar.WithPromptPosture's doc comments for the full reasoning.
+	streamCtx = applyPromptPostureToCtx(streamCtx, r.cfg.AutonomyKnobs != nil, resolvedKnobs.EffectiveTier)
 
 	// Pre-seed the AskBus with the user's message so the chat graph's
 	// `ask_user` AskNode resolves on its first fire. The chat graph is
@@ -1022,7 +1391,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// run pauses on the next ask_user fire if the LoopNode body re-
 	// enters the AskNode for a follow-up turn.
 	askBus := coreag.NewMemAskBus()
-	askBus.Answer(subID, chatAskNodeID, userMessage)
+	askBus.Answer(subID, chatAskNodeID, turn.Text)
 
 	env := &coreag.Env{
 		RunID:     subID,
@@ -1068,7 +1437,35 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		// both treat zero as "use the package default" rather than
 		// "unlimited" -- which is why the gap survived: the behavioural
 		// guards worked while the volume guards silently did not.
-		Budget: applyTokenCeilingKnob(graph.Budget, resolvedKnobs),
+		//
+		// applyBudgetTierDial (owner directive 2026-09-09): until this,
+		// MaxLLMCallsPerRun and MaxToolCallsPerRun were the flat
+		// chat_default_classic.yaml constants (5000/10000) regardless of
+		// autonomy tier -- applyTokenCeilingKnob only ever touched
+		// MaxTokensPerRun. A Strict-tier session got the same call-volume
+		// ceiling as an Autonomous one; only the token ceiling scaled.
+		//
+		// applyProfileBudgetClamp (mission requirement 3): a spawned
+		// sub-agent's profile-declared BudgetTokens/BudgetTimeS, when
+		// present, narrows the tier-derived ceiling further -- it can
+		// only lower it, same nested-clamp rule as the two dials above.
+		// subagentBudget is the zero value / not-found for every
+		// interactive session (SubagentBudgets is keyed by spawned
+		// child session id only), so this is a no-op on the ordinary
+		// chat path.
+		Budget: applyProfileBudgetClamp(
+			applyBudgetTierDial(applyTokenCeilingKnob(graph.Budget, resolvedKnobs), resolvedKnobs.EffectiveTier),
+			subagentBudget, hasSubagentBudget,
+		),
+		// TurnPause (subagent-control-and-background-tasks-01PMZB11
+		// UNIT-8, owner ruling E-002): wired unconditionally, mirroring
+		// how Budget is wired unconditionally above — sessionTurnPauseGate
+		// and its backing SubagentPauseRegistry are both nil-receiver-safe,
+		// so this is a no-op Wait for every interactive session and for
+		// any build that hasn't wired r.cfg.SubagentPause. A spawned
+		// sub-agent's child session id only ever has an entry once
+		// Subagent_Pause is actually called against its branch.
+		TurnPause: sessionTurnPauseGate{reg: r.cfg.SubagentPause, sessionID: sessionID},
 		// AutoCompaction is the growth watermark in front of the
 		// kernel's own automatic pre_call site
 		// (turn-context-runway-01PMAG03 WP02).
@@ -1133,6 +1530,32 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if r.cfg.EnvDefaults != nil {
 		r.cfg.EnvDefaults(env)
 	}
+	// v0.86.0 unwired sweep: the write half of hook additional_context.
+	// env.LifecycleHooks (set by EnvDefaults above) fires pre_tool_use /
+	// post_tool_use, and tool_invocation.go hands any additional_context
+	// to env.PendingContext — which no production code ever set, so the
+	// context was dropped on every chat run. Set AFTER EnvDefaults so the
+	// process-wide closure cannot clobber the per-runner queue that this
+	// run's llmAdapter drains.
+	if env.PendingContext == nil && r.pendingContext != nil {
+		env.PendingContext = r.pendingContext
+	}
+	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04 second seam): apply
+	// the resolved posture mode to the Cedar gate env.Policy now points
+	// at, AFTER EnvDefaults so this isn't clobbered by the process-wide
+	// PolicyGateAdapter EnvDeps.applyTo installs. resolvedKnobs was
+	// already resolved once for this StartStream (fix F8) — reusing it
+	// here rather than re-deriving keeps that single-resolution
+	// invariant intact. The type assertion (rather than an import of
+	// core/rpc/views/agentgraph) keeps this package's dependency
+	// direction unchanged; a fake env.Policy that doesn't implement
+	// WithPostureMode is simply left as-is, matching every other
+	// unset-seam degrade in this function.
+	if pm, ok := env.Policy.(interface {
+		WithPostureMode(string) coreag.PolicyGate
+	}); ok {
+		env.Policy = pm.WithPostureMode(resolvedKnobs.PostureMode)
+	}
 	// WP12: register the spec this turn will actually execute, so the
 	// turn can be projected back into a graph afterwards. Recorded here
 	// — after the routing gate and the max-turns dial have finished
@@ -1141,6 +1564,19 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// not the file on disk.
 	if r.cfg.RunSpecRecorder != nil {
 		r.cfg.RunSpecRecorder(subID, graph)
+	}
+	// agentgraph-settings-linkage-01DOGF0D WP03: the durable turn -> run
+	// link. Same placement rule as the recorder above (the digest must
+	// describe the RESOLVED spec), and recorded before the kernel run
+	// starts so the live turn is linkable the moment StartStream returns.
+	// A failure is logged, never fatal: the link is observability, the
+	// turn is the product.
+	env.TurnSpanID = turnSpanID
+	if r.cfg.TurnRuns != nil {
+		if terr := r.cfg.TurnRuns.RecordTurnRun(ctx, sessionID, turnSpanID, subID, graph.ID, coreag.SpecDigest(graph)); terr != nil {
+			logging.L().Warn("chat.turn_run.record_failed",
+				"session_id", sessionID, "run_id", subID, "err", terr.Error())
+		}
 	}
 
 	// Register the per-turn usage hook via HookPostLLM so it fires
@@ -1153,19 +1589,81 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// provider kind and model id from the adapter so the usage hook can
 	// populate UsageTurn.ProviderKind / UsageTurn.ModelID for full
 	// token-cost-telemetry alignment.
-	if r.cfg.UsageHook != nil || r.cfg.GeneratedImageCapturer != nil {
+	if r.cfg.UsageHook != nil || r.cfg.GeneratedImageCapturer != nil || r.cfg.PostSendHook != nil {
 		if env.Hooks == nil {
 			env.Hooks = coreag.NewHookManager(env.Memory, env.SessionID, env.ProjectID)
 		}
 		capturedAdapter := llmAdapter
 		capturedSessionID := sessionID
-		if r.cfg.UsageHook != nil {
+		capturedJournal := journal
+		// fix/usage-persists-on-every-move, rounds 2+3: gated on
+		// !journal.records(). For every ordinary turn (a resolved span —
+		// the overwhelming majority) turnJournal.AppendEntry now fires
+		// usage for the final row itself (see moves.go). Registering
+		// THIS callback too would fire a SECOND write for the same row,
+		// and it would run AFTER the journal's own write (this hook
+		// fires once AppendEntry returns to sessionWriteExecutor), so it
+		// would silently overwrite the right value with whatever it
+		// found. journal.records() is false only for the degenerate
+		// no-user-message-to-span-from case, where the journal writes
+		// everything classic and never calls fireUsage itself — this
+		// registration is that case's only usage writer.
+		//
+		// It sources usage via capturedJournal.LookupCandidateUsage, NOT
+		// capturedAdapter.LastResponse() — RecordCandidateUsage runs
+		// unconditionally in Generate regardless of records(), so even
+		// an inert journal has the same content-matched history
+		// AppendEntry uses, and needs it for the same structural reason:
+		// on the ROUTED graph, exit_gate's own verdict call is ALWAYS
+		// the last Generate() before this hook fires, degenerate journal
+		// or not, so a "last response" read would ALWAYS be the gate's
+		// usage here too. There is no reader of LastResponse() left
+		// anywhere on the usage-firing path.
+		if r.cfg.UsageHook != nil && !journal.records() {
 			usageHook := r.cfg.UsageHook
-			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
-				resp := capturedAdapter.LastResponse()
-				providerKind := capturedAdapter.ProviderKind()
-				modelID := capturedAdapter.ActiveModelID()
-				usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp)
+			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, text string) {
+				resp, providerKind, modelID, ok := capturedJournal.LookupCandidateUsage(text)
+				if !ok {
+					// No recorded Generate() call produced this exact
+					// text — nothing to attribute usage to. Safer to
+					// skip than to guess.
+					logging.L().Warn("chat.usage.no_candidate_match",
+						"session_id", capturedSessionID, "message_id", messageID)
+					return
+				}
+				usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp, resp)
+			})
+		}
+		// Register the post_send hook (ledger #46). Unlike the usage hook
+		// above, this is NOT gated on journal.records(): memory.persist
+		// wants every real assistant reply SessionWriteNode lands, not
+		// just the one the usage journal attributes as the turn's final
+		// billed row. `text` here is exactly what exec_state.go's
+		// sessionWriteExecutor just wrote for role=="assistant" — the
+		// real persisted content, not an internal exit_gate verdict
+		// (exit_gate's own text never reaches this callback because it
+		// is never written as an assistant history row itself).
+		//
+		// FinishReason is looked up via capturedJournal.LookupCandidateUsage,
+		// NOT capturedAdapter.LastResponse() — the same fix the usage hook
+		// above already needed and documents just above: on a ROUTED
+		// graph, LastResponse() is exit_gate's own always-runs-last
+		// verdict call, not the Generate() that actually produced `text`.
+		// memory.persist's skip_on_finish_reason filter would silently
+		// key off the wrong call's finish reason otherwise. Falls back to
+		// providerKind/modelID from the adapter only when no candidate
+		// matches (never blocks the hook on a lookup miss).
+		if r.cfg.PostSendHook != nil {
+			postSendHook := r.cfg.PostSendHook
+			capturedUserMessage := turn.Text
+			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, text string) {
+				resp, providerKind, modelID, ok := capturedJournal.LookupCandidateUsage(text)
+				if !ok {
+					resp = capturedAdapter.LastResponse()
+					providerKind = capturedAdapter.ProviderKind()
+					modelID = capturedAdapter.ActiveModelID()
+				}
+				postSendHook(ctx, capturedSessionID, capturedUserMessage, text, providerKind, modelID, resp.FinishReason)
 			})
 		}
 		// WP02 (multimodal-io-extended-01KQ8TD2): drain buffered generated
@@ -1190,15 +1688,44 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		}
 	}
 
+	// laya-advisors-01LAYA001 WP07: the advice seam's turn-path threading
+	// point. Registered on the SAME HookPostLLM boundary as the usage/
+	// post-send/image hooks above (see advice_hook.go's file-header
+	// comment for why this never delays the turn) — but in a SEPARATE,
+	// unconditioned block, since advice evaluation's enablement
+	// (r.cfg.Advisor != nil) is independent of whether usage capture,
+	// post_send, or image capture happen to be wired.
+	if r.cfg.Advisor != nil {
+		if env.Hooks == nil {
+			env.Hooks = coreag.NewHookManager(env.Memory, env.SessionID, env.ProjectID)
+		}
+		capturedTier := resolvedKnobs.EffectiveTier
+		capturedProfileID, capturedModelOverride := profileID, modelOverride
+		env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(_ context.Context, sID, _, _ string) {
+			r.goTracked(func() { r.fireAdvice(sID, capturedProfileID, capturedModelOverride, turn.Text, capturedTier) })
+		})
+	}
+
 	sub := &chatSub{
 		id:            subID,
 		sessionID:     sessionID,
 		profileID:     profileID,
 		modelOverride: modelOverride,
+		turn:          turn,
 		cancel:        cancel,
 		done:          make(chan struct{}),
 		bridge:        bridge,
 		journal:       journal,
+		providerKind:  llmAdapter.ProviderKind(),
+		effectiveTier: resolvedKnobs.EffectiveTier,
+		// Claimed synchronously, here, rather than at the top of
+		// driveRun's goroutine: PauseSubagent can race in the instant
+		// StartStream returns subID to the caller, and BeginRun must
+		// have already registered this run as sessionID's active
+		// generation before that can happen, or a Pause call landing in
+		// that window would arm an unowned (owner==0) entry no run ever
+		// claims. See subagent_pause.go's BeginRun doc.
+		pauseGen: r.cfg.SubagentPause.BeginRun(sessionID),
 	}
 	r.mu.Lock()
 	r.subs[subID] = sub
@@ -1240,6 +1767,16 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		}
 	}()
 
+	sub.turnStartedAt = time.Now()
+	if r.cfg.TurnUsage != nil {
+		// The run is committed: everything that can refuse a turn (profile
+		// resolution, graph load, budget, lockdown) has already returned.
+		r.cfg.TurnUsage.TurnStarted(ctx, sessionID, llmAdapter.ProviderKind())
+	}
+	// The tracker slot taken at the top now belongs to driveRun (its
+	// first defer releases it), so Drain/Shutdown wait for the run's exit
+	// path, which writes storage after StartStream has returned.
+	runHandedOff = true
 	go r.driveRun(streamCtx, sub, env)
 	return subID, nil
 }
@@ -1254,11 +1791,32 @@ func (r *ChatRunner) StopStream(_ context.Context, subID string) error {
 		return fmt.Errorf("chat: subscription %q not found", subID)
 	}
 	sub.cancelCause.Store("stop-called")
+	// Before cancelling: the provider's own "context canceled" error
+	// chunk must not reach the surface as a failure.
+	sub.bridge.MarkStopped()
 	logging.L().Info("chat.run.stop_called",
 		"sub_id", subID, "session_id", sub.sessionID)
 	sub.cancel()
 	<-sub.done
 	return nil
+}
+
+// HasActiveRun reports whether a run for sessionID is still executing —
+// started and not yet at its terminal close. The llm view uses it to
+// refuse a second, concurrent Retry of the same turn
+// (undelivered-message-retry; llm.ActiveRunChecker).
+func (r *ChatRunner) HasActiveRun(sessionID string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, sub := range r.subs {
+		if sub.sessionID == sessionID && !sub.finished.Load() {
+			return true
+		}
+	}
+	return false
 }
 
 // HasPausedSubFor reports whether a paused turn exists for the given profileID.
@@ -1276,10 +1834,11 @@ func (r *ChatRunner) HasPausedSubFor(profileID string) (token string, ok bool) {
 }
 
 // RedriveLastTurn re-issues a StartStream for the captured (profileID,
-// sessionID, modelOverride) of a paused turn WITHOUT appending a new user
-// message — the user turn is already in session history courtesy of the
-// original StartStream. This is the auto-resume seam called by the LLM
-// view after a successful TestAndRotateKey.
+// sessionID, modelOverride, turn) of a paused turn. Nothing is appended —
+// the runner never appends a user turn — and the turn is not announced to
+// context-sync again: the original run already did. This is the
+// auto-resume seam called by the LLM view after a successful
+// TestAndRotateKey.
 //
 // Returns the new sub_id on success. The paused entry is removed from
 // pausedSubs regardless of the outcome so a failed redrive does not block
@@ -1296,10 +1855,14 @@ func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (new
 	if !ok {
 		return "", fmt.Errorf("chat: no paused turn for profile %q", profileID)
 	}
-	// StartStream with empty userMessage skips the HistoryWriter.AppendMessage
-	// call so the user turn is not double-appended (the HistoryWriter guard
-	// in StartStream checks `userMessage != ""`).
-	newSubID, err = r.StartStream(ctx, pt.profileID, pt.sessionID, pt.modelOverride, "")
+	// The SAME turn, minus the announce. Before chat-single-writer this
+	// passed an empty userMessage — which was what kept the old runner from
+	// appending the turn a third time, and which also handed the ask node,
+	// the post_send hook and the advisors an empty string for the redriven
+	// turn.
+	redrive := pt.turn
+	redrive.Announce = false
+	newSubID, err = r.StartStream(ctx, pt.profileID, pt.sessionID, pt.modelOverride, redrive)
 	if err != nil {
 		// The user rotated their key expecting the retry to work; a bare
 		// error return here told them nothing (B17, engineer-truth-pass
@@ -1323,8 +1886,10 @@ func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (new
 	// useSession clears its streamingError when the profile matches.
 	if r.cfg.Broker != nil {
 		r.cfg.Broker.Emit("provider:auth-resumed", AuthResumedPayload{
-			ProfileID: pt.profileID,
-			NewSubID:  newSubID,
+			ProfileID:   pt.profileID,
+			NewSubID:    newSubID,
+			PausedSubID: pt.subID,
+			SessionID:   pt.sessionID,
 		})
 	}
 	return newSubID, nil
@@ -1335,7 +1900,18 @@ func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (new
 // surface always sees a close signal — the bridge's Close() is
 // idempotent so a kernel-side Close that already fired is a no-op.
 func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env) {
+	// Registered first so it runs last: the run is not "done" for Drain
+	// until its whole exit path (checkpoint delete, close(sub.done)) is.
+	defer r.runs.done()
+	// The turn's span: every gen_ai.chat span of the run nests under it
+	// (llm-call-telemetry-01LLMTEL01 WP01). Ended after the exit path
+	// below, before the run is released to Drain.
+	ctx, turnSpan := genaitrace.StartTurn(ctx, sub.sessionID)
+	defer turnSpan.End()
 	log := logging.L()
+	// flushDone is closed when the periodic checkpoint flusher exits (nil
+	// when none was started).
+	var flushDone chan struct{}
 	defer func() {
 		// Recover any panic in the kernel run or the terminal
 		// classification/persist logic. Without this a panic would crash
@@ -1349,6 +1925,14 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 			// Best-effort: tell the frontend the turn ended so the typing
 			// indicator clears instead of hanging forever.
 			if sub.finished.CompareAndSwap(false, true) {
+				r.recordTurnOutcome(sub, session.TurnRunOutcome{
+					Outcome:        session.TurnOutcomeFailed,
+					Delivered:      sub.bridge.ModelResponded(),
+					FailureClass:   string(corellm.FailureUnknown),
+					FailureCode:    corellm.FailureCodeUnknown,
+					FailureSummary: "Internal error",
+				})
+				r.fireTurnEnded(ctx, sub, env, TurnEndFailed)
 				sub.bridge.EmitClosed("backend-error", "internal error", "")
 			}
 		}
@@ -1368,6 +1952,15 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// taken. `reason` is declared later in this function and is out
 		// of lexical scope for this defer, which is why this is
 		// unconditional rather than branching on it.
+		// End the run's context and wait for the periodic flusher BEFORE
+		// the delete below. Nothing cancelled streamCtx on a normal
+		// completion, so the flusher (and the inbound-ctx watcher in
+		// StartStream) outlived the run indefinitely — and a flusher tick
+		// landing after the delete could resurrect the checkpoint row.
+		sub.cancel()
+		if flushDone != nil {
+			<-flushDone
+		}
 		if r.cfg.StreamCheckpoints != nil {
 			delCtx, delCancel := context.WithTimeout(context.Background(), persistPartialTimeout)
 			if derr := r.cfg.StreamCheckpoints.DeleteStreamCheckpoint(delCtx, sub.sessionID, sub.id); derr != nil {
@@ -1379,6 +1972,30 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		r.mu.Lock()
 		delete(r.subs, sub.id)
 		r.mu.Unlock()
+		// Release this run's pause entry, if it owns one, unconditionally
+		// on every exit path — mirroring the r.subs delete above.
+		// Without this, a sub-agent paused and then aborted (rather than
+		// resumed) leaves its never-closed channel in
+		// SubagentPauseRegistry.paused for the life of the process:
+		// TurnPause.Wait returns ctx.Err() on abort and exits the loop,
+		// but nothing ever calls Resume to clear the entry.
+		//
+		// This calls EndRun, not Resume: a plain session-keyed Resume
+		// here would be unconditionally correct only if sessionIDs were
+		// never reused across runs, and they are (RedriveLastTurn
+		// re-issues StartStream for the same session; so does every
+		// ordinary next chat turn). A stale run's cleanup can stall here
+		// behind the DeleteStreamCheckpoint call above; a second run can
+		// start AND get freshly paused on the same sessionID before this
+		// stale cleanup resumes. EndRun(sessionID, pauseGen) only
+		// releases the entry if it is still owned by THIS run's
+		// generation, so it can never clear a newer run's pause — see
+		// subagent_pause.go's BeginRun/EndRun doc. EndRun is
+		// nil-receiver-safe (no-op when SubagentPause is unwired) and a
+		// no-op when this run never owned an entry (pauseGen==0, or the
+		// entry's owner has since moved on), so this is safe to call
+		// unconditionally rather than only on the abort path.
+		r.cfg.SubagentPause.EndRun(sub.sessionID, sub.pauseGen)
 		close(sub.done)
 	}()
 
@@ -1397,7 +2014,16 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	// outside a test fixture means the seam was never wired, not that
 	// periodic durability is an intentionally-disabled feature.
 	if r.cfg.StreamCheckpoints != nil {
-		go runPeriodicFlush(ctx, sub.sessionID, sub.id, sub.bridge, r.cfg.StreamCheckpoints, 0)
+		flushDone = make(chan struct{})
+		// Bind ctx by value: the closure would otherwise read the ctx
+		// variable driveRun reassigns below (sanitizer/resolver layers) —
+		// a race the old `go runPeriodicFlush(ctx, …)` form never had,
+		// because a go statement evaluates its arguments eagerly.
+		flushCtx, done := ctx, flushDone
+		go func() {
+			defer close(done)
+			runPeriodicFlush(flushCtx, sub.sessionID, sub.id, sub.bridge, r.cfg.StreamCheckpoints, 0)
+		}()
 	}
 
 	// model-moves-transcript-01PMCH01 WP02: whatever else happens, the
@@ -1461,6 +2087,10 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	reason := "completed"
 	message := ""
 	finishReason := ""
+	// failure is the classified reason a backend-error close carries
+	// (undelivered-message-retry): class + code + provider + sanitized
+	// provider message. Zero for every non-error close.
+	var failure corellm.RunFailure
 	// errorKind discriminates the terminal close beyond `reason` so the
 	// surface can render honest copy — see StreamClosedPayload.ErrorKind.
 	errorKind := ""
@@ -1489,6 +2119,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 			sessionID:     sub.sessionID,
 			profileID:     authFailed.ProfileID,
 			modelOverride: sub.modelOverride,
+			turn:          sub.turn,
 			pausedAt:      time.Now(),
 		}
 		r.mu.Lock()
@@ -1517,6 +2148,10 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		if !sub.finished.CompareAndSwap(false, true) {
 			return
 		}
+		// The run is over even though the stream stays open: record it so
+		// a reload shows the message as not delivered (a successful
+		// RedriveLastTurn is a later delivered run, which clears it).
+		r.recordTurnOutcome(sub, failedOutcome(corellm.ClassifyFailure(err, sub.providerKind), sub.bridge.ModelResponded()))
 		log.Info("chat.run.auth_failure_paused",
 			"sub_id", sub.id,
 			"session_id", sub.sessionID,
@@ -1539,6 +2174,14 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		})
 	}
 
+	// Request-too-large verdict for a context-overflow rejection: read
+	// before the switch because classifying it needs the session's
+	// history, and only the overflow arm consumes it.
+	var tooLarge *ErrRequestTooLarge
+	if err != nil && isContextOverflowError(err) {
+		tooLarge = r.classifyRequestTooLarge(context.WithoutCancel(ctx), sub.sessionID, sub.profileID, sub.modelOverride, err, sub.journal.TurnContent())
+	}
+
 	switch {
 	case err == nil:
 		reason = "completed"
@@ -1553,7 +2196,11 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		runTerminatedClean = true
 	case errors.Is(err, coreag.ErrBudgetExceeded):
 		reason = "backend-error"
-		message = "agent reached the per-run budget cap"
+		message = budgetCapMessage(err, sub.effectiveTier)
+		failure = corellm.RunFailure{
+			Class: corellm.FailureUserActionable, Code: failureCodeBudget,
+			Provider: sub.providerKind, Summary: "Reached the per-run budget cap",
+		}
 	case errors.Is(err, compaction.ErrSessionFull):
 		// The `compact` node decided the user is genuinely out of
 		// context: the dial is "off" and the session is already over
@@ -1572,6 +2219,22 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		reason = "backend-error"
 		message = compaction.ErrSessionFull.Error()
 		errorKind = StreamClosedErrorKindSessionFull
+	case err != nil && isContextOverflowError(err) && tooLarge != nil:
+		// The provider rejected the request for its size, but the
+		// session's history is empty or a small fraction of the window:
+		// the overflow is the request the harness built (tool schemas +
+		// system prompt), not the conversation. Compaction cannot help —
+		// there is nothing to summarise — so skip overflow recovery and
+		// say what is actually wrong instead of ErrSessionFull's "your
+		// conversation is full".
+		reason = "backend-error"
+		message = tooLarge.Error()
+		errorKind = StreamClosedErrorKindRequestTooLarge
+		failure = requestTooLargeFailure(sub.providerKind, tooLarge)
+		log.Warn("chat.run.request_too_large",
+			"sub_id", sub.id, "session_id", sub.sessionID,
+			"model", tooLarge.Model, "window", tooLarge.Window,
+			"history_tokens", tooLarge.HistoryTokens)
 	case err != nil && isContextOverflowError(err):
 		// Reactive context-overflow recovery (FR-005 / agent-loop-
 		// robustness-parity WP05), budgeted by
@@ -1611,7 +2274,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// stopped on its own".
 		reason = "stop-called"
 		cause := cancelCauseString(sub)
-		if cause == "inbound-ctx" {
+		if cause == "inbound-ctx" || cause == "app-shutdown" {
 			log.Warn("chat.run.aborted_by_inbound_ctx",
 				"sub_id", sub.id,
 				"session_id", sub.sessionID,
@@ -1636,8 +2299,44 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		}
 	default:
 		reason = "backend-error"
-		message = err.Error()
+		// Prefer the typed error's Friendly() text over the raw wrapped
+		// message. By kernel-exit time err.Error() carries the full
+		// graph-node chain ("loop: node ...: body ...: model: node ...:
+		// chat: registry stream: llm: ...") — useful in the log line
+		// above, but developer noise in a chat bubble. Friendly()
+		// renders fresh from the typed error's own fields (provider,
+		// status, message) and ignores the wrapping text entirely, so
+		// this also strips the node-chain prefix for every typed error
+		// in the taxonomy (ErrAuth, ErrPaymentRequired, ErrInvalidRequest,
+		// the attachment-error family, …), not just the case that
+		// prompted this fix. Untyped errors still fall back to
+		// err.Error() unchanged.
+		message = corellm.FriendlyOr(err, err.Error())
 	}
+	// The close Message reaches a chat bubble and, for a partial, a
+	// persisted row; Friendly() copy embeds the provider's raw error body
+	// verbatim, and some providers echo the offending key or header back
+	// in it. Redact every credential shape before it leaves the runner.
+	message = corellm.RedactCredentials(message)
+	if reason == "backend-error" && failure.Class == "" {
+		failure = corellm.ClassifyFailure(err, sub.providerKind)
+		if errorKind == StreamClosedErrorKindSessionFull {
+			failure.Class = corellm.FailureUserActionable
+			failure.Code = StreamClosedErrorKindSessionFull
+			failure.Summary = "The conversation no longer fits the model's context window"
+		}
+	} else if reason == "custom_endpoint_missing_capability" {
+		failure = corellm.ClassifyFailure(err, sub.providerKind)
+		failure.Class, failure.Code = corellm.FailureUserActionable, corellm.FailureCodeUnsupported
+		failure.Summary = "This endpoint does not support a capability this request needs"
+	}
+	// delivered: did the model accept this turn's request? Any streamed
+	// model output (text, reasoning, a tool call, usage, finish) means it
+	// did; a clean completion means it did. A failure before the first
+	// such event — a 402/401/429 on the response line, a refused
+	// connection — means the user's message never reached the model,
+	// which is what the chat surface renders as NOT DELIVERED.
+	delivered := runTerminatedClean || sub.bridge.ModelResponded()
 
 	// long-turn-resilience-01KR3PRS WP03: when the kernel exited with
 	// a backend-error AND the StreamBridge accumulated text deltas
@@ -1653,13 +2352,45 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	//     would surface a stale Resume button with no recovery upside.
 	//   - no PartialPersister wired: degrade to the WP00 frontend-only
 	//     fallback (the partial bubble's streamingError sub-line).
+	if reason == "backend-error" && r.cfg.TurnUsage != nil {
+		// Only the CLASSIFIED kind crosses this seam — `message` stays here.
+		// "recoverable" uses the PartialPersister definition: no tool_use
+		// executed, so a retry cannot double-bill a side effect.
+		_, ranTool := sub.bridge.PartialState()
+		r.cfg.TurnUsage.TurnFailed(context.WithoutCancel(ctx), sub.sessionID,
+			classifyPartialFailureKind(message), !ranTool)
+	}
+
 	var (
 		partialMessageID   string
 		partialFailureKind string
 		partialRecoverable bool
 	)
 	if reason == "backend-error" && r.cfg.PartialPersister != nil {
-		partialText, hasTool := sub.bridge.PartialState()
+		// finding #105: every completed move of this turn is ALREADY a
+		// persisted row (model-moves-transcript-01PMCH01 WP02) — the
+		// same reason interrupt.go's PersistInterrupt persists
+		// bridge.PartialSegment() (the un-persisted tail) rather than
+		// bridge.PartialState()'s whole-turn accumulation. This path
+		// used to call PartialState() for the text too, so a
+		// backend-error after >=1 completed move duplicated every
+		// earlier segment into the new partial row, and the duplicate
+		// then fed the model's own words back to it as context on the
+		// next turn. hasTool is still read from PartialState(): per
+		// the PartialPersister doc above, "recoverable" answers
+		// whether ANY tool_use executed anywhere in the turn (a
+		// continuation prompt would double-bill a tool's side effect),
+		// which is turn-wide by design — unlike the text, it is not
+		// scoped to the tail segment.
+		_, hasTool := sub.bridge.PartialState()
+		// chat-single-writer-01DOGF0G WP04: and not even the whole
+		// segment — only the part the move journal neither wrote nor
+		// holds. A segment the journal already owns (the parked last fire
+		// that the deferred Finish below will write, or a `final`
+		// session_write already wrote) persisted here became a kind-less
+		// failed twin of that move: the "extra assistant bubble" of
+		// dogfood F12. See turnJournal.UnpersistedTail.
+		partialText := sub.journal.UnpersistedTail(sub.bridge.PartialSegment())
 		if partialText != "" {
 			partialFailureKind = classifyPartialFailureKind(message)
 			partialRecoverable = !hasTool
@@ -1716,7 +2447,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	// at least one assistant message exists — all inside a fresh
 	// 5-second context (NFR-001).
 	if runTerminatedClean && r.cfg.AutoTitle != nil {
-		go r.fireAutoTitle(sub.sessionID, sub.profileID, sub.modelOverride)
+		r.goTracked(func() { r.fireAutoTitle(sub.sessionID, sub.profileID, sub.modelOverride) })
 	}
 
 	// Post-run merge-suggestion trigger (engineer-truth-pass-01PMTP01
@@ -1734,12 +2465,51 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	//       session (the overwhelming majority of chat turns).
 	if runTerminatedClean && reason == "completed" && finishReason != "paused" &&
 		env.MergeSuggester != nil && env.Branch != nil {
+		// finding #105 audit: PartialState() (whole-turn accumulation)
+		// is the RIGHT call here, unlike the backend-error site above.
+		// This value never gets persisted — fireMergeSuggestion only
+		// feeds it in-memory to MergeSuggester.Inspect's terminal-token
+		// heuristic ("does this reply read like a conclusion?"), so
+		// there is no duplicate-row hazard. And reason=="completed"
+		// means the turn ended cleanly, so SessionWriteNode already
+		// wrote the real transcript rows; this local variable is a
+		// throwaway copy for one heuristic check, not a second write.
+		// Semantically it also wants the whole-turn text: the heuristic
+		// judges "the reply the user just saw," which for a
+		// multi-segment turn is every segment concatenated, not only
+		// the last move's tail (PartialSegment() would silently drop
+		// earlier segments from the judgment for no reason tied to the
+		// heuristic's intent).
 		lastText, _ := sub.bridge.PartialState()
-		go r.fireMergeSuggestion(sub.sessionID, env.Branch, env.MergeSuggester, lastText)
+		r.goTracked(func() { r.fireMergeSuggestion(sub.sessionID, env.Branch, env.MergeSuggester, lastText) })
 	}
 
 	if !sub.finished.CompareAndSwap(false, true) {
 		return
+	}
+	// Flush the journal's parked segment BEFORE the close is announced:
+	// stream-closed subscribers read the transcript on that event (the
+	// scheduled-chat dispatcher's snippet, cost and empty-session check),
+	// so every row the turn produced must already be persisted. The
+	// deferred Finish above stays as the backstop for the paths that
+	// return without reaching here; Finish is idempotent.
+	{
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), persistPartialTimeout)
+		sub.journal.Finish(flushCtx)
+		flushCancel()
+	}
+	// Persist the outcome BEFORE the close is announced, so a surface
+	// that re-reads Sessions_TurnRuns on stream-closed sees it.
+	switch {
+	case runTerminatedClean:
+		r.recordTurnOutcome(sub, session.TurnRunOutcome{Outcome: session.TurnOutcomeCompleted, Delivered: true})
+		r.fireTurnEnded(ctx, sub, env, TurnEndCompleted)
+	case reason == "stop-called":
+		r.recordTurnOutcome(sub, session.TurnRunOutcome{Outcome: session.TurnOutcomeStopped, Delivered: delivered})
+		r.fireTurnEnded(ctx, sub, env, TurnEndStopped)
+	default:
+		r.recordTurnOutcome(sub, failedOutcome(failure, delivered))
+		r.fireTurnEnded(ctx, sub, env, TurnEndFailed)
 	}
 	sub.bridge.EmitClosedFull(StreamClosed{
 		Reason:             reason,
@@ -1749,6 +2519,9 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		PartialFailureKind: partialFailureKind,
 		PartialRecoverable: partialRecoverable,
 		ErrorKind:          errorKind,
+		TurnSpanID:         sub.turn.MessageID,
+		Delivered:          delivered,
+		Failure:            failure,
 	})
 	log.Info("chat.run.complete",
 		"sub_id", sub.id,
@@ -1758,8 +2531,74 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	)
 }
 
+// fireTurnEnded reports the run's end to TurnUsage. Nil-safe and
+// panic-proof: an observer bug must never break the terminal path (it runs
+// before the stream-closed emission).
+func (r *ChatRunner) fireTurnEnded(ctx context.Context, sub *chatSub, env *coreag.Env, outcome string) {
+	if r.cfg.TurnUsage == nil || sub == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			logging.L().Error("chat.turn_usage.turn_ended_panic",
+				"session_id", sub.sessionID, "panic", fmt.Sprintf("%v", rec))
+		}
+	}()
+	var modelCalls, toolCalls int
+	if env != nil && env.Counters != nil {
+		_, modelCalls, toolCalls, _ = env.Counters.Snapshot()
+	}
+	var dur time.Duration
+	if !sub.turnStartedAt.IsZero() {
+		dur = time.Since(sub.turnStartedAt)
+	}
+	r.cfg.TurnUsage.TurnEnded(ctx, sub.sessionID, outcome, modelCalls, toolCalls, dur)
+}
+
+// failureCodeBudget is the run-failure code for a per-run budget cap. It
+// is chat-local (the cap is a harness policy, not a provider error) and
+// user_actionable: retrying unchanged hits the same cap.
+const failureCodeBudget = "budget_exceeded"
+
+// failedOutcome builds the persisted outcome of a failed run.
+func failedOutcome(f corellm.RunFailure, delivered bool) session.TurnRunOutcome {
+	class := string(f.Class)
+	if class == "" {
+		class = string(corellm.FailureUnknown)
+	}
+	return session.TurnRunOutcome{
+		Outcome:         session.TurnOutcomeFailed,
+		Delivered:       delivered,
+		FailureClass:    class,
+		FailureCode:     f.Code,
+		FailureStatus:   f.Status,
+		FailureProvider: f.Provider,
+		FailureSummary:  f.Summary,
+		FailureMessage:  f.Message,
+	}
+}
+
+// recordTurnOutcome stamps the run's terminal outcome onto its
+// session_turn_runs row (undelivered-message-retry). Best-effort, like
+// RecordTurnRun: a failure is logged, never fatal — the outcome is what
+// makes NOT DELIVERED survive a reload, but the live close payload still
+// carries it for the open surface. A fresh context: the run's own ctx is
+// often already cancelled here.
+func (r *ChatRunner) recordTurnOutcome(sub *chatSub, o session.TurnRunOutcome) {
+	if r.cfg.TurnRuns == nil || sub == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), persistPartialTimeout)
+	defer cancel()
+	if err := r.cfg.TurnRuns.RecordTurnOutcome(ctx, sub.sessionID, sub.id, o); err != nil {
+		logging.L().Warn("chat.turn_run.outcome_record_failed",
+			"session_id", sub.sessionID, "run_id", sub.id, "err", err.Error())
+	}
+}
+
 // cancelCauseString returns the recorded cancellation cause for a sub
-// ("stop-called", "inbound-ctx") or "none" when nothing cancelled it.
+// ("stop-called", "inbound-ctx", "app-shutdown") or "none" when nothing
+// cancelled it.
 // Used by the terminal path to attribute a context.Canceled exit.
 func cancelCauseString(sub *chatSub) string {
 	if v, ok := sub.cancelCause.Load().(string); ok && v != "" {
@@ -1885,9 +2724,49 @@ func applyMaxTurnsDial(g *coreag.Graph, cap int) {
 // method again.
 func (r *ChatRunner) autonomyKnobs(ctx context.Context, sessionID string) autonomy.ResolvedKnobs {
 	if r == nil || r.cfg.AutonomyKnobs == nil {
-		return autonomy.ResolvedKnobs{}
+		// Every other field's zero value already means "no opinion" to
+		// its consumer (0 token ceiling = applyTokenCeilingKnob no-ops,
+		// 0 maxIterations = the maxTurns fallback below applies
+		// instead). EffectiveTier cannot use that convention: Tier's
+		// zero value is TierStrict, an ACTIVE tier with the tightest
+		// budget ceiling in the table, not "no tier." Without this
+		// explicit override, a chassis that never wires AutonomyKnobs
+		// (today, only test harnesses and a not-yet-configured boot --
+		// see the field's "WIRED... in production" doc above) would
+		// silently clamp every run's call-volume budget to Strict's
+		// ceiling instead of leaving it at the graph's declared value,
+		// which is what "no dial configured" should mean. TierDefault
+		// matches autonomy.DefaultLayer()'s own fallback.
+		return autonomy.ResolvedKnobs{EffectiveTier: autonomy.TierDefault}
 	}
 	return r.cfg.AutonomyKnobs(ctx, sessionID)
+}
+
+// SubagentBudgets returns the registry StartStream reads sub-agent
+// profile budget overrides from, so core/rpc's NewSubagentRunSpawner
+// wiring can obtain the SAME instance to write into rather than
+// constructing a second, unread one. Safe to call on a nil ChatRunner
+// or before Config.SubagentBudgets is set — both return nil, and every
+// SubagentBudgetRegistry method is nil-receiver-safe.
+func (r *ChatRunner) SubagentBudgets() *SubagentBudgetRegistry {
+	if r == nil {
+		return nil
+	}
+	return r.cfg.SubagentBudgets
+}
+
+// SubagentPause returns the registry StartStream wires onto every Env's
+// TurnPause field, so core/rpc/views/branches's Subagent_Pause /
+// Subagent_Resume wiring can obtain the SAME instance to write into
+// rather than constructing a second, unread one (subagent-control-and-
+// background-tasks-01PMZB11 UNIT-8). Safe to call on a nil ChatRunner
+// or before Config.SubagentPause is set — both return nil, and every
+// SubagentPauseRegistry method is nil-receiver-safe.
+func (r *ChatRunner) SubagentPause() *SubagentPauseRegistry {
+	if r == nil {
+		return nil
+	}
+	return r.cfg.SubagentPause
 }
 
 // askOnAmbiguityNeverDefaultAnswer is the stated assumption an AskNode
@@ -1916,7 +2795,47 @@ func init() {
 	knobcoverage.Register[autonomy.ResolvedKnobs]("ContinueOnError", "chat.continueOnErrorPolicy")
 	knobcoverage.Register[autonomy.ResolvedKnobs]("TokenCeilingPerTurn", "chat.applyTokenCeilingKnob")
 	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("SourceTrace", "resolver bookkeeping, not a tunable knob")
-	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("PostureMode", "resolver bookkeeping, not a tunable knob")
+	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04 second seam): was
+	// RegisterDeferred("resolver bookkeeping, not a tunable knob") until
+	// this WP gave it a real consumer — env.Policy is re-wrapped with
+	// cedar.WithPostureMode(resolvedKnobs.PostureMode, ...) right below
+	// the EnvDefaults call in StartStream, so plan_mode denies
+	// write-class Cedar actions instead of only lowering the knob-level
+	// AutoApproveFamilies preset.
+	knobcoverage.Register[autonomy.ResolvedKnobs]("PostureMode", "chat.ChatRunner.StartStream (PolicyGateAdapter.WithPostureMode re-wrap)")
+	// owner directive 2026-09-09: the per-run call-volume budget cap
+	// (MaxLLMCallsPerRun/MaxToolCallsPerRun) is now governed by the
+	// autonomy tier, same as TokenCeilingPerTurn already governs
+	// MaxTokensPerRun above. trust-surfaces-that-fire-01PMZ202 WP23
+	// (AN-04) added a second consumer in this same file,
+	// applyPromptPostureToCtx (stamps the Cedar prompt registry's
+	// interactive-permission posture onto streamCtx) — not re-registered
+	// here, since knobcoverage.Register only needs one consumer named
+	// per field and panics on a second registration for the same field.
+	knobcoverage.Register[autonomy.ResolvedKnobs]("EffectiveTier", "chat.applyBudgetTierDial")
+}
+
+// applyPromptPostureToCtx stamps ctx with the Cedar prompt registry's
+// interactive-permission posture derived from tier
+// (trust-surfaces-that-fire-01PMZ202 WP23 / AN-04, post-review fix).
+// Pulled out of StartStream so the gating logic is independently
+// testable — a real *cedar.Registry, driven with the ctx this returns,
+// proves the wiring rather than just the mapping table.
+//
+// knobsProviderWired MUST be r.cfg.AutonomyKnobs != nil, not merely
+// "tier looks like a real value" — autonomy.Tier's zero value
+// stringifies to "strict" (TierStrict is iota 0), not "default", so a
+// nil AutonomyKnobs provider's zero-value resolvedKnobs would silently
+// flip every unwired chassis (tests, the nil-core boot path) from
+// today's PostureDefault to PostureAlwaysPrompt if this stamped
+// unconditionally. false leaves ctx exactly as passed in — no stamp —
+// so RequestInteractive falls back to the registry-wide default,
+// byte-identical to a harness with no autonomy provider wired.
+func applyPromptPostureToCtx(ctx context.Context, knobsProviderWired bool, tier autonomy.Tier) context.Context {
+	if !knobsProviderWired {
+		return ctx
+	}
+	return cedar.WithPromptPosture(ctx, cedar.PromptPostureForTierName(tier.String()))
 }
 
 // applyAskOnAmbiguityDial folds the askOnAmbiguity knob onto the chat
@@ -2272,15 +3191,233 @@ func (r *ChatRunner) compactionWatermarkPolicy() coreag.CompactionWatermarkPolic
 // Zero on either side means "no opinion": a zero knob leaves the graph
 // value alone, and a zero graph value (no declared cap) lets the knob
 // establish one.
+// UNIT BUG, fixed 2026-09-12: this used to assign the PER-TURN ceiling
+// straight into MaxTokensPerRun, a PER-RUN cumulative cap. The two are
+// different units, and for the chat graph the gap is enormous: chat_default
+// is "a per-session kernel run" that pauses on AskNode between user turns
+// and resumes on the next message, so ONE run spans the WHOLE SESSION.
+// Kernel.checkBudget compares MaxTokensPerRun against the cumulative
+// counter from env.Counters.Snapshot(), and because every turn re-sends the
+// conversation, cumulative spend grows by roughly the context size per turn.
+//
+// Observed live: a session at 262k context died with
+//
+//	"reached the token budget cap (3471969 used of 2097152 allowed) at the
+//	 autonomous autonomy tier"
+//
+// 2_097_152 is TierAutonomous's per-TURN ceiling -- about eight turns of
+// headroom for the WHOLE session, on the most permissive tier there is.
+// The graph's own declared max_tokens_per_run is 20_000_000, a sane per-run
+// number, and the dial was lowering it to a per-turn one. The old error text
+// told the user to raise the graph's declared budget, which could not have
+// helped: the graph was never the binding constraint.
+//
+// The conversion is perTurn * maxIterations, because maxIterations is
+// exactly "how many turns may this run take" -- so their product is the
+// per-run token budget the tier's own two dials already imply. Both ends
+// keep their established conventions:
+//
+//   - maxIterations == 0 means unbounded (see KnobMaxIterations: the
+//     TierAutonomous preset is 0). Unbounded turns cannot yield a bounded
+//     token product, so the knob expresses no per-run opinion and the
+//     graph's declared cap stands alone. That is what makes TierAutonomous
+//     fall back to the graph's 20M instead of dying at 2Mi.
+//   - the result may still only LOWER the graph's ceiling, never raise it.
+//     A graph's budget block is the author's safety cap and a Settings
+//     toggle must not defeat it; raising it remains a graph edit.
+//
+// The knob stays consumed (knobcoverage registers this function as its
+// consumer), so fixing the unit does not re-inert the dial.
 func applyTokenCeilingKnob(b coreag.Budget, knobs autonomy.ResolvedKnobs) coreag.Budget {
 	ceiling := knobs.TokenCeilingPerTurn
 	if ceiling <= 0 {
 		return b
 	}
-	if b.MaxTokensPerRun <= 0 || ceiling < b.MaxTokensPerRun {
-		b.MaxTokensPerRun = ceiling
+	// Unbounded turn count => no per-run opinion from this knob.
+	if knobs.MaxIterations <= 0 {
+		return b
+	}
+	perRun := ceiling * knobs.MaxIterations
+	// Overflow guard: a large ceiling times a large iteration count can wrap
+	// on 32-bit int. A wrapped negative would read as "no cap" below and
+	// silently remove the limit, so treat any non-positive product as
+	// "no opinion" rather than trusting it.
+	if perRun <= 0 {
+		return b
+	}
+	if b.MaxTokensPerRun <= 0 || perRun < b.MaxTokensPerRun {
+		b.MaxTokensPerRun = perRun
 	}
 	return b
+}
+
+// applyBudgetTierDial folds the autonomy tier's call-volume budget
+// ceiling (autonomy.BudgetCeilingForTier) onto the graph's declared
+// per-run caps, so MaxLLMCallsPerRun and MaxToolCallsPerRun scale with
+// the dial the same way applyTokenCeilingKnob already scales
+// MaxTokensPerRun (owner directive 2026-09-09).
+//
+// Before this, chat_default_classic.yaml's budget: block
+// (max_llm_calls_per_run: 5000, max_tool_calls_per_run: 10000) was the
+// per-run cap for every tier alike -- ErrBudgetExceeded fired at the
+// same volume whether the session was Strict or Autonomous, which is
+// what prompted the owner's "we should be using our built in autonomy
+// dial" ruling.
+//
+// Same rule as applyTokenCeilingKnob: the dial may only LOWER the
+// graph's declared ceiling, never raise it -- the graph's budget block
+// is the author's outer safety net, and TierAutonomous's table entry is
+// set to match the graph's declared numbers exactly rather than exceed
+// them, so this never raises the ceiling in production even though the
+// <= guard technically allows it for a future graph with a smaller
+// declared budget. Zero on either side means "no opinion," same
+// convention as applyTokenCeilingKnob.
+func applyBudgetTierDial(b coreag.Budget, tier autonomy.Tier) coreag.Budget {
+	ceiling := autonomy.BudgetCeilingForTier(tier)
+	if ceiling.MaxLLMCallsPerRun > 0 && (b.MaxLLMCallsPerRun <= 0 || ceiling.MaxLLMCallsPerRun < b.MaxLLMCallsPerRun) {
+		b.MaxLLMCallsPerRun = ceiling.MaxLLMCallsPerRun
+	}
+	if ceiling.MaxToolCallsPerRun > 0 && (b.MaxToolCallsPerRun <= 0 || ceiling.MaxToolCallsPerRun < b.MaxToolCallsPerRun) {
+		b.MaxToolCallsPerRun = ceiling.MaxToolCallsPerRun
+	}
+	// Cost ceiling (owner ruling 2026-09-12). The graphs declare no
+	// max_cost_usd_per_run, so below TierAutonomous this ESTABLISHES the
+	// only spend guard there is; at TierAutonomous the table entry is 0,
+	// which lands in the "no opinion" branch and leaves cost capping
+	// DISABLED so an hours-long run is never stopped by spend.
+	//
+	// Kernel.checkBudget already enforces MaxCostUSDPerRun against
+	// RunCounters.AddCost(resp.CostUSD), so this needed a tier value and a
+	// fold, not new enforcement.
+	if ceiling.MaxCostUSDPerRun > 0 && (b.MaxCostUSDPerRun <= 0 || ceiling.MaxCostUSDPerRun < b.MaxCostUSDPerRun) {
+		b.MaxCostUSDPerRun = ceiling.MaxCostUSDPerRun
+	}
+	return b
+}
+
+// applyProfileBudgetClamp folds a spawned sub-agent's profile-declared
+// BudgetTokens/BudgetTimeS onto the run's Budget (mission requirement
+// 3, owner directive 2026-09-09: "keep the sub-agent profile's explicit
+// BudgetTokens/BudgetTimeS working").
+//
+// Precedence: CLAMP, not override. An explicit profile value can only
+// LOWER whatever ceiling the graph + autonomy tier already produced —
+// it can never raise it. This is the same nested-safety-net rule
+// applyTokenCeilingKnob and applyBudgetTierDial both already enforce
+// one layer up, extended one more layer: graph declares the outer max,
+// tier can only narrow it, profile can only narrow it further.
+//
+// Justification for clamp-over-override: a Profile is a YAML document a
+// user can hand-author (core/agents.Profile's package doc: "User
+// profiles win on id collision... Bundled profiles are read-only").
+// If an explicit profile budget could OVERRIDE the tier ceiling, a
+// mistyped or malicious profile (budget_tokens: 999999999) would let a
+// sub-agent dispatch outrun the dispatching session's own configured
+// autonomy tier — exactly the "runaway spend" failure class this whole
+// cap exists to stop (owner ruling: "no tier should mean unbounded...
+// this cap exists specifically to stop runaway spend"). A profile
+// author can always ask for LESS than the tier allows (e.g. a
+// summarizer profile with a small budget_tokens, because the task
+// genuinely needs less), but raising the ceiling above the dispatching
+// session's own dial is a decision only the dial should make.
+//
+// hasBudget=false (SubagentBudgets has no entry for this session — the
+// ordinary case for every interactive session) is a no-op, same
+// "zero/absent means no opinion" convention as the two dials above.
+func applyProfileBudgetClamp(b coreag.Budget, sb SubagentBudget, hasBudget bool) coreag.Budget {
+	if !hasBudget {
+		return b
+	}
+	if sb.Tokens > 0 && (b.MaxTokensPerRun <= 0 || sb.Tokens < b.MaxTokensPerRun) {
+		b.MaxTokensPerRun = sb.Tokens
+	}
+	if sb.WallclockSecs > 0 && (b.MaxWallclockPerRunSecs <= 0 || sb.WallclockSecs < b.MaxWallclockPerRunSecs) {
+		b.MaxWallclockPerRunSecs = sb.WallclockSecs
+	}
+	return b
+}
+
+// budgetCapMessage builds driveRun's user-facing terminal message for a
+// budget-cap hit (owner directive 2026-09-09: "agent reached the
+// per-run budget cap" named neither the cap, the limit, nor a way to
+// raise it — the exact complaint that prompted this whole change).
+//
+// errors.As extracts the *coreag.BudgetCapError's Reason/Limit/Used.
+// Falling back to the original generic wording when extraction fails
+// (rather than printing zeros) keeps this safe against any future
+// budget-error call site that hasn't been migrated onto
+// BudgetCapError — degrading to the pre-fix message is the honest
+// behaviour for missing detail, not a formatting artifact.
+func budgetCapMessage(err error, tier autonomy.Tier) string {
+	var capErr *coreag.BudgetCapError
+	if !errors.As(err, &capErr) {
+		return "agent reached the per-run budget cap"
+	}
+	label, tierGoverned := budgetCapReasonLabel(capErr.Reason)
+	usedLimit := fmt.Sprintf("%s used of %s allowed",
+		formatBudgetQuantity(capErr.Reason, capErr.Used),
+		formatBudgetQuantity(capErr.Reason, capErr.Limit))
+
+	if !tierGoverned {
+		// max_cost_usd_per_run / max_wallclock_per_run_seconds /
+		// max_backtracks_per_run: none of these are scaled by
+		// applyBudgetTierDial today (only tokens/LLM-calls/tool-calls
+		// are), so telling the user to raise the tier would be a lie —
+		// raising the tier would not move this number. Wallclock CAN
+		// be set by a sub-agent profile's BudgetTimeS
+		// (applyProfileBudgetClamp), which the phrasing below covers.
+		return fmt.Sprintf(
+			"agent reached the %s budget cap (%s) — this limit is set by the graph's declared budget"+
+				" (or, for a spawned sub-agent, its profile's budget_time_s), not the autonomy tier",
+			label, usedLimit)
+	}
+	if tier >= autonomy.TierAutonomous {
+		return fmt.Sprintf(
+			"agent reached the %s budget cap (%s) at the %q autonomy tier — that is already the highest"+
+				" tier's ceiling; raising it further requires editing the graph's declared budget",
+			label, usedLimit, tier.String())
+	}
+	return fmt.Sprintf(
+		"agent reached the %s budget cap (%s) at the %q autonomy tier — raise the autonomy tier in"+
+			" Settings → Autonomy to raise this cap",
+		label, usedLimit, tier.String())
+}
+
+// budgetCapReasonLabel maps checkBudget's cap reason strings to a human
+// label plus whether autonomy.BudgetCeilingForTier / applyBudgetTierDial
+// actually governs that cap. Keep in sync with checkBudget's reason
+// strings (core/agentgraph/kernel.go) and applyBudgetTierDial above.
+func budgetCapReasonLabel(reason string) (label string, tierGoverned bool) {
+	switch reason {
+	case "max_tokens_per_run":
+		return "token", true
+	case "max_llm_calls_per_run":
+		return "LLM-call", true
+	case "max_tool_calls_per_run":
+		return "tool-call", true
+	case "max_cost_usd_per_run":
+		return "cost", false
+	case "max_wallclock_per_run_seconds":
+		return "time", false
+	case "max_backtracks_per_run":
+		return "backtrack", false
+	default:
+		return reason, false
+	}
+}
+
+// formatBudgetQuantity renders a cap's limit/used value in the unit its
+// reason implies -- dollars for cost, seconds for wallclock, a bare
+// count for everything else (tokens/LLM-calls/tool-calls/backtracks).
+func formatBudgetQuantity(reason string, v float64) string {
+	switch reason {
+	case "max_cost_usd_per_run":
+		return fmt.Sprintf("$%.2f", v)
+	case "max_wallclock_per_run_seconds":
+		return fmt.Sprintf("%.0fs", v)
+	default:
+		return fmt.Sprintf("%.0f", v)
+	}
 }
 
 // applyReasoningBudgetDial threads the resolved extended-thinking budget
@@ -2319,4 +3456,16 @@ type historyAdapterFunc func(ctx context.Context, sessionID string, n int) ([]co
 // History satisfies agentgraph.HistoryReader.
 func (f historyAdapterFunc) History(ctx context.Context, sessionID string, n int) ([]coreag.Message, error) {
 	return f(ctx, sessionID, n)
+}
+
+// newChatRunID returns a globally unique chat run id, "chat-<ULID>"
+// (agentgraph-settings-linkage-01DOGF0D WP02). The "chat-" prefix is
+// kept so a run id still says where it came from in logs and URLs; no
+// consumer parses what follows it.
+func newChatRunID() (string, error) {
+	u, err := event.NewULID()
+	if err != nil {
+		return "", fmt.Errorf("chat: allocate run id: %w", err)
+	}
+	return "chat-" + string(u), nil
 }

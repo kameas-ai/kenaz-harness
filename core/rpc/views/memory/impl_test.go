@@ -152,7 +152,9 @@ func TestRememberMessage_RejectsInvalidScope(t *testing.T) {
 	}
 }
 
-func TestPromoteScope_MoveSemantics(t *testing.T) {
+// TestPromoteScope_KeepsID pins memory-sync-01MEMSY01 WP03: the RPC
+// returns the same id (the Fleet origin id) and the chunk moves in place.
+func TestPromoteScope_KeepsID(t *testing.T) {
 	t.Parallel()
 	reader := &fakeReader{msgs: map[string][]Message{
 		"sess-1": {{ID: "m1", Role: "user", Content: "promote me"}},
@@ -167,8 +169,8 @@ func TestPromoteScope_MoveSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PromoteScope: %v", err)
 	}
-	if newID == originalID {
-		t.Fatal("PromoteScope returned the same id; expected a fresh id")
+	if newID != originalID {
+		t.Fatalf("PromoteScope returned %q; the origin id %q must be kept", newID, originalID)
 	}
 	chunks, _ := api.ListChunks(ctx, ListFilter{})
 	if len(chunks) != 1 {
@@ -181,9 +183,13 @@ func TestPromoteScope_MoveSemantics(t *testing.T) {
 	if got.ScopeKind != corememory.ScopeKindProject || got.ScopeID != "proj-A" {
 		t.Errorf("scope = (%s, %s)", got.ScopeKind, got.ScopeID)
 	}
-	// Verify the original is gone from the store.
-	if err := api.Forget(ctx, originalID); err == nil {
-		t.Error("original id still present after promote (should have been deleted)")
+	// long_term is reachable from the RPC (OQ-2) and drops any scope id.
+	if _, err := api.PromoteScope(ctx, originalID, "long_term", "ignored"); err != nil {
+		t.Fatalf("promote to long_term: %v", err)
+	}
+	lt, _ := api.ListChunks(ctx, ListFilter{ScopeKind: corememory.ScopeKindLongTerm})
+	if len(lt) != 1 || lt[0].ID != originalID || lt[0].ScopeID != "" {
+		t.Fatalf("long_term list = %+v", lt)
 	}
 }
 

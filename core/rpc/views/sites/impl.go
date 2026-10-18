@@ -48,6 +48,8 @@ type FleetSitesClient interface {
 	SiteStatus(ctx context.Context, siteID string) (corefleet.SiteRecord, error)
 	SiteLogs(ctx context.Context, siteID string, tailLines int) (string, error)
 	SiteDelete(ctx context.Context, siteID string) error
+	SiteEnvSet(ctx context.Context, siteID string, vars map[string]string) error
+	SiteEnvList(ctx context.Context, siteID string) ([]corefleet.SiteEnvEntry, error)
 }
 
 // verify *corefleet.Client satisfies FleetSitesClient at compile time.
@@ -371,4 +373,45 @@ func (s *SitesImpl) Sites_Delete(ctx context.Context, site string) error {
 		return fmt.Errorf("sites: delete %q: %w", site, err)
 	}
 	return nil
+}
+
+// ----- Sites_EnvSet / Sites_EnvList (fleet-enforcement-truth-01PMZ505 WP09) -----
+//
+// core/sites/manifest.go declares per-site env vars and forbids supplying
+// their values inline ("absent by design; use PUT /sites/{id}/env to set
+// them"). Before this WP, SiteEnvSet/SiteEnvList existed on
+// core/fleet.Client with zero non-test callers — the ONLY documented way
+// to set a declared secret pointed at a route nothing in the app called.
+
+// Sites_EnvSet sets one or more environment variable values for site.
+// Values are write-only: this call accepts them, SiteEnvList never
+// returns them. No MCP tool wraps this deliberately — sites.go names it
+// "the ONLY way secrets reach a site"; exposing a secret-setting tool to
+// the model is a separate decision with its own gate work.
+func (s *SitesImpl) Sites_EnvSet(ctx context.Context, site string, vars map[string]string) error {
+	if err := s.checkPreConditions(); err != nil {
+		return err
+	}
+	if err := s.client.SiteEnvSet(ctx, site, vars); err != nil {
+		return fmt.Errorf("sites: env set %q: %w", site, err)
+	}
+	return nil
+}
+
+// Sites_EnvList returns declared env var NAMES + metadata for site. Never
+// returns a value — check-no-credential-in-ui.sh enforces that no wire
+// shape reaching the frontend carries a value field for a credential type.
+func (s *SitesImpl) Sites_EnvList(ctx context.Context, site string) ([]SiteEnvEntry, error) {
+	if err := s.checkPreConditions(); err != nil {
+		return nil, err
+	}
+	entries, err := s.client.SiteEnvList(ctx, site)
+	if err != nil {
+		return nil, fmt.Errorf("sites: env list %q: %w", site, err)
+	}
+	out := make([]SiteEnvEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, SiteEnvEntry{Name: e.Name, Description: e.Description, SetAt: e.SetAt})
+	}
+	return out, nil
 }

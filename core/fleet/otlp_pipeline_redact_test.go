@@ -112,13 +112,18 @@ func TestOTLPPipeline_RedactsSecretAttributeBeforeTransmission(t *testing.T) {
 
 	// Construct the FleetOTLPPipeline — the live OTLP path under test.
 	pipeline := NewFleetOTLPPipeline(nil)
+	// Most permissive reachable state (full consent, every class incl. the
+	// span class opted in): what this test proves must hold even then.
+	openEverything(pipeline)
 
 	// baseRes: minimal startup resource.
 	baseRes := resource.NewWithAttributes(semconv.SchemaURL,
 		attribute.String("service.name", "harness-test"),
 	)
 
-	bearer := fakeBearerProvider("test-pipeline-token")
+	// A JWT whose sub matches identity.UserID below: Activate binds the bearer
+	// to the activated subject (boundBearer), as production tokens always are.
+	bearer := fakeBearerProvider(fakeJWT("user-test-123"))
 
 	// Activate against the fake OTLP server. The pipeline appends "/v1/traces"
 	// to the base URL (matching the mux handler above).
@@ -194,6 +199,9 @@ func TestOTLPPipeline_RedactsSecretRef(t *testing.T) {
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
 	pipeline := NewFleetOTLPPipeline(nil)
+	// Most permissive reachable state (full consent, every class incl. the
+	// span class opted in): what this test proves must hold even then.
+	openEverything(pipeline)
 	baseRes := resource.NewWithAttributes(semconv.SchemaURL,
 		attribute.String("service.name", "harness-test"),
 	)
@@ -202,7 +210,7 @@ func TestOTLPPipeline_RedactsSecretRef(t *testing.T) {
 	if err := pipeline.Activate(ctx, srv.URL, baseRes, IdentityAttrs{
 		UserID: "user-secret-ref-test",
 		OrgID:  "org-secret-ref-test",
-	}, fakeBearerProvider("token-secret-ref"), tp); err != nil {
+	}, fakeBearerProvider(fakeJWT("user-secret-ref-test")), tp); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 
@@ -246,6 +254,9 @@ func TestOTLPPipeline_NoActivation_NoTraffic(t *testing.T) {
 
 	// Construct but do NOT activate the pipeline.
 	pipeline := NewFleetOTLPPipeline(nil)
+	// Most permissive reachable state (full consent, every class incl. the
+	// span class opted in): what this test proves must hold even then.
+	openEverything(pipeline)
 	_ = pipeline // not activated — tp has no fleet processor registered
 
 	tracer := tp.Tracer("no-activate-test")

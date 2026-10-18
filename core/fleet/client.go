@@ -4,7 +4,10 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // tokenExpiryGrace is the window before ExpiresAt in which we consider the
@@ -34,14 +37,50 @@ type Client struct {
 	httpTimeout time.Duration
 	isNop       bool
 
-	// sessionBroker is optional. When set, refresh failures emit
-	// TopicFleetSessionExpired on the Wails event bus so the UI
-	// can surface a re-auth banner (FR-005).
+	// sessionBroker is optional. When set, a DEFINITE refresh rejection
+	// emits TopicFleetSessionExpired on it. The production sink is the
+	// settings view's sessionExpiredTap, which consumes it in-process into
+	// the FleetSession snapshot (the UI sees it only as
+	// fleet:session-changed); it is not forwarded to the event bus.
 	sessionBroker BrokerSink
+
+	// enrollSF collapses concurrent RefreshIdentity callers into a single
+	// POST /api/v1/enroll round trip (finding #98, 2026-09-14). There are
+	// several independent, uncoordinated frontend call sites that can all
+	// invoke Settings_FleetSignIn / Settings_FleetRefreshIdentity around
+	// the same moment (UserMenu.vue's background poll, AccountPanel.vue's
+	// mount and manual-refresh triggers, CedarEditor.vue's mount) — none
+	// of them know about each other, so without this, every overlap fires
+	// as a fully independent enroll + activateOTLPPipeline + FleetConfig
+	// resolution. This is the same coalescing pattern CapabilityPoller.Refresh
+	// already uses (capability_poller.go), applied to the other fleet
+	// network op with multiple uncoordinated callers. A single key is
+	// correct: there is exactly one identity per Client, so any two
+	// concurrent enroll attempts are always for the same session and can
+	// always share one result.
+	enrollSF singleflight.Group
+
+	// support latches features the connected fleet server answers with a
+	// route-level (plain, non-JSON) 404 — unsupported for this Client's
+	// lifetime, never retried (unsupported_endpoint.go).
+	support endpointSupport
+
+	// authOK is the SetAuthOKHook callback (fleet-session-truth-01DOGF0A).
+	authOK atomic.Pointer[func()]
+
+	// keyReg records the outcome of the most recent device-key
+	// registration (enroll / PUT keys) for the session snapshot
+	// (device-keys-handoff-01DEVKH01 WP02). Mutex-guarded inside.
+	keyReg keyRegState
+
+	// orgPause is the staff "pause paid features" state this client has
+	// observed (org_paused.go). Mutex-guarded inside.
+	orgPause orgPauseState
 }
 
-// SetSessionBroker wires the event broker into the client. When set, a
-// refresh failure emits TopicFleetSessionExpired to the frontend.
+// SetSessionBroker wires the session sink into the client. When set, a
+// definite refresh rejection emits TopicFleetSessionExpired on it (see the
+// sessionBroker field: consumed in-process, not forwarded to the frontend).
 // Safe to call at any time; replaces the previous broker.
 func (c *Client) SetSessionBroker(b BrokerSink) {
 	if c == nil || c.isNop {
@@ -134,21 +173,6 @@ func (c *Client) SignIn(ctx context.Context) (Identity, error) {
 	return Identity{}, ErrNotSignedIn // real impl in WP02
 }
 
-// SignOut clears persisted tokens and identity. Returns ErrFleetDisabled
-// on nop clients.
-func (c *Client) SignOut(ctx context.Context) error {
-	if c == nil || c.isNop {
-		return ErrFleetDisabled
-	}
-	if err := ClearTokens(); err != nil {
-		return err
-	}
-	if c.dataDir != "" {
-		_ = clearIdentityFile(c.dataDir) // best-effort
-	}
-	return nil
-}
-
 // SignedIn reports whether the client has a valid, non-expired session.
 //
 // FR-004: returns false when:
@@ -206,6 +230,8 @@ func (c *Client) CurrentIdentity(ctx context.Context) (Identity, error) {
 }
 
 // RefreshIdentity calls the fleet enroll endpoint and caches the result.
+// Concurrent callers (see enrollSF's doc comment) share a single in-flight
+// HTTP request via singleflight; every waiter gets the same result.
 func (c *Client) RefreshIdentity(ctx context.Context, nodeID, platform, version string) (Identity, error) {
 	if c == nil || c.isNop {
 		return Identity{}, ErrFleetDisabled
@@ -213,5 +239,13 @@ func (c *Client) RefreshIdentity(ctx context.Context, nodeID, platform, version 
 	if !c.profile.Configured() {
 		return Identity{}, ErrProfileNotConfigured
 	}
-	return c.enrollIdentity(ctx, nodeID, platform, version)
+	v, err, _ := c.enrollSF.Do("enroll", func() (any, error) {
+		return c.enrollIdentity(ctx, nodeID, platform, version)
+	})
+	if err != nil {
+		// v is the zero Identity{} on error (enrollIdentity's own contract);
+		// singleflight forwards it unchanged to every waiter.
+		return Identity{}, err
+	}
+	return v.(Identity), nil
 }

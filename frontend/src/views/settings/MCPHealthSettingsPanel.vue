@@ -5,8 +5,15 @@
  *
  * Surfaces one dial:
  *   Auto-restart on disconnect — when ON (default), the supervisor restarts
- *   an MCP server after two consecutive ping failures. When OFF, the server
- *   stays in "failed" state until the user manually re-enables it.
+ *   a stdio MCP server after two consecutive ping failures. When OFF, the
+ *   unresponsive server is left running (a warning is logged per trip) for
+ *   manual inspection. The Go reader is the healthPinger's trip decision
+ *   (core/mcp/transport/stdio/health.go autoRestartEnabled, fed live from
+ *   Settings by core/rpc/api.go's stdio.PoolOptions.AutoRestartEnabled).
+ *   A server whose process EXITS is still restarted either way — the dial
+ *   only governs the ping-failure path, and the copy below says so.
+ *
+ * Mounted at Settings › Integrations › MCP Servers (?tab=mcp-servers).
  */
 import { onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
@@ -70,9 +77,11 @@ onMounted(() => {
             Auto-restart on disconnect
           </div>
           <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
-            When enabled, the harness automatically restarts an MCP server
-            after two consecutive ping failures (default: on). Disable to
-            keep the server in the "failed" state for manual inspection.
+            When enabled, the harness automatically restarts a local (stdio)
+            MCP server after two consecutive failed health pings (default:
+            on). Disable to leave an unresponsive server running for manual
+            inspection instead. A server whose process exits is still
+            restarted.
           </p>
           <div
             v-if="error"

@@ -12,12 +12,15 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/contextbootstrap"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/install"
 	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 	"github.com/kameas-ai/kenaz-harness/core/llm/gemini" // model-lit-allow: import path into core/llm/** itself, not a literal
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
+	"github.com/kameas-ai/kenaz-harness/core/modelcalls"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
@@ -26,8 +29,10 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
+	blockedrequestsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/blockedrequests"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
+	capabilitiesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/capabilities"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
@@ -37,6 +42,7 @@ import (
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
+	documentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/documents"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
@@ -57,6 +63,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/shell"
+	sidecarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sidecar"
 	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	slashview "github.com/kameas-ai/kenaz-harness/core/rpc/views/slashcmd"
 	storageview "github.com/kameas-ai/kenaz-harness/core/rpc/views/storage"
@@ -70,6 +77,8 @@ import (
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
 	"github.com/kameas-ai/kenaz-harness/core/sentry"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
+	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 )
 
 // Bindings is the Wails-reflected JS-callable surface. Every method has a
@@ -133,6 +142,15 @@ func (b *Bindings) ShellStatus() (ShellStatus, error) {
 func (b *Bindings) AppInfo() (AppInfo, error) {
 	defer sentry.WrapBinding("AppInfo")()
 	return b.api.AppInfo(b.ctx())
+}
+
+// CompactionOverhead returns the running compaction-driven LLM cost
+// tally the SessionsView header row renders (chat-turn-integrity-
+// 01PMZ606 WP12, owner ruling X-7 / CK-08). Zero value, not an error,
+// when compaction was disabled at boot.
+func (b *Bindings) CompactionOverhead() (CompactionOverheadInfo, error) {
+	defer sentry.WrapBinding("CompactionOverhead")()
+	return b.api.CompactionOverhead(b.ctx())
 }
 
 // ── settings (privacy CI invariant #5; WP13 fleshes out persistence) ───
@@ -273,6 +291,59 @@ func (b *Bindings) Sessions_MoveToProject(id, projectID string) error {
 	return b.api.Sessions().MoveToProject(b.ctx(), id, projectID)
 }
 
+// Sessions_GetKnobsDefault returns the session-level RequestKnobs
+// override, or nil when none has been set (model-settings-reach-the-
+// model-01PMZ101 UNIT-6 / WP10). SessionTunePanel reads this on open.
+//
+// NOT YET reflected in frontend/wailsjs/go/rpc/Bindings.{js,d.ts}: this
+// mission's worktree could not run `wails generate module` (it opens a
+// REAL database — CLAUDE.md tooling footguns — and this session's
+// dispatch instructions forbid running it under any circumstance). The
+// method is hand-declared on harnessClient.ts's WailsBindingsLike
+// interface instead, following the CompactionOverhead precedent
+// (chat-turn-integrity-01PMZ606 WP12) — see that interface's doc
+// comment. A real `wails generate module` run (with the documented
+// HOME/KENAZ_HARNESS_ENV override) is required before this binding is
+// reachable at runtime; until then check-codegen.sh's wailsjs-hash gate
+// will correctly report drift.
+func (b *Bindings) Sessions_GetKnobsDefault(id string) (*sessions.SessionKnobs, error) {
+	defer sentry.WrapBinding("Sessions_GetKnobsDefault")()
+	return b.api.Sessions().GetKnobsDefault(b.ctx(), id)
+}
+
+// Sessions_SetKnobsDefault persists the session-level RequestKnobs
+// override; nil clears it. See Sessions_GetKnobsDefault's doc comment
+// for the wailsjs-regeneration caveat.
+func (b *Bindings) Sessions_SetKnobsDefault(id string, knobs *sessions.SessionKnobs) error {
+	defer sentry.WrapBinding("Sessions_SetKnobsDefault")()
+	return b.api.Sessions().SetKnobsDefault(b.ctx(), id, knobs)
+}
+
+// Sessions_GetToolExposure returns the session's tool-exposure override
+// layer and activated tool set.
+func (b *Bindings) Sessions_GetToolExposure(id string) (sessions.SessionToolExposure, error) {
+	defer sentry.WrapBinding("Sessions_GetToolExposure")()
+	return b.api.Sessions().GetToolExposure(b.ctx(), id)
+}
+
+// Sessions_SetToolExposure persists the session's tool-exposure override
+// layer; an empty layer clears it. Unknown tiers are refused.
+func (b *Bindings) Sessions_SetToolExposure(id string, exposure toolexposure.Exposure) error {
+	defer sentry.WrapBinding("Sessions_SetToolExposure")()
+	return b.api.Sessions().SetToolExposure(b.ctx(), id, exposure)
+}
+
+// Sessions_LoadTools activates tools for the session — server names,
+// exact tool names or "server__prefix*" globs — the same activation the
+// model's kenaz__load_tools call performs, so their schemas are sent on
+// the session's next model calls. Every name not loaded is reported
+// with why (off and the setting that did it, a stopped server and its
+// state, or unknown). sticky activations survive TTL expiry.
+func (b *Bindings) Sessions_LoadTools(id string, servers []string, tools []string, sticky bool) (loadtools.Result, error) {
+	defer sentry.WrapBinding("Sessions_LoadTools")()
+	return b.api.Sessions().LoadTools(b.ctx(), id, servers, tools, sticky)
+}
+
 // Sessions_SuggestTitle triggers a manual auto-title generation for the
 // session identified by id. Returns the generated title string on success
 // (session-auto-titling-01KQ8TDS WP04).
@@ -287,6 +358,27 @@ func (b *Bindings) Sessions_SuggestTitle(id string) (string, error) {
 func (b *Bindings) Sessions_GetUsage(id string) (sessions.SessionUsage, error) {
 	defer sentry.WrapBinding("Sessions_GetUsage")()
 	return b.api.Sessions().GetUsage(b.ctx(), id)
+}
+
+// Sessions_ModelCalls returns the session's most recent stored model
+// provider calls, newest first, for the read-only "Model calls" view
+// under the session cost readout (llm-call-telemetry-01LLMTEL01 WP02).
+// limit <= 0 means 50; it is capped at 500. Allowlisted, bounded fields
+// only — ids, models, counts, latencies, cost, finish reasons, error
+// class; never content.
+func (b *Bindings) Sessions_ModelCalls(id string, limit int) ([]modelcalls.CallView, error) {
+	defer sentry.WrapBinding("Sessions_ModelCalls")()
+	return b.api.ModelCallsForSession(b.ctx(), id, limit)
+}
+
+// Sessions_TurnRuns returns the session's recorded chat turn ->
+// agent-graph run mappings (agentgraph-settings-linkage-01DOGF0D WP03),
+// so the transcript can link each turn to /agentgraph/run/:runId/graph
+// and RunView. Desktop-only: every route it feeds is a Graph_* surface
+// with no serve dispatch (D-701), so the caller gates on !isServedMode().
+func (b *Bindings) Sessions_TurnRuns(sessionID string) ([]sessions.TurnRun, error) {
+	defer sentry.WrapBinding("Sessions_TurnRuns")()
+	return b.api.Sessions().TurnRuns(b.ctx(), sessionID)
 }
 
 // Sessions_ClearTitle resets the session's name to "" and auto_titled=0,
@@ -328,6 +420,19 @@ func (b *Bindings) Sessions_ResumeMessage(sessionID, messageID string) (sessions
 func (b *Bindings) LLM_ListProviders() ([]llm.Provider, error) {
 	defer sentry.WrapBinding("LLM_ListProviders")()
 	return b.api.LLMConnector().ListProviders(b.ctx())
+}
+
+// LLM_ListCredentialKeys lists every key the configured provider profiles
+// use, one row per distinct key, labelled by scope (local | user_sync | org
+// | team) — provider-credentials-client-01PCCLI01 WP04, §7a H2. Read-only
+// display metadata: never key bytes, never a keychain locator.
+func (b *Bindings) LLM_ListCredentialKeys() ([]llm.CredentialKey, error) {
+	defer sentry.WrapBinding("LLM_ListCredentialKeys")()
+	provs, err := b.api.LLMConnector().ListProviders(b.ctx())
+	if err != nil {
+		return nil, err
+	}
+	return llm.CredentialKeys(provs), nil
 }
 func (b *Bindings) LLM_StartStream(profileID, sessionID, modelOverride string) (string, error) {
 	defer sentry.WrapBinding("LLM_StartStream")()
@@ -541,6 +646,28 @@ func (b *Bindings) MCP_ImportClaudeDesktopConfig(req mcp.ImportRequest) (mcp.Imp
 func (b *Bindings) MCP_SaveCustomRecipe(req mcp.SaveCustomRecipeRequest) (recipes.Recipe, error) {
 	defer sentry.WrapBinding("MCP_SaveCustomRecipe")()
 	return b.api.MCP().SaveCustomRecipe(b.ctx(), req)
+}
+
+// MCP_SetToolPolicy upserts a permission rule for (server, tool) into
+// the static permission source (<DataDir>/mcp_servers.json) — the
+// writer trust-surfaces-that-fire-01PMZ202 WP24 (finding CHAT-05) adds
+// so a "confirm each use" policy is producible from a shipped surface
+// instead of only by hand-editing a JSON file. policy is one of
+// "auto_allow" | "confirm_each" | "deny"; tool may be "*" for a
+// whole-server rule. The static resolver is read once at chassis boot,
+// so this takes effect starting with the next restart, not the running
+// session.
+func (b *Bindings) MCP_SetToolPolicy(server, tool, policy, reason string) error {
+	defer sentry.WrapBinding("MCP_SetToolPolicy")()
+	return b.api.MCP().SetToolPolicy(b.ctx(), server, tool, policy, reason)
+}
+
+// MCP_ListToolPolicies returns every rule currently persisted in the
+// static permission source, for the Tools view to render current
+// policy state.
+func (b *Bindings) MCP_ListToolPolicies() ([]toolloop.StaticRule, error) {
+	defer sentry.WrapBinding("MCP_ListToolPolicies")()
+	return b.api.MCP().ListToolPolicies(b.ctx())
 }
 
 // MCP_HealthSnapshot returns the current health status for every installed
@@ -1324,15 +1451,13 @@ func (b *Bindings) Settings_SetShortcut(id, binding string) error {
 		return ss.SaveShortcuts(m)
 	}
 	// Fallback: full round-trip.
-	s, err := store.LoadAll()
-	if err != nil {
-		return err
-	}
-	if s.KeyboardShortcuts == nil {
-		s.KeyboardShortcuts = make(map[string]string)
-	}
-	s.KeyboardShortcuts[id] = binding
-	return store.SaveAll(s)
+	return settings.Update(store, func(s *settings.Settings) error {
+		if s.KeyboardShortcuts == nil {
+			s.KeyboardShortcuts = make(map[string]string)
+		}
+		s.KeyboardShortcuts[id] = binding
+		return nil
+	})
 }
 
 // Settings_SetShortcuts atomically replaces the full keyboard shortcut
@@ -1354,12 +1479,10 @@ func (b *Bindings) Settings_SetShortcuts(m map[string]string) error {
 		return ss.SaveShortcuts(m)
 	}
 	// Fallback: full round-trip.
-	s, err := store.LoadAll()
-	if err != nil {
-		return err
-	}
-	s.KeyboardShortcuts = m
-	return store.SaveAll(s)
+	return settings.Update(store, func(s *settings.Settings) error {
+		s.KeyboardShortcuts = m
+		return nil
+	})
 }
 
 // Settings_GetMCPAutoRestart returns whether MCP servers should auto-restart
@@ -1370,10 +1493,66 @@ func (b *Bindings) Settings_GetMCPAutoRestart() (bool, error) {
 	return b.api.Settings().GetMCPAutoRestart(b.ctx())
 }
 
+// Settings_GetModelCallTelemetry returns the model-call telemetry
+// settings: "Fetch OpenRouter generation stats" (default on), retention
+// days (0 = 30) and "Share model-call telemetry with Fleet" (default
+// off). llm-call-telemetry-01LLMTEL01 WP02.
+func (b *Bindings) Settings_GetModelCallTelemetry() (settings.ModelCallTelemetrySettings, error) {
+	defer sentry.WrapBinding("Settings_GetModelCallTelemetry")()
+	return b.api.Settings().GetModelCallTelemetry(b.ctx())
+}
+
+// Settings_SetModelCallTelemetry persists the model-call telemetry
+// settings and applies the Fleet-sharing opt-in to the live span lane
+// at once (turning it on exports only calls that start afterwards).
+func (b *Bindings) Settings_SetModelCallTelemetry(mc settings.ModelCallTelemetrySettings) error {
+	defer sentry.WrapBinding("Settings_SetModelCallTelemetry")()
+	return b.api.Settings().SetModelCallTelemetry(b.ctx(), mc)
+}
+
+// Settings_GetMLLocalActivity returns the local ML activity store's
+// status (ml-producer-01MLPRD01 WP11): row counts, size on disk,
+// retention, and whether new activity is also being shared with Fleet.
+func (b *Bindings) Settings_GetMLLocalActivity() (MLLocalActivityView, error) {
+	defer sentry.WrapBinding("Settings_GetMLLocalActivity")()
+	return b.api.MLLocalActivity(b.ctx())
+}
+
+// Settings_SetMLLocalActivityRetention sets how many days local agent
+// activity is kept (0 = the 90-day default; 1..3650).
+func (b *Bindings) Settings_SetMLLocalActivityRetention(days int) (MLLocalActivityView, error) {
+	defer sentry.WrapBinding("Settings_SetMLLocalActivityRetention")()
+	return b.api.SetMLLocalActivityRetention(b.ctx(), days)
+}
+
+// Settings_DeleteMLLocalActivity is "Delete local activity data": it
+// wipes the local activity store, the unsent Fleet outbox and the task
+// state on this device.
+func (b *Bindings) Settings_DeleteMLLocalActivity() (MLLocalActivityView, error) {
+	defer sentry.WrapBinding("Settings_DeleteMLLocalActivity")()
+	return b.api.DeleteMLLocalActivity(b.ctx())
+}
+
 // Settings_SetMCPAutoRestart persists the MCP auto-restart dial.
 func (b *Bindings) Settings_SetMCPAutoRestart(enabled bool) error {
 	defer sentry.WrapBinding("Settings_SetMCPAutoRestart")()
 	return b.api.Settings().SetMCPAutoRestart(b.ctx(), enabled)
+}
+
+// Settings_GetToolExposure returns the user's per-server / per-tool
+// exposure tiers, schema budget and activation TTL as stored (0 =
+// default), plus the read-only effective budget and TTL.
+func (b *Bindings) Settings_GetToolExposure() (toolexposure.Settings, error) {
+	defer sentry.WrapBinding("Settings_GetToolExposure")()
+	return b.api.Settings().GetToolExposure(b.ctx())
+}
+
+// Settings_SetToolExposure validates and persists the user's exposure
+// tiers, schema budget and activation TTL (0 = default); the effective
+// fields are ignored.
+func (b *Bindings) Settings_SetToolExposure(ts toolexposure.Settings) error {
+	defer sentry.WrapBinding("Settings_SetToolExposure")()
+	return b.api.Settings().SetToolExposure(b.ctx(), ts)
 }
 
 // Settings_GetAutoTitleEnabled returns whether session auto-titling is on.
@@ -1399,6 +1578,14 @@ func (b *Bindings) Settings_GetChatCustomInstructions() (string, error) {
 // text. An empty string clears the user layer.
 func (b *Bindings) Settings_SetChatCustomInstructions(text string) error {
 	return b.api.Settings().SetChatCustomInstructions(b.ctx(), text)
+}
+
+// Settings_GetRiskRaterBenchmark returns the vendored risk-rater model
+// comparison (risk-rated-autonomy-01PMRA01, owner ruling 2026-09-15) the
+// Settings picker UI renders alongside each candidate rating model.
+func (b *Bindings) Settings_GetRiskRaterBenchmark() (risk.RiskRaterBenchmark, error) {
+	defer sentry.WrapBinding("Settings_GetRiskRaterBenchmark")()
+	return b.api.Settings().GetRiskRaterBenchmark(b.ctx())
 }
 
 // EmbedderConfigResult is the wire shape returned by
@@ -1471,12 +1658,10 @@ func (b *Bindings) Settings_SetShowPerMessageTokenMeter(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	s.ShowPerMessageTokenMeter = enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		s.ShowPerMessageTokenMeter = enabled
+		return nil
+	})
 }
 
 // ── WP08 — multimodal input feature flag ──────────────────────────────
@@ -1507,13 +1692,11 @@ func (b *Bindings) Settings_SetMultimodalInput(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	// Inverted storage: Disabled = !enabled.
-	s.MultimodalInputDisabled = !enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		// Inverted storage: Disabled = !enabled.
+		s.MultimodalInputDisabled = !enabled
+		return nil
+	})
 }
 
 // ── Multimodal output capture dials (multimodal-io-extended-01KQ8TD2 WP06) ──
@@ -1543,13 +1726,11 @@ func (b *Bindings) Settings_SetAutoCaptureGeneratedImages(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	// Inverted storage: Disabled = !enabled.
-	s.AutoCaptureGeneratedImagesDisabled = !enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		// Inverted storage: Disabled = !enabled.
+		s.AutoCaptureGeneratedImagesDisabled = !enabled
+		return nil
+	})
 }
 
 // Settings_GetMaxGeneratedImageBytes returns the per-image byte cap for the
@@ -1577,15 +1758,13 @@ func (b *Bindings) Settings_SetMaxGeneratedImageBytes(bytes int64) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	if bytes < 0 {
-		bytes = 0
-	}
-	s.MaxGeneratedImageBytes = bytes
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		if bytes < 0 {
+			bytes = 0
+		}
+		s.MaxGeneratedImageBytes = bytes
+		return nil
+	})
 }
 
 // ── key-rotation settings (provider-keychain-rotation-01KQ8TD9 WP07) ──
@@ -1616,12 +1795,10 @@ func (b *Bindings) Settings_SetAutoResumeOnKeyRotation(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	s.AutoResumeOnKeyRotationDisabled = !enabled
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		s.AutoResumeOnKeyRotationDisabled = !enabled
+		return nil
+	})
 }
 
 // ── audit settings (audit-log-enhancement-01KX5R8F WP07) ────────────────────
@@ -1644,16 +1821,25 @@ func (b *Bindings) Settings_FleetSignIn() (settings.FleetIdentity, error) {
 	return b.api.Settings().FleetSignIn(b.ctx())
 }
 
+// Settings_FleetSignInCancel cancels the in-flight sign-in flow
+// (fleet-session-truth-01DOGF0A FR-5). No-op when none is running.
+func (b *Bindings) Settings_FleetSignInCancel() error {
+	defer sentry.WrapBinding("Settings_FleetSignInCancel")()
+	return b.api.Settings().FleetSignInCancel(b.ctx())
+}
+
 // Settings_FleetSignOut clears tokens and identity cache.
 func (b *Bindings) Settings_FleetSignOut() error {
 	defer sentry.WrapBinding("Settings_FleetSignOut")()
 	return b.api.Settings().FleetSignOut(b.ctx())
 }
 
-// Settings_FleetSignedIn reports whether valid tokens exist.
-func (b *Bindings) Settings_FleetSignedIn() (bool, error) {
-	defer sentry.WrapBinding("Settings_FleetSignedIn")()
-	return b.api.Settings().FleetSignedIn(b.ctx())
+// Settings_FleetSession returns the single fleet-session snapshot every
+// surface reads (fleet-session-truth-01DOGF0A FR-1). The same shape is
+// pushed on fleet:session-changed.
+func (b *Bindings) Settings_FleetSession() (settings.FleetSessionView, error) {
+	defer sentry.WrapBinding("Settings_FleetSession")()
+	return b.api.Settings().FleetSession(b.ctx())
 }
 
 // Settings_FleetRefreshIdentity re-enrolls with fleet and updates the cache.
@@ -1904,6 +2090,39 @@ func (b *Bindings) Projects_ListSessions(projectID string) ([]projectsview.Sessi
 	return b.api.Projects().ListSessions(b.ctx(), projectID)
 }
 
+// ── documents + local knowledge sites (contracts/documents-rpc.md) ────
+//
+// Mirrored one-for-one by the served dispatch in core/serve/server.go.
+
+func (b *Bindings) Documents_List(sessionID string) ([]documentsview.DocumentSummary, error) {
+	defer sentry.WrapBinding("Documents_List")()
+	return b.api.Documents().List(b.ctx(), sessionID)
+}
+func (b *Bindings) Documents_Get(sessionID, id string) (documentsview.Document, error) {
+	defer sentry.WrapBinding("Documents_Get")()
+	return b.api.Documents().Get(b.ctx(), sessionID, id)
+}
+func (b *Bindings) Documents_Create(sessionID, title, body string) (documentsview.Document, error) {
+	defer sentry.WrapBinding("Documents_Create")()
+	return b.api.Documents().Create(b.ctx(), sessionID, title, body)
+}
+func (b *Bindings) Documents_Update(sessionID, id string, baseVersion int, body string) (documentsview.Document, error) {
+	defer sentry.WrapBinding("Documents_Update")()
+	return b.api.Documents().Update(b.ctx(), sessionID, id, baseVersion, body)
+}
+func (b *Bindings) Documents_Preview(body string) (documentsview.PreviewResult, error) {
+	defer sentry.WrapBinding("Documents_Preview")()
+	return b.api.Documents().Preview(b.ctx(), body)
+}
+func (b *Bindings) Documents_BuildSite(sessionID, slug, title string, documentIDs []string) (documentsview.SiteBuildResult, error) {
+	defer sentry.WrapBinding("Documents_BuildSite")()
+	return b.api.Documents().BuildSite(b.ctx(), sessionID, slug, title, documentIDs)
+}
+func (b *Bindings) Documents_ExportsDir() (documentsview.ExportsDirResult, error) {
+	defer sentry.WrapBinding("Documents_ExportsDir")()
+	return b.api.Documents().ExportsDir(b.ctx())
+}
+
 // ── artifacts (artifacts-storage WP02) ────────────────────────────────
 
 func (b *Bindings) Artifacts_List(filter artifactsview.ArtifactFilter) ([]artifactsview.Artifact, error) {
@@ -2004,26 +2223,49 @@ func (b *Bindings) Hooks_DryRun(hookID string, syntheticPayload string) (hooksvi
 
 // ── tools (MCP recipes) ────────────────────────────────────────────────
 
+// Tools_SchemaCosts reports every tool server's schema cost (token
+// estimate of its tool definitions) and resolved exposure tier, per tool
+// and per server. With sessionID set it resolves that session, its
+// override and activated set included; otherwise it resolves projectID
+// with no session, or the user's default when projectID is empty.
+func (b *Bindings) Tools_SchemaCosts(sessionID, projectID string) ([]loadtools.ServerCost, error) {
+	defer sentry.WrapBinding("Tools_SchemaCosts")()
+	return b.api.ToolSchemaCosts(b.ctx(), sessionID, projectID)
+}
+
 func (b *Bindings) Tools_ListRecipes() ([]tools.RecipeListing, error) {
 	defer sentry.WrapBinding("Tools_ListRecipes")()
 	return b.api.Tools().ListRecipes(b.ctx())
 }
 
+// Tools_InstallRecipe is the MCP key-prompt flow's install: the framework
+// install (install-framework-01DOGF0B WP04) with the env + config the
+// modal collected, returning the supervisor's status snapshot.
 func (b *Bindings) Tools_InstallRecipe(id string, env map[string]string, config map[string]any) (stdio.RecipeStatus, error) {
 	defer sentry.WrapBinding("Tools_InstallRecipe")()
-	return b.api.Tools().InstallRecipe(b.ctx(), id, env, config)
+	return installRecipe(b.ctx(), b.api.Capabilities().Framework(), b.api.Tools(), id, env, config)
 }
 
 // Tools_SignInRecipe runs the MCP OAuth sign-in for a remote recipe (opens the
 // system browser), persists the token, and respawns the recipe authenticated.
+// The sign-in installs the recipe itself; the framework then observes the
+// supervisor and announces capability:installed if it is there.
 func (b *Bindings) Tools_SignInRecipe(id string) (stdio.RecipeStatus, error) {
 	defer sentry.WrapBinding("Tools_SignInRecipe")()
-	return b.api.Tools().SignInRecipe(b.ctx(), id)
+	return observeRecipeFlow(b.ctx(), b.api.Capabilities().Framework(), id, func() (stdio.RecipeStatus, error) {
+		return b.api.Tools().SignInRecipe(b.ctx(), id)
+	})
 }
 
+// Tools_UninstallRecipe removes a recipe through the framework (consumer
+// confirmation, capability:uninstalled; org-provisioned recipes refused).
 func (b *Bindings) Tools_UninstallRecipe(id string) error {
 	defer sentry.WrapBinding("Tools_UninstallRecipe")()
-	return b.api.Tools().UninstallRecipe(b.ctx(), id)
+	fw := b.api.Capabilities().Framework()
+	if fw == nil {
+		return capabilitiesview.ErrUnavailable
+	}
+	return fw.Uninstall(b.ctx(), install.KindMCPRecipe, id)
 }
 
 func (b *Bindings) Tools_ForgetRecipeKey(id, envName string) error {
@@ -2106,7 +2348,41 @@ func (b *Bindings) Tools_BeginDeviceAuth(id string) (tools.DeviceAuthBeginResult
 // Returns the live RecipeStatus so the frontend can update the Tools panel.
 func (b *Bindings) Tools_PollDeviceAuth(id string) (stdio.RecipeStatus, error) {
 	defer sentry.WrapBinding("Tools_PollDeviceAuth")()
-	return b.api.Tools().PollDeviceAuth(b.ctx(), id)
+	return observeRecipeFlow(b.ctx(), b.api.Capabilities().Framework(), id, func() (stdio.RecipeStatus, error) {
+		return b.api.Tools().PollDeviceAuth(b.ctx(), id)
+	})
+}
+
+// ── capabilities: the one install framework (install-framework-01DOGF0B) ──
+
+// Capability_List returns every install provider's items — installed state
+// read from each runtime consumer — plus the sources that could not be
+// listed, each with a reason (rendered as a row, never a hidden tab).
+func (b *Bindings) Capability_List(filter install.Filter) (install.Listing, error) {
+	defer sentry.WrapBinding("Capability_List")()
+	return b.api.Capabilities().List(b.ctx(), filter)
+}
+
+// Capability_Install installs an item whose requirements are all satisfied
+// and returns its refreshed row. Items needing keys, OAuth or a directory
+// go through their per-kind flow binding (e.g. Tools_InstallRecipe), which
+// routes through the same framework.
+func (b *Bindings) Capability_Install(kind, id, version string) (install.Item, error) {
+	defer sentry.WrapBinding("Capability_Install")()
+	return b.api.Capabilities().Install(b.ctx(), kind, id, version)
+}
+
+// Capability_Uninstall removes an item through its provider; the consumer
+// must confirm it is gone.
+func (b *Bindings) Capability_Uninstall(kind, id string) error {
+	defer sentry.WrapBinding("Capability_Uninstall")()
+	return b.api.Capabilities().Uninstall(b.ctx(), kind, id)
+}
+
+// Capability_Update installs the newest version of an installed item.
+func (b *Bindings) Capability_Update(kind, id string) (install.Item, error) {
+	defer sentry.WrapBinding("Capability_Update")()
+	return b.api.Capabilities().Update(b.ctx(), kind, id)
 }
 
 // ── shell escape (chat input `!cmd` feature) ──────────────────────────
@@ -2141,7 +2417,7 @@ func (b *Bindings) Bash_Exec(sessionID, command string) (BashExecResult, error) 
 	}
 	tool, ok := holder.Builtins().Lookup("kenaz__bash")
 	if !ok {
-		return BashExecResult{}, errors.New("rpc: kenaz__bash tool not registered (toggle on in Settings → Tools)")
+		return BashExecResult{}, errors.New("rpc: kenaz__bash tool not registered (toggle on in Capabilities)")
 	}
 	args, err := json.Marshal(struct {
 		Command string `json:"command"`
@@ -2251,14 +2527,25 @@ func (b *Bindings) Slashcmd_SkillPublish(name, projectID, visibility string) err
 	return b.api.Slash().SkillPublish(b.ctx(), name, projectID, visibility)
 }
 
+// Slashcmd_SkillInstall installs a fleet catalog skill through the install
+// framework (install-framework-01DOGF0B WP05): payload fetched once,
+// verified by the single verifier, live-registered, consumer-confirmed,
+// capability:installed emitted.
 func (b *Bindings) Slashcmd_SkillInstall(catalogID, version string) error {
 	defer sentry.WrapBinding("Slashcmd_SkillInstall")()
-	return b.api.Slash().SkillInstall(b.ctx(), catalogID, version)
+	return installSkill(b.ctx(), b.api.Capabilities().Framework(), catalogID, version)
 }
 
+// Slashcmd_SkillUninstall removes a skill (catalog id or store id) through
+// the install framework: org-mandated skills are refused, the slash
+// registry must confirm it is gone, capability:uninstalled is emitted.
 func (b *Bindings) Slashcmd_SkillUninstall(skillID string) error {
 	defer sentry.WrapBinding("Slashcmd_SkillUninstall")()
-	return b.api.Slash().SkillUninstall(b.ctx(), skillID)
+	fw := b.api.Capabilities().Framework()
+	if fw == nil {
+		return capabilitiesview.ErrUnavailable
+	}
+	return fw.Uninstall(b.ctx(), install.KindSkill, skillID)
 }
 
 func (b *Bindings) Slashcmd_SkillRenameLocalTrigger(skillID, newTrigger string) error {
@@ -2268,8 +2555,10 @@ func (b *Bindings) Slashcmd_SkillRenameLocalTrigger(skillID, newTrigger string) 
 
 // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ────────────────
 
-// FeatureFlagInfo carries a single feature-flag name + enabled state
-// for the frontend FeatureFlagsView.
+// FeatureFlagInfo carries a single feature-flag name + enabled state.
+// Read by the frontend's gating checks (SettingsView.vue,
+// HooksSettingsView.vue, GeneratedImageBlock.vue); the Settings › Flags
+// tab that listed them was deleted by settings-cleanup-01SETUX01 WP01.
 type FeatureFlagInfo struct {
 	Name        string `json:"name"`
 	Enabled     bool   `json:"enabled"`
@@ -2294,9 +2583,17 @@ func ComputeFeatureFlags() []FeatureFlagInfo {
 			EnvVar:      "HARNESS_USER_SLASHCMD",
 		},
 		{
-			Name:        "multimodal-out",
-			Enabled:     llmcap.MultimodalOutEnabled(),
-			Description: "Model-generated image output pipeline (DALL-E 3, gpt-image-1, Titan Image). When off, StreamGeneratedImage events are silently discarded regardless of the auto-capture dial.", // model-lit-allow: feature-flag description prose, not classification
+			Name:    "multimodal-out",
+			Enabled: llmcap.MultimodalOutEnabled(),
+			// CHAT-06 justify(blocker: "no adapter emits StreamGeneratedImage",
+			// owner: alec, date: 2026-08-19; chat-turn-integrity-01PMZ606
+			// WP13, spec.md E-005): this used to claim a live
+			// "model-generated image output pipeline" that "silently
+			// discards" events when off — implying the pipeline works and
+			// this flag only gates it. Neither is true: no adapter in the
+			// tree constructs a StreamGeneratedImage event at all, on or
+			// off, so this flag currently controls nothing observable.
+			Description: "Reserved for a model-generated image output pipeline. No adapter currently produces the events this would gate — flipping it has no observable effect yet.", // model-lit-allow: feature-flag description prose, not classification
 			EnvVar:      "HARNESS_MULTIMODAL_OUT",
 		},
 		{
@@ -2483,6 +2780,11 @@ func (b *Bindings) Branches_List(parentSessionID string) ([]branchesview.Branch,
 }
 func (b *Bindings) Branches_Create(opts branchesview.CreateBranchOptions) (branchesview.Branch, error) {
 	defer sentry.WrapBinding("Branches_Create")()
+	// The frontend may only stamp the human creation paths. "model_tool"
+	// (kenaz__fork_conversation's adapter) and "auto_act" (the advice
+	// hook) are internal provenance; a client-supplied value claiming
+	// either would forge the audit record's answer to "who forked this".
+	opts.CreationPath = branchesview.ClientCreationPath(opts.CreationPath)
 	return b.api.Branches().CreateBranch(b.ctx(), opts)
 }
 func (b *Bindings) Branches_GetStatus(branchID string) (branchesview.BranchStatus, error) {
@@ -2521,6 +2823,45 @@ func (b *Bindings) Branches_SetAdvisorDismissed(sessionID string, dismissed bool
 func (b *Bindings) Branches_ListWithBranchTree(projectID string) ([]branchesview.SessionWithBranchPointer, error) {
 	defer sentry.WrapBinding("Branches_ListWithBranchTree")()
 	return b.api.Branches().ListWithBranchTree(b.ctx(), projectID)
+}
+
+// Subagent_Abort stops a dispatched sub-agent's underlying run and marks
+// its task cancelled — the branch-scoped alias of Tasks_Abort
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8). Gated by
+// cedar.ActionToolSubagentAbort; idempotent against an already-terminal
+// sub-agent.
+func (b *Bindings) Subagent_Abort(branchID string) error {
+	defer sentry.WrapBinding("Subagent_Abort")()
+	return b.api.Branches().AbortSubagent(b.ctx(), branchID)
+}
+
+// Subagent_Steer appends a user message to a dispatched sub-agent's
+// child session (UNIT-8). Gated by cedar.ActionToolSubagentSteer.
+func (b *Bindings) Subagent_Steer(branchID, message string) error {
+	defer sentry.WrapBinding("Subagent_Steer")()
+	return b.api.Branches().SteerSubagent(b.ctx(), branchID, message)
+}
+
+// Subagent_Pause arms a dispatched sub-agent's turn-pause signal — it
+// finishes the turn it is currently on and starts no further turn
+// until Subagent_Resume clears the signal (subagent-control-and-
+// background-tasks-01PMZB11 UNIT-8, owner ruling E-002). NOT
+// immediate: a long turn already in flight keeps running; to stop
+// spend right now use Subagent_Abort instead. Gated by
+// cedar.ActionToolSubagentPause; idempotent against an already-paused
+// sub-agent.
+func (b *Bindings) Subagent_Pause(branchID string) error {
+	defer sentry.WrapBinding("Subagent_Pause")()
+	return b.api.Branches().PauseSubagent(b.ctx(), branchID)
+}
+
+// Subagent_Resume clears a dispatched sub-agent's turn-pause signal so
+// its next turn begins again (UNIT-8). Gated by
+// cedar.ActionToolSubagentResume; idempotent against a sub-agent that
+// was not paused.
+func (b *Bindings) Subagent_Resume(branchID string) error {
+	defer sentry.WrapBinding("Subagent_Resume")()
+	return b.api.Branches().ResumeSubagent(b.ctx(), branchID)
 }
 
 // ── workflows (mission workflows-01KQ8TDG, v0.3.0 beta) ───────────────
@@ -2593,14 +2934,10 @@ func (b *Bindings) Workflows_CancelRun(runID string) error {
 }
 
 // ── workflow catalog bindings (p0-wiring-fixes WP02) ──────────────────────
-// Workflows_CatalogList returns the full catalog of installable workflow
-// templates. Delegates to the WorkflowsAPI catalog seam (WP03 of
-// workflows-agentic-01KW2D3X). Returns ErrCatalogUnavailable when no
-// catalog backend is wired.
-func (b *Bindings) Workflows_CatalogList() ([]workflowsview.CatalogEntry, error) {
-	defer sentry.WrapBinding("Workflows_CatalogList")()
-	return b.api.Workflows().Catalog_List(b.ctx())
-}
+// Workflows_CatalogList was deleted by install-framework-01DOGF0B WP05: the
+// shipped templates are listed by Capability_List (the workflow provider
+// reads the same catalog seam), and the Workflows › Catalog browse tab it
+// fed is retired.
 
 // Workflows_CatalogGet returns the full YAML source + entry metadata for
 // the catalog item identified by id. The preview drawer uses this to render
@@ -2616,7 +2953,7 @@ func (b *Bindings) Workflows_CatalogGet(id string) (workflowsview.CatalogPreview
 // catalog backend is wired.
 func (b *Bindings) Workflows_CatalogInstall(id string) (workflowsview.CatalogInstallResult, error) {
 	defer sentry.WrapBinding("Workflows_CatalogInstall")()
-	return b.api.Workflows().Catalog_Install(b.ctx(), id)
+	return installWorkflowTemplate(b.ctx(), b.api.Capabilities().Framework(), id)
 }
 
 // ── scheduled chat runs (scheduled-chat-runs-01KX5R8B, WP04) ──────────
@@ -2652,6 +2989,29 @@ func (b *Bindings) ScheduledChat_History(id string, limit int) ([]scheduledchatv
 func (b *Bindings) ScheduledChat_SetEnabled(id string, enabled bool) error {
 	defer sentry.WrapBinding("ScheduledChat_SetEnabled")()
 	return b.api.ScheduledChat().SetEnabled(b.ctx(), id, enabled)
+}
+
+// ScheduledChat_DefaultModel reports what "active default" resolves to
+// for a schedule with no model override — the same resolution the
+// dispatcher applies at fire time.
+func (b *Bindings) ScheduledChat_DefaultModel() (scheduledchatview.DefaultModel, error) {
+	defer sentry.WrapBinding("ScheduledChat_DefaultModel")()
+	return b.api.ScheduledChat().DefaultModel(b.ctx())
+}
+
+// ── blocked permission requests (model-scheduled-jobs-01PMSJ01 WP07) ─
+
+func (b *Bindings) BlockedRequests_ListPending() ([]blockedrequestsview.PendingRequest, error) {
+	defer sentry.WrapBinding("BlockedRequests_ListPending")()
+	return b.api.BlockedRequests().ListPending(b.ctx())
+}
+func (b *Bindings) BlockedRequests_Grant(id string) error {
+	defer sentry.WrapBinding("BlockedRequests_Grant")()
+	return b.api.BlockedRequests().Grant(b.ctx(), id)
+}
+func (b *Bindings) BlockedRequests_Dismiss(id string) error {
+	defer sentry.WrapBinding("BlockedRequests_Dismiss")()
+	return b.api.BlockedRequests().Dismiss(b.ctx(), id)
 }
 
 // ── update (mission auto-update, v0.4.0 WP03) ─────────────────────────
@@ -2828,6 +3188,20 @@ func (b *Bindings) Projects_SetAutonomy(projectID string, layer autonomy.Layer) 
 	return b.api.Projects().SaveAutonomyProfile(b.ctx(), projectID, layer)
 }
 
+// Projects_GetToolExposure returns the project's tool-exposure override
+// layer; the empty layer when none is set.
+func (b *Bindings) Projects_GetToolExposure(projectID string) (toolexposure.Exposure, error) {
+	defer sentry.WrapBinding("Projects_GetToolExposure")()
+	return b.api.Projects().GetToolExposure(b.ctx(), projectID)
+}
+
+// Projects_SetToolExposure persists the project's tool-exposure
+// override layer; an empty layer clears it. Unknown tiers are refused.
+func (b *Bindings) Projects_SetToolExposure(projectID string, exposure toolexposure.Exposure) error {
+	defer sentry.WrapBinding("Projects_SetToolExposure")()
+	return b.api.Projects().SetToolExposure(b.ctx(), projectID, exposure)
+}
+
 // Sessions_GetAutonomy returns the session's persisted autonomy.Layer
 // override.
 func (b *Bindings) Sessions_GetAutonomy(sessionID string) (autonomy.Layer, error) {
@@ -2851,8 +3225,9 @@ func (b *Bindings) Sessions_ResolveAutonomy(sessionID string) (sessions.Resolved
 
 // Storage_GetMigrationDriftReport reads the harness_migrations ledger and
 // the registered migration set, compares them, and returns every
-// discrepancy. Never modifies the database. Wired to the Settings → Health
-// panel's MigrationDriftPanel.vue component.
+// discrepancy. Never modifies the database. Read by the Settings issue
+// banner's database provider (frontend/src/lib/settingsIssues.ts, rendered
+// by SettingsIssuesBanner.vue on every settings page).
 func (b *Bindings) Storage_GetMigrationDriftReport() (storageview.DriftReport, error) {
 	defer sentry.WrapBinding("Storage_GetMigrationDriftReport")()
 	return b.api.Storage().GetMigrationDriftReport(b.ctx())
@@ -3088,6 +3463,15 @@ func (b *Bindings) Confirm_Resolve(sessionID string, callID string, approved boo
 	return b.api.Confirm().Resolve(b.ctx(), sessionID, callID, approved, reason, rememberSession)
 }
 
+// Advice_Respond is laya-advisors-01LAYA001 WP07's chip response
+// binding: action is "accept" or "dismiss". Returns the newly created
+// child session id for a branch_now accept (empty string otherwise) —
+// see core/rpc/advice_respond.go for the full contract.
+func (b *Bindings) Advice_Respond(sessionID string, kindID string, action string) (string, error) {
+	defer sentry.WrapBinding("Advice_Respond")()
+	return b.api.Advice_Respond(b.ctx(), sessionID, kindID, action)
+}
+
 // Confirm_ResolveAlways approves one row AND writes a DURABLE allow rule
 // for its (server, tool) — the modal's visually-separated "always allow"
 // control.
@@ -3181,15 +3565,13 @@ func (b *Bindings) Settings_SetLocalRuntimeRAMOverrideGB(gb float64) error {
 	if b.storeFn == nil {
 		return nil
 	}
-	s, err := b.storeFn().LoadAll()
-	if err != nil {
-		return err
-	}
-	if gb < 0 {
-		gb = 0
-	}
-	s.LocalRuntimeRAMOverrideGB = gb
-	return b.storeFn().SaveAll(s)
+	return settings.Update(b.storeFn(), func(s *settings.Settings) error {
+		if gb < 0 {
+			gb = 0
+		}
+		s.LocalRuntimeRAMOverrideGB = gb
+		return nil
+	})
 }
 
 // LLM_ListDetectedLocalRuntimes returns the current local runtime detection
@@ -3275,6 +3657,46 @@ func (b *Bindings) Planmode_Edit(req planmodeview.EditRequest) (planmodeview.Edi
 	return b.api.Planmode_Edit(b.ctx(), req)
 }
 
+// ── Sidecar (local ML engine) bindings (laya-advisors-01LAYA001 WP13) ──
+
+// Sidecar_Status observes (read-only — never spawns) and returns the local
+// ML engine's full picture for Settings → Recommendations: the honest
+// state, the pre-download disclosure (size, version, location), and
+// whether an update is pending.
+func (b *Bindings) Sidecar_Status() (sidecarview.StatusView, error) {
+	defer sentry.WrapBinding("Sidecar_Status")()
+	return b.api.Sidecar().Status(b.ctx())
+}
+
+// Sidecar_Enable downloads, verifies, installs and starts the local ML
+// engine. Blocks for the duration; the panel polls Sidecar_Status for the
+// install phase.
+func (b *Bindings) Sidecar_Enable() (sidecarview.StatusView, error) {
+	defer sentry.WrapBinding("Sidecar_Enable")()
+	return b.api.Sidecar().Enable(b.ctx())
+}
+
+// Sidecar_Update installs the newer pinned engine. Always an explicit
+// user action — the harness never updates the engine silently.
+func (b *Bindings) Sidecar_Update() (sidecarview.StatusView, error) {
+	defer sentry.WrapBinding("Sidecar_Update")()
+	return b.api.Sidecar().Update(b.ctx())
+}
+
+// Sidecar_Repair re-attempts to start an installed engine that is not
+// answering.
+func (b *Bindings) Sidecar_Repair() (sidecarview.StatusView, error) {
+	defer sentry.WrapBinding("Sidecar_Repair")()
+	return b.api.Sidecar().Repair(b.ctx())
+}
+
+// Sidecar_Uninstall stops the engine and removes it, its models and its
+// config from this device.
+func (b *Bindings) Sidecar_Uninstall() (sidecarview.StatusView, error) {
+	defer sentry.WrapBinding("Sidecar_Uninstall")()
+	return b.api.Sidecar().Uninstall(b.ctx())
+}
+
 // ── Sentry crash-reporting bindings (sentry-error-monitoring-01KX5R8G WP05)
 
 // Sentry_GetLastFive returns the most-recent 5 (or fewer) captured events
@@ -3318,11 +3740,89 @@ func (b *Bindings) Fleet_SetTelemetryConsent(level string) error {
 	return b.api.Fleet().SetTelemetryConsent(b.ctx(), level)
 }
 
+// Fleet_TelemetryStatus returns a payload-free export health snapshot, so
+// "enrolled but not reporting" is diagnosable from Settings.
+func (b *Bindings) Fleet_TelemetryStatus() (settings.FleetTelemetryStatusView, error) {
+	defer sentry.WrapBinding("Fleet_TelemetryStatus")()
+	return b.api.Settings().FleetTelemetryStatus(b.ctx())
+}
+
+// Fleet_MemorySyncStatus returns the learned-memory sync panel state
+// (memory-sync-01MEMSY01 WP08): opt-in, Fleet scopes + usage, sync_blocked
+// count, lane health.
+func (b *Bindings) Fleet_MemorySyncStatus() (settings.MemorySyncStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MemorySyncStatus")()
+	return b.api.Settings().FleetMemorySyncStatus(b.ctx())
+}
+
+// Fleet_MemorySyncEnable opts in to learned-memory sync with the given
+// scopes (long_term / global) and the accepted disclosure version.
+func (b *Bindings) Fleet_MemorySyncEnable(scopes []string, consentVersion string) (settings.MemorySyncStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MemorySyncEnable")()
+	return b.api.Settings().FleetMemorySyncEnable(b.ctx(), scopes, consentVersion)
+}
+
+// Fleet_MemorySyncDisable opts out (Fleet keeps the data); with
+// deleteFromFleet it first erases everything on Fleet — confirm must be
+// "forget-all".
+func (b *Bindings) Fleet_MemorySyncDisable(deleteFromFleet bool, confirm string) (settings.MemorySyncStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MemorySyncDisable")()
+	return b.api.Settings().FleetMemorySyncDisable(b.ctx(), deleteFromFleet, confirm)
+}
+
+// Fleet_MLStatus returns the Cloud ML consent panel state
+// (ml-producer-01MLPRD01 WP01): a fresh GET /me/ml read, the rendered
+// required notice, and the ML producer's shipping status.
+func (b *Bindings) Fleet_MLStatus() (settings.MLStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MLStatus")()
+	return b.api.Settings().FleetMLStatus(b.ctx())
+}
+
+// Fleet_MLAckNotice acknowledges the hosted-inference notice version the
+// panel displayed, through the notice button clicked ("Turn on Offload" or
+// "I have read this"; it picks the ack action Fleet records). On 409
+// policy_changed the fresh state comes back with noticeChanged set so the
+// panel shows the new notice again.
+func (b *Bindings) Fleet_MLAckNotice(noticeVersion int, button string) (settings.MLStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MLAckNotice")()
+	return b.api.Settings().FleetMLAckNotice(b.ctx(), noticeVersion, button)
+}
+
+// Fleet_SetWorkflowEventsOptIn writes the member's own workflow_events
+// opt-in (org policy member_choice) and returns the re-read panel state.
+func (b *Bindings) Fleet_SetWorkflowEventsOptIn(optedIn bool) (settings.MLStatusView, error) {
+	defer sentry.WrapBinding("Fleet_SetWorkflowEventsOptIn")()
+	return b.api.Settings().FleetSetWorkflowEventsOptIn(b.ctx(), optedIn)
+}
+
+// Fleet_PendingApprovals returns the pending-approvals hub
+// (ml-producer-01MLPRD01 WP06): everything the member must agree to, as
+// Settings' approvals banner and modal render it.
+func (b *Bindings) Fleet_PendingApprovals() (settings.PendingApprovalsView, error) {
+	defer sentry.WrapBinding("Fleet_PendingApprovals")()
+	return b.api.Settings().FleetPendingApprovals(b.ctx())
+}
+
+// Fleet_ApproveItem approves one hub item by id. The approve action is
+// looked up server-side from a fresh list (never taken from the frontend)
+// and refused unless its method + path is in the harness allowlist.
+func (b *Bindings) Fleet_ApproveItem(id string) (settings.PendingApprovalsView, error) {
+	defer sentry.WrapBinding("Fleet_ApproveItem")()
+	return b.api.Settings().FleetApproveItem(b.ctx(), id)
+}
+
+// Fleet_DismissItemLocally hides an informational hub item ("Not now") on
+// this device until the item's version changes. Nothing is sent to Fleet.
+func (b *Bindings) Fleet_DismissItemLocally(id string) (settings.PendingApprovalsView, error) {
+	defer sentry.WrapBinding("Fleet_DismissItemLocally")()
+	return b.api.Settings().FleetDismissItemLocally(b.ctx(), id)
+}
+
 // ── Phase-3 unit collaboration bindings (unified-context-artifacts-01NCTXU01) ─
 
-// Unit_PromoteAsMergeRequest opens a merge request to promote a unit UP a
-// classification level (personal→team→org) instead of writing the higher layer
-// directly (WP16). toClassification is "team" | "org".
+// Unit_PromoteAsMergeRequest promotes a unit UP a classification level:
+// personal→team is a straight push; team→org pushes then opens a merge
+// request (review F2). toClassification is "team" | "org".
 func (b *Bindings) Unit_PromoteAsMergeRequest(unitID, toClassification, title, body string) (fleetview.MergeRequestResult, error) {
 	defer sentry.WrapBinding("Unit_PromoteAsMergeRequest")()
 	return b.api.Fleet().Unit_PromoteAsMergeRequest(b.ctx(), unitID, toClassification, title, body)
@@ -3381,8 +3881,11 @@ func (b *Bindings) Catalog_List(filter catalogview.CatalogFilter) ([]catalogview
 	return b.api.Catalog().Catalog_List(b.ctx(), filter)
 }
 
-// Catalog_Install downloads and installs the identified catalog item into the
-// local DataDir. Returns an error when signature verification fails.
+// Catalog_Install refuses every catalog kind with
+// fleet.ErrCatalogKindNotInstallable (install-framework-01DOGF0B WP02): no
+// kind has an install on this path that a runtime consumer reads. Skills
+// install via Slashcmd_SkillInstall, workflows via the Add-capability
+// surface (both through the install framework). Writes nothing.
 func (b *Bindings) Catalog_Install(catalogID, version string) error {
 	defer sentry.WrapBinding("Catalog_Install")()
 	return b.api.Catalog().Catalog_Install(b.ctx(), catalogID, version)
@@ -3400,6 +3903,23 @@ func (b *Bindings) Catalog_Uninstall(kind, catalogID, version string) error {
 func (b *Bindings) Catalog_Installed() ([]catalogview.CatalogItemView, error) {
 	defer sentry.WrapBinding("Catalog_Installed")()
 	return b.api.Catalog().Catalog_Installed(b.ctx())
+}
+
+// Catalog_Unpublish withdraws catalogID from the org listing. Distinct
+// from Catalog_Uninstall (local copy only). Server-authorized (register
+// C-3/C-8); returns a distinct forbidden error on a 403, not the tier
+// error.
+//
+// (fleet-enforcement-truth-01PMZ505 WP11.) Go-side surface only as of
+// this commit — see docs/unwired-ledger.md for the frontend-binding
+// deferral this WP records: the operating constraints for this pass
+// disallowed hand-editing frontend/wailsjs/**, which a NEW Wails-bound
+// method's JS/TS mirror requires. The backend is fully wired and
+// tested; wiring the last-mile mirror + a Marketplace action is the
+// smallest possible follow-up.
+func (b *Bindings) Catalog_Unpublish(catalogID string) error {
+	defer sentry.WrapBinding("Catalog_Unpublish")()
+	return b.api.Catalog().Catalog_Unpublish(b.ctx(), catalogID)
 }
 
 // ── Sync bindings (fleet-share-and-sync-01NDFSEX14 WP05) ─────────────────────
@@ -3427,6 +3947,29 @@ func (b *Bindings) Sync_ForcePush(category string) error {
 func (b *Bindings) Sync_ForcePull(category string) error {
 	defer sentry.WrapBinding("Sync_ForcePull")()
 	return b.api.Sync().Sync_ForcePull(b.ctx(), category)
+}
+
+// Sync_ConfirmUploads records the user's one-time confirmation that enabled
+// settings categories may upload to Fleet, then uploads the held ones
+// (provider-credentials-client-01PCCLI01 A2, owner ruling H1).
+func (b *Bindings) Sync_ConfirmUploads() error {
+	defer sentry.WrapBinding("Sync_ConfirmUploads")()
+	return b.api.Sync().Sync_ConfirmUploads(b.ctx())
+}
+
+// Settings_ResetUnreadable is the "Reset settings" recovery for a
+// settings.json that cannot be read: it moves the file aside to
+// settings.json.corrupt-<UTC timestamp>, writes the defaults and turns the
+// live settings-sync opt-ins off to match (settings_reset.go). It refuses,
+// changing nothing, when the file reads fine. Desktop-only: the settings
+// file is the host's own.
+func (b *Bindings) Settings_ResetUnreadable() (settings.ResetUnreadableResult, error) {
+	defer sentry.WrapBinding("Settings_ResetUnreadable")()
+	r, ok := b.api.(unreadableSettingsResetter)
+	if !ok {
+		return settings.ResetUnreadableResult{}, settings.ErrResetUnsupported
+	}
+	return r.ResetUnreadableSettings(b.ctx())
 }
 
 // Sync_PendingMCPSecrets returns MCPs that arrived via sync but need credentials
@@ -3482,6 +4025,28 @@ func (b *Bindings) Sites_Logs(site string, tailLines int) (string, error) {
 func (b *Bindings) Sites_Delete(site string) error {
 	defer sentry.WrapBinding("Sites_Delete")()
 	return b.api.Sites().Sites_Delete(b.ctx(), site)
+}
+
+// Sites_EnvSet sets one or more declared environment variable values for
+// site. This is the ONLY way secrets reach a site.
+//
+// (fleet-enforcement-truth-01PMZ505 WP09.) Go-side surface only as of
+// this commit — see docs/unwired-ledger.md for the frontend-binding
+// deferral this WP records: the operating constraints for this pass
+// disallowed hand-editing frontend/wailsjs/**, which a NEW Wails-bound
+// method's JS/TS mirror requires. The backend is fully wired and
+// tested; wiring the last-mile mirror + a settings surface is the
+// smallest possible follow-up.
+func (b *Bindings) Sites_EnvSet(site string, vars map[string]string) error {
+	defer sentry.WrapBinding("Sites_EnvSet")()
+	return b.api.Sites().Sites_EnvSet(b.ctx(), site, vars)
+}
+
+// Sites_EnvList returns declared env var names + metadata for site. Never
+// returns a value (WP09).
+func (b *Bindings) Sites_EnvList(site string) ([]sitesview.SiteEnvEntry, error) {
+	defer sentry.WrapBinding("Sites_EnvList")()
+	return b.api.Sites().Sites_EnvList(b.ctx(), site)
 }
 
 // ── Tasks bindings (background-task-monitor-01KZNP3C WP05) ──────────────────
@@ -3626,14 +4191,30 @@ func (b *Bindings) Handoff_Share(sessionID, recipientUserID string) error {
 	return b.api.ContextSync().Handoff_Share(b.ctx(), sessionID, recipientUserID)
 }
 
+// Handoff_RecipientDevices lists a teammate's receiving devices (key ids +
+// fingerprints) for the share dialog's trust display. No key bytes cross
+// this boundary (device-keys-handoff-01DEVKH01 FR-6).
+func (b *Bindings) Handoff_RecipientDevices(recipientUserID string) ([]contextsyncview.RecipientDeviceView, error) {
+	defer sentry.WrapBinding("Handoff_RecipientDevices")()
+	return b.api.ContextSync().Handoff_RecipientDevices(b.ctx(), recipientUserID)
+}
+
+// Handoff_Delete dismisses an inbox item without accepting it (fleet
+// DELETE /handoff/{id}, idempotent).
+func (b *Bindings) Handoff_Delete(inboxItemID string) error {
+	defer sentry.WrapBinding("Handoff_Delete")()
+	return b.api.ContextSync().Handoff_Delete(b.ctx(), inboxItemID)
+}
+
 // Handoff_Inbox returns the current fleet handoff inbox for the current user.
 func (b *Bindings) Handoff_Inbox() ([]contextsyncview.InboxItemView, error) {
 	defer sentry.WrapBinding("Handoff_Inbox")()
 	return b.api.ContextSync().Handoff_Inbox(b.ctx())
 }
 
-// Handoff_Accept decrypts an inbox item. Returns a view with the event count;
-// no content crosses the RPC boundary.
+// Handoff_Accept decrypts an inbox item with this device's key, saves it
+// as a new local session (deduped by inbox item id) and returns that
+// session's id; no content crosses the RPC boundary.
 func (b *Bindings) Handoff_Accept(inboxItemID string) (contextsyncview.AcceptedSessionView, error) {
 	defer sentry.WrapBinding("Handoff_Accept")()
 	return b.api.ContextSync().Handoff_Accept(b.ctx(), inboxItemID)
@@ -3677,4 +4258,19 @@ func (b *Bindings) Compliance_ArchiveNow() error {
 func (b *Bindings) Compliance_SetRetention(days int) error {
 	defer sentry.WrapBinding("Compliance_SetRetention")()
 	return b.api.Compliance().SetRetention(b.ctx(), days)
+}
+
+// Compliance_SkipToID is the operator recovery action after a hash-chain
+// break: advances the archiver's cursor to toID and clears the halt.
+//
+// (fleet-enforcement-truth-01PMZ505 WP06.) Go-side surface only as of
+// this commit — see docs/unwired-ledger.md for the frontend-binding
+// deferral this WP records: the operating constraints for this pass
+// disallowed hand-editing frontend/wailsjs/**, which a NEW Wails-bound
+// method's JS/TS mirror requires. The backend is fully wired and
+// tested; wiring the last-mile mirror + Sync panel control is the
+// smallest possible follow-up.
+func (b *Bindings) Compliance_SkipToID(toID string) error {
+	defer sentry.WrapBinding("Compliance_SkipToID")()
+	return b.api.Compliance().SkipToID(b.ctx(), toID)
 }

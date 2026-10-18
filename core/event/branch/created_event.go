@@ -35,7 +35,8 @@ type BranchCreatedEvent struct {
 	ParentSessionID string
 	ParentMessageID string
 	BranchSessionID string
-	// CreationPath is "explicit" | "edit_resend".
+	// CreationPath is "explicit" | "edit_resend" | "unknown" |
+	// "auto_act" | "model_tool" (see conversation.Branch.CreationPath).
 	CreationPath string
 	Timestamp    time.Time
 }

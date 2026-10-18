@@ -9,10 +9,15 @@
  * expanding.
  *
  * Expanded state: three sub-sections, in resolution order
- * (global → project → session). Each row is read-only — manage actions
- * live on the project landing page (project scope), settings page
- * (global), and a future per-session settings drawer (session). Clicking
- * a row toggles an inline content-snippet preview rendered with
+ * (global → project → session). Global and project rows are read-only
+ * here — their manage actions live on the settings page (global) and the
+ * project landing page (project). SESSION rows carry AttachmentRow's
+ * remove action (v0.86.0 unwired sweep review, 2026-10-04): this panel is
+ * the only surface that lists a session's attachments, and hook-attached
+ * context (session_start / subagent_start additional_context) lands
+ * there — without a remove action it reached the model for the session's
+ * whole life with no way to take it back. Clicking a row (outside its
+ * action buttons) toggles an inline content-snippet preview rendered with
  * `whitespace-pre-wrap` (no markdown — same approach as ContextPreview).
  *
  * The panel re-fetches `Attachments_ListResolved` on mount and whenever
@@ -66,8 +71,17 @@ function toggle() {
   expanded.value = !expanded.value;
 }
 
-function togglePreview(id: string) {
+function togglePreview(id: string, evt?: Event) {
+  // A click on the row's own action buttons (session-scope Remove) must
+  // not also toggle the preview.
+  const target = evt?.target as HTMLElement | null;
+  if (target?.closest?.('button')) return;
   previewId.value = previewId.value === id ? null : id;
+}
+
+function onRemoved(id: string) {
+  if (previewId.value === id) previewId.value = null;
+  void refresh(props.sessionId);
 }
 
 const grouped = computed<Record<AttachmentScopeKind, Attachment[]>>(() => {
@@ -196,14 +210,23 @@ async function confirmCreateFolder() {
           </div>
           <ul class="space-y-1.5">
             <li v-for="a in grouped[kind]" :key="a.id">
-              <button
-                type="button"
-                class="block w-full text-left"
+              <!-- A div, not a <button>: session rows nest AttachmentRow's
+                   own Remove <button>, and button-in-button is invalid. -->
+              <div
+                role="button"
+                tabindex="0"
+                class="block w-full text-left cursor-pointer"
                 :data-testid="`resolved-row-${a.id}`"
-                @click="togglePreview(a.id)"
+                @click="togglePreview(a.id, $event)"
+                @keydown.enter.self="togglePreview(a.id)"
+                @keydown.space.self.prevent="togglePreview(a.id)"
               >
-                <AttachmentRow :attachment="a" :readonly="true" />
-              </button>
+                <AttachmentRow
+                  :attachment="a"
+                  :readonly="kind !== 'session'"
+                  @removed="onRemoved"
+                />
+              </div>
               <div
                 v-if="previewId === a.id"
                 class="mt-1 rounded-sm border border-border-muted bg-surface-0 px-3 py-2"

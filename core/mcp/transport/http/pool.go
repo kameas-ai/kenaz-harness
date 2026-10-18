@@ -35,6 +35,12 @@ type Pool struct {
 	closed  bool
 
 	idCounter atomic.Int64
+
+	// healthObserver, when set, is notified on every observed state
+	// transition of any server in the pool (connector-lifecycle-truth
+	// UNIT-8's mcp:health-changed publisher). Guarded by mu alongside
+	// servers/closed.
+	healthObserver transport.HealthObserver
 }
 
 // serverEntry pairs a Connection with its in-flight request map and
@@ -124,14 +130,15 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 	}
 
 	connSpec := Spec{
-		ID:              spec.Name,
-		URL:             spec.URL,
-		HeadersTemplate: spec.HeadersTemplate,
-		Env:             spec.Env,
+		ID:               spec.Name,
+		URL:              spec.URL,
+		HeadersTemplate:  spec.HeadersTemplate,
+		Env:              spec.Env,
 		FirstByteTimeout: p.opts.FirstByteTimeout,
 		InitTimeout:      p.opts.InitTimeout,
 		PingPeriod:       p.opts.PingPeriod,
 		PingTimeout:      p.opts.PingTimeout,
+		On401:            spec.On401,
 	}
 	// HeadersTemplate is now passed from ServerSpec.HeadersTemplate.
 	// Values may contain ${VAR} tokens that Connection.Open substitutes
@@ -154,11 +161,20 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 		Period:    p.opts.PingPeriod,
 		Timeout:   p.opts.PingTimeout,
 		NewTicker: p.opts.NewTicker,
+		// finding #106: pass entry.dispatchMu so the probe's Send+Recv
+		// serialises against toolsForEntry/Call on this SAME
+		// connection (see NewToolsListProbe's doc comment). entry is
+		// already allocated above, so this closure-captures the
+		// pointer whose dispatchMu field toolsForEntry/Call lock at
+		// pool.go:399/447 today — same struct, not a second lock.
 		Probe: NewToolsListProbe(conn, func() int64 {
 			return p.idCounter.Add(1)
-		}),
+		}, &entry.dispatchMu),
 		OnFailure: func(reason string) {
 			p.opts.Logger.Warn("http.health.tripped", "server", spec.Name, "reason", reason)
+		},
+		OnStateChange: func(previous, current transport.State) {
+			p.notifyHealth(spec.Name, string(previous))
 		},
 		Logger: loggerAdapter,
 	}
@@ -226,6 +242,94 @@ func (p *Pool) CloseOne(ctx context.Context, id string) error {
 
 	entry.probe.Stop()
 	return entry.conn.Close()
+}
+
+// RecipeStatus returns the live status snapshot for a single server,
+// derived from its HealthProbe's last recorded outcome (UNIT-7 —
+// before this, dispatch.Pool synthesised a permanent "running" for
+// every http-owned id instead of asking this pool; see
+// core/mcp/dispatch/pool.go). ok is false when id is not in the pool.
+//
+// Enabled is hardcoded true, matching stdio.RecipeStatus's own
+// documented placeholder (stdio/status.go:40) — the upstream RPC view
+// overlays the real enabled/disabled value from the recipe catalog,
+// which this transport layer does not have access to. That is a
+// different, already-documented limitation from the State/UpdatedAt
+// fabrication this method fixes: Enabled here is a known placeholder
+// consistently overlaid downstream, not a claim that a check ran.
+func (p *Pool) RecipeStatus(id string) (transport.RecipeStatus, bool) {
+	p.mu.RLock()
+	entry, ok := p.servers[id]
+	p.mu.RUnlock()
+	if !ok {
+		return transport.RecipeStatus{}, false
+	}
+
+	snap := entry.probe.Snapshot()
+	state := snap.State
+	if state == "" {
+		// No probe tick has landed yet. Starting, not Running — see
+		// HealthProbe's type doc comment.
+		state = transport.StateStarting
+	}
+	return transport.RecipeStatus{
+		ID:        id,
+		Enabled:   true,
+		State:     string(state),
+		LastError: snap.LastError,
+		UpdatedAt: snap.LastProbeAt,
+	}, true
+}
+
+// AllRecipeStatuses returns the live status snapshot for every server
+// currently in the pool. Satisfies dispatch.RemoteSubPool.
+func (p *Pool) AllRecipeStatuses() []transport.RecipeStatus {
+	p.mu.RLock()
+	ids := make([]string, 0, len(p.servers))
+	for id := range p.servers {
+		ids = append(ids, id)
+	}
+	p.mu.RUnlock()
+
+	out := make([]transport.RecipeStatus, 0, len(ids))
+	for _, id := range ids {
+		if rs, ok := p.RecipeStatus(id); ok {
+			out = append(out, rs)
+		}
+	}
+	return out
+}
+
+// SetHealthObserver installs a callback invoked whenever any server's
+// live-probed health state changes (connector-lifecycle-truth
+// UNIT-8's mcp:health-changed publisher). Pass nil to clear. Safe to
+// call before or after any server is opened — servers opened after
+// this call still notify the newly-installed observer, since openOne
+// reads p.healthObserver indirectly through notifyHealth at
+// transition time, not at entry-construction time.
+func (p *Pool) SetHealthObserver(fn transport.HealthObserver) {
+	p.mu.Lock()
+	p.healthObserver = fn
+	p.mu.Unlock()
+}
+
+// notifyHealth builds the current RecipeStatus for id and, if an
+// observer is installed, invokes it with (id, previousState,
+// current). Called from the probe goroutine via HealthProbe's
+// OnStateChange, already outside the probe's own mu — safe to call
+// back into RecipeStatus (which takes p.mu, a different lock).
+func (p *Pool) notifyHealth(id, previousState string) {
+	p.mu.RLock()
+	observer := p.healthObserver
+	p.mu.RUnlock()
+	if observer == nil {
+		return
+	}
+	current, ok := p.RecipeStatus(id)
+	if !ok {
+		return
+	}
+	observer(id, previousState, current)
 }
 
 // Close fans out a Close to every entry. After Close returns, all
@@ -314,6 +418,14 @@ func (p *Pool) toolsForEntry(ctx context.Context, entry *serverEntry) ([]coremcp
 	if err != nil {
 		return nil, err
 	}
+	if !msg.MatchesID(id) {
+		// finding #106: dispatchMu (held above) prevents a CONCURRENT
+		// Send from another caller, but not a STALE reply from an
+		// earlier caller that gave up on ctx.Done() before its own
+		// Recv observed this connection's queue — see
+		// NewToolsListProbe's doc comment for the full mechanism.
+		return nil, fmt.Errorf("http: tools/list response id mismatch (sent %d)", id)
+	}
 	if msg.Error != nil {
 		return nil, msg.Error
 	}
@@ -365,6 +477,10 @@ func (p *Pool) Call(ctx context.Context, server, tool string, args json.RawMessa
 	msg, err := recvWithCtx(ctx, entry.conn)
 	if err != nil {
 		return nil, err
+	}
+	if !msg.MatchesID(id) {
+		// finding #106: see toolsForEntry's identical check above.
+		return nil, fmt.Errorf("http: tools/call response id mismatch (sent %d)", id)
 	}
 	if msg.Error != nil {
 		return nil, msg.Error
