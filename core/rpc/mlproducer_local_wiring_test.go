@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -373,5 +374,388 @@ func TestMLProducerWiring_SidecarGetsEffectiveRetention(t *testing.T) {
 	}
 	if got := activityRetentionEnv(func() (int, error) { return 99999, nil }); got[0] != activity.RetentionEnvVar+"=3650" {
 		t.Fatalf("clamp → %v", got)
+	}
+}
+
+// Review finding (#439): FileStore.LoadAll reads a MISSING settings.json
+// as the defaults with no error, so a file deleted outside the app after
+// a good read of 365 days used to read as a fresh, good 90 — and the
+// pruner deleted local activity aged 90–365 days. These drive the real
+// FileStore on a temp dir.
+
+func newMissingSettingsAPI(t *testing.T) (*API, *settingsview.FileStore) {
+	t.Helper()
+	return newRetentionAPIAt(t, t.TempDir(), t.TempDir())
+}
+
+// newRetentionAPIAt is a process over the given data and settings dirs
+// (a second call over the same dirs is a restart).
+func newRetentionAPIAt(t *testing.T, dataDir, settingsDir string) (*API, *settingsview.FileStore) {
+	t.Helper()
+	c, err := core.New(core.Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	store, err := settingsview.NewFileStore(settingsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(c, WithSettingsStore(store))
+	t.Cleanup(a.Shutdown)
+	if a.mlProducer == nil || a.mlProducer.rec.LocalStore() == nil {
+		t.Fatal("no local activity store")
+	}
+	return a, store
+}
+
+func commitAgedActivity(t *testing.T, w *mlProducerWiring, id string, age time.Duration) {
+	t.Helper()
+	ts := time.Now().Add(-age).UnixMilli()
+	if _, err := w.rec.LocalStore().Commit(context.Background(), activity.Write{
+		Source: "harness.agent",
+		Events: []activity.Event{{Kind: "phase_change", TS: ts, Payload: map[string]any{"task": id, "phase": "coding"}}},
+		Task:   &activity.Task{ID: id, RepoRoot: "r", StartedAt: ts, LastActive: ts},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func spawnRetentionEnv(t *testing.T, a *API) []string {
+	t.Helper()
+	sp, ok := a.sidecarMgr.Spawner.(mlsidecar.ProcessSpawner)
+	if !ok || sp.EnvFunc == nil {
+		t.Fatalf("Spawner = %T with no EnvFunc", a.sidecarMgr.Spawner)
+	}
+	var got []string
+	for _, kv := range sp.Env([]string{"PATH=/bin", activity.RetentionEnvVar + "=7"}) {
+		if strings.HasPrefix(kv, activity.RetentionEnvVar+"=") {
+			got = append(got, kv)
+		}
+	}
+	return got
+}
+
+// (1) Good read of 365, then settings.json is deleted: the pass still
+// prunes to 365 (the 100-day-old row survives, the 400-day-old one goes)
+// and the missing file counts as a failed read.
+func TestMLProducerWiring_MissingSettingsAfterGoodReadKeepsLastGood(t *testing.T) {
+	t.Parallel()
+	a, store := newMissingSettingsAPI(t)
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	commitAgedActivity(t, w, "agent-100d", 100*24*time.Hour)
+	commitAgedActivity(t, w, "agent-400d", 400*24*time.Hour)
+	if err := os.Remove(store.Path()); err != nil {
+		t.Fatal(err)
+	}
+	ev, tk, err := w.pruner.PruneOnce(ctx)
+	if err != nil || ev != 1 || tk != 1 {
+		t.Fatalf("prune with settings.json missing = %d/%d, %v; want only the 400-day row (365-day window)", ev, tk, err)
+	}
+	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 1 || st.Tasks != 1 {
+		t.Fatalf("rows after the pass = %+v; the 100-day-old activity was purged (read as the 90-day default)", st)
+	}
+	if h := w.retention.Health(); h.ConsecutiveFailedPasses != 1 || !h.HaveGood || h.LastGoodDays != 365 {
+		t.Fatalf("health = %+v; want one failed pass over the last good 365", h)
+	}
+	if got := spawnRetentionEnv(t, a); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=365" {
+		t.Fatalf("spawn env with settings.json missing = %v; want the last good =365", got)
+	}
+}
+
+// (2) A genuine first run (no settings.json, nothing read yet): the
+// defaults are a good read, so the 90-day default prunes and nothing
+// counts as a failure.
+func TestMLProducerWiring_MissingSettingsOnFirstRunIsDefault(t *testing.T) {
+	t.Parallel()
+	a, store := newMissingSettingsAPI(t)
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := os.Stat(store.Path()); !os.IsNotExist(err) {
+		t.Fatalf("settings.json exists before the first read (%v); the test needs a first run", err)
+	}
+	commitAgedActivity(t, w, "agent-100d", 100*24*time.Hour)
+	commitAgedActivity(t, w, "agent-30d", 30*24*time.Hour)
+	for i := 0; i < activity.BlockedPasses+1; i++ {
+		ev, tk, err := w.pruner.PruneOnce(ctx)
+		if err != nil {
+			t.Fatalf("pass %d: %v", i, err)
+		}
+		if i == 0 && (ev != 1 || tk != 1) {
+			t.Fatalf("first-run prune = %d/%d; want the 100-day row (90-day default)", ev, tk)
+		}
+	}
+	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 1 || st.Tasks != 1 {
+		t.Fatalf("rows after first-run passes = %+v", st)
+	}
+	if h := w.retention.Health(); h.Blocked || h.ConsecutiveFailedPasses != 0 {
+		t.Fatalf("first-run health = %+v; want no failures", h)
+	}
+	v, err := a.MLLocalActivity(ctx)
+	if err != nil || v.RetentionBlocked || v.EffectiveRetentionDays != 90 {
+		t.Fatalf("first-run status = %+v, %v", v, err)
+	}
+	if got := spawnRetentionEnv(t, a); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=90" {
+		t.Fatalf("first-run spawn env = %v; want =90", got)
+	}
+}
+
+// (3) settings.json missing for ≥3 passes after a good read: blocked, and
+// the status shows the last good window the pruner is still applying.
+func TestMLProducerWiring_MissingSettingsBlocksWithLastGood(t *testing.T) {
+	t.Parallel()
+	a, store := newMissingSettingsAPI(t)
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	commitAgedActivity(t, w, "agent-100d", 100*24*time.Hour)
+	if err := os.Remove(store.Path()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < activity.BlockedPasses; i++ {
+		_, _, _ = w.pruner.PruneOnce(ctx)
+	}
+	v, err := a.MLLocalActivity(ctx)
+	if err != nil {
+		t.Fatalf("status once blocked: %v", err)
+	}
+	if !v.RetentionBlocked || v.LastGoodRetentionDays != 365 || v.EffectiveRetentionDays != 365 || v.Events != 1 {
+		t.Fatalf("status with settings.json missing for %d passes = %+v; want RetentionBlocked with the last good 365", activity.BlockedPasses, v)
+	}
+	if got := spawnRetentionEnv(t, a); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=365" {
+		t.Fatalf("spawn env while blocked = %v; want =365", got)
+	}
+}
+
+// Review of #441 (HIGH): after settings.json is deleted, any save
+// (SaveRoute runs on every navigation) recreates it with the retention
+// key absent. That must not read as the 90-day default: the choice
+// recorded in activity.db applies.
+func TestMLProducerWiring_RecreatedSettingsKeepsRecordedChoice(t *testing.T) {
+	t.Parallel()
+	a, store := newMissingSettingsAPI(t)
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	commitAgedActivity(t, w, "agent-100d", 100*24*time.Hour)
+	commitAgedActivity(t, w, "agent-400d", 400*24*time.Hour)
+	if err := os.Remove(store.Path()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveRoute("/x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.Path()); err != nil {
+		t.Fatalf("SaveRoute did not recreate settings.json: %v", err)
+	}
+	ev, tk, err := w.pruner.PruneOnce(ctx)
+	if err != nil || ev != 1 || tk != 1 {
+		t.Fatalf("prune after a recreated settings.json = %d/%d, %v; want only the 400-day row (365)", ev, tk, err)
+	}
+	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 1 || st.Tasks != 1 {
+		t.Fatalf("rows = %+v; the 100-day-old row was purged at the 90-day default", st)
+	}
+	if got := spawnRetentionEnv(t, a); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=365" {
+		t.Fatalf("spawn env = %v; want =365", got)
+	}
+	v, err := a.MLLocalActivity(ctx)
+	if err != nil || v.EffectiveRetentionDays != 365 || v.RetentionBlocked {
+		t.Fatalf("status = %+v, %v; want effective 365, not blocked (0/absent is not a failure)", v, err)
+	}
+}
+
+// Review of #441 (MEDIUM): the choice survives a restart with
+// settings.json missing.
+func TestMLProducerWiring_MissingSettingsAfterRestartKeepsRecordedChoice(t *testing.T) {
+	t.Parallel()
+	dataDir, settingsDir := t.TempDir(), t.TempDir()
+	a, store := newRetentionAPIAt(t, dataDir, settingsDir)
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	commitAgedActivity(t, a.mlProducer, "agent-100d", 100*24*time.Hour)
+	commitAgedActivity(t, a.mlProducer, "agent-400d", 400*24*time.Hour)
+	a.Shutdown()
+	if err := a.core.Shutdown(ctx); err != nil { // releases the data-dir lock
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.Path()); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := newRetentionAPIAt(t, dataDir, settingsDir)
+	w := b.mlProducer
+	ev, tk, err := w.pruner.PruneOnce(ctx)
+	if err != nil || ev != 1 || tk != 1 {
+		t.Fatalf("prune after restart with settings.json missing = %d/%d, %v; want only the 400-day row (365)", ev, tk, err)
+	}
+	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 1 || st.Tasks != 1 {
+		t.Fatalf("rows after restart = %+v", st)
+	}
+	if got := spawnRetentionEnv(t, b); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=365" {
+		t.Fatalf("spawn env after restart = %v; want =365", got)
+	}
+}
+
+// Explicitly setting the default from the panel records 90: shortening
+// by an explicit choice applies, and a later rewrite keeps it.
+func TestMLProducerWiring_ExplicitDefaultChoiceRecordsAndPrunes(t *testing.T) {
+	t.Parallel()
+	a, store := newMissingSettingsAPI(t)
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.SetMLLocalActivityRetention(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if d, ok, err := w.rec.LocalStore().RetentionChoice(ctx); err != nil || !ok || d != 90 {
+		t.Fatalf("recorded choice = %d/%v/%v; want 90", d, ok, err)
+	}
+	commitAgedActivity(t, w, "agent-100d", 100*24*time.Hour)
+	commitAgedActivity(t, w, "agent-30d", 30*24*time.Hour)
+	if err := store.SaveRoute("/y"); err != nil {
+		t.Fatal(err)
+	}
+	if ev, tk, err := w.pruner.PruneOnce(ctx); err != nil || ev != 1 || tk != 1 {
+		t.Fatalf("prune after an explicit default = %d/%d, %v; want the 100-day row", ev, tk, err)
+	}
+}
+
+// A genuine first run (no settings.json, no activity.db) reads 90 and
+// records nothing.
+func TestMLProducerWiring_FirstRunNoFilesIsDefault(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	if _, err := os.Stat(activity.Path(dataDir)); !os.IsNotExist(err) {
+		t.Fatalf("activity.db exists before New: %v", err)
+	}
+	a, _ := newRetentionAPIAt(t, dataDir, t.TempDir())
+	w := a.mlProducer
+	ctx := context.Background()
+	commitAgedActivity(t, w, "agent-100d", 100*24*time.Hour)
+	if ev, tk, err := w.pruner.PruneOnce(ctx); err != nil || ev != 1 || tk != 1 {
+		t.Fatalf("first-run prune = %d/%d, %v; want the 100-day row (90)", ev, tk, err)
+	}
+	if _, ok, err := w.rec.LocalStore().RetentionChoice(ctx); err != nil || ok {
+		t.Fatalf("first run recorded a choice (%v, %v); a default read never records", ok, err)
+	}
+	if got := spawnRetentionEnv(t, a); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=90" {
+		t.Fatalf("first-run spawn env = %v", got)
+	}
+}
+
+// A hand edit to 30 in a present file applies and is recorded.
+func TestMLProducerWiring_HandEditedRetentionAppliesAndRecords(t *testing.T) {
+	t.Parallel()
+	a, store := newMissingSettingsAPI(t)
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.Path(), []byte(`{"mlLocalActivityRetentionDays":30}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := w.settings.MLLocalActivityRetentionDays(); err != nil || d != 30 {
+		t.Fatalf("hand-edited read = %d, %v; the test's JSON key is wrong", d, err)
+	}
+	commitAgedActivity(t, w, "agent-40d", 40*24*time.Hour)
+	commitAgedActivity(t, w, "agent-10d", 10*24*time.Hour)
+	if ev, tk, err := w.pruner.PruneOnce(ctx); err != nil || ev != 1 || tk != 1 {
+		t.Fatalf("prune after a hand edit to 30 = %d/%d, %v; want the 40-day row", ev, tk, err)
+	}
+	if d, ok, err := w.rec.LocalStore().RetentionChoice(ctx); err != nil || !ok || d != 30 {
+		t.Fatalf("recorded choice = %d/%v/%v; want 30", d, ok, err)
+	}
+}
+
+// breakRetentionChoice makes the recorded choice unreadable (a read
+// error, not an absent row) through a second connection to activity.db.
+func breakRetentionChoice(t *testing.T, dataDir string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+activityDBPath(dataDir)+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`DROP TABLE harness_retention_choice`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Re-review of #441: an unreadable recorded choice, after a restart, with
+// settings.json present but without the key, is a failed read — nothing
+// pruned and =hold — never the 90-day default.
+func TestMLProducerWiring_UnreadableChoiceAfterRestartHolds(t *testing.T) {
+	t.Parallel()
+	dataDir, settingsDir := t.TempDir(), t.TempDir()
+	a, store := newRetentionAPIAt(t, dataDir, settingsDir)
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	commitAgedActivity(t, a.mlProducer, "agent-100d", 100*24*time.Hour)
+	commitAgedActivity(t, a.mlProducer, "agent-400d", 400*24*time.Hour)
+	a.Shutdown()
+	if err := a.core.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.Path(), []byte(`{"lastRoute":"/x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	breakRetentionChoice(t, dataDir)
+	b, _ := newRetentionAPIAt(t, dataDir, settingsDir)
+	w := b.mlProducer
+	if ev, tk, err := w.pruner.PruneOnce(ctx); err != activity.ErrRetentionUnreadable || ev != 0 || tk != 0 {
+		t.Fatalf("prune with the choice unreadable = %d/%d, %v; want skipped", ev, tk, err)
+	}
+	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 2 || st.Tasks != 2 {
+		t.Fatalf("rows = %+v; want all kept", st)
+	}
+	if got := spawnRetentionEnv(t, b); len(got) != 1 || got[0] != activity.RetentionEnvVar+"="+activity.RetentionHold {
+		t.Fatalf("spawn env with the choice unreadable = %v; want =hold", got)
+	}
+	for i := 0; i < activity.BlockedPasses-1; i++ {
+		_, _, _ = w.pruner.PruneOnce(ctx)
+	}
+	if v, err := b.MLLocalActivity(ctx); err != nil || !v.RetentionBlocked || v.LastGoodRetentionDays != 0 {
+		t.Fatalf("status = %+v, %v; want blocked with no last good", v, err)
+	}
+}
+
+// The same with a last good value in this process: it applies (365, not
+// 90) and the read counts as a failure.
+func TestMLProducerWiring_UnreadableChoiceUsesLastGood(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	a, store := newRetentionAPIAt(t, dataDir, t.TempDir())
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	commitAgedActivity(t, w, "agent-100d", 100*24*time.Hour)
+	commitAgedActivity(t, w, "agent-400d", 400*24*time.Hour)
+	breakRetentionChoice(t, dataDir)
+	if err := os.WriteFile(store.Path(), []byte(`{"lastRoute":"/x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ev, tk, err := w.pruner.PruneOnce(ctx); err != nil || ev != 1 || tk != 1 {
+		t.Fatalf("prune = %d/%d, %v; want only the 400-day row (last good 365)", ev, tk, err)
+	}
+	if h := w.retention.Health(); h.ConsecutiveFailedPasses != 1 || h.LastGoodDays != 365 {
+		t.Fatalf("health = %+v; want one failed pass over the last good 365", h)
+	}
+	if got := spawnRetentionEnv(t, a); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=365" {
+		t.Fatalf("spawn env = %v; want =365", got)
 	}
 }

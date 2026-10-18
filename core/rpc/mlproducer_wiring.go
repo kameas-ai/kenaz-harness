@@ -164,7 +164,17 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWi
 		EnrollGen: w.enrollGen.Load,
 	})
 
-	w.retention = activity.NewRetention(settingsImpl.MLLocalActivityRetentionDays, nil)
+	// A missing settings.json is handed to Retention as ErrSettingMissing,
+	// and the member's choice is recorded in activity.db (WithChoiceStore):
+	// a deleted or rewritten settings.json keeps the recorded choice; a
+	// genuine first run (nothing recorded) reads the default.
+	w.retention = activity.NewRetention(func() (int, error) {
+		days, err := settingsImpl.MLLocalActivityRetentionDays()
+		if errors.Is(err, settings.ErrSettingsMissing) {
+			return 0, activity.ErrSettingMissing
+		}
+		return days, err
+	}, nil).WithChoiceStore(w.rec.LocalStore)
 	w.pruner = activity.NewRetentionPruner(w.rec.LocalStore, w.retention, nil, logging.L())
 
 	settingsImpl.OnFleetSessionReset(w.onSessionReset)
@@ -398,6 +408,11 @@ type MLLocalActivityView struct {
 // can quote the file.
 var errRetentionUnreadable = errors.New("local activity retention setting could not be read")
 
+// errRetentionChoiceNotRecorded: SetMLLocalActivityRetention saved the
+// setting (and this session applies it) but could not record its durable
+// copy in the activity store, so a lost settings.json would not keep it.
+var errRetentionChoiceNotRecorded = errors.New("local activity retention was saved to settings, but its durable copy in the activity store could not be written; it applies now, and saving again retries the copy")
+
 // retentionReader is the engine's spawn-time retention read, through the
 // shared fail-safe Retention: the fresh value, else the last good one,
 // else an error (the spawn env then sends activity.RetentionHold). nil without a
@@ -477,6 +492,14 @@ func (a *API) SetMLLocalActivityRetention(ctx context.Context, days int) (MLLoca
 	}
 	if err := a.mlProducer.settings.SetMLLocalActivityRetentionDays(ctx, days); err != nil {
 		return MLLocalActivityView{}, err
+	}
+	// The member's explicit choice, recorded next to the data it governs
+	// (activity.Retention): a lost or rewritten settings.json then cannot
+	// change it.
+	if err := a.mlProducer.retention.Chose(days); err != nil {
+		// Counts only: never the error text (it can quote the file).
+		logging.L().Warn("mlproducer.activity.retention_choice_record_failed")
+		return MLLocalActivityView{}, errRetentionChoiceNotRecorded
 	}
 	return a.mlProducer.localActivity(ctx)
 }

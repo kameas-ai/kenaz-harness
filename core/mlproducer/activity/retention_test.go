@@ -211,3 +211,31 @@ func TestPruner_BlockedWithoutLastGoodDeletesNothing(t *testing.T) {
 		t.Fatalf("rows while blocked with no last good = %+v; want kept", st)
 	}
 }
+
+// A missing settings file is a good read of the default until a value has
+// been read from an existing file; after that it is a failed read that
+// keeps the last good value.
+func TestRetention_MissingSettingFile(t *testing.T) {
+	t.Parallel()
+	var days int
+	var err error
+	r := NewRetention(func() (int, error) { return days, err }, nil)
+	err = ErrSettingMissing
+	if raw, fresh, ok := r.readPass(); raw != 0 || !fresh || !ok {
+		t.Fatalf("first-run missing = %d/%v/%v; want a good default read", raw, fresh, ok)
+	}
+	if raw, fresh, ok := r.readPass(); raw != 0 || !fresh || !ok {
+		t.Fatalf("still-missing first run = %d/%v/%v; want a good default read", raw, fresh, ok)
+	}
+	days, err = 365, nil
+	if raw, fresh, ok := r.readPass(); raw != 365 || !fresh || !ok {
+		t.Fatalf("stored read = %d/%v/%v", raw, fresh, ok)
+	}
+	days, err = 0, ErrSettingMissing
+	if raw, fresh, ok := r.readPass(); raw != 365 || fresh || !ok {
+		t.Fatalf("missing after a stored read = %d/%v/%v; want the last good 365, not fresh", raw, fresh, ok)
+	}
+	if h := r.Health(); h.ConsecutiveFailedPasses != 1 {
+		t.Fatalf("health = %+v; want one failed pass", h)
+	}
+}

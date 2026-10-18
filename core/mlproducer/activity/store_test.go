@@ -463,3 +463,36 @@ func TestOpen_ConcurrentFirstOpensAllSucceed(t *testing.T) {
 		t.Fatalf("ledger rows = %d, want %d (a migration applied twice)", got, SchemaVersion)
 	}
 }
+
+func TestStore_RetentionChoice(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), DirName, FileName)
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.RetentionChoice(ctx); err != nil || ok {
+		t.Fatalf("fresh store choice = %v, %v; want none", ok, err)
+	}
+	for _, bad := range []int{0, -1, MaxRetentionDays + 1} {
+		if err := s.SetRetentionChoice(ctx, bad); err == nil {
+			t.Fatalf("SetRetentionChoice(%d) accepted", bad)
+		}
+	}
+	if err := s.SetRetentionChoice(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRetentionChoice(ctx, 30); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if d, ok, err := s2.RetentionChoice(ctx); err != nil || !ok || d != 30 {
+		t.Fatalf("reopened choice = %d/%v/%v; want 30", d, ok, err)
+	}
+}
