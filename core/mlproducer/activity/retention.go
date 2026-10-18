@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
@@ -20,6 +21,10 @@ import (
 //     the last good value (the member's own choice; stopping would
 //     over-retain for as long as the file stays broken) and deletes
 //     nothing only when there is none.
+//   - ErrSettingMissing (the settings file does not exist) is a failed
+//     read once a value has been read from an existing file in this
+//     process (the file was deleted after a good read: keep that value),
+//     and a good read of the default (0) otherwise (a genuine first run).
 //
 // Safe for concurrent use.
 type Retention struct {
@@ -28,12 +33,17 @@ type Retention struct {
 
 	mu           sync.Mutex
 	haveGood     bool
+	haveStored   bool // a read from an existing settings file succeeded
 	good         int
 	goodAt       time.Time
 	start        time.Time
 	lastFailed   bool
 	failedPasses int
 }
+
+// ErrSettingMissing is what a Retention read func returns when the
+// settings file does not exist (see Retention).
+var ErrSettingMissing = errors.New("activity: retention setting file missing")
 
 // BlockedPasses / BlockedAfter are the thresholds at which unreadable
 // retention becomes visible (Health().Blocked).
@@ -71,6 +81,11 @@ func (r *Retention) readCounted(pass bool) (int, bool, bool) {
 	days, err := r.read()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if errors.Is(err, ErrSettingMissing) && !r.haveStored {
+		err, days = nil, 0
+	} else if err == nil {
+		r.haveStored = true
+	}
 	if err == nil {
 		r.haveGood, r.good, r.goodAt = true, days, r.now()
 		r.lastFailed, r.failedPasses = false, 0

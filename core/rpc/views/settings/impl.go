@@ -76,17 +76,33 @@ func (s *FileStore) LoadAll() (Settings, error) {
 }
 
 func (s *FileStore) loadLocked() (Settings, error) {
+	got, _, err := s.loadPresentLocked()
+	return got, err
+}
+
+// LoadAllPresent is LoadAll that also says whether the file exists
+// (present = false: the defaults came from a missing file). Only the
+// local activity retention read needs the distinction: a file deleted
+// after a good read must not read as the default window (pruning is
+// irreversible). Every other consumer keeps LoadAll's missing → defaults.
+func (s *FileStore) LoadAllPresent() (Settings, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadPresentLocked()
+}
+
+func (s *FileStore) loadPresentLocked() (Settings, bool, error) {
 	def := defaultSettings()
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return def, nil
+			return def, false, nil
 		}
-		return def, fmt.Errorf("settings: read: %w", err)
+		return def, false, fmt.Errorf("settings: read: %w", err)
 	}
 	var got Settings
 	if err := json.Unmarshal(data, &got); err != nil {
-		return def, fmt.Errorf("settings: parse: %w", err)
+		return def, true, fmt.Errorf("settings: parse: %w", err)
 	}
 	// Apply defaults for any zero-valued fields so partial files don't
 	// brick the UI.
@@ -108,7 +124,7 @@ func (s *FileStore) loadLocked() (Settings, error) {
 	if got.WindowSize.Height == 0 {
 		got.WindowSize.Height = def.WindowSize.Height
 	}
-	return got, nil
+	return got, true, nil
 }
 
 // SaveAll persists every field atomically via a temp-file rename.
@@ -1791,12 +1807,30 @@ func (a *API) MLLocalActivityRetentionDays() (int, error) {
 	if a == nil || a.store == nil {
 		return 0, nil
 	}
+	if ps, ok := a.store.(interface {
+		LoadAllPresent() (Settings, bool, error)
+	}); ok {
+		s, present, err := ps.LoadAllPresent()
+		if err != nil {
+			return 0, err
+		}
+		if !present {
+			return 0, ErrSettingsMissing
+		}
+		return s.MLLocalActivityRetentionDays, nil
+	}
 	s, err := a.store.LoadAll()
 	if err != nil {
 		return 0, err
 	}
 	return s.MLLocalActivityRetentionDays, nil
 }
+
+// ErrSettingsMissing is MLLocalActivityRetentionDays' answer when the
+// settings file does not exist (the value is then 0, the default). The
+// retention reader decides what that means: a first run (nothing read
+// yet) takes the default; a file gone after a good read is a failed read.
+var ErrSettingsMissing = errors.New("settings: settings file missing")
 
 // SetMLLocalActivityRetentionDays validates and persists the local ML
 // activity retention (0 = default). The pruner reads it on its next pass.

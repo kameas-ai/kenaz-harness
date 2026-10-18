@@ -164,7 +164,16 @@ func newMLProducerWiring(c *core.Core, settingsImpl *settings.API) *mlProducerWi
 		EnrollGen: w.enrollGen.Load,
 	})
 
-	w.retention = activity.NewRetention(settingsImpl.MLLocalActivityRetentionDays, nil)
+	// A missing settings.json is handed to Retention as ErrSettingMissing:
+	// after a good read it is a failed read (keep the last good window),
+	// on a first run the default is a good read.
+	w.retention = activity.NewRetention(func() (int, error) {
+		days, err := settingsImpl.MLLocalActivityRetentionDays()
+		if errors.Is(err, settings.ErrSettingsMissing) {
+			return 0, activity.ErrSettingMissing
+		}
+		return days, err
+	}, nil)
 	w.pruner = activity.NewRetentionPruner(w.rec.LocalStore, w.retention, nil, logging.L())
 
 	settingsImpl.OnFleetSessionReset(w.onSessionReset)

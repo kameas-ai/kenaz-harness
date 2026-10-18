@@ -375,3 +375,151 @@ func TestMLProducerWiring_SidecarGetsEffectiveRetention(t *testing.T) {
 		t.Fatalf("clamp → %v", got)
 	}
 }
+
+// Review finding (#439): FileStore.LoadAll reads a MISSING settings.json
+// as the defaults with no error, so a file deleted outside the app after
+// a good read of 365 days used to read as a fresh, good 90 — and the
+// pruner deleted local activity aged 90–365 days. These drive the real
+// FileStore on a temp dir.
+
+func newMissingSettingsAPI(t *testing.T) (*API, *settingsview.FileStore) {
+	t.Helper()
+	c, err := core.New(core.Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	store, err := settingsview.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(c, WithSettingsStore(store))
+	t.Cleanup(a.Shutdown)
+	if a.mlProducer == nil || a.mlProducer.rec.LocalStore() == nil {
+		t.Fatal("no local activity store")
+	}
+	return a, store
+}
+
+func commitAgedActivity(t *testing.T, w *mlProducerWiring, id string, age time.Duration) {
+	t.Helper()
+	ts := time.Now().Add(-age).UnixMilli()
+	if _, err := w.rec.LocalStore().Commit(context.Background(), activity.Write{
+		Source: "harness.agent",
+		Events: []activity.Event{{Kind: "phase_change", TS: ts, Payload: map[string]any{"task": id, "phase": "coding"}}},
+		Task:   &activity.Task{ID: id, RepoRoot: "r", StartedAt: ts, LastActive: ts},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func spawnRetentionEnv(t *testing.T, a *API) []string {
+	t.Helper()
+	sp, ok := a.sidecarMgr.Spawner.(mlsidecar.ProcessSpawner)
+	if !ok || sp.EnvFunc == nil {
+		t.Fatalf("Spawner = %T with no EnvFunc", a.sidecarMgr.Spawner)
+	}
+	var got []string
+	for _, kv := range sp.Env([]string{"PATH=/bin", activity.RetentionEnvVar + "=7"}) {
+		if strings.HasPrefix(kv, activity.RetentionEnvVar+"=") {
+			got = append(got, kv)
+		}
+	}
+	return got
+}
+
+// (1) Good read of 365, then settings.json is deleted: the pass still
+// prunes to 365 (the 100-day-old row survives, the 400-day-old one goes)
+// and the missing file counts as a failed read.
+func TestMLProducerWiring_MissingSettingsAfterGoodReadKeepsLastGood(t *testing.T) {
+	t.Parallel()
+	a, store := newMissingSettingsAPI(t)
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	commitAgedActivity(t, w, "agent-100d", 100*24*time.Hour)
+	commitAgedActivity(t, w, "agent-400d", 400*24*time.Hour)
+	if err := os.Remove(store.Path()); err != nil {
+		t.Fatal(err)
+	}
+	ev, tk, err := w.pruner.PruneOnce(ctx)
+	if err != nil || ev != 1 || tk != 1 {
+		t.Fatalf("prune with settings.json missing = %d/%d, %v; want only the 400-day row (365-day window)", ev, tk, err)
+	}
+	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 1 || st.Tasks != 1 {
+		t.Fatalf("rows after the pass = %+v; the 100-day-old activity was purged (read as the 90-day default)", st)
+	}
+	if h := w.retention.Health(); h.ConsecutiveFailedPasses != 1 || !h.HaveGood || h.LastGoodDays != 365 {
+		t.Fatalf("health = %+v; want one failed pass over the last good 365", h)
+	}
+	if got := spawnRetentionEnv(t, a); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=365" {
+		t.Fatalf("spawn env with settings.json missing = %v; want the last good =365", got)
+	}
+}
+
+// (2) A genuine first run (no settings.json, nothing read yet): the
+// defaults are a good read, so the 90-day default prunes and nothing
+// counts as a failure.
+func TestMLProducerWiring_MissingSettingsOnFirstRunIsDefault(t *testing.T) {
+	t.Parallel()
+	a, store := newMissingSettingsAPI(t)
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := os.Stat(store.Path()); !os.IsNotExist(err) {
+		t.Fatalf("settings.json exists before the first read (%v); the test needs a first run", err)
+	}
+	commitAgedActivity(t, w, "agent-100d", 100*24*time.Hour)
+	commitAgedActivity(t, w, "agent-30d", 30*24*time.Hour)
+	for i := 0; i < activity.BlockedPasses+1; i++ {
+		ev, tk, err := w.pruner.PruneOnce(ctx)
+		if err != nil {
+			t.Fatalf("pass %d: %v", i, err)
+		}
+		if i == 0 && (ev != 1 || tk != 1) {
+			t.Fatalf("first-run prune = %d/%d; want the 100-day row (90-day default)", ev, tk)
+		}
+	}
+	if st, _ := w.rec.LocalStore().Stats(ctx); st.Events != 1 || st.Tasks != 1 {
+		t.Fatalf("rows after first-run passes = %+v", st)
+	}
+	if h := w.retention.Health(); h.Blocked || h.ConsecutiveFailedPasses != 0 {
+		t.Fatalf("first-run health = %+v; want no failures", h)
+	}
+	v, err := a.MLLocalActivity(ctx)
+	if err != nil || v.RetentionBlocked || v.EffectiveRetentionDays != 90 {
+		t.Fatalf("first-run status = %+v, %v", v, err)
+	}
+	if got := spawnRetentionEnv(t, a); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=90" {
+		t.Fatalf("first-run spawn env = %v; want =90", got)
+	}
+}
+
+// (3) settings.json missing for ≥3 passes after a good read: blocked, and
+// the status shows the last good window the pruner is still applying.
+func TestMLProducerWiring_MissingSettingsBlocksWithLastGood(t *testing.T) {
+	t.Parallel()
+	a, store := newMissingSettingsAPI(t)
+	w := a.mlProducer
+	ctx := context.Background()
+	if _, err := a.SetMLLocalActivityRetention(ctx, 365); err != nil {
+		t.Fatal(err)
+	}
+	commitAgedActivity(t, w, "agent-100d", 100*24*time.Hour)
+	if err := os.Remove(store.Path()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < activity.BlockedPasses; i++ {
+		_, _, _ = w.pruner.PruneOnce(ctx)
+	}
+	v, err := a.MLLocalActivity(ctx)
+	if err != nil {
+		t.Fatalf("status once blocked: %v", err)
+	}
+	if !v.RetentionBlocked || v.LastGoodRetentionDays != 365 || v.EffectiveRetentionDays != 365 || v.Events != 1 {
+		t.Fatalf("status with settings.json missing for %d passes = %+v; want RetentionBlocked with the last good 365", activity.BlockedPasses, v)
+	}
+	if got := spawnRetentionEnv(t, a); len(got) != 1 || got[0] != activity.RetentionEnvVar+"=365" {
+		t.Fatalf("spawn env while blocked = %v; want =365", got)
+	}
+}
