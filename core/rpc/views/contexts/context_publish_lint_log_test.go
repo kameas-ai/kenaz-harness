@@ -1,9 +1,10 @@
 package contexts_test
 
-// context_publish_lint_log_test.go — review R5. A lint_blocked refusal
-// carries server-redacted excerpts of the user's body. They are shown to the
-// user in the returned error and must NEVER reach a log line. Planted
-// excerpt: it must appear in the error and in no captured slog record.
+// context_publish_lint_log_test.go — review R5 + legal (rejected content is
+// never echoed, kenaz-fleet #322). A lint_blocked refusal names the rule and
+// the field it was found in; the UI error shows those, and nothing from a
+// finding may reach a log line. A planted legacy excerpt (an older Fleet)
+// must appear in neither the error nor any captured slog record.
 
 import (
 	"bytes"
@@ -48,7 +49,7 @@ func TestContextPublish_LintBlocked_ExcerptNeverLogged(t *testing.T) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
-		_, _ = io.WriteString(w, `{"code":"lint_blocked","message":"blocked","details":{"node_id":"node-1","findings":[{"rule":"stripe_secret_key","severity":"block","excerpt":"`+plantedExcerpt+`"}]}}`)
+		_, _ = io.WriteString(w, `{"code":"lint_blocked","message":"blocked","details":{"node_id":"node-1","findings":[{"rule":"stripe_secret_key","severity":"block","field":"body","excerpt":"`+plantedExcerpt+`"}]}}`)
 	}))
 	defer srv.Close()
 	corefleet.SeedFleetConfigForTesting(srv.URL, corefleet.FleetConfig{
@@ -77,8 +78,11 @@ func TestContextPublish_LintBlocked_ExcerptNeverLogged(t *testing.T) {
 	if !errors.Is(err, corefleet.ErrContextLintBlocked) {
 		t.Fatalf("err = %v, want ErrContextLintBlocked", err)
 	}
-	if !strings.Contains(err.Error(), plantedExcerpt) {
-		t.Fatalf("the UI error %q should carry the excerpt so the user can find the secret", err.Error())
+	if strings.Contains(err.Error(), plantedExcerpt) || strings.Contains(err.Error(), "PLANTED-EXCERPT") {
+		t.Fatalf("the UI error %q echoed rejected content", err.Error())
+	}
+	if !strings.Contains(err.Error(), "stripe_secret_key in body") {
+		t.Fatalf("the UI error %q should name the rule and field so the user can find the secret", err.Error())
 	}
 	out := logs.String()
 	if !strings.Contains(out, "contexts.publish.failed") {
@@ -96,7 +100,7 @@ func TestContextPushError_LogValue_OmitsExcerpt(t *testing.T) {
 	logs := &lockedBuf{}
 	l := slog.New(slog.NewJSONHandler(logs, nil))
 	pe := &corefleet.ContextPushError{Op: "push", Status: 422, Code: "lint_blocked",
-		Findings: []corefleet.LintFinding{{Rule: "r", Severity: "block", Excerpt: plantedExcerpt}}}
+		Findings: []corefleet.LintFinding{{Rule: "r", Severity: "block", Field: plantedExcerpt}}}
 	l.Warn("x", "err", pe)
 	if strings.Contains(logs.String(), "PLANTED-EXCERPT") {
 		t.Fatalf("LogValue leaked the excerpt: %s", logs.String())
