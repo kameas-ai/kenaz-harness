@@ -187,7 +187,9 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// with tool-context-budget-01TCBUD01 WP01.
 	// 0347 (projects/sessions tool_exposure + sessions.tool_activations)
 	// lands with tool-context-budget-01TCBUD01 WP02.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347}
+	// 0348 (scheduled_chat_runs.session_id) lands with the
+	// one-conversation-per-schedule fix.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -311,8 +313,11 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// model-calls/1800-model-calls (llm-call-telemetry-01LLMTEL01 WP02: the
 	// local model_calls store) one more, hence 71 — summed by hand at the
 	// 2026-10-10 merge of the two branches.
-	if count != 71 {
-		t.Errorf("ledger count = %d, want 71", count)
+	// sessions/0348-scheduled-chat-runs-session-id (one conversation per
+	// schedule) one more, hence 72. If another branch also bumped this
+	// pin, the composed value is the SUM of the bumps.
+	if count != 72 {
+		t.Errorf("ledger count = %d, want 72", count)
 	}
 }
 

@@ -850,6 +850,44 @@ type pausedTurn struct {
 	// post_send hook and the advisors — rather than a blank turn.
 	turn     UserTurn
 	pausedAt time.Time
+	// bridge is the paused sub's stream bridge, left OPEN at the pause
+	// ("the stream stays open until RedriveLastTurn completes"). When the
+	// paused turn is dropped without being redriven, abandonPaused closes
+	// it through this bridge, so every listener — the chat surface and the
+	// scheduled-chat dispatcher's containment watcher — sees the turn end.
+	bridge *StreamBridge
+	// failure is the pause's classified failure, carried onto that close
+	// so the surface marks the message NOT DELIVERED with its cause.
+	failure corellm.RunFailure
+	// redriving is set (under r.mu) while RedriveLastTurn is starting the
+	// redrive: the entry stays in pausedSubs until the redrive's own sub
+	// exists, so the turn is never invisible to SubStillLive, and a
+	// second concurrent redrive of it is refused.
+	redriving bool
+}
+
+// StreamClosedReasonAbandoned is the llm:stream-closed reason for a turn
+// that was paused for key rotation and then dropped without being
+// redriven: a later pause on the same profile replaced it (pausedSubs
+// holds one per profile), or its redrive could not start. The turn will
+// never run, so its stream is closed rather than left open forever.
+const StreamClosedReasonAbandoned = "abandoned"
+
+// abandonPaused closes a paused turn that will never be redriven (see
+// StreamClosedReasonAbandoned). Idempotent through the bridge.
+func (r *ChatRunner) abandonPaused(pt *pausedTurn, why string) {
+	if pt == nil || pt.bridge == nil {
+		return
+	}
+	pt.bridge.EmitClosedFull(StreamClosed{
+		Reason:     StreamClosedReasonAbandoned,
+		Message:    why,
+		TurnSpanID: pt.turn.MessageID,
+		Delivered:  false,
+		Failure:    pt.failure,
+	})
+	logging.L().Info("chat.run.paused_turn_abandoned",
+		"sub_id", pt.subID, "session_id", pt.sessionID, "profile_id", pt.profileID, "why", why)
 }
 
 // AuthFailedPayload is the broker payload emitted on the
@@ -1819,6 +1857,47 @@ func (r *ChatRunner) HasActiveRun(sessionID string) bool {
 	return false
 }
 
+// HasPausedTurnIn reports whether a turn in sessionID is paused for key
+// rotation (pausedSubs). Such a sub is finished and out of r.subs, so
+// HasActiveRun is false, yet RedriveLastTurn can re-run it in the session
+// at any time. The scheduled-chat dispatcher treats it as the
+// conversation still being busy (sessions/0348): a fire must not start a
+// second turn there, nor end the paused turn's containment.
+func (r *ChatRunner) HasPausedTurnIn(sessionID string) bool {
+	if r == nil || sessionID == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, pt := range r.pausedSubs {
+		if pt.sessionID == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
+// SubStillLive reports whether subID can still run: it is executing
+// (started, not at its terminal) or paused for key rotation, so a
+// RedriveLastTurn can still re-run it. The scheduled-chat containment
+// watcher keeps a run contained for as long as this is true.
+func (r *ChatRunner) SubStillLive(subID string) bool {
+	if r == nil || subID == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if sub, ok := r.subs[subID]; ok && !sub.finished.Load() {
+		return true
+	}
+	for _, pt := range r.pausedSubs {
+		if pt.subID == subID {
+			return true
+		}
+	}
+	return false
+}
+
 // HasPausedSubFor reports whether a paused turn exists for the given profileID.
 // When ok is true, token is the sub_id originally assigned to the paused turn.
 // Used by the LLM view's TestAndRotateKey to decide whether to mint an
@@ -1827,7 +1906,7 @@ func (r *ChatRunner) HasPausedSubFor(profileID string) (token string, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	pt, ok := r.pausedSubs[profileID]
-	if !ok {
+	if !ok || pt.redriving {
 		return "", false
 	}
 	return pt.subID, true
@@ -1848,13 +1927,28 @@ func (r *ChatRunner) HasPausedSubFor(profileID string) (token string, ok bool) {
 func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (newSubID string, err error) {
 	r.mu.Lock()
 	pt, ok := r.pausedSubs[profileID]
+	if ok && pt.redriving {
+		ok = false // already being redriven
+	}
 	if ok {
-		delete(r.pausedSubs, profileID)
+		pt.redriving = true
 	}
 	r.mu.Unlock()
 	if !ok {
 		return "", fmt.Errorf("chat: no paused turn for profile %q", profileID)
 	}
+	// The entry is removed once StartStream returns — after the redrive's
+	// sub exists, so the turn is live throughout (SubStillLive). If the
+	// redrive cannot start, the paused turn is abandoned and its stream
+	// closed (see abandonPaused), not left open with nothing able to
+	// resume it.
+	defer func() {
+		r.mu.Lock()
+		if r.pausedSubs[profileID] == pt {
+			delete(r.pausedSubs, profileID)
+		}
+		r.mu.Unlock()
+	}()
 	// The SAME turn, minus the announce. Before chat-single-writer this
 	// passed an empty userMessage — which was what kept the old runner from
 	// appending the turn a third time, and which also handed the ask node,
@@ -1876,6 +1970,7 @@ func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (new
 				ErrorMessage: err.Error(),
 			})
 		}
+		r.abandonPaused(pt, "The retry after the key rotation could not start: "+err.Error())
 		return "", err
 	}
 	// Notify subscribers (chat surface, toast queues) that the paused turn
@@ -2121,10 +2216,18 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 			modelOverride: sub.modelOverride,
 			turn:          sub.turn,
 			pausedAt:      time.Now(),
+			bridge:        sub.bridge,
+			failure:       corellm.ClassifyFailure(err, sub.providerKind),
 		}
 		r.mu.Lock()
+		replaced := r.pausedSubs[authFailed.ProfileID]
 		r.pausedSubs[authFailed.ProfileID] = pt
 		r.mu.Unlock()
+		// One paused turn per profile (last-write-wins): the one this
+		// replaces can never be redriven now, so close it.
+		if replaced != nil && replaced.subID != pt.subID && !replaced.redriving {
+			r.abandonPaused(replaced, "A later turn paused for the same provider key, so this one will not resume after the key rotation; send it again.")
+		}
 
 		// Emit the synthetic "paused for auth" chunk so the frontend's chat
 		// bubble marks the turn as incomplete.

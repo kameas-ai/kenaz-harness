@@ -29,6 +29,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -155,7 +156,11 @@ type containmentFixture struct {
 	audit    *containmentAudit
 	blocked  blockedrequests.Store
 	registry *ScheduledRunContainmentRegistry
-	db       string // dataDir
+	// dispatcher is the same LiveChatRunDispatcher the cron engine fires
+	// through, for tests that fire one schedule repeatedly.
+	dispatcher *LiveChatRunDispatcher
+	bus        *EventBus
+	db         string // dataDir
 }
 
 // buildContainmentFixture wires the production fire path over dataDir
@@ -237,6 +242,8 @@ func buildContainmentFixtureWith(t *testing.T, dataDir string, llm coreag.LLMPro
 	dispatcher := NewChatRunDispatcher(ChatRunDispatcherDeps{
 		Store:          store,
 		Sessions:       sessionsAPI,
+		ActiveRuns:     runner,
+		PausedTurns:    runner,
 		LLM:            llmAPI,
 		Bus:            bus,
 		DefaultProfile: func() string { return "test-profile" },
@@ -251,7 +258,7 @@ func buildContainmentFixtureWith(t *testing.T, dataDir string, llm coreag.LLMPro
 	cron.Start()
 	t.Cleanup(cron.Stop)
 
-	return &containmentFixture{runner: runner, sessions: sessionsAPI, llm: llmAPI, store: store, engine: cron, pool: pool, model: model, audit: audit, blocked: blocked, registry: registry, db: dataDir}
+	return &containmentFixture{runner: runner, sessions: sessionsAPI, llm: llmAPI, store: store, engine: cron, pool: pool, model: model, audit: audit, blocked: blocked, registry: registry, dispatcher: dispatcher, bus: bus, db: dataDir}
 }
 
 // fireOnce creates a one-shot row due now, arms it through the engine's
@@ -980,4 +987,450 @@ func TestScheduledRunContainment_RedriveBeforeTimeoutStaysContainedThenReleases(
 		time.Sleep(20 * time.Millisecond)
 	}
 	f.await(t, "cr-early-redrive") // the original sub never closes; the dispatcher times out
+}
+
+// promptGatedModel blocks any call whose newest user message has a gate
+// (until a token arrives on it, or ctx ends) and answers "ok". Lets a test
+// hold the scheduled turn and an interactive turn in the same session
+// independently.
+type promptGatedModel struct {
+	mu    sync.Mutex
+	gates map[string]chan struct{}
+	seen  map[string]int
+}
+
+func (m *promptGatedModel) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
+	last := ""
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			last = req.Messages[i].Content
+			break
+		}
+	}
+	m.mu.Lock()
+	m.seen[last]++
+	gate := m.gates[last]
+	m.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return coreag.LLMResponse{}, ctx.Err()
+		}
+	}
+	if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
+		sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: "ok"})
+	}
+	return coreag.LLMResponse{Content: "ok", FinishReason: "stop"}, nil
+}
+
+func (m *promptGatedModel) waitSeen(t *testing.T, prompt string, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		m.mu.Lock()
+		got := m.seen[prompt]
+		m.mu.Unlock()
+		if got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("model saw %q %d time(s), want %d", prompt, got, n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestScheduledRunContainment_ReusedConversationContainsEachRunOnly
+// (sessions/0348, one conversation per schedule): the schedule's single
+// session is contained for each scheduled turn — re-armed on the second
+// fire — and for nothing else. An interactive turn the user runs in the
+// conversation BETWEEN fires is not contained; one the user runs DURING a
+// fire does not end that fire's containment; each fire's own terminal
+// releases it.
+func TestScheduledRunContainment_ReusedConversationContainsEachRunOnly(t *testing.T) {
+	sandboxUserConfigDir(t)
+	const schedPrompt, userPrompt, userPrompt2 = "use your tools", "what did you find?", "and now?"
+	model := &promptGatedModel{
+		gates: map[string]chan struct{}{schedPrompt: make(chan struct{}), userPrompt: make(chan struct{}), userPrompt2: make(chan struct{})},
+		seen:  map[string]int{},
+	}
+	f := buildContainmentFixtureWith(t, t.TempDir(), model, 10*time.Second)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	rec := scheduler.ChatRunRecord{
+		ID: "cr-reuse", Name: "containment reuse", PromptTemplate: schedPrompt, Cron: "0 0 1 1 *", OutputSink: "none",
+		Enabled: true, CreatedBy: scheduler.ScheduledRunCreatedByModel, ToolAllowlist: []string{"kenaz__alpha"},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := f.store.Create(ctx, rec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	job := scheduler.Job{ID: rec.ID, Kind: scheduler.JobKindChatRun, ChatRun: &scheduler.ChatRunSpec{
+		ID: rec.ID, PromptTemplate: rec.PromptTemplate, CreatedBy: rec.CreatedBy, ToolAllowlist: rec.ToolAllowlist,
+	}}
+	fire := func() <-chan scheduler.ChatRunHistoryRecord {
+		out := make(chan scheduler.ChatRunHistoryRecord, 1)
+		go func() {
+			r, err := f.dispatcher.DispatchChatRun(ctx, job, time.Now().UTC())
+			if err != nil {
+				t.Errorf("DispatchChatRun: %v", err)
+			}
+			out <- r
+		}()
+		return out
+	}
+	interactive := func(sid, text string) {
+		if _, err := f.sessions.AppendMessage(ctx, sid, "user", text); err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+		if _, err := f.llm.StartStream(ctx, "test-profile", sid, ""); err != nil {
+			t.Fatalf("interactive StartStream: %v", err)
+		}
+	}
+	waitIdle := func(sid string) {
+		deadline := time.Now().Add(10 * time.Second)
+		for f.runner.HasActiveRun(sid) {
+			if time.Now().After(deadline) {
+				t.Fatalf("session %s never went idle", sid)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	// Fire 1: contained while its turn runs, released by its own end.
+	done := fire()
+	model.waitSeen(t, schedPrompt, 1)
+	stored, err := f.store.Get(ctx, rec.ID)
+	if err != nil || stored.SessionID == "" {
+		t.Fatalf("stored conversation = %+v (err %v)", stored, err)
+	}
+	sid := stored.SessionID
+	if !f.registry.Contained(sid) {
+		t.Fatal("fire 1's turn is not contained")
+	}
+	model.gates[schedPrompt] <- struct{}{}
+	if r := <-done; r.Status != "completed" || r.SessionID != sid {
+		t.Fatalf("fire 1 = %+v", r)
+	}
+	waitReleased(t, f.registry, sid)
+
+	// Between fires: the user's own turn in the conversation is not contained.
+	interactive(sid, userPrompt)
+	model.waitSeen(t, userPrompt, 1)
+	if f.registry.Contained(sid) {
+		t.Fatal("containment leaked onto the user's interactive turn between fires")
+	}
+	model.gates[userPrompt] <- struct{}{}
+	waitIdle(sid)
+
+	// Fire 2: re-armed on the SAME session. A user turn that starts and
+	// ends inside it does not release it; fire 2's own end does.
+	done = fire()
+	model.waitSeen(t, schedPrompt, 2)
+	if !f.registry.Contained(sid) {
+		t.Fatal("fire 2 did not re-arm containment on the reused conversation")
+	}
+	interactive(sid, userPrompt2)
+	model.waitSeen(t, userPrompt2, 1)
+	model.gates[userPrompt2] <- struct{}{}
+	time.Sleep(300 * time.Millisecond) // let the interactive stream's terminal event land
+	if !f.registry.Contained(sid) {
+		t.Fatal("the user's stream ending released fire 2's containment while fire 2 still runs")
+	}
+	close(model.gates[schedPrompt])
+	r2 := <-done
+	if r2.Status != "completed" || r2.SessionID != sid {
+		t.Fatalf("fire 2 = %+v, want completed in %s", r2, sid)
+	}
+	waitReleased(t, f.registry, sid)
+}
+
+// authPauseThenToolsModel: its FIRST call fails provider auth (the turn
+// pauses for key rotation and never closes). Every later call asks for
+// kenaz__alpha + kenaz__beta, and answers once it has seen tool results.
+type authPauseThenToolsModel struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (m *authPauseThenToolsModel) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
+	m.mu.Lock()
+	m.calls++
+	n := m.calls
+	m.mu.Unlock()
+	if n == 1 {
+		return coreag.LLMResponse{}, &corellm.ErrProviderAuthFailed{Provider: "anthropic", ProfileID: "test-profile", ModelID: "m", Reason: "bad key"}
+	}
+	if k := len(req.Messages); k > 0 && req.Messages[k-1].Role == "tool" {
+		if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
+			sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: "done"})
+		}
+		return coreag.LLMResponse{Content: "done", FinishReason: "stop"}, nil
+	}
+	return coreag.LLMResponse{
+		FinishReason: "tool_use",
+		ToolCalls: []coreag.ToolCallRequest{
+			{ID: fmt.Sprintf("tu-a-%d", n), Name: "kenaz__alpha", Arguments: `{}`},
+			{ID: fmt.Sprintf("tu-b-%d", n), Name: "kenaz__beta", Arguments: `{}`},
+		},
+	}, nil
+}
+
+// createModelRow stores a model-created cron row (never armed: the test
+// fires it through a dispatcher directly) and returns its job.
+func (f *containmentFixture) createModelRow(t *testing.T, id string) scheduler.Job {
+	t.Helper()
+	now := time.Now().UTC()
+	rec := scheduler.ChatRunRecord{
+		ID: id, Name: "containment " + id, PromptTemplate: "use your tools", Cron: "0 0 1 1 *", OutputSink: "none",
+		Enabled: true, CreatedBy: scheduler.ScheduledRunCreatedByModel, ToolAllowlist: []string{"kenaz__alpha"},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := f.store.Create(context.Background(), rec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	return scheduler.Job{ID: id, Kind: scheduler.JobKindChatRun, ChatRun: &scheduler.ChatRunSpec{
+		ID: id, PromptTemplate: rec.PromptTemplate, CreatedBy: rec.CreatedBy, ToolAllowlist: rec.ToolAllowlist,
+	}}
+}
+
+func (f *containmentFixture) waitToolOutcomes(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(f.pool.snapshot())+len(toolBlockedRows(t, f.blocked)) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("tool outcomes: calls=%v blocked=%d, want %d", f.pool.snapshot(), len(toolBlockedRows(t, f.blocked)), n)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// (a) A fire whose conversation holds a turn paused for key rotation is
+// skipped: the paused turn can be redriven there at any time. The paused
+// turn stays contained and its later redrive runs contained.
+// Fail-on-revert: drop the PausedTurns check in conversation() -> fire 2
+// runs instead of being skipped.
+func TestScheduledRunContainment_PausedTurnSkipsNextFire(t *testing.T) {
+	sandboxUserConfigDir(t)
+	f := buildContainmentFixtureWith(t, t.TempDir(), &authPauseThenToolsModel{}, 500*time.Millisecond)
+	job := f.createModelRow(t, "cr-paused")
+	ctx := context.Background()
+
+	r1, err := f.dispatcher.DispatchChatRun(ctx, job, time.Now().UTC())
+	if err != nil || r1.Status != "failed" || !strings.Contains(r1.Error, "timed out") {
+		t.Fatalf("fire 1 = %+v (err %v), want an auth-paused run that timed out", r1, err)
+	}
+	sid := r1.SessionID
+	if _, ok := f.runner.HasPausedSubFor("test-profile"); !ok || !f.runner.HasPausedTurnIn(sid) {
+		t.Fatal("fire 1's turn is not paused for key rotation")
+	}
+	r2, err := f.dispatcher.DispatchChatRun(ctx, job, time.Now().UTC())
+	if err != nil || r2.Status != scheduler.ChatRunStatusSkipped || r2.Error != skipReasonPausedTurn || r2.SessionID != sid {
+		t.Fatalf("fire 2 = %+v (err %v), want skipped (%q) in %s", r2, err, skipReasonPausedTurn, sid)
+	}
+	if !f.registry.Contained(sid) {
+		t.Fatal("the paused turn's conversation is no longer contained")
+	}
+	if _, err := f.runner.RedriveLastTurn(ctx, "test-profile"); err != nil {
+		t.Fatalf("RedriveLastTurn: %v", err)
+	}
+	f.waitToolOutcomes(t, 2)
+	if got := f.pool.snapshot(); len(got) != 1 || got[0] != "kenaz__alpha" {
+		t.Fatalf("redrive dispatched %v, want only [kenaz__alpha]", got)
+	}
+	waitReleased(t, f.registry, sid)
+}
+
+// (b) Even with (a) disabled — a fire that does run in the conversation
+// while an earlier turn is auth-paused — the later fire's release must not
+// end the paused turn's containment: its redrive, hours later, still runs
+// contained, and only its own end releases the session.
+// Fail-on-revert: make Release drop the whole session entry (the pre-
+// generation-set behaviour) -> fire 2's release uncontains the session,
+// and the redrive would run with the full toolset.
+func TestScheduledRunContainment_LaterFireReleaseKeepsPausedTurnContained(t *testing.T) {
+	sandboxUserConfigDir(t)
+	f := buildContainmentFixtureWith(t, t.TempDir(), &authPauseThenToolsModel{}, 500*time.Millisecond)
+	job := f.createModelRow(t, "cr-paused-b")
+	ctx := context.Background()
+	// The fixture's dispatcher without the paused-turn skip.
+	d := NewChatRunDispatcher(ChatRunDispatcherDeps{
+		Store: f.store, Sessions: f.sessions, ActiveRuns: f.runner, LLM: f.llm, Bus: f.bus,
+		DefaultProfile: func() string { return "test-profile" },
+		Containment:    f.registry,
+		Timeout:        500 * time.Millisecond,
+	})
+	r1, err := d.DispatchChatRun(ctx, job, time.Now().UTC())
+	if err != nil || r1.Status != "failed" || !f.runner.HasPausedTurnIn(r1.SessionID) {
+		t.Fatalf("fire 1 = %+v (err %v), want an auth-paused run", r1, err)
+	}
+	sid := r1.SessionID
+
+	d.deps.Timeout = 5 * time.Second
+	r2, err := d.DispatchChatRun(ctx, job, time.Now().UTC())
+	if err != nil || r2.Status != "completed" || r2.SessionID != sid {
+		t.Fatalf("fire 2 = %+v (err %v), want it to run to completion in %s", r2, err, sid)
+	}
+	f.waitToolOutcomes(t, 2) // fire 2: alpha ran, beta refused
+	if !f.registry.Contained(sid) {
+		t.Fatal("fire 2's release ended the containment the auth-paused fire 1 still holds")
+	}
+
+	if _, err := f.runner.RedriveLastTurn(ctx, "test-profile"); err != nil {
+		t.Fatalf("RedriveLastTurn: %v", err)
+	}
+	f.waitToolOutcomes(t, 4)
+	for _, c := range f.pool.snapshot() {
+		if c != "kenaz__alpha" {
+			t.Fatalf("dispatched %v — the redriven paused turn escaped containment", f.pool.snapshot())
+		}
+	}
+	waitReleased(t, f.registry, sid)
+}
+
+// authOnceByPromptModel fails provider auth ONCE for each prompt in fail
+// (by the newest user message), pausing that turn for key rotation. Any
+// other call asks for kenaz__alpha + kenaz__beta, then answers once it
+// has seen tool results. Race-safe.
+type authOnceByPromptModel struct {
+	mu   sync.Mutex
+	fail map[string]bool
+}
+
+func (m *authOnceByPromptModel) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
+	last := ""
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			last = req.Messages[i].Content
+			break
+		}
+	}
+	m.mu.Lock()
+	failNow := m.fail[last]
+	delete(m.fail, last)
+	m.mu.Unlock()
+	if failNow {
+		return coreag.LLMResponse{}, &corellm.ErrProviderAuthFailed{Provider: "anthropic", ProfileID: "test-profile", ModelID: "m", Reason: "bad key"}
+	}
+	if k := len(req.Messages); k > 0 && req.Messages[k-1].Role == "tool" {
+		if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
+			sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: "done"})
+		}
+		return coreag.LLMResponse{Content: "done", FinishReason: "stop"}, nil
+	}
+	return coreag.LLMResponse{
+		FinishReason: "tool_use",
+		ToolCalls: []coreag.ToolCallRequest{
+			{ID: "tu-a-" + last, Name: "kenaz__alpha", Arguments: `{}`},
+			{ID: "tu-b-" + last, Name: "kenaz__beta", Arguments: `{}`},
+		},
+	}, nil
+}
+
+// pauseScheduledRun fires job once and returns its conversation, asserting
+// the turn paused for key rotation and the session is contained.
+func (f *containmentFixture) pauseScheduledRun(t *testing.T, job scheduler.Job) string {
+	t.Helper()
+	r, err := f.dispatcher.DispatchChatRun(context.Background(), job, time.Now().UTC())
+	if err != nil || r.Status != "failed" || r.SessionID == "" {
+		t.Fatalf("fire = %+v (err %v), want an auth-paused run that timed out", r, err)
+	}
+	if !f.runner.HasPausedTurnIn(r.SessionID) || !f.registry.Contained(r.SessionID) {
+		t.Fatalf("paused=%v contained=%v, want the run paused and contained", f.runner.HasPausedTurnIn(r.SessionID), f.registry.Contained(r.SessionID))
+	}
+	return r.SessionID
+}
+
+// Orphan path 1: another session's auth pause on the same profile replaces
+// the scheduled run's paused turn (one per profile), so it can never be
+// redriven. The runner closes it as abandoned; the watch sees its own
+// terminal and releases — the user's own turns in the conversation are
+// not left restricted to the schedule's allowlist.
+// Fail-on-revert: drop the abandonPaused call on overwrite -> the session
+// stays contained and the user's kenaz__beta call is refused.
+func TestScheduledRunContainment_PausedTurnReplacedByAnotherPauseIsReleased(t *testing.T) {
+	sandboxUserConfigDir(t)
+	model := &authOnceByPromptModel{fail: map[string]bool{"use your tools": true, "elsewhere": true}}
+	f := buildContainmentFixtureWith(t, t.TempDir(), model, 500*time.Millisecond)
+	sid := f.pauseScheduledRun(t, f.createModelRow(t, "cr-orphan-1"))
+	ctx := context.Background()
+
+	other, err := f.sessions.Create(ctx, "another chat")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := f.sessions.AppendMessage(ctx, other.ID, "user", "elsewhere"); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if _, err := f.llm.StartStream(ctx, "test-profile", other.ID, ""); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	waitReleased(t, f.registry, sid)
+	if f.runner.HasPausedTurnIn(sid) {
+		t.Fatal("the replaced paused turn is still listed")
+	}
+
+	// The user's own turn in the conversation runs unrestricted.
+	if _, err := f.sessions.AppendMessage(ctx, sid, "user", "my own question"); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if _, err := f.llm.StartStream(ctx, "test-profile", sid, ""); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	f.waitToolOutcomes(t, 2)
+	if got := sortedCalls(f.pool); got != "kenaz__alpha,kenaz__beta" {
+		t.Fatalf("user's turn dispatched %q (blocked rows %d), want both tools — it was contained by the schedule", got, len(toolBlockedRows(t, f.blocked)))
+	}
+}
+
+// Orphan path 2: the redrive after a key rotation cannot start. The paused
+// entry is already gone, so the runner closes the turn as abandoned and
+// the session is released.
+// Fail-on-revert: drop the abandonPaused call in RedriveLastTurn's error
+// path -> the session stays contained.
+func TestScheduledRunContainment_FailedRedriveReleases(t *testing.T) {
+	sandboxUserConfigDir(t)
+	model := &authOnceByPromptModel{fail: map[string]bool{"use your tools": true}}
+	f := buildContainmentFixtureWith(t, t.TempDir(), model, 500*time.Millisecond)
+	sid := f.pauseScheduledRun(t, f.createModelRow(t, "cr-orphan-2"))
+
+	// A runner that is shutting down refuses every StartStream.
+	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := f.runner.Shutdown(sctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if _, err := f.runner.RedriveLastTurn(context.Background(), "test-profile"); err == nil {
+		t.Fatal("RedriveLastTurn succeeded on a shut-down runner; the test needs it to fail")
+	}
+	waitReleased(t, f.registry, sid)
+}
+
+// Orphan path 3: the key is rotated after the watch window. The watch must
+// not have given up while the run's sub was still paused (redrivable):
+// the late redrive runs contained and its end releases the session.
+// Fail-on-revert: drop the SubStillLive extension at the watch expiry ->
+// the watch is gone before the redrive and the session is never released.
+func TestScheduledRunContainment_LateRedriveAfterWatchWindowReleases(t *testing.T) {
+	sandboxUserConfigDir(t)
+	prev := containmentWatchMax
+	containmentWatchMax = 200 * time.Millisecond
+	t.Cleanup(func() { containmentWatchMax = prev })
+	model := &authOnceByPromptModel{fail: map[string]bool{"use your tools": true}}
+	f := buildContainmentFixtureWith(t, t.TempDir(), model, 500*time.Millisecond)
+	sid := f.pauseScheduledRun(t, f.createModelRow(t, "cr-orphan-3"))
+
+	time.Sleep(4 * containmentWatchMax) // several watch windows pass while paused
+	if !f.registry.Contained(sid) {
+		t.Fatal("released while the paused turn can still be redriven")
+	}
+	if _, err := f.runner.RedriveLastTurn(context.Background(), "test-profile"); err != nil {
+		t.Fatalf("RedriveLastTurn: %v", err)
+	}
+	f.waitToolOutcomes(t, 2)
+	if got := f.pool.snapshot(); len(got) != 1 || got[0] != "kenaz__alpha" {
+		t.Fatalf("late redrive dispatched %v, want only [kenaz__alpha]", got)
+	}
+	waitReleased(t, f.registry, sid)
 }

@@ -146,6 +146,28 @@ describe('New scheduled chat form — active default model', () => {
   });
 });
 
+describe('Skipped fire', () => {
+  it('renders the skip reason (muted, not as an error) and links the conversation', async () => {
+    const SKIPPED: ScheduledChatRunSummary = {
+      id: 'hist-3',
+      chatRunId: 'run-1',
+      sessionId: 'sess-42',
+      status: 'skipped',
+      startedAt: '2026-10-09T01:30:00Z',
+      error: "skipped: this schedule's previous run is still in progress",
+    };
+    const { wrapper } = mountPanel([{ ...ENTRY, lastRun: SKIPPED }]);
+    await flushPromises();
+    const reason = wrapper.find('[data-testid$="-skipped-hist-3"]');
+    expect(reason.exists()).toBe(true);
+    expect(reason.text()).toContain('previous run is still in progress');
+    expect(reason.classes()).toContain('text-ink-muted');
+    expect(wrapper.find('[data-testid$="-error-hist-3"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid$="-open-hist-3"]').attributes('href')).toBe('/sessions/sess-42');
+    wrapper.unmount();
+  });
+});
+
 describe('Runs tab — chat run history rows', () => {
   it('shows the last run on the collapsed row and model/cost/Open session per history row', async () => {
     const chatClient = createFakeScheduledChatClient({

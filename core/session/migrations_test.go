@@ -484,12 +484,13 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// 0344 turn_run_outcome (undelivered-message-retry) +
 	// 0345 scheduled_chat_history_model_cost (dogfood 2026-10-08 r2) +
 	// 0346 session_usage_cache_tokens (tool-context-budget-01TCBUD01 WP01) +
-	// 0347 tool_exposure (tool-context-budget-01TCBUD01 WP02)) =
-	// 50 applied entries (2 chassis bootstrap + 48 sessions migrations).
-	if got := len(db.ledger); got != 50 {
-		t.Fatalf("ledger size = %d, want 50", got)
+	// 0347 tool_exposure (tool-context-budget-01TCBUD01 WP02) +
+	// 0348 scheduled_chat_runs_session (one conversation per schedule)) =
+	// 51 applied entries (2 chassis bootstrap + 49 sessions migrations).
+	if got := len(db.ledger); got != 51 {
+		t.Fatalf("ledger size = %d, want 51", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348}
 
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {

@@ -1023,6 +1023,35 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 // failure — the surface returns "not wired" rather than silently
 // falling back to a deleted legacy pump path.
 func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverride string) (string, error) {
+	return a.startStream(ctx, profileID, sessionID, modelOverride, "")
+}
+
+// ErrTargetMessageNotFound refuses StartStreamForMessage when messageID is
+// not a user row of the session.
+var ErrTargetMessageNotFound = errors.New("llm: the user message to answer is not in this session")
+
+// MessageTargetedStreamer is the optional extension of LLMConnectorAPI
+// that starts a stream answering ONE named user row instead of "the
+// newest user row". *API implements it.
+type MessageTargetedStreamer interface {
+	StartStreamForMessage(ctx context.Context, profileID, sessionID, modelOverride, messageID string) (string, error)
+}
+
+// StartStreamForMessage is StartStream for the user row messageID rather
+// than the session's newest user row. The scheduled-chat dispatcher uses
+// it (sessions/0348): it appends its prompt to a conversation the user
+// can also type into, so a user message landing between that append and
+// the stream start would otherwise be the turn the scheduled run answers
+// — leaving the scheduled prompt unanswered and running the user's turn
+// under the schedule's containment.
+func (a *API) StartStreamForMessage(ctx context.Context, profileID, sessionID, modelOverride, messageID string) (string, error) {
+	if messageID == "" {
+		return "", ErrTargetMessageNotFound
+	}
+	return a.startStream(ctx, profileID, sessionID, modelOverride, messageID)
+}
+
+func (a *API) startStream(ctx context.Context, profileID, sessionID, modelOverride, targetID string) (string, error) {
 	log := logging.L()
 	log.Info("llm.start_stream.requested",
 		"profile_id", profileID,
@@ -1094,7 +1123,7 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 	if a.history != nil && sessionID != "" {
 		if stored, herr := a.history.ListMessages(ctx, sessionID); herr == nil {
 			for i := len(stored) - 1; i >= 0; i-- {
-				if stored[i].Role == "user" {
+				if stored[i].Role == "user" && (targetID == "" || stored[i].ID == targetID) {
 					announce := !turnAlreadySpanned(stored, stored[i].ID)
 					if rr, ok := a.history.(TurnRunSpanReader); ok {
 						if spans, rerr := rr.RunTurnSpans(ctx, sessionID); rerr == nil {
@@ -1127,8 +1156,16 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 			}
 		}
 	}
+	if targetID != "" && turn.MessageID != targetID {
+		// Never fall back to "the newest user row": that is the very
+		// mis-attribution a targeted start exists to prevent.
+		log.Info("llm.start_stream.refused", "reason", "target message not found", "session_id", sessionID)
+		return "", ErrTargetMessageNotFound
+	}
 	return a.chatRunner.StartStream(ctx, profileID, sessionID, modelOverride, turn)
 }
+
+var _ MessageTargetedStreamer = (*API)(nil)
 
 // turnAlreadySpanned reports whether any row carries id as its
 // turn_span_id — i.e. a run of that turn already wrote moves. An empty id
