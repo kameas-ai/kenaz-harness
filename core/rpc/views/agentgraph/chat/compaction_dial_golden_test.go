@@ -87,6 +87,17 @@ func (d *dialCallRecorder) RollingSummarize(_ context.Context, sessionID string,
 	return "rolling-1", nil
 }
 
+// RollingSummarizeWith is recorded so a dial path that reached it would
+// show up in the golden call list (none does: it is the scheduled
+// budget's entry point).
+func (d *dialCallRecorder) RollingSummarizeWith(_ context.Context, sessionID string,
+	model compaction.ProviderProfileRef, _ compaction.RollingOptions) (compaction.RollingResult, error) {
+	d.mu.Lock()
+	d.calls = append(d.calls, fmt.Sprintf("RollingSummarizeWith(session=%q, model=%q)", sessionID, model.String()))
+	d.mu.Unlock()
+	return compaction.RollingResult{}, nil
+}
+
 func (d *dialCallRecorder) snapshot() []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
