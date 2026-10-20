@@ -4,7 +4,7 @@ package sqlite_test
 // scheduled_chat_runs: the ONE conversation a schedule's runs continue.
 //
 // CLAUDE.md blind spot #3: starts from the newest committed release
-// snapshot (v0.98.0, which predates 0348) with its seeded schedule row,
+// snapshot (v0.99.0, which predates 0348) with its seeded schedule row,
 // and only then opens under HEAD. Asserts 0348 applies over a populated
 // table, the old row survives reading as "no conversation yet", a stored
 // conversation round-trips through SQL across a close/reopen, an inline
@@ -25,19 +25,19 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/storage/sqlite/upgradesnap"
 )
 
-func TestMigration0348_ScheduledChatRunsSession_UpgradesPopulatedV0980(t *testing.T) {
+func TestMigration0348_ScheduledChatRunsSession_UpgradesPopulatedV0990(t *testing.T) {
 	ctx := context.Background()
-	dumpText, err := os.ReadFile(filepath.Join("testdata", "upgrade", "v0.98.0", "dump.sql"))
+	dumpText, err := os.ReadFile(filepath.Join("testdata", "upgrade", "v0.99.0", "dump.sql"))
 	if err != nil {
-		t.Fatalf("read v0.98.0 fixture: %v", err)
+		t.Fatalf("read v0.99.0 fixture: %v", err)
 	}
 	dir := t.TempDir()
 	raw := openRawSQLiteAt(t, filepath.Join(dir, "data.db"))
 	if err := upgradesnap.Materialize(ctx, raw, string(dumpText)); err != nil {
-		t.Fatalf("materialise v0.98.0 snapshot: %v", err)
+		t.Fatalf("materialise v0.99.0 snapshot: %v", err)
 	}
 	if columnExists(t, raw, "scheduled_chat_runs", "session_id") {
-		t.Fatal("v0.98.0 snapshot already has scheduled_chat_runs.session_id — the fixture no longer predates 0348")
+		t.Fatal("v0.99.0 snapshot already has scheduled_chat_runs.session_id — the fixture no longer predates 0348")
 	}
 	var seeded int
 	if err := raw.QueryRowContext(ctx, `SELECT COUNT(*) FROM scheduled_chat_runs`).Scan(&seeded); err != nil || seeded == 0 {
@@ -53,7 +53,7 @@ func TestMigration0348_ScheduledChatRunsSession_UpgradesPopulatedV0980(t *testin
 
 	db, err := storagesqlite.Open(newConfig(dir))
 	if err != nil {
-		t.Fatalf("Open on the v0.98.0 snapshot: %v", err)
+		t.Fatalf("Open on the v0.99.0 snapshot: %v", err)
 	}
 	if pending, perr := db.Migrations().Pending(); perr != nil || len(pending) != 0 {
 		t.Fatalf("Pending after Open = %v (err %v), want none", pending, perr)
