@@ -27,9 +27,9 @@ package rpc
 
 import (
 	"context"
-	"fmt"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1285,6 +1285,152 @@ func TestScheduledRunContainment_LaterFireReleaseKeepsPausedTurnContained(t *tes
 		if c != "kenaz__alpha" {
 			t.Fatalf("dispatched %v — the redriven paused turn escaped containment", f.pool.snapshot())
 		}
+	}
+	waitReleased(t, f.registry, sid)
+}
+
+// authOnceByPromptModel fails provider auth ONCE for each prompt in fail
+// (by the newest user message), pausing that turn for key rotation. Any
+// other call asks for kenaz__alpha + kenaz__beta, then answers once it
+// has seen tool results. Race-safe.
+type authOnceByPromptModel struct {
+	mu   sync.Mutex
+	fail map[string]bool
+}
+
+func (m *authOnceByPromptModel) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
+	last := ""
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			last = req.Messages[i].Content
+			break
+		}
+	}
+	m.mu.Lock()
+	failNow := m.fail[last]
+	delete(m.fail, last)
+	m.mu.Unlock()
+	if failNow {
+		return coreag.LLMResponse{}, &corellm.ErrProviderAuthFailed{Provider: "anthropic", ProfileID: "test-profile", ModelID: "m", Reason: "bad key"}
+	}
+	if k := len(req.Messages); k > 0 && req.Messages[k-1].Role == "tool" {
+		if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
+			sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: "done"})
+		}
+		return coreag.LLMResponse{Content: "done", FinishReason: "stop"}, nil
+	}
+	return coreag.LLMResponse{
+		FinishReason: "tool_use",
+		ToolCalls: []coreag.ToolCallRequest{
+			{ID: "tu-a-" + last, Name: "kenaz__alpha", Arguments: `{}`},
+			{ID: "tu-b-" + last, Name: "kenaz__beta", Arguments: `{}`},
+		},
+	}, nil
+}
+
+// pauseScheduledRun fires job once and returns its conversation, asserting
+// the turn paused for key rotation and the session is contained.
+func (f *containmentFixture) pauseScheduledRun(t *testing.T, job scheduler.Job) string {
+	t.Helper()
+	r, err := f.dispatcher.DispatchChatRun(context.Background(), job, time.Now().UTC())
+	if err != nil || r.Status != "failed" || r.SessionID == "" {
+		t.Fatalf("fire = %+v (err %v), want an auth-paused run that timed out", r, err)
+	}
+	if !f.runner.HasPausedTurnIn(r.SessionID) || !f.registry.Contained(r.SessionID) {
+		t.Fatalf("paused=%v contained=%v, want the run paused and contained", f.runner.HasPausedTurnIn(r.SessionID), f.registry.Contained(r.SessionID))
+	}
+	return r.SessionID
+}
+
+// Orphan path 1: another session's auth pause on the same profile replaces
+// the scheduled run's paused turn (one per profile), so it can never be
+// redriven. The runner closes it as abandoned; the watch sees its own
+// terminal and releases — the user's own turns in the conversation are
+// not left restricted to the schedule's allowlist.
+// Fail-on-revert: drop the abandonPaused call on overwrite -> the session
+// stays contained and the user's kenaz__beta call is refused.
+func TestScheduledRunContainment_PausedTurnReplacedByAnotherPauseIsReleased(t *testing.T) {
+	sandboxUserConfigDir(t)
+	model := &authOnceByPromptModel{fail: map[string]bool{"use your tools": true, "elsewhere": true}}
+	f := buildContainmentFixtureWith(t, t.TempDir(), model, 500*time.Millisecond)
+	sid := f.pauseScheduledRun(t, f.createModelRow(t, "cr-orphan-1"))
+	ctx := context.Background()
+
+	other, err := f.sessions.Create(ctx, "another chat")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := f.sessions.AppendMessage(ctx, other.ID, "user", "elsewhere"); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if _, err := f.llm.StartStream(ctx, "test-profile", other.ID, ""); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	waitReleased(t, f.registry, sid)
+	if f.runner.HasPausedTurnIn(sid) {
+		t.Fatal("the replaced paused turn is still listed")
+	}
+
+	// The user's own turn in the conversation runs unrestricted.
+	if _, err := f.sessions.AppendMessage(ctx, sid, "user", "my own question"); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if _, err := f.llm.StartStream(ctx, "test-profile", sid, ""); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	f.waitToolOutcomes(t, 2)
+	if got := sortedCalls(f.pool); got != "kenaz__alpha,kenaz__beta" {
+		t.Fatalf("user's turn dispatched %q (blocked rows %d), want both tools — it was contained by the schedule", got, len(toolBlockedRows(t, f.blocked)))
+	}
+}
+
+// Orphan path 2: the redrive after a key rotation cannot start. The paused
+// entry is already gone, so the runner closes the turn as abandoned and
+// the session is released.
+// Fail-on-revert: drop the abandonPaused call in RedriveLastTurn's error
+// path -> the session stays contained.
+func TestScheduledRunContainment_FailedRedriveReleases(t *testing.T) {
+	sandboxUserConfigDir(t)
+	model := &authOnceByPromptModel{fail: map[string]bool{"use your tools": true}}
+	f := buildContainmentFixtureWith(t, t.TempDir(), model, 500*time.Millisecond)
+	sid := f.pauseScheduledRun(t, f.createModelRow(t, "cr-orphan-2"))
+
+	// A runner that is shutting down refuses every StartStream.
+	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := f.runner.Shutdown(sctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if _, err := f.runner.RedriveLastTurn(context.Background(), "test-profile"); err == nil {
+		t.Fatal("RedriveLastTurn succeeded on a shut-down runner; the test needs it to fail")
+	}
+	waitReleased(t, f.registry, sid)
+}
+
+// Orphan path 3: the key is rotated after the watch window. The watch must
+// not have given up while the run's sub was still paused (redrivable):
+// the late redrive runs contained and its end releases the session.
+// Fail-on-revert: drop the SubStillLive extension at the watch expiry ->
+// the watch is gone before the redrive and the session is never released.
+func TestScheduledRunContainment_LateRedriveAfterWatchWindowReleases(t *testing.T) {
+	sandboxUserConfigDir(t)
+	prev := containmentWatchMax
+	containmentWatchMax = 200 * time.Millisecond
+	t.Cleanup(func() { containmentWatchMax = prev })
+	model := &authOnceByPromptModel{fail: map[string]bool{"use your tools": true}}
+	f := buildContainmentFixtureWith(t, t.TempDir(), model, 500*time.Millisecond)
+	sid := f.pauseScheduledRun(t, f.createModelRow(t, "cr-orphan-3"))
+
+	time.Sleep(4 * containmentWatchMax) // several watch windows pass while paused
+	if !f.registry.Contained(sid) {
+		t.Fatal("released while the paused turn can still be redriven")
+	}
+	if _, err := f.runner.RedriveLastTurn(context.Background(), "test-profile"); err != nil {
+		t.Fatalf("RedriveLastTurn: %v", err)
+	}
+	f.waitToolOutcomes(t, 2)
+	if got := f.pool.snapshot(); len(got) != 1 || got[0] != "kenaz__alpha" {
+		t.Fatalf("late redrive dispatched %v, want only [kenaz__alpha]", got)
 	}
 	waitReleased(t, f.registry, sid)
 }

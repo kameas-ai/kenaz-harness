@@ -125,6 +125,10 @@ type ChatRunDispatcherDeps struct {
 // rotation turns. *chat.ChatRunner implements it.
 type PausedTurnChecker interface {
 	HasPausedTurnIn(sessionID string) bool
+	// SubStillLive reports whether a sub is executing or paused (and so
+	// redrivable). The containment watcher does not give up on a run
+	// while one of its own subs is.
+	SubStillLive(subID string) bool
 }
 
 // BannerPublisher is the minimal seam LiveChatRunDispatcher needs to
@@ -450,11 +454,17 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	}
 }
 
-// containmentWatchMax bounds how long releaseOnOwnTerminal waits. A
-// session whose stream never terminates (an auth-paused turn nobody
-// redrives) stays contained when the watch gives up — the fail-safe
-// direction — and the watcher goroutine does not leak.
-const containmentWatchMax = 24 * time.Hour
+// containmentWatchMax bounds how long releaseOnOwnTerminal waits before
+// it re-checks the run. While one of the run's own subs is still live —
+// executing, or paused for key rotation and so redrivable at any time
+// (PausedTurns.SubStillLive) — the watch is extended: a redrive days
+// later must still be seen ending. A paused turn that is dropped instead
+// is closed by the runner ("abandoned"), which the watch sees as the
+// run's own terminal. Only a run whose subs are neither live nor ever
+// observed ending stays contained when the watch gives up — the
+// fail-safe direction — and the watcher goroutine does not leak. A var so
+// tests can shorten it.
+var containmentWatchMax = 24 * time.Hour
 
 // topicAuthResumed is the chat runner's redrive announcement
 // (chat.AuthResumedPayload), which links a key-rotation redrive's new sub
@@ -536,9 +546,10 @@ func (d *LiveChatRunDispatcher) releaseOnOwnTerminal(own *ownStreams, pending <-
 			drained = true
 		}
 	}
+	watchMax := containmentWatchMax
 	go func() {
 		defer cancel()
-		timer := time.NewTimer(containmentWatchMax)
+		timer := time.NewTimer(watchMax)
 		defer timer.Stop()
 		for {
 			select {
@@ -551,10 +562,31 @@ func (d *LiveChatRunDispatcher) releaseOnOwnTerminal(own *ownStreams, pending <-
 					return
 				}
 			case <-timer.C:
+				if d.ownSubLive(own) {
+					timer.Reset(watchMax)
+					continue
+				}
 				return
 			}
 		}
 	}()
+}
+
+// ownSubLive reports whether the run may still be running (see
+// containmentWatchMax): one of its own subs is executing or paused, or a
+// turn is executing in its session — a redrive of the run whose link
+// (auth-resumed) the watch has not seen yet. The latter can also be a
+// user's turn; that only keeps the WATCH alive, never the containment.
+// Without the seams nothing is known to be live.
+func (d *LiveChatRunDispatcher) ownSubLive(own *ownStreams) bool {
+	if d.deps.PausedTurns != nil {
+		for sub := range own.owned {
+			if d.deps.PausedTurns.SubStillLive(sub) {
+				return true
+			}
+		}
+	}
+	return d.deps.ActiveRuns != nil && d.deps.ActiveRuns.HasActiveRun(own.sessionID)
 }
 
 // deliverBanner publishes TopicScheduledChatBanner with this run's

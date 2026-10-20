@@ -276,7 +276,15 @@ func (e *ErrProviderAuthFailed) Error() string {
 
 // Unwrap exposes the underlying *ErrAuth so errors.As(err, &ErrAuth{})
 // traverses through ErrProviderAuthFailed.
-func (e *ErrProviderAuthFailed) Unwrap() error { return e.Cause }
+// Unwrap returns the wrapped *ErrAuth, or a true nil when there is none:
+// returning a nil *ErrAuth as an error would make errors.As match it and
+// hand ClassifyFailure a nil pointer to dereference.
+func (e *ErrProviderAuthFailed) Unwrap() error {
+	if e.Cause == nil {
+		return nil
+	}
+	return e.Cause
+}
 
 // ErrProviderPaymentRequired is the registry-level decoration of
 // *ErrPaymentRequired with the profile/provider context needed to tell
