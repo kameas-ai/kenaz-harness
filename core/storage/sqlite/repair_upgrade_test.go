@@ -129,9 +129,10 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 	// 0344 (undelivered-message-retry) probes pragma_table_info before
 	// each ALTER, so its re-application over existing columns is a no-op;
 	// 0345 (scheduled-chat history model/cost), 0346 (usage cache
-	// tokens), 0347 (tool exposure) and 0348 (scheduled-chat
-	// conversation) probe the same way.
-	want := []int{332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348}
+	// tokens), 0347 (tool exposure), 0348 (scheduled-chat
+	// conversation) and 0349 (scheduled-chat context budget) probe the
+	// same way.
+	want := []int{332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349}
 	if len(got) != len(want) {
 		t.Fatalf("re-applied sessions migrations = %v, want %v", got, want)
 	}

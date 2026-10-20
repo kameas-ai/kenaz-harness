@@ -95,8 +95,62 @@ type ChatRunRecord struct {
 	// by SetSessionID — Create and Update never touch the column, so an
 	// inline edit of the schedule keeps its conversation.
 	SessionID string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// Context policy of the schedule's conversation (migration
+	// sessions/0349, scheduled-chat-context-budget). Before a fire whose
+	// conversation is over ContextBudgetTokens, the dispatcher keeps the
+	// newest KeepRecentRuns runs verbatim and folds every older one into
+	// one rolling summary, passing MemoryFocus to the summariser.
+	//
+	// ContextBudgetTokens 0 reads as DefaultContextBudgetTokens and a nil
+	// KeepRecentRuns as DefaultKeepRecentRuns (EffectiveContextBudget /
+	// EffectiveKeepRecentRuns): a record built without them — a test
+	// fixture, a caller written before 0349 — gets the same defaults the
+	// migration gave every existing schedule. KeepRecentRuns is a pointer
+	// because 0 is a legal value (keep no run verbatim).
+	ContextBudgetTokens int
+	KeepRecentRuns      *int
+	MemoryFocus         string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+// Context-policy defaults and bounds (sessions/0349). The defaults are
+// the owner-approved ones the migration backfills; the bounds are what
+// core/rpc/views/scheduledchat validates create/edit input against.
+const (
+	DefaultContextBudgetTokens = 20000
+	DefaultKeepRecentRuns      = 2
+	// MinContextBudgetTokens: below this a single run plus its summary
+	// would not fit, and every fire would compact.
+	MinContextBudgetTokens = 4000
+	// MaxContextBudgetTokens caps the budget when the model's window is
+	// unknown; a known window caps it further.
+	MaxContextBudgetTokens = 2_000_000
+	MaxKeepRecentRuns      = 10
+	// MaxMemoryFocusChars bounds the instructions passed to the
+	// summariser on every compaction.
+	MaxMemoryFocusChars = 2000
+)
+
+// EffectiveContextBudget returns ContextBudgetTokens, or the default when
+// it is unset (<= 0).
+func (r ChatRunRecord) EffectiveContextBudget() int {
+	if r.ContextBudgetTokens <= 0 {
+		return DefaultContextBudgetTokens
+	}
+	return r.ContextBudgetTokens
+}
+
+// EffectiveKeepRecentRuns returns KeepRecentRuns, or the default when it
+// is unset (nil). Negative values read as 0.
+func (r ChatRunRecord) EffectiveKeepRecentRuns() int {
+	if r.KeepRecentRuns == nil {
+		return DefaultKeepRecentRuns
+	}
+	if *r.KeepRecentRuns < 0 {
+		return 0
+	}
+	return *r.KeepRecentRuns
 }
 
 // EffectiveTriggerKind returns r.TriggerKind, treating an empty string as
@@ -169,8 +223,19 @@ type ChatRunHistoryRecord struct {
 	// CostUSD is THIS run's cost: the summed cost of the rows its own
 	// turn wrote (sessions/0345). Not the session's cumulative cost — a
 	// schedule's conversation carries every earlier run (sessions/0348).
-	// 0 when unknown or when the run cost nothing.
+	// 0 when unknown or when the run cost nothing. Includes
+	// CompactionCostUSD when the fire compacted first.
 	CostUSD float64
+	// PromptMessageID is the session row this fire's prompt was
+	// appended as (sessions/0349) — the boundary the context budget
+	// counts runs by. "" when the fire never appended (a skip, an early
+	// failure) and on rows from before 0349.
+	PromptMessageID string
+	// CompactionCostUSD is what summarising older runs before this fire
+	// cost — part of CostUSD, reported on its own so the run list can
+	// say so. nil when the fire did not compact; 0 when it did and the
+	// summariser's price is unknown.
+	CompactionCostUSD *float64
 }
 
 // ScheduledChatStore is the storage interface for scheduled chat runs.
@@ -217,8 +282,9 @@ func NewSQLiteChatStore(db storage.DB) *SQLiteChatStore {
 func (s *SQLiteChatStore) Create(ctx context.Context, r ChatRunRecord) error {
 	const q = `
 		INSERT INTO scheduled_chat_runs
-			(id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at,
+			 context_budget_tokens, keep_recent_runs, memory_focus)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	enabledInt := 0
 	if r.Enabled {
@@ -240,6 +306,7 @@ func (s *SQLiteChatStore) Create(ctx context.Context, r ChatRunRecord) error {
 			r.CreatedAt.Unix(), r.UpdatedAt.Unix(),
 			createdBy, encodeToolAllowlist(r.ToolAllowlist),
 			r.EffectiveTriggerKind(), runAt,
+			r.EffectiveContextBudget(), r.EffectiveKeepRecentRuns(), r.MemoryFocus,
 		)
 		return err
 	})
@@ -258,7 +325,8 @@ func (s *SQLiteChatStore) Update(ctx context.Context, r ChatRunRecord) error {
 		UPDATE scheduled_chat_runs
 		SET name = ?, prompt_template = ?, cron = ?, timezone = ?,
 		    model = ?, output_sink = ?, enabled = ?, updated_at = ?, tool_allowlist = ?,
-		    trigger_kind = ?, run_at = ?
+		    trigger_kind = ?, run_at = ?,
+		    context_budget_tokens = ?, keep_recent_runs = ?, memory_focus = ?
 		WHERE id = ?
 	`
 	enabledInt := 0
@@ -276,6 +344,7 @@ func (s *SQLiteChatStore) Update(ctx context.Context, r ChatRunRecord) error {
 			r.Model, r.OutputSink, enabledInt, r.UpdatedAt.Unix(),
 			encodeToolAllowlist(r.ToolAllowlist),
 			r.EffectiveTriggerKind(), runAt,
+			r.EffectiveContextBudget(), r.EffectiveKeepRecentRuns(), r.MemoryFocus,
 			r.ID,
 		)
 		if err != nil {
@@ -304,7 +373,8 @@ func (s *SQLiteChatStore) Delete(ctx context.Context, id string) error {
 // Get implements ScheduledChatStore.
 func (s *SQLiteChatStore) Get(ctx context.Context, id string) (ChatRunRecord, error) {
 	const q = `
-		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at, session_id
+		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at, session_id,
+		       context_budget_tokens, keep_recent_runs, memory_focus
 		FROM scheduled_chat_runs
 		WHERE id = ?
 	`
@@ -315,7 +385,8 @@ func (s *SQLiteChatStore) Get(ctx context.Context, id string) (ChatRunRecord, er
 // List implements ScheduledChatStore.
 func (s *SQLiteChatStore) List(ctx context.Context) ([]ChatRunRecord, error) {
 	const q = `
-		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at, session_id
+		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at, session_id,
+		       context_budget_tokens, keep_recent_runs, memory_focus
 		FROM scheduled_chat_runs
 		ORDER BY created_at ASC
 	`
@@ -390,13 +461,22 @@ func (s *SQLiteChatStore) SetSessionID(ctx context.Context, id, sessionID string
 func (s *SQLiteChatStore) AppendHistory(ctx context.Context, h ChatRunHistoryRecord) error {
 	const q = `
 		INSERT INTO scheduled_chat_run_history
-			(id, chat_run_id, session_id, status, started_at, ended_at, output_snippet, error, model, cost_usd)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, chat_run_id, session_id, status, started_at, ended_at, output_snippet, error, model, cost_usd,
+			 prompt_message_id, compaction_cost_usd)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	var endedAt *int64
 	if h.EndedAt != nil {
 		v := h.EndedAt.Unix()
 		endedAt = &v
+	}
+	var promptID any
+	if h.PromptMessageID != "" {
+		promptID = h.PromptMessageID
+	}
+	var compactionCost any
+	if h.CompactionCostUSD != nil {
+		compactionCost = *h.CompactionCostUSD
 	}
 	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
 		_, err := tx.Exec(ctx, q,
@@ -404,6 +484,7 @@ func (s *SQLiteChatStore) AppendHistory(ctx context.Context, h ChatRunHistoryRec
 			h.StartedAt.Unix(), endedAt,
 			h.OutputSnippet, h.Error,
 			h.Model, h.CostUSD,
+			promptID, compactionCost,
 		)
 		return err
 	})
@@ -412,7 +493,8 @@ func (s *SQLiteChatStore) AppendHistory(ctx context.Context, h ChatRunHistoryRec
 // History implements ScheduledChatStore.
 func (s *SQLiteChatStore) History(ctx context.Context, chatRunID string, limit int) ([]ChatRunHistoryRecord, error) {
 	const q = `
-		SELECT id, chat_run_id, session_id, status, started_at, ended_at, output_snippet, error, model, cost_usd
+		SELECT id, chat_run_id, session_id, status, started_at, ended_at, output_snippet, error, model, cost_usd,
+		       prompt_message_id, compaction_cost_usd
 		FROM scheduled_chat_run_history
 		WHERE chat_run_id = ?
 		ORDER BY started_at DESC
@@ -428,14 +510,19 @@ func (s *SQLiteChatStore) History(ctx context.Context, chatRunID string, limit i
 	for rows.Next() {
 		var h ChatRunHistoryRecord
 		var endedAtRaw *int64
+		var promptIDRaw *string
 		startedAtRaw := int64(0)
 		if err := rows.Scan(
 			&h.ID, &h.ChatRunID, &h.SessionID, &h.Status,
 			&startedAtRaw, &endedAtRaw,
 			&h.OutputSnippet, &h.Error,
 			&h.Model, &h.CostUSD,
+			&promptIDRaw, &h.CompactionCostUSD,
 		); err != nil {
 			return nil, err
+		}
+		if promptIDRaw != nil {
+			h.PromptMessageID = *promptIDRaw
 		}
 		h.StartedAt = time.Unix(startedAtRaw, 0).UTC()
 		if endedAtRaw != nil {
@@ -460,12 +547,14 @@ func scanChatRunRecord(row scanner) (ChatRunRecord, error) {
 	var toolAllowlistRaw string
 	var runAtRaw *int64
 	var sessionIDRaw *string
+	var keepRecentRuns int
 	if err := row.Scan(
 		&r.ID, &r.Name, &r.PromptTemplate, &r.Cron, &r.Timezone,
 		&r.Model, &r.OutputSink, &enabledInt,
 		&createdAtRaw, &updatedAtRaw,
 		&r.CreatedBy, &toolAllowlistRaw,
 		&r.TriggerKind, &runAtRaw, &sessionIDRaw,
+		&r.ContextBudgetTokens, &keepRecentRuns, &r.MemoryFocus,
 	); err != nil {
 		return ChatRunRecord{}, ErrChatRunNotFound
 	}
@@ -481,6 +570,7 @@ func scanChatRunRecord(row scanner) (ChatRunRecord, error) {
 	if sessionIDRaw != nil {
 		r.SessionID = *sessionIDRaw
 	}
+	r.KeepRecentRuns = &keepRecentRuns
 	return r, nil
 }
 

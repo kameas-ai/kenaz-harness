@@ -389,6 +389,11 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// that table's digest waiver below.
 	_, hasSchedRuns := preOpen["scheduled_chat_runs"]
 	schedRunsPredate0348 := hasSchedRuns && !columnExists(t, raw, "scheduled_chat_runs", "session_id")
+	// sessions/0349 adds the context-policy columns to scheduled_chat_runs
+	// and prompt_message_id / compaction_cost_usd to
+	// scheduled_chat_run_history; same question for both waivers below.
+	schedRunsPredate0349 := hasSchedRuns && !columnExists(t, raw, "scheduled_chat_runs", "context_budget_tokens")
+	schedHistoryPredates0349 := hasSchedHistory && !columnExists(t, raw, "scheduled_chat_run_history", "prompt_message_id")
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}
@@ -655,6 +660,31 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 			t.Errorf("table scheduled_chat_runs present before Open, missing after")
 		} else if before.RowCount != after.RowCount {
 			t.Errorf("table scheduled_chat_runs row count changed: %d -> %d (0348 only adds a column)", before.RowCount, after.RowCount)
+		}
+	}
+	// sessions/0349-scheduled-chat-context-budget ADDs three defaulted
+	// context-policy columns to scheduled_chat_runs and two nullable ones
+	// to scheduled_chat_run_history, so every seeded row's digest changes
+	// on a snapshot that predates it. Waived for those snapshots only;
+	// the row counts are still asserted exactly.
+	// TestMigration0349_* proves the old rows read back with the default
+	// policy and that new values round-trip.
+	for _, w := range []struct {
+		table    string
+		predates bool
+	}{
+		{"scheduled_chat_runs", schedRunsPredate0349},
+		{"scheduled_chat_run_history", schedHistoryPredates0349},
+	} {
+		before, ok := preOpen[w.table]
+		if !ok || !w.predates || changed[w.table] {
+			continue
+		}
+		changed[w.table] = true
+		if after, ok := postOpen[w.table]; !ok {
+			t.Errorf("table %s present before Open, missing after", w.table)
+		} else if before.RowCount != after.RowCount {
+			t.Errorf("table %s row count changed: %d -> %d (0349 only adds columns)", w.table, before.RowCount, after.RowCount)
 		}
 	}
 	for table, before := range preOpen {

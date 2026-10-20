@@ -188,8 +188,9 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// 0347 (projects/sessions tool_exposure + sessions.tool_activations)
 	// lands with tool-context-budget-01TCBUD01 WP02.
 	// 0348 (scheduled_chat_runs.session_id) lands with the
-	// one-conversation-per-schedule fix.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348}
+	// one-conversation-per-schedule fix; 0349 (per-schedule context
+	// budget) with scheduled-chat-context-budget.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -316,8 +317,9 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// sessions/0348-scheduled-chat-runs-session-id (one conversation per
 	// schedule) one more, hence 72. If another branch also bumped this
 	// pin, the composed value is the SUM of the bumps.
-	if count != 72 {
-		t.Errorf("ledger count = %d, want 72", count)
+	// sessions/0349-scheduled-chat-context-budget one more, hence 73.
+	if count != 73 {
+		t.Errorf("ledger count = %d, want 73", count)
 	}
 }
 
