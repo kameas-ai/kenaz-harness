@@ -124,6 +124,18 @@ func (f *fakeStore) SetEnabled(_ context.Context, id string, enabled bool) error
 	return nil
 }
 
+func (f *fakeStore) SetSessionID(_ context.Context, id, sessionID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.records[id]
+	if !ok {
+		return scheduler.ErrChatRunNotFound
+	}
+	r.SessionID = sessionID
+	f.records[id] = r
+	return nil
+}
+
 func (f *fakeStore) AppendHistory(_ context.Context, h scheduler.ChatRunHistoryRecord) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

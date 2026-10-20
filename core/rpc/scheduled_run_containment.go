@@ -42,6 +42,13 @@ package rpc
 // none does within containmentWatchMax the entry is kept (fail-safe). A
 // stream that never started releases immediately.
 //
+// Generations (sessions/0348, one conversation per schedule): the same
+// session is contained once per fire, so each Contain returns a fresh
+// generation and Release only drops the entry while it still holds that
+// generation. A late release from an earlier run of the conversation (a
+// timed-out run's watcher seeing its stream end just as the next fire
+// re-arms) cannot end the newer run's containment.
+//
 // Safe for concurrent use.
 
 import (
@@ -65,14 +72,16 @@ const toolFamilyBlocked = "tool"
 type runContainment struct {
 	chatRunID string
 	allow     map[string]struct{}
+	gen       uint64
 }
 
 // ScheduledRunContainmentRegistry maps a session id to the allowlist its
 // run is contained to.
 type ScheduledRunContainmentRegistry struct {
-	mu   sync.RWMutex
-	m    map[string]runContainment
-	sink corefs.BlockedRequestSink
+	mu      sync.RWMutex
+	m       map[string]runContainment
+	sink    corefs.BlockedRequestSink
+	lastGen uint64
 }
 
 // NewScheduledRunContainmentRegistry returns an empty registry recording
@@ -82,10 +91,11 @@ func NewScheduledRunContainmentRegistry(sink corefs.BlockedRequestSink) *Schedul
 }
 
 // Contain binds sessionID to allow (published tool names, e.g.
-// "kenaz__web_fetch"). An empty allow denies every tool.
-func (r *ScheduledRunContainmentRegistry) Contain(sessionID, chatRunID string, allow []string) {
+// "kenaz__web_fetch") and returns this binding's generation, which the
+// matching Release must present. An empty allow denies every tool.
+func (r *ScheduledRunContainmentRegistry) Contain(sessionID, chatRunID string, allow []string) uint64 {
 	if r == nil || sessionID == "" {
-		return
+		return 0
 	}
 	set := make(map[string]struct{}, len(allow))
 	for _, n := range allow {
@@ -93,7 +103,9 @@ func (r *ScheduledRunContainmentRegistry) Contain(sessionID, chatRunID string, a
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.m[sessionID] = runContainment{chatRunID: chatRunID, allow: set}
+	r.lastGen++
+	r.m[sessionID] = runContainment{chatRunID: chatRunID, allow: set, gen: r.lastGen}
+	return r.lastGen
 }
 
 // Inherit binds childSessionID to the containment parentSessionID is under,
@@ -113,15 +125,22 @@ func (r *ScheduledRunContainmentRegistry) Inherit(childSessionID, parentSessionI
 	return true
 }
 
-// Release drops sessionID's containment. Call only once the session's run
-// is known to be over (see the file doc's "Lifetime").
-func (r *ScheduledRunContainmentRegistry) Release(sessionID string) {
+// Release drops sessionID's containment if it is still the binding gen
+// (Contain's return) and reports whether it did. Call only once that run
+// is known to be over (see the file doc's "Lifetime"). A stale gen — the
+// session has since been re-contained by a later run — is a no-op.
+func (r *ScheduledRunContainmentRegistry) Release(sessionID string, gen uint64) bool {
 	if r == nil || sessionID == "" {
-		return
+		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	c, ok := r.m[sessionID]
+	if !ok || c.gen != gen {
+		return false
+	}
 	delete(r.m, sessionID)
+	return true
 }
 
 // Contained reports whether sessionID is currently contained.

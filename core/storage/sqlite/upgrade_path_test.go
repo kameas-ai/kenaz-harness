@@ -385,6 +385,10 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// projects digest waiver below.
 	_, hasProjects := preOpen["projects"]
 	projectsPredate0347 := hasProjects && !columnExists(t, raw, "projects", "tool_exposure")
+	// sessions/0348 adds scheduled_chat_runs.session_id; same question for
+	// that table's digest waiver below.
+	_, hasSchedRuns := preOpen["scheduled_chat_runs"]
+	schedRunsPredate0348 := hasSchedRuns && !columnExists(t, raw, "scheduled_chat_runs", "session_id")
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}
@@ -636,6 +640,21 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 			t.Errorf("table projects present before Open, missing after")
 		} else if before.RowCount != after.RowCount {
 			t.Errorf("table projects row count changed: %d -> %d (0347 only adds columns)", before.RowCount, after.RowCount)
+		}
+	}
+	// sessions/0348-scheduled-chat-runs-session-id ADDs session_id
+	// (nullable, no default) to scheduled_chat_runs, so every seeded
+	// schedule's digest changes on a snapshot that predates it. Waived for
+	// those snapshots only (older tags already declare the table in
+	// expectedChangedTables); the row count is still asserted exactly.
+	// TestMigration0348_* proves the old rows read back intact with no
+	// conversation and that a stored conversation round-trips.
+	if before, ok := preOpen["scheduled_chat_runs"]; ok && schedRunsPredate0348 && !changed["scheduled_chat_runs"] {
+		changed["scheduled_chat_runs"] = true
+		if after, ok := postOpen["scheduled_chat_runs"]; !ok {
+			t.Errorf("table scheduled_chat_runs present before Open, missing after")
+		} else if before.RowCount != after.RowCount {
+			t.Errorf("table scheduled_chat_runs row count changed: %d -> %d (0348 only adds a column)", before.RowCount, after.RowCount)
 		}
 	}
 	for table, before := range preOpen {

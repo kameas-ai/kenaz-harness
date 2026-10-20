@@ -53,7 +53,11 @@ export interface ScheduledChatRunSummary {
   id: string;
   chatRunId: string;
   sessionId?: string;
-  status: 'completed' | 'failed' | 'running';
+  /**
+   * 'skipped': the fire did not run because the schedule's conversation
+   * still had a turn in progress; `error` says why.
+   */
+  status: 'completed' | 'failed' | 'running' | 'skipped';
   startedAt: string; // ISO 8601
   endedAt?: string;  // ISO 8601
   outputSnippet?: string;

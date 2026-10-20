@@ -1,8 +1,12 @@
 <script setup lang="ts">
 /**
  * ChatRunOutcome — one scheduled-chat run's outcome: status, start time
- * (and duration once ended), model, cost, an "Open session" link when
- * the run's session exists, and the error text of a failed run.
+ * (and duration once ended), model, cost, an "Open conversation" link when
+ * the run's session exists, the error text of a failed run, and the
+ * reason a fire was skipped. A schedule's runs all continue ONE
+ * conversation (migration sessions/0348), so every row of a schedule
+ * links to the same session; a fire is "skipped" when that conversation
+ * still had a turn running.
  *
  * The single renderer for a run outcome: the Schedules row and the Runs
  * tab's collapsed row show the entry's lastRun with it, and each Runs-tab
@@ -29,6 +33,7 @@ const statusClass = computed(() => {
   if (props.run.status === 'completed') return 'text-signal-ok';
   if (props.run.status === 'running') return 'text-signal-warn';
   if (props.run.status === 'failed') return 'text-signal-danger';
+  // 'skipped' and anything unknown.
   return 'text-ink-muted';
 });
 
@@ -58,13 +63,20 @@ const tid = (part: string) => `${props.testidPrefix}-${part}-${props.run.id}`;
         :data-testid="tid('open')"
         @click.stop
       >
-        Open session
+        Open conversation
       </RouterLink>
     </div>
     <div
       v-if="run.status === 'failed' && run.error"
       class="font-ui text-xs text-signal-danger break-words"
       :data-testid="tid('error')"
+    >
+      {{ run.error }}
+    </div>
+    <div
+      v-else-if="run.status === 'skipped' && run.error"
+      class="font-ui text-xs text-ink-muted break-words"
+      :data-testid="tid('skipped')"
     >
       {{ run.error }}
     </div>

@@ -155,7 +155,10 @@ type containmentFixture struct {
 	audit    *containmentAudit
 	blocked  blockedrequests.Store
 	registry *ScheduledRunContainmentRegistry
-	db       string // dataDir
+	// dispatcher is the same LiveChatRunDispatcher the cron engine fires
+	// through, for tests that fire one schedule repeatedly.
+	dispatcher *LiveChatRunDispatcher
+	db         string // dataDir
 }
 
 // buildContainmentFixture wires the production fire path over dataDir
@@ -237,6 +240,7 @@ func buildContainmentFixtureWith(t *testing.T, dataDir string, llm coreag.LLMPro
 	dispatcher := NewChatRunDispatcher(ChatRunDispatcherDeps{
 		Store:          store,
 		Sessions:       sessionsAPI,
+		ActiveRuns:     runner,
 		LLM:            llmAPI,
 		Bus:            bus,
 		DefaultProfile: func() string { return "test-profile" },
@@ -251,7 +255,7 @@ func buildContainmentFixtureWith(t *testing.T, dataDir string, llm coreag.LLMPro
 	cron.Start()
 	t.Cleanup(cron.Stop)
 
-	return &containmentFixture{runner: runner, sessions: sessionsAPI, llm: llmAPI, store: store, engine: cron, pool: pool, model: model, audit: audit, blocked: blocked, registry: registry, db: dataDir}
+	return &containmentFixture{runner: runner, sessions: sessionsAPI, llm: llmAPI, store: store, engine: cron, pool: pool, model: model, audit: audit, blocked: blocked, registry: registry, dispatcher: dispatcher, db: dataDir}
 }
 
 // fireOnce creates a one-shot row due now, arms it through the engine's
@@ -980,4 +984,161 @@ func TestScheduledRunContainment_RedriveBeforeTimeoutStaysContainedThenReleases(
 		time.Sleep(20 * time.Millisecond)
 	}
 	f.await(t, "cr-early-redrive") // the original sub never closes; the dispatcher times out
+}
+
+// promptGatedModel blocks any call whose newest user message has a gate
+// (until a token arrives on it, or ctx ends) and answers "ok". Lets a test
+// hold the scheduled turn and an interactive turn in the same session
+// independently.
+type promptGatedModel struct {
+	mu    sync.Mutex
+	gates map[string]chan struct{}
+	seen  map[string]int
+}
+
+func (m *promptGatedModel) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
+	last := ""
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			last = req.Messages[i].Content
+			break
+		}
+	}
+	m.mu.Lock()
+	m.seen[last]++
+	gate := m.gates[last]
+	m.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return coreag.LLMResponse{}, ctx.Err()
+		}
+	}
+	if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
+		sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: "ok"})
+	}
+	return coreag.LLMResponse{Content: "ok", FinishReason: "stop"}, nil
+}
+
+func (m *promptGatedModel) waitSeen(t *testing.T, prompt string, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		m.mu.Lock()
+		got := m.seen[prompt]
+		m.mu.Unlock()
+		if got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("model saw %q %d time(s), want %d", prompt, got, n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestScheduledRunContainment_ReusedConversationContainsEachRunOnly
+// (sessions/0348, one conversation per schedule): the schedule's single
+// session is contained for each scheduled turn — re-armed on the second
+// fire — and for nothing else. An interactive turn the user runs in the
+// conversation BETWEEN fires is not contained; one the user runs DURING a
+// fire does not end that fire's containment; each fire's own terminal
+// releases it.
+func TestScheduledRunContainment_ReusedConversationContainsEachRunOnly(t *testing.T) {
+	sandboxUserConfigDir(t)
+	const schedPrompt, userPrompt, userPrompt2 = "use your tools", "what did you find?", "and now?"
+	model := &promptGatedModel{
+		gates: map[string]chan struct{}{schedPrompt: make(chan struct{}), userPrompt: make(chan struct{}), userPrompt2: make(chan struct{})},
+		seen:  map[string]int{},
+	}
+	f := buildContainmentFixtureWith(t, t.TempDir(), model, 10*time.Second)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	rec := scheduler.ChatRunRecord{
+		ID: "cr-reuse", Name: "containment reuse", PromptTemplate: schedPrompt, Cron: "0 0 1 1 *", OutputSink: "none",
+		Enabled: true, CreatedBy: scheduler.ScheduledRunCreatedByModel, ToolAllowlist: []string{"kenaz__alpha"},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := f.store.Create(ctx, rec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	job := scheduler.Job{ID: rec.ID, Kind: scheduler.JobKindChatRun, ChatRun: &scheduler.ChatRunSpec{
+		ID: rec.ID, PromptTemplate: rec.PromptTemplate, CreatedBy: rec.CreatedBy, ToolAllowlist: rec.ToolAllowlist,
+	}}
+	fire := func() <-chan scheduler.ChatRunHistoryRecord {
+		out := make(chan scheduler.ChatRunHistoryRecord, 1)
+		go func() {
+			r, err := f.dispatcher.DispatchChatRun(ctx, job, time.Now().UTC())
+			if err != nil {
+				t.Errorf("DispatchChatRun: %v", err)
+			}
+			out <- r
+		}()
+		return out
+	}
+	interactive := func(sid, text string) {
+		if _, err := f.sessions.AppendMessage(ctx, sid, "user", text); err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+		if _, err := f.llm.StartStream(ctx, "test-profile", sid, ""); err != nil {
+			t.Fatalf("interactive StartStream: %v", err)
+		}
+	}
+	waitIdle := func(sid string) {
+		deadline := time.Now().Add(10 * time.Second)
+		for f.runner.HasActiveRun(sid) {
+			if time.Now().After(deadline) {
+				t.Fatalf("session %s never went idle", sid)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	// Fire 1: contained while its turn runs, released by its own end.
+	done := fire()
+	model.waitSeen(t, schedPrompt, 1)
+	stored, err := f.store.Get(ctx, rec.ID)
+	if err != nil || stored.SessionID == "" {
+		t.Fatalf("stored conversation = %+v (err %v)", stored, err)
+	}
+	sid := stored.SessionID
+	if !f.registry.Contained(sid) {
+		t.Fatal("fire 1's turn is not contained")
+	}
+	model.gates[schedPrompt] <- struct{}{}
+	if r := <-done; r.Status != "completed" || r.SessionID != sid {
+		t.Fatalf("fire 1 = %+v", r)
+	}
+	waitReleased(t, f.registry, sid)
+
+	// Between fires: the user's own turn in the conversation is not contained.
+	interactive(sid, userPrompt)
+	model.waitSeen(t, userPrompt, 1)
+	if f.registry.Contained(sid) {
+		t.Fatal("containment leaked onto the user's interactive turn between fires")
+	}
+	model.gates[userPrompt] <- struct{}{}
+	waitIdle(sid)
+
+	// Fire 2: re-armed on the SAME session. A user turn that starts and
+	// ends inside it does not release it; fire 2's own end does.
+	done = fire()
+	model.waitSeen(t, schedPrompt, 2)
+	if !f.registry.Contained(sid) {
+		t.Fatal("fire 2 did not re-arm containment on the reused conversation")
+	}
+	interactive(sid, userPrompt2)
+	model.waitSeen(t, userPrompt2, 1)
+	model.gates[userPrompt2] <- struct{}{}
+	time.Sleep(300 * time.Millisecond) // let the interactive stream's terminal event land
+	if !f.registry.Contained(sid) {
+		t.Fatal("the user's stream ending released fire 2's containment while fire 2 still runs")
+	}
+	close(model.gates[schedPrompt])
+	r2 := <-done
+	if r2.Status != "completed" || r2.SessionID != sid {
+		t.Fatalf("fire 2 = %+v, want completed in %s", r2, sid)
+	}
+	waitReleased(t, f.registry, sid)
 }

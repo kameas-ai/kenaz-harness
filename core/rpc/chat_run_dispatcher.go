@@ -4,8 +4,10 @@
 // manager, the LLM view and the in-process event bus; core/scheduler must
 // not import core/rpc.
 //
-// Design (spec.md §5.2): reload the row, render the prompt, create a
-// session, append the rendered prompt as the user turn, start the stream
+// Design (spec.md §5.2): reload the row, render the prompt, resolve the
+// schedule's ONE conversation (create it on the first fire, continue it on
+// every later one — sessions/0348), append the rendered prompt as a new
+// user turn, start the stream
 // through the SAME production surface the interactive chat path uses
 // (llmview.API.StartStream, not a second chat stack), and await the
 // terminal "llm:stream-closed" event on the in-process EventBus —
@@ -26,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -34,6 +37,7 @@ import (
 	sessionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/scheduler"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // defaultDispatchTimeout bounds how long DispatchChatRun waits for the
@@ -51,9 +55,17 @@ type ChatRunDispatcherDeps struct {
 	// edits (model, sink, template) take effect without re-registering
 	// the cron schedule (spec.md §5.2 step 1).
 	Store scheduler.ScheduledChatStore
-	// Sessions creates the headless session and appends the rendered
-	// prompt as its opening user turn.
+	// Sessions creates the schedule's conversation on its first fire and
+	// appends each fire's rendered prompt to it as a new user turn.
 	Sessions sessionsview.SessionsAPI
+	// ActiveRuns reports whether a turn is still executing in a session —
+	// the chat runner (*chat.ChatRunner). A fire whose conversation has a
+	// live turn (the previous run outliving its dispatch timeout, or one
+	// the user started) is skipped and recorded as such rather than run
+	// as a second, concurrent turn in one session. nil only detects
+	// overlap within this dispatcher (one dispatch per schedule at a
+	// time); production wires the runner (api.go).
+	ActiveRuns llmview.ActiveRunChecker
 	// LLM is the same production LLM view the interactive chat surface
 	// calls — StartStream is dispatched through the ONE chat stack that
 	// exists, not a second one built for scheduling (spec.md §1.3).
@@ -113,6 +125,40 @@ type BannerPublisher interface {
 // LiveChatRunDispatcher is the production scheduler.ChatRunDispatcher.
 type LiveChatRunDispatcher struct {
 	deps ChatRunDispatcherDeps
+
+	// inflight holds the schedule ids with a dispatch in progress, so a
+	// RunNow racing a cron fire of the same schedule (or two overlapping
+	// fires) cannot both pass the active-turn check before either has
+	// started its stream.
+	mu       sync.Mutex
+	inflight map[string]bool
+}
+
+// skipReasonInFlight / skipReasonActiveTurn are the history Error text of
+// a skipped fire (Status scheduler.ChatRunStatusSkipped).
+const (
+	skipReasonInFlight   = "skipped: this schedule's previous run is still in progress"
+	skipReasonActiveTurn = "skipped: a turn is still running in this schedule's conversation (the previous run, or one started there by hand), so this fire did not start another"
+)
+
+// claim marks id in flight and reports whether it was free.
+func (d *LiveChatRunDispatcher) claim(id string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.inflight[id] {
+		return false
+	}
+	if d.inflight == nil {
+		d.inflight = map[string]bool{}
+	}
+	d.inflight[id] = true
+	return true
+}
+
+func (d *LiveChatRunDispatcher) unclaim(id string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.inflight, id)
 }
 
 // NewChatRunDispatcher constructs a LiveChatRunDispatcher over deps.
@@ -221,36 +267,52 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		model = d.deps.DefaultModel(profileID)
 	}
 
-	// Step 4: create a headless session.
+	// One dispatch per schedule at a time (see LiveChatRunDispatcher.
+	// inflight). Taken before the conversation is resolved, so the
+	// active-turn check below cannot race a sibling dispatch's StartStream.
+	if !d.claim(id) {
+		return skippedRecord(rec.SessionID, now, skipReasonInFlight), nil
+	}
+	defer d.unclaim(id)
+
+	// Step 4 (sessions/0348): the schedule's ONE conversation. The first
+	// fire creates it; every later fire continues it.
 	if d.deps.Sessions == nil {
 		return failedRecord(now, "no sessions API wired"), nil
 	}
-	sessionName := rec.Name
-	if sessionName == "" {
-		sessionName = "Scheduled chat run"
+	sess, created, skip, serr := d.conversation(ctx, rec)
+	if serr != "" {
+		return failedRecord(now, serr), nil
 	}
-	sess, cerr := d.deps.Sessions.Create(ctx, "Scheduled: "+sessionName)
-	if cerr != nil {
-		return failedRecord(now, fmt.Sprintf("create session: %v", cerr)), nil
+	if skip {
+		return skippedRecord(sess.ID, now, skipReasonActiveTurn), nil
 	}
 	// model-scheduled-jobs-01PMSJ01 WP06: record this session's origin
 	// for the lifetime of the dispatch, so a filesystem-permission denial
 	// mid-run (core/tools/fs.RecordingPrompter, wired at
 	// builtins_wiring.go) can attribute its blocked_permission_requests
 	// row to THIS scheduled run rather than defaulting to "interactive".
-	// Cleared on every return path via defer — the run is over either
-	// way once DispatchChatRun returns.
+	// Set again on every fire of the reused conversation (an overwrite,
+	// same value) and cleared on every return path via defer, so a turn
+	// the user runs in the conversation between fires reads as
+	// interactive. Only one dispatch per schedule runs at a time (claim
+	// above) and no two schedules share a conversation, so one fire's
+	// Clear cannot drop another's Set.
 	if d.deps.Origins != nil {
 		d.deps.Origins.Set(sess.ID, id)
 		defer d.deps.Origins.Clear(sess.ID)
 	}
-	// WP02 (H-1): contain the session before its first turn. Released
-	// when one of the run's OWN streams ends — this sub or a key-rotation
-	// redrive of it (ownStreams, below; releaseOnOwnTerminal after a
-	// timeout) — never at the timeout itself, and never on another
-	// stream in the same session (see ScheduledRunContainmentRegistry).
+	// WP02 (H-1): contain the session before this fire's turn — re-armed
+	// on every fire of the reused conversation. Released when one of THIS
+	// run's own streams ends — this sub or a key-rotation redrive of it
+	// (ownStreams, below; releaseOnOwnTerminal after a timeout) — never at
+	// the timeout itself, and never on another stream in the same session
+	// (see ScheduledRunContainmentRegistry). The generation makes that
+	// release specific to this fire: a late release from an earlier run
+	// of the conversation cannot end this one's containment.
+	var containGen uint64
 	if containment.Contained {
-		d.deps.Containment.Contain(sess.ID, id, containment.Allow)
+		containGen = d.deps.Containment.Contain(sess.ID, id, containment.Allow)
 	}
 
 	// Step 5: append the rendered prompt as the user turn BEFORE calling
@@ -261,10 +323,14 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	// LLM_StartStream). This append is the turn's ONLY write: the chat
 	// runner never persists a user turn (chat-single-writer-01DOGF0G).
 	// Without it, StartStream runs with no user message at all.
-	if _, aerr := d.deps.Sessions.AppendMessage(ctx, sess.ID, "user", prompt); aerr != nil {
+	promptMsg, aerr := d.deps.Sessions.AppendMessage(ctx, sess.ID, "user", prompt)
+	if aerr != nil {
+		if containment.Contained {
+			d.deps.Containment.Release(sess.ID, containGen)
+		}
 		r := failedRecord2(sess.ID, now, fmt.Sprintf("append prompt: %v", aerr))
 		r.Model = model
-		d.discardEmptyFailedSession(ctx, &r, prompt)
+		d.discardNewEmptySession(ctx, id, created, &r, prompt)
 		return r, nil
 	}
 
@@ -278,25 +344,26 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	subCh, cancel := d.deps.Bus.Subscribe(64, "llm:stream-closed", topicAuthResumed)
 	defer cancel()
 
-	subID, serr := d.deps.LLM.StartStream(ctx, profileID, sess.ID, rec.Model)
-	if serr != nil {
+	subID, sterr := d.deps.LLM.StartStream(ctx, profileID, sess.ID, rec.Model)
+	if sterr != nil {
 		// No stream started, so nothing can run under the containment.
 		if containment.Contained {
-			d.deps.Containment.Release(sess.ID)
+			d.deps.Containment.Release(sess.ID, containGen)
 		}
-		r := failedRecord2(sess.ID, now, fmt.Sprintf("start stream: %v", serr))
+		r := failedRecord2(sess.ID, now, fmt.Sprintf("start stream: %v", sterr))
 		r.Model = model
-		d.discardEmptyFailedSession(ctx, &r, prompt)
+		d.discardNewEmptySession(ctx, id, created, &r, prompt)
 		return r, nil
 	}
 
 	// WP02 re-review: the run's OWN streams — this sub plus any
 	// key-rotation redrive of it — decide when containment ends; a
 	// stream someone else runs in the same session never does.
-	own := newOwnStreams(sess.ID, subID)
+	own := newOwnStreams(sess.ID, subID, containGen)
 
 	log.Info("scheduler.chat_dispatch.started",
 		"chat_run_id", id, "session_id", sess.ID, "sub_id", subID,
+		"continued_conversation", !created,
 		"output_sink_kind", sinkKind, "output_sink_path", sinkPath)
 
 	deadline := time.NewTimer(d.deps.Timeout)
@@ -309,7 +376,7 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 				return failedRecord2(sess.ID, now, "event bus subscription closed before a terminal event arrived"), nil
 			}
 			if containment.Contained && own.observe(ev) {
-				d.deps.Containment.Release(sess.ID)
+				d.deps.Containment.Release(sess.ID, own.gen)
 			}
 			payload, ok := ev.Payload.(chat.StreamClosedPayload)
 			if !ok {
@@ -320,13 +387,15 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			if payload.SubID != subID {
 				continue // another stream's terminal event; keep waiting.
 			}
-			histRec := d.buildRecord(ctx, sess.ID, now, payload)
+			histRec := d.buildRecord(ctx, sess.ID, promptMsg.ID, now, payload)
 			histRec.Model = model
 			// The run is over (terminal event), so a failure that never
-			// produced an assistant message leaves an empty session
-			// nobody will open: delete it. Not on timeout / ctx-cancel
-			// below — the run may still be executing there.
-			d.discardEmptyFailedSession(ctx, &histRec, prompt)
+			// produced an assistant message in a conversation THIS fire
+			// created leaves an empty session nobody will open: delete
+			// it. A continued conversation is never deleted. Not on
+			// timeout / ctx-cancel below — the run may still be
+			// executing there.
+			d.discardNewEmptySession(ctx, id, created, &histRec, prompt)
 			if sinkKind == "banner" {
 				d.deliverBanner(id, rec.Name, histRec.SessionID, histRec)
 			}
@@ -380,10 +449,13 @@ type ownStreams struct {
 	owned       map[string]bool
 	endedOthers map[string]bool
 	released    bool
+	// gen is the containment generation this run armed (Contain's return);
+	// its release presents it, so it can only end its own binding.
+	gen uint64
 }
 
-func newOwnStreams(sessionID, subID string) *ownStreams {
-	return &ownStreams{sessionID: sessionID, owned: map[string]bool{subID: true}, endedOthers: map[string]bool{}}
+func newOwnStreams(sessionID, subID string, gen uint64) *ownStreams {
+	return &ownStreams{sessionID: sessionID, owned: map[string]bool{subID: true}, endedOthers: map[string]bool{}, gen: gen}
 }
 
 // observe feeds one bus event and reports whether it is the moment the
@@ -431,7 +503,7 @@ func (d *LiveChatRunDispatcher) releaseOnOwnTerminal(own *ownStreams, pending <-
 				drained = true
 			} else if own.observe(ev) {
 				cancel()
-				d.deps.Containment.Release(own.sessionID)
+				d.deps.Containment.Release(own.sessionID, own.gen)
 				return
 			}
 		default:
@@ -449,7 +521,7 @@ func (d *LiveChatRunDispatcher) releaseOnOwnTerminal(own *ownStreams, pending <-
 					return
 				}
 				if own.observe(ev) {
-					d.deps.Containment.Release(own.sessionID)
+					d.deps.Containment.Release(own.sessionID, own.gen)
 					return
 				}
 			case <-timer.C:
@@ -479,8 +551,12 @@ func (d *LiveChatRunDispatcher) deliverBanner(chatRunID, name, sessionID string,
 // buildRecord translates the terminal payload's Reason/ErrorKind into a
 // ChatRunHistoryRecord.Status and reads the assistant reply back from
 // PERSISTED history, not from the stream (spec.md §5.2 step 8 / D-4 — the
-// stream is drop-tolerant, history is not).
-func (d *LiveChatRunDispatcher) buildRecord(ctx context.Context, sessionID string, startedAt time.Time, payload chat.StreamClosedPayload) scheduler.ChatRunHistoryRecord {
+// stream is drop-tolerant, history is not). Snippet and cost come from
+// THIS run's turn only (the rows spanned by promptID, runTurnRows): the
+// conversation also holds every earlier run and any turn the user ran in
+// it, so neither "the last assistant row" nor the session's cumulative
+// usage answers what this run did or cost.
+func (d *LiveChatRunDispatcher) buildRecord(ctx context.Context, sessionID, promptID string, startedAt time.Time, payload chat.StreamClosedPayload) scheduler.ChatRunHistoryRecord {
 	ended := time.Now().UTC()
 	rec := scheduler.ChatRunHistoryRecord{
 		SessionID: sessionID,
@@ -507,16 +583,57 @@ func (d *LiveChatRunDispatcher) buildRecord(ctx context.Context, sessionID strin
 		}
 	}
 	if d.deps.Sessions != nil {
-		if snippet, ok := lastAssistantSnippet(ctx, d.deps.Sessions, sessionID); ok {
-			rec.OutputSnippet = snippet
-		}
-		// The run's cost: each scheduled run owns its session, so the
-		// session's cumulative usage at the terminal event IS the run's.
-		if usage, err := d.deps.Sessions.GetUsage(ctx, sessionID); err == nil {
-			rec.CostUSD = usage.CostUSD
+		if msgs, err := d.deps.Sessions.ListMessages(ctx, sessionID); err == nil {
+			turn := runTurnRows(msgs, promptID)
+			rec.OutputSnippet = lastAssistantSnippet(turn)
+			rec.CostUSD = turnCost(turn)
 		}
 	}
 	return rec
+}
+
+// runTurnRows returns the rows the turn opened by user message promptID
+// wrote: every later row whose TurnSpanID is promptID, plus — for rows
+// written without span metadata — the unspanned non-user rows before the
+// next user message. Rows of any other turn (an earlier run, a turn the
+// user ran in the conversation) are excluded. nil when promptID is not in
+// msgs.
+func runTurnRows(msgs []sessionsview.Message, promptID string) []sessionsview.Message {
+	start := -1
+	for i, m := range msgs {
+		if m.ID == promptID {
+			start = i
+			break
+		}
+	}
+	if start < 0 || promptID == "" {
+		return nil
+	}
+	var out []sessionsview.Message
+	otherTurnBegan := false
+	for _, m := range msgs[start+1:] {
+		switch {
+		case m.TurnSpanID == promptID:
+			out = append(out, m)
+		case m.Role == "user":
+			otherTurnBegan = true
+		case m.TurnSpanID == "" && !otherTurnBegan:
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// turnCost sums the per-row cost the usage pipeline recorded on a turn's
+// rows (session_messages.cost_usd). Rows with no recorded cost add 0.
+func turnCost(rows []sessionsview.Message) float64 {
+	var total float64
+	for _, m := range rows {
+		if m.CostUSD != nil {
+			total += *m.CostUSD
+		}
+	}
+	return total
 }
 
 // discardEmptyFailedSession deletes the run's session when a failed run
@@ -553,25 +670,86 @@ func (d *LiveChatRunDispatcher) discardEmptyFailedSession(ctx context.Context, r
 	rec.SessionID = ""
 }
 
-// lastAssistantSnippet reads the persisted assistant reply back from
-// session history (never from the stream — spec.md D-4), truncated to a
-// reasonable snippet length.
-func lastAssistantSnippet(ctx context.Context, sessionsAPI sessionsview.SessionsAPI, sessionID string) (string, bool) {
-	msgs, err := sessionsAPI.ListMessages(ctx, sessionID)
-	if err != nil {
-		return "", false
+// discardNewEmptySession applies discardEmptyFailedSession only to a
+// conversation THIS fire created (sessions/0348): a continued conversation
+// holds earlier runs and is never deleted, whatever this fire left in it.
+// When the new session is deleted the schedule's stored link is cleared
+// too, so the next fire starts a fresh conversation instead of chasing a
+// deleted id.
+func (d *LiveChatRunDispatcher) discardNewEmptySession(ctx context.Context, chatRunID string, created bool, rec *scheduler.ChatRunHistoryRecord, prompt string) {
+	if !created {
+		return
 	}
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "assistant" && msgs[i].Content != "" {
+	sessionID := rec.SessionID
+	d.discardEmptyFailedSession(ctx, rec, prompt)
+	if rec.SessionID == "" && sessionID != "" && d.deps.Store != nil {
+		if err := d.deps.Store.SetSessionID(context.WithoutCancel(ctx), chatRunID, ""); err != nil {
+			logging.L().Warn("scheduler.chat_dispatch.clear_conversation_failed",
+				"chat_run_id", chatRunID, "error", err.Error())
+		}
+	}
+}
+
+// conversation resolves the session this fire runs in (sessions/0348):
+// the schedule's stored conversation when it still exists, else a new
+// "Scheduled: <name>" session whose id is stored on the schedule. skip is
+// true when the stored conversation has a turn executing (ActiveRuns) —
+// the fire must not run a second, concurrent turn there. A non-empty
+// failure is the history Error for a fire that cannot proceed.
+func (d *LiveChatRunDispatcher) conversation(ctx context.Context, rec scheduler.ChatRunRecord) (sess sessionsview.Session, created, skip bool, failure string) {
+	if rec.SessionID != "" {
+		existing, err := d.deps.Sessions.Get(ctx, rec.SessionID)
+		switch {
+		case err == nil:
+			if d.deps.ActiveRuns != nil && d.deps.ActiveRuns.HasActiveRun(existing.ID) {
+				return existing, false, true, ""
+			}
+			return existing, false, false, ""
+		case errors.Is(err, session.ErrSessionNotFound):
+			// The user deleted the conversation: start a new one below.
+			logging.L().Info("scheduler.chat_dispatch.conversation_gone",
+				"chat_run_id", rec.ID, "session_id", rec.SessionID)
+		default:
+			// Cannot tell whether it still exists; creating a second
+			// conversation on a transient read error would split the
+			// schedule's history, so this fire fails instead.
+			return sessionsview.Session{}, false, false, fmt.Sprintf("look up the schedule's conversation: %v", err)
+		}
+	}
+	name := rec.Name
+	if name == "" {
+		name = "Scheduled chat run"
+	}
+	fresh, err := d.deps.Sessions.Create(ctx, "Scheduled: "+name)
+	if err != nil {
+		return sessionsview.Session{}, false, false, fmt.Sprintf("create session: %v", err)
+	}
+	if serr := d.deps.Store.SetSessionID(ctx, rec.ID, fresh.ID); serr != nil {
+		// The run still proceeds in the new session; the next fire,
+		// finding no link, starts another conversation. Logged, because
+		// that is exactly the one-chat-per-fire behaviour this column
+		// exists to end.
+		logging.L().Warn("scheduler.chat_dispatch.store_conversation_failed",
+			"chat_run_id", rec.ID, "session_id", fresh.ID, "error", serr.Error())
+	}
+	return fresh, true, false, ""
+}
+
+// lastAssistantSnippet returns the newest non-empty assistant reply among
+// a run's turn rows (read back from persisted history, never from the
+// stream — spec.md D-4), truncated to a reasonable snippet length.
+func lastAssistantSnippet(rows []sessionsview.Message) string {
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].Role == "assistant" && rows[i].Content != "" {
 			const maxSnippet = 2000
-			c := msgs[i].Content
+			c := rows[i].Content
 			if len(c) > maxSnippet {
 				c = c[:maxSnippet]
 			}
-			return c, true
+			return c
 		}
 	}
-	return "", false
+	return ""
 }
 
 // failedRecord builds a ChatRunHistoryRecord for a failure that occurred
@@ -584,6 +762,16 @@ func failedRecord(now time.Time, reason string) scheduler.ChatRunHistoryRecord {
 		EndedAt:   &ended,
 		Error:     reason,
 	}
+}
+
+// skippedRecord is the history row of a fire that did not run because its
+// conversation already had a turn in flight. sessionID links the row to
+// that conversation ("" when the schedule has none yet).
+func skippedRecord(sessionID string, now time.Time, reason string) scheduler.ChatRunHistoryRecord {
+	r := failedRecord(now, reason)
+	r.Status = scheduler.ChatRunStatusSkipped
+	r.SessionID = sessionID
+	return r
 }
 
 // failedRecord2 is failedRecord plus a session id, for failures that

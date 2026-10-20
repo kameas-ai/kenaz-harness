@@ -89,8 +89,14 @@ type ChatRunRecord struct {
 	// unrestricted; model-scheduled-jobs B-3, model-harness-toolset-
 	// 01MHTS001 WP02). ToolAllowlist is nil whenever this is true.
 	ToolAllowlistUnresolvable bool
-	CreatedAt                 time.Time
-	UpdatedAt                 time.Time
+	// SessionID is the schedule's ONE conversation (migration
+	// sessions/0348): the session every fire appends its prompt to as a
+	// new user turn. Empty until the first fire creates it. Written only
+	// by SetSessionID — Create and Update never touch the column, so an
+	// inline edit of the schedule keeps its conversation.
+	SessionID string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // EffectiveTriggerKind returns r.TriggerKind, treating an empty string as
@@ -138,12 +144,19 @@ func decodeToolAllowlist(raw string) []string {
 	return out
 }
 
+// ChatRunStatusSkipped is the history Status of a fire that did not run
+// because the schedule's conversation (sessions/0348) still had a turn in
+// flight — the previous run, or one started there by hand. Error carries
+// the reason. Running two turns concurrently in one session is never
+// right, so the fire is recorded and dropped, not queued.
+const ChatRunStatusSkipped = "skipped"
+
 // ChatRunHistoryRecord is one row in scheduled_chat_run_history.
 type ChatRunHistoryRecord struct {
 	ID            string
 	ChatRunID     string
 	SessionID     string
-	Status        string // completed | failed | running
+	Status        string // completed | failed | running | skipped
 	StartedAt     time.Time
 	EndedAt       *time.Time
 	OutputSnippet string
@@ -153,8 +166,10 @@ type ChatRunHistoryRecord struct {
 	// (migration sessions/0345). Empty when unknown (pre-0345 rows, or a
 	// failure before the model was resolved).
 	Model string
-	// CostUSD is the run session's cumulative cost at the terminal event
-	// (sessions/0345). 0 when unknown or when the run cost nothing.
+	// CostUSD is THIS run's cost: the summed cost of the rows its own
+	// turn wrote (sessions/0345). Not the session's cumulative cost — a
+	// schedule's conversation carries every earlier run (sessions/0348).
+	// 0 when unknown or when the run cost nothing.
 	CostUSD float64
 }
 
@@ -177,6 +192,9 @@ type ScheduledChatStore interface {
 	// SetEnabled flips the enabled flag for id.
 	// Returns ErrChatRunNotFound when no row with id exists.
 	SetEnabled(ctx context.Context, id string, enabled bool) error
+	// SetSessionID records the conversation id's runs continue ("" clears
+	// it). Returns ErrChatRunNotFound when no row with id exists.
+	SetSessionID(ctx context.Context, id, sessionID string) error
 
 	// AppendHistory records one execution outcome.
 	AppendHistory(ctx context.Context, h ChatRunHistoryRecord) error
@@ -286,7 +304,7 @@ func (s *SQLiteChatStore) Delete(ctx context.Context, id string) error {
 // Get implements ScheduledChatStore.
 func (s *SQLiteChatStore) Get(ctx context.Context, id string) (ChatRunRecord, error) {
 	const q = `
-		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at
+		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at, session_id
 		FROM scheduled_chat_runs
 		WHERE id = ?
 	`
@@ -297,7 +315,7 @@ func (s *SQLiteChatStore) Get(ctx context.Context, id string) (ChatRunRecord, er
 // List implements ScheduledChatStore.
 func (s *SQLiteChatStore) List(ctx context.Context) ([]ChatRunRecord, error) {
 	const q = `
-		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at
+		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at, session_id
 		FROM scheduled_chat_runs
 		ORDER BY created_at ASC
 	`
@@ -330,6 +348,30 @@ func (s *SQLiteChatStore) SetEnabled(ctx context.Context, id string, enabled boo
 	}
 	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
 		res, err := tx.Exec(ctx, q, enabledInt, time.Now().Unix(), id)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrChatRunNotFound
+		}
+		return nil
+	})
+}
+
+// SetSessionID implements ScheduledChatStore. updated_at is left alone:
+// the conversation link is run bookkeeping, not an edit of the schedule.
+func (s *SQLiteChatStore) SetSessionID(ctx context.Context, id, sessionID string) error {
+	const q = `UPDATE scheduled_chat_runs SET session_id = ? WHERE id = ?`
+	var arg any
+	if sessionID != "" {
+		arg = sessionID
+	}
+	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		res, err := tx.Exec(ctx, q, arg, id)
 		if err != nil {
 			return err
 		}
@@ -417,12 +459,13 @@ func scanChatRunRecord(row scanner) (ChatRunRecord, error) {
 	var createdAtRaw, updatedAtRaw int64
 	var toolAllowlistRaw string
 	var runAtRaw *int64
+	var sessionIDRaw *string
 	if err := row.Scan(
 		&r.ID, &r.Name, &r.PromptTemplate, &r.Cron, &r.Timezone,
 		&r.Model, &r.OutputSink, &enabledInt,
 		&createdAtRaw, &updatedAtRaw,
 		&r.CreatedBy, &toolAllowlistRaw,
-		&r.TriggerKind, &runAtRaw,
+		&r.TriggerKind, &runAtRaw, &sessionIDRaw,
 	); err != nil {
 		return ChatRunRecord{}, ErrChatRunNotFound
 	}
@@ -434,6 +477,9 @@ func scanChatRunRecord(row scanner) (ChatRunRecord, error) {
 	if runAtRaw != nil {
 		t := time.Unix(*runAtRaw, 0).UTC()
 		r.RunAt = &t
+	}
+	if sessionIDRaw != nil {
+		r.SessionID = *sessionIDRaw
 	}
 	return r, nil
 }

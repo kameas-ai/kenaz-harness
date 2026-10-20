@@ -3993,11 +3993,20 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 		if chatStore != nil && a.sessionsAPI != nil && a.llmAPI != nil {
 			capturedPersonalStore := personalForLLM
+			// sessions/0348: a fire whose conversation still has a turn
+			// executing is skipped, not run concurrently — the chat runner
+			// is the one place that knows. A nil runner (no LLM stack)
+			// leaves the interface nil, not a typed-nil pointer.
+			var activeRuns llm.ActiveRunChecker
+			if a.chatRunner != nil {
+				activeRuns = a.chatRunner
+			}
 			live := NewChatRunDispatcher(ChatRunDispatcherDeps{
-				Store:    chatStore,
-				Sessions: a.sessionsAPI,
-				LLM:      a.llmAPI,
-				Bus:      a.eventBus,
+				Store:      chatStore,
+				Sessions:   a.sessionsAPI,
+				ActiveRuns: activeRuns,
+				LLM:        a.llmAPI,
+				Bus:        a.eventBus,
 				// Lazy, mirroring wfDeps.DefaultProfileFunc (line ~2046
 				// above): first personal-provider profile wins, re-read
 				// on every dispatch so a profile added after boot is
