@@ -194,7 +194,7 @@ func parseToolGrantResourceID(body string) (string, bool) {
 // third-party, so this is reachable input and not a theoretical one.
 func toolGrantResourceID(server, tool string) (string, error) {
 	id := uidID(ToolUID(server, tool))
-	if id == "" || strings.ContainsAny(id, "\"\\\n\r") {
+	if id == "" || strings.ContainsAny(id, "\"\\\n\r") || !SafeLiteralText(id) {
 		return "", ErrInvalidToolGrant
 	}
 	return id, nil
@@ -234,8 +234,11 @@ func WriteToolAllowGrant(ctx context.Context, dataDir string, engine *Engine, se
 		"permit(\n" +
 		"  principal,\n" +
 		"  action == Action::\"" + ActionUseTool + "\",\n" +
-		"  resource == " + EntityTypeTool + "::\"" + resourceID + "\"\n" +
+		"  resource == " + EntityTypeTool + "::" + QuoteString(resourceID) + "\n" +
 		");\n"
+	if err := ValidateGeneratedSnippet([]byte(body)); err != nil {
+		return "", err
+	}
 	if err := os.WriteFile(toolGrantPath(dataDir, filename), []byte(body), 0o644); err != nil {
 		return "", err
 	}

@@ -229,6 +229,15 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 				d.Reason = "dangerous path: allow-always requires AllowDangerousPersist override"
 				return d, nil
 			}
+			if !cedar.PersistableFamilyID(canonical) {
+				// A path a policy literal cannot carry (invalid UTF-8,
+				// U+FFFD, control characters) is granted for this
+				// session only, as Allow once would be.
+				g.addTransientGrant(op, canonical)
+				d.Outcome = cedar.Allow
+				d.Reason = "user granted allow-always; path cannot be persisted, granted allow-once (transient)"
+				return d, nil
+			}
 			body := buildExactSnippet(op, canonical)
 			_ = g.writePolicySnippet(snippetName(op, canonical, "path"), body)
 			d.Outcome = cedar.Allow
@@ -242,6 +251,12 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 				return d, nil
 			}
 			dir := filepath.Dir(canonical)
+			if !cedar.PersistableFamilyID(dir) {
+				g.addTransientGrant(op, canonical)
+				d.Outcome = cedar.Allow
+				d.Reason = "user granted allow-always; directory cannot be persisted, granted allow-once (transient)"
+				return d, nil
+			}
 			body := buildDirectorySnippet(op, dir)
 			_ = g.writePolicySnippet(snippetName(op, dir, "dir"), body)
 			d.Outcome = cedar.Allow
@@ -387,6 +402,9 @@ func snippetName(op Op, path, scope string) string {
 func (g *Gate) writePolicySnippet(name, body string) error {
 	if g.opts.PolicyDir == "" {
 		return nil
+	}
+	if err := cedar.ValidateGeneratedSnippet([]byte(body)); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(g.opts.PolicyDir, 0o700); err != nil {
 		return fmt.Errorf("fs/gate: mkdir PolicyDir: %w", err)

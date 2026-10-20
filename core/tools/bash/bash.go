@@ -661,6 +661,10 @@ func (t *Tool) promptBashGate(ctx context.Context, pattern string, argv []string
 			Argv:       argv,
 			WorkingDir: workingDir,
 			Dangerous:  isDangerous,
+			// The modal disables "Allow always" for a pattern
+			// writePolicySnippet would refuse, so the choice it offers
+			// is the choice that happens.
+			AllowAlwaysUnavailable: !cedar.PersistableFamilyID(pattern),
 		},
 	}
 	resolution, err := t.promptRegistry.RequestInteractive(ctx, surface)
@@ -740,7 +744,7 @@ func (t *Tool) writePolicySnippet(pattern string) {
 	// run re-prompts — the same outcome as Allow once.
 	if !cedar.PersistableFamilyID(pattern) {
 		t.logf("bash.gate.snippet_refused",
-			"reason", "pattern not persistable (empty, control character, leading \"..\", or reserved)",
+			"reason", "pattern not persistable (empty, control character, invalid UTF-8 or U+FFFD, leading \"..\", or reserved)",
 			"pattern", strconv.Quote(pattern),
 		)
 		return
@@ -757,6 +761,10 @@ func (t *Tool) writePolicySnippet(pattern string) {
 		"  action == Action::\"run_bash_command\",\n" +
 		"  resource == " + cedar.EntityTypeBashCommand + "::" + cedar.QuoteString(pattern) + "\n" +
 		");\n"
+	if err := cedar.ValidateGeneratedSnippet([]byte(body)); err != nil {
+		t.logf("bash.gate.snippet_refused", "reason", err.Error(), "pattern", strconv.Quote(pattern))
+		return
+	}
 	if err := writeFile(filename, []byte(body)); err != nil {
 		t.logf("bash.gate.snippet_write_err", "file", filename, "err", err.Error())
 		return

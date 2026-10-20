@@ -1296,6 +1296,7 @@ export namespace cedar {
 	    argv: string[];
 	    working_dir?: string;
 	    dangerous: boolean;
+	    allow_always_unavailable?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new BashPromptSurface(source);
@@ -1307,6 +1308,7 @@ export namespace cedar {
 	        this.argv = source["argv"];
 	        this.working_dir = source["working_dir"];
 	        this.dangerous = source["dangerous"];
+	        this.allow_always_unavailable = source["allow_always_unavailable"];
 	    }
 	}
 	export class CredPromptSurface {

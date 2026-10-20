@@ -50,17 +50,34 @@ useEventStream<PermissionRequest>('bash:permission-pending', (payload) => {
 
 const head = computed<PermissionRequest | null>(() => queue.value[0] ?? null);
 
+// A command name the policy file cannot carry (control characters,
+// invalid UTF-8, a reserved id) is never saved by the backend, so the
+// button is disabled rather than quietly behaving as "Allow once".
+const allowAlwaysUnavailable = computed(
+  () => head.value?.surface?.bash?.allow_always_unavailable === true,
+);
+
 const allowAlwaysEnabled = computed(() => {
+  if (allowAlwaysUnavailable.value) return false;
   if (!head.value?.dangerous_tier) return true;
   return cacheDangerousOps.value;
 });
 
 const allowAlwaysLabel = computed(() => {
+  if (allowAlwaysUnavailable.value) {
+    return 'Allow always (unavailable for this command name)';
+  }
   if (head.value?.dangerous_tier && !cacheDangerousOps.value) {
     return 'Allow always (disabled for dangerous ops)';
   }
   return 'Allow always';
 });
+
+const allowAlwaysDisabledTitle = computed(() =>
+  allowAlwaysUnavailable.value
+    ? 'This command name cannot be saved as a permanent rule. Allow once instead.'
+    : undefined,
+);
 
 function onResolved(requestID: string) {
   queue.value = queue.value.filter((q) => q.request_id !== requestID);
@@ -77,6 +94,7 @@ defineExpose({ queue, reconcile });
     :queue-length="queue.length"
     :allow-always-enabled="allowAlwaysEnabled"
     :allow-always-label="allowAlwaysLabel"
+    :allow-always-disabled-title="allowAlwaysDisabledTitle"
     data-testid="bash-permission-modal"
     @resolved="onResolved"
   />

@@ -2,6 +2,10 @@ package cedar
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	cedar "github.com/cedar-policy/cedar-go"
 )
@@ -42,8 +46,45 @@ func QuoteLikePrefix(prefix string) string {
 // with "invalid" — a grant on the raw id could then never match — and
 // false for the literal "invalid" itself, because a permit on
 // BashCommand::"invalid" would match every malformed pattern at once.
+//
+// It also requires SafeLiteralText: a string the vendored parser cannot
+// read back must never reach a policy file.
 func PersistableFamilyID(id string) bool {
-	return validateFamilyID(id) && id != invalidUIDID
+	return validateFamilyID(id) && id != invalidUIDID && SafeLiteralText(id)
+}
+
+// SafeLiteralText reports whether s survives a round trip through a
+// Cedar string literal under the vendored cedar-go parser. It must be
+// valid UTF-8 and must not contain U+FFFD: cedar-go v1.6.0's unquoter
+// rejects every utf8.RuneError ("bad unicode rune") — including a
+// correctly encoded U+FFFD, which its escaper emits raw — and ranging
+// over invalid UTF-8 yields U+FFFD. Either one in a generated snippet
+// makes the file unparseable and the engine fail closed. Linux file
+// names, argv[0] and MCP tool names are all arbitrary bytes, so this is
+// reachable input.
+func SafeLiteralText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsRune(s, utf8.RuneError)
+}
+
+// ErrInvalidGeneratedSnippet is returned by ValidateGeneratedSnippet.
+var ErrInvalidGeneratedSnippet = errors.New("cedar: generated policy snippet rejected")
+
+// ValidateGeneratedSnippet parses body with the vendored cedar-go parser
+// and requires it to contain exactly one policy. Every writer of a
+// generated grant runs this before the file reaches the policy
+// directory, so an escaping gap in some future writer degrades to "the
+// grant was not saved" instead of "the user policy failed to load and
+// every gated action fails closed" — and an injection that smuggles a
+// second policy is refused even if it parses.
+func ValidateGeneratedSnippet(body []byte) error {
+	list, err := cedar.NewPolicyListFromBytes("", body)
+	if err != nil {
+		return fmt.Errorf("%w: does not parse: %v", ErrInvalidGeneratedSnippet, err)
+	}
+	if len(list) != 1 {
+		return fmt.Errorf("%w: contains %d policies, want exactly 1", ErrInvalidGeneratedSnippet, len(list))
+	}
+	return nil
 }
 
 // ResourceScopeID parses body as Cedar policy text and returns the

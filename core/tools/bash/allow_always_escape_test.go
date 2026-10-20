@@ -4,8 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"testing"
+	"time"
 
 	cedargo "github.com/cedar-policy/cedar-go"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -105,8 +106,12 @@ func TestAllowAlways_NewlineInjection_RefusedEngineHealthy(t *testing.T) {
 		"nul\x00byte",
 		"esc\x1b[31m",
 		"c1\u0085next",
+		// Not control characters, but cedar-go v1.6.0 cannot parse them
+		// back ("bad unicode rune"): U+FFFD and invalid UTF-8.
+		"rep\uFFFDlacement",
+		"bad\xffutf8",
 	} {
-		t.Run(strings.NewReplacer("\n", `\n`, "\t", `\t`, "\x00", `\0`).Replace(pattern), func(t *testing.T) {
+		t.Run(strconv.QuoteToASCII(pattern), func(t *testing.T) {
 			tool, eng, dataDir := newSnippetTool(t)
 			tool.writePolicySnippet(pattern)
 
@@ -201,5 +206,43 @@ func TestAllowAlways_OrdinaryPatternUnchanged(t *testing.T) {
 	}
 	if got := bashOutcome(eng, "git push"); got == cedar.Allow {
 		t.Errorf("git push = Allow; grant leaked past its pattern")
+	}
+}
+
+// The prompt tells the modal when "Allow always" would be refused, so
+// the button is disabled instead of silently acting as Allow once.
+func TestCedarGate_SurfaceFlagsUnpersistablePattern(t *testing.T) {
+	for _, tc := range []struct {
+		argv0       string
+		unavailable bool
+	}{
+		{"/usr/bin/git", false},
+		{"/tmp/data.db\necho", true},
+		{"/tmp/x\uFFFD", true},
+		{"/tmp/invalid", true},
+	} {
+		reg := cedar.NewRegistry(cedar.WithTimeout(2 * time.Second))
+		got := make(chan cedar.PromptSurface, 1)
+		go func() {
+			for {
+				if list := reg.ListPending(); len(list) > 0 {
+					got <- list[0].Surface
+					_ = reg.Resolve(list[0].RequestID, cedar.DecisionAllowOnce)
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+		tool, _ := newTool(t, func(o *Options) {
+			o.CedarEngine = buildNotApplicableEngine(t)
+			o.PromptRegistry = reg
+		})
+		if allow, _ := tool.cedarGate(context.Background(), []string{tc.argv0}, ""); !allow {
+			t.Fatalf("%q: gate refused an Allow once", tc.argv0)
+		}
+		surf := <-got
+		if surf.Bash == nil || surf.Bash.AllowAlwaysUnavailable != tc.unavailable {
+			t.Errorf("%q: surface = %+v, want AllowAlwaysUnavailable=%v", tc.argv0, surf.Bash, tc.unavailable)
+		}
 	}
 }

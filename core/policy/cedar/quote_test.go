@@ -2,6 +2,7 @@ package cedar
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,5 +130,79 @@ func TestWriteMCPSpawnSnippet_EscapesRecipeID(t *testing.T) {
 		if strings.Contains(ent.Name(), "bad") {
 			t.Errorf("refused recipe id still wrote %s", ent.Name())
 		}
+	}
+}
+
+func TestSafeLiteralText(t *testing.T) {
+	for s, want := range map[string]bool{
+		"git status": true, "caf\u00e9": true, "a\nb": true, // newline is escapable
+		"x\uFFFD": false, "y\xff": false, "\xc3": false, "\xed\xa0\x80": false,
+	} {
+		if got := SafeLiteralText(s); got != want {
+			t.Errorf("SafeLiteralText(%q) = %v, want %v", s, got, want)
+		}
+	}
+	for _, s := range []string{"x\uFFFD", "y\xff"} {
+		if PersistableFamilyID(s) {
+			t.Errorf("PersistableFamilyID(%q) = true, want false", s)
+		}
+	}
+}
+
+// The unescapable case the round-trip test above cannot cover: cedar-go
+// emits U+FFFD raw and then refuses to parse it. ValidateGeneratedSnippet
+// must catch it (and any other unparseable or multi-policy body).
+func TestValidateGeneratedSnippet(t *testing.T) {
+	one := "permit(principal, action, resource == BashCommand::" + QuoteString("git status") + ");"
+	if err := ValidateGeneratedSnippet([]byte("// comment\n" + one)); err != nil {
+		t.Errorf("single policy rejected: %v", err)
+	}
+	for name, body := range map[string]string{
+		"fffd":        "permit(principal, action, resource == BashCommand::" + QuoteString("x\uFFFD") + ");",
+		"bad_utf8":    "permit(principal, action, resource == BashCommand::" + QuoteString("y\xff") + ");",
+		"unparseable": `permit(principal, action, resource == BashCommand::"x`,
+		"zero":        "// nothing\n",
+		"two":         one + "\npermit(principal, action, resource);",
+	} {
+		if err := ValidateGeneratedSnippet([]byte(body)); !errors.Is(err, ErrInvalidGeneratedSnippet) {
+			t.Errorf("%s: err = %v, want ErrInvalidGeneratedSnippet", name, err)
+		}
+	}
+}
+
+func TestWriteMCPSpawnSnippet_UnparseableRecipeIDRefused(t *testing.T) {
+	ctx := context.Background()
+	for _, id := range []string{"rec\uFFFD", "rec\xff"} {
+		e, dir := newDiskEngine(t, nil)
+		if err := WriteMCPSpawnSnippet(ctx, dir, e, id); err == nil {
+			t.Errorf("%q: persisted; want refused", id)
+		}
+		if err := e.UserPolicyLoadError(); err != nil {
+			t.Errorf("%q: engine unhealthy: %v", id, err)
+		}
+		if ents, _ := os.ReadDir(filepath.Join(dir, PolicyDir)); len(ents) != 0 {
+			t.Errorf("%q: wrote %d files", id, len(ents))
+		}
+	}
+}
+
+func TestWriteToolAllowGrant_UnparseableNameRefused(t *testing.T) {
+	ctx := context.Background()
+	for _, tool := range []string{"t\uFFFD", "t\xff"} {
+		e, dir := newDiskEngine(t, nil)
+		if _, err := WriteToolAllowGrant(ctx, dir, e, "srv", tool); err == nil {
+			t.Errorf("%q: persisted; want refused", tool)
+		}
+		if err := e.UserPolicyLoadError(); err != nil {
+			t.Errorf("%q: engine unhealthy: %v", tool, err)
+		}
+	}
+	// Ordinary grant unchanged and live.
+	e, dir := newDiskEngine(t, nil)
+	if _, err := WriteToolAllowGrant(ctx, dir, e, "srv", "read_file"); err != nil {
+		t.Fatalf("ordinary grant: %v", err)
+	}
+	if !HasToolAllowGrant(dir, "srv", "read_file") {
+		t.Error("ordinary grant not found by HasToolAllowGrant")
 	}
 }

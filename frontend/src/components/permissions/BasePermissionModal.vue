@@ -40,6 +40,8 @@
  *   - allowAlwaysEnabled — when false, the "Allow always" button is
  *     disabled (dangerous-tier + PermissionCacheDangerousOps=false).
  *   - allowAlwaysLabel — override button label for the dangerous tier.
+ *   - allowAlwaysDisabledTitle — tooltip on the disabled "Allow always"
+ *     button (defaults to the dangerous-ops explanation).
  *
  * Slots:
  *   - default — additional family-specific detail rendered between
@@ -66,12 +68,14 @@ const props = withDefaults(
     queueLength?: number;
     allowAlwaysEnabled?: boolean;
     allowAlwaysLabel?: string;
+    allowAlwaysDisabledTitle?: string;
   }>(),
   {
     familyIcon: '🔒',
     queueLength: 0,
     allowAlwaysEnabled: true,
     allowAlwaysLabel: 'Allow always',
+    allowAlwaysDisabledTitle: 'Disabled for dangerous ops. Enable in Settings → Permissions.',
   },
 );
 
@@ -267,7 +271,7 @@ defineExpose({ decide });
           class="w-full rounded-md border border-accent-hairline text-accent px-3 py-2 hover:bg-surface-2 disabled:opacity-50 disabled:text-ink-muted disabled:border-border-muted disabled:cursor-not-allowed"
           :disabled="submitting || !allowAlwaysEnabled"
           data-testid="perm-modal-allow-always"
-          :title="allowAlwaysEnabled ? '' : 'Disabled for dangerous ops. Enable in Settings → Permissions.'"
+          :title="allowAlwaysEnabled ? '' : allowAlwaysDisabledTitle"
           @click="decide('allow_always')"
         >
           {{ allowAlwaysLabel }}

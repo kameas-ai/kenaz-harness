@@ -514,6 +514,9 @@ func WriteMCPSpawnSnippet(ctx context.Context, dataDir string, engine *Engine, r
 		"  action == Action::\"use_credential\",\n" +
 		"  resource == " + EntityTypeCredential + "::" + QuoteString(recipeID+"::mcp_spawn") + "\n" +
 		");\n"
+	if err := ValidateGeneratedSnippet([]byte(body)); err != nil {
+		return err
+	}
 	if err := os.WriteFile(filename, []byte(body), 0o644); err != nil {
 		return err
 	}
