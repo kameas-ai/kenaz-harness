@@ -99,6 +99,42 @@ streaming usage tokens.
 
 ---
 
+## Workbench (served) mode: host-granted endpoint
+
+The served harness inside a Kenaz workbench has no provider settings (its
+Settings page carries only Fleet telemetry and Agent Profiles, and
+`LLM_Add/Update/RemoveProvider` and `LLM_ProbeCustomEndpoint` are not served
+RPCs) — its single provider profile is seeded from the environment the control plane
+writes onto the KENAZMETA disk (Spec 078). To point a workbench at an
+OpenAI-compatible endpoint (for example a host-side `llama-server` reachable
+over the vmnet gateway), grant:
+
+| Env var | Required | Meaning |
+|---|---|---|
+| `KENAZ_HARNESS_PROVIDER=custom-openai` | yes | selects the custom-openai adapter |
+| `KENAZ_HARNESS_BASE_URL` | yes | base URL, e.g. `http://192.168.64.1:8081/v1` |
+| `KENAZ_HARNESS_MODEL` | yes | model id sent on every request (no default for this kind) |
+| `KENAZ_HARNESS_CRED_ENV` | no | name of the env var holding the API key; omit for local servers |
+| `KENAZ_HARNESS_AUTH_SCHEME` | no | `none` (default without a credential) / `bearer` (default with one) / `api-key-header` (sends `X-API-Key`). `bearer` and `api-key-header` require a credential; `custom` is refused because a grant cannot carry the header name |
+
+The workbench's egress policy must permit the destination: the RFC1918
+carve-out covers the vmnet gateway under the `local-only` tier; under
+`allowlist` add the host:port explicitly.
+
+At boot the served harness runs the same three-step probe against the granted
+endpoint and records the verdict on the profile's capability hints (logged as
+`harness.serve.host_provider.probed`). An unreachable endpoint logs
+`harness.serve.host_provider.probe_failed` and leaves the hints unset, so the
+adapter operates conservatively until the next boot. A granted credential var
+that is empty at probe time logs `harness.serve.host_provider.probe_skipped`
+(the key is resolved through the same credential path chat requests use, and
+never logged). Boot log lines carry the endpoint as scheme, host and path
+only — userinfo is masked and any query string or fragment is dropped — and a
+failed probe logs a classified `reason` (`timeout`, `dns`, `connect_refused`,
+`connect_failed`, `tls`, `http_<status>`, `probe_error`), never the error text
+or the server's response body. There is no Probe button
+in served mode — restart the workbench to re-probe.
+
 ## Troubleshooting
 
 **Probe returns "streaming: unknown"**

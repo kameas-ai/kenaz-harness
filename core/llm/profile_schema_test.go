@@ -53,3 +53,30 @@ func longString(n int) string {
 	}
 	return string(b)
 }
+
+// TestValidateProfile_CredentiallessCustomOpenAI pins the one shape allowed
+// to carry no credential reference (a served workbench's host-granted
+// auth_scheme=none endpoint) and the near-misses that must still fail.
+func TestValidateProfile_CredentiallessCustomOpenAI(t *testing.T) {
+	none := map[string]any{"auth_scheme": "none"}
+	ok := ProviderProfile{ID: "host", Kind: "custom-openai", Model: "qwen", Endpoint: "http://127.0.0.1:8081/v1", Defaults: none}
+	if err := ValidateProfile(ok); err != nil {
+		t.Fatalf("credential-less custom-openai with auth_scheme=none rejected: %v", err)
+	}
+	bad := []struct {
+		name string
+		p    ProviderProfile
+	}{
+		{"custom-openai bearer without cred", ProviderProfile{ID: "h", Kind: "custom-openai", Model: "m", Endpoint: "http://x/v1", Defaults: map[string]any{"auth_scheme": "bearer"}}},
+		{"custom-openai no scheme without cred", ProviderProfile{ID: "h", Kind: "custom-openai", Model: "m", Endpoint: "http://x/v1"}},
+		{"other kind with none scheme and no cred", ProviderProfile{ID: "h", Kind: "openai", Model: "m", Defaults: none}},
+		{"custom-openai none with fleet-only ref", ProviderProfile{ID: "h", Kind: "custom-openai", Model: "m", Endpoint: "http://x/v1", Defaults: none, Cred: CredentialReference{Source: CredSourceOrg, CredentialID: "c1"}}},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidateProfile(tc.p); err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+		})
+	}
+}

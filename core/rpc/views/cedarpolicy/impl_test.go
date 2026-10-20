@@ -2,6 +2,7 @@ package cedarpolicy_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,7 +107,7 @@ func TestFilenameValidation_AcceptedNames(t *testing.T) {
 			t.Parallel()
 			// WritePolicySnippet exercises the validator; we check it does not
 			// return a validation error (os/fs errors are fine — no engine needed).
-			err := api.WritePolicySnippet(context.Background(), name, "// test\n")
+			err := api.WritePolicySnippet(context.Background(), name, validSnippetBody)
 			if err != nil {
 				t.Fatalf("expected accepted name %q to succeed, got: %v", name, err)
 			}
@@ -153,7 +154,7 @@ func TestFilenameValidation_RejectedNames(t *testing.T) {
 		tc := tc
 		t.Run(tc.reason, func(t *testing.T) {
 			t.Parallel()
-			err := api.WritePolicySnippet(context.Background(), tc.name, "// test\n")
+			err := api.WritePolicySnippet(context.Background(), tc.name, validSnippetBody)
 			if err == nil {
 				t.Fatalf("expected name %q (%s) to be rejected, but got no error", tc.name, tc.reason)
 			}
@@ -217,7 +218,7 @@ func TestWriteAndRevoke_EngineReloadTriggered(t *testing.T) {
 	dir := t.TempDir()
 	api := cedarpolicy.NewAPIWithDataDir(e, dir)
 	const name = "tool_allow_reloadtest.cedar"
-	if err := api.WritePolicySnippet(context.Background(), name, "// reload test\n"); err != nil {
+	if err := api.WritePolicySnippet(context.Background(), name, validSnippetBody); err != nil {
 		t.Fatalf("WritePolicySnippet: %v", err)
 	}
 	if err := api.RevokePolicySnippet(context.Background(), name); err != nil {
@@ -261,5 +262,40 @@ func TestAPI_WritePolicySnippet_WritesAndReloads(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("snippet file %q not listed after WritePolicySnippet", filename)
+	}
+}
+
+// validSnippetBody is a minimal single-policy body: WritePolicySnippet
+// refuses anything that does not parse to exactly one policy.
+const validSnippetBody = "// test\npermit(principal, action == Action::\"run_bash_command\", resource == BashCommand::\"ls\");\n"
+
+// TestWritePolicySnippet_RejectsInvalidBody: a generated grant the engine
+// could not load (or one smuggling a second policy) is refused before
+// any I/O, so it can never make the engine fail closed.
+func TestWritePolicySnippet_RejectsInvalidBody(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	e, err := cedar.NewEngine(cedar.Options{IncludeEmbedded: true, LoadFromDisk: true, DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("cedar.NewEngine: %v", err)
+	}
+	api := cedarpolicy.NewAPIWithDataDir(e, dataDir)
+	for name, body := range map[string]string{
+		"fffd":         "permit(principal, action, resource == Tool::" + cedar.QuoteString("x\uFFFD") + ");",
+		"bad_utf8":     "permit(principal, action, resource == Tool::\"y\xff\");",
+		"unterminated": "permit(principal, action, resource == Tool::\"data.db\necho\");",
+		"zero":         "// nothing\n",
+		"two":          validSnippetBody + "permit(principal, action, resource);\n",
+	} {
+		err := api.WritePolicySnippet(context.Background(), "tool_allow_bad.cedar", body)
+		if !errors.Is(err, cedar.ErrInvalidGeneratedSnippet) {
+			t.Errorf("%s: err = %v, want ErrInvalidGeneratedSnippet", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, cedar.PolicyDir, "tool_allow_bad.cedar")); !os.IsNotExist(err) {
+		t.Errorf("invalid body reached the policy dir (stat err %v)", err)
+	}
+	if err := e.UserPolicyLoadError(); err != nil {
+		t.Errorf("engine unhealthy: %v", err)
 	}
 }

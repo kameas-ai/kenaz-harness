@@ -130,7 +130,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpointURL, bytes.NewReader(body))
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		return nil, &llm.ErrInvalidRequest{Status: 0, Message: llm.RedactURLError(err).Error()}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -143,14 +143,14 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	resp, err := a.httpc.Do(httpReq)
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrTransient{Status: 0, Message: "gemini: http: " + err.Error(), Cause: err}
+		return nil, llm.NewTransportError("gemini: http: ", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		return nil, classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(endpointURL, cred)...)
 	}
 
 	s := &geminiStream{
@@ -218,14 +218,14 @@ func (a *Adapter) TestKey(ctx context.Context, cred []byte) error {
 	u := AIStudioModelsURL()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		return &llm.ErrInvalidRequest{Status: 0, Message: llm.RedactURLError(err).Error()}
 	}
 	auth := newAPIKeyAuth(cred)
 	_ = auth.Authorize(req)
 
 	resp, err := a.httpc.Do(req)
 	if err != nil {
-		return &llm.ErrTransient{Status: 0, Message: "gemini: test key: " + err.Error(), Cause: err}
+		return llm.NewTransportError("gemini: test key: ", err)
 	}
 	defer resp.Body.Close()
 
@@ -233,7 +233,7 @@ func (a *Adapter) TestKey(ctx context.Context, cred []byte) error {
 		return nil
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return classifyStatus(resp.StatusCode, body)
+	return classifyStatus(resp.StatusCode, body, llm.RequestSecrets("", cred)...)
 }
 
 // ListModels implements llm.ModelLister. Lists available Gemini models
@@ -245,20 +245,20 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	u := AIStudioModelsURL()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		return nil, &llm.ErrInvalidRequest{Status: 0, Message: llm.RedactURLError(err).Error()}
 	}
 	auth := newAPIKeyAuth(cred)
 	_ = auth.Authorize(req)
 
 	resp, err := a.httpc.Do(req)
 	if err != nil {
-		return nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+		return nil, llm.NewTransportError("", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, classifyStatus(resp.StatusCode, body)
+		return nil, classifyStatus(resp.StatusCode, body, llm.RequestSecrets(u, cred)...)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB

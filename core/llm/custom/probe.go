@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // ProbeRequest carries the parameters for a capability probe.
@@ -78,8 +80,11 @@ func (p *Prober) Probe(ctx context.Context, req ProbeRequest) ProbeResult {
 
 	streaming, streamingUsage, authErr := p.probeStreaming(step1Ctx, chatURL, model, req)
 	if authErr != nil {
-		// Auth failure → abort; do not save partial matrix.
-		return ProbeResult{Matrix: matrix, Err: authErr}
+		// Auth failure → abort; do not save partial matrix. The verdict
+		// can carry the server's error message, which may echo the
+		// credential (under a user-chosen header name) or the URL's
+		// userinfo/query — scrub the exact secret material out of it.
+		return ProbeResult{Matrix: matrix, Err: scrubError(authErr, llm.RequestSecrets(req.BaseURL, req.Cred))}
 	}
 	matrix.Streaming = streaming
 	matrix.StreamingUsage = streamingUsage
@@ -112,7 +117,7 @@ func (p *Prober) probeStreaming(ctx context.Context, chatURL, model string, req 
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, chatURL, bytes.NewReader(data))
 	if err != nil {
-		return CapabilityValueUnknown, CapabilityValueUnknown, err
+		return CapabilityValueUnknown, CapabilityValueUnknown, llm.RedactURLError(err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -124,15 +129,19 @@ func (p *Prober) probeStreaming(ctx context.Context, chatURL, model string, req 
 
 	resp, err := p.httpc.Do(httpReq)
 	if err != nil {
-		return CapabilityValueUnknown, CapabilityValueUnknown, fmt.Errorf("custom-openai probe step1: %w", err)
+		return CapabilityValueUnknown, CapabilityValueUnknown, fmt.Errorf("custom-openai probe step1: %w", llm.RedactURLError(err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		msg := extractErrorMessage(body)
+		if msg == "" {
+			return CapabilityValueUnknown, CapabilityValueUnknown,
+				fmt.Errorf("custom-openai probe: auth failed (status=%d)", resp.StatusCode)
+		}
 		return CapabilityValueUnknown, CapabilityValueUnknown,
-			fmt.Errorf("custom-openai probe: auth failed (status=%d): %s", resp.StatusCode, msg)
+			&ProbeAuthError{Status: resp.StatusCode, Message: msg}
 	}
 	if resp.StatusCode != 200 {
 		return CapabilityValueFalse, CapabilityValueUnknown, nil
@@ -210,7 +219,7 @@ func (p *Prober) probeToolCalling(ctx context.Context, chatURL, model string, re
 
 	resp, err := p.httpc.Do(httpReq)
 	if err != nil {
-		return CapabilityValueUnknown, err
+		return CapabilityValueUnknown, llm.RedactURLError(err)
 	}
 	defer resp.Body.Close()
 
@@ -232,3 +241,33 @@ func (p *Prober) probeToolCalling(ctx context.Context, chatURL, model string, re
 	}
 }
 
+// scrubbedError replaces err's text with a secret-scrubbed copy while
+// keeping err in the chain, so errors.As / errors.Is see the original
+// typed error.
+type scrubbedError struct {
+	msg string
+	err error
+}
+
+func (e *scrubbedError) Error() string { return e.msg }
+func (e *scrubbedError) Unwrap() error { return e.err }
+
+func scrubError(err error, secrets []string) error {
+	if err == nil {
+		return nil
+	}
+	return &scrubbedError{msg: llm.ScrubSecrets(err.Error(), secrets...), err: err}
+}
+
+// ProbeAuthError is the probe's step-1 401/403 verdict. Error() keeps the
+// pre-existing text (the desktop Probe button shows it); Status lets a
+// caller that must not echo the server's body — the served boot log —
+// classify the failure without reading Message.
+type ProbeAuthError struct {
+	Status  int
+	Message string
+}
+
+func (e *ProbeAuthError) Error() string {
+	return fmt.Sprintf("custom-openai probe: auth failed (status=%d): %s", e.Status, e.Message)
+}

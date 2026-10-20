@@ -4036,6 +4036,17 @@ export interface PermissionRequest {
   danger_copy?: string;
   // Filesystem-specific
   op?: 'read' | 'write' | 'delete' | 'move' | 'recipe_dir_add';
+  /**
+   * The typed surface the flat fields were projected from
+   * (FlatPermissionRequest.Surface). Only the fields a modal reads are
+   * declared here.
+   */
+  surface?: {
+    bash?: {
+      /** True when the pattern cannot be saved as an "Allow always" grant. */
+      allow_always_unavailable?: boolean;
+    };
+  };
 }
 
 /**

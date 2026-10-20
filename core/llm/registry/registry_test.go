@@ -1460,3 +1460,75 @@ func TestRegistry_StreamCostReducer_PreservesProviderSourcedCost(t *testing.T) {
 		t.Fatalf("want reducer.Derive NOT called when the adapter already provided Source:\"provider\", got %d calls", reducer.calls)
 	}
 }
+
+// TestRegistry_ZeroCredentialReferenceSkipsResolution pins the served
+// custom-openai auth_scheme=none path: a profile whose credential
+// reference is entirely unset streams without touching the resolver,
+// instead of failing on `unknown credential kind ""`.
+func TestRegistry_ZeroCredentialReferenceSkipsResolution(t *testing.T) {
+	r, _ := newReg(t)
+	r.resolver = credref.New(secrets.NewMemoryBackend())
+	adapter := &fakeAdapter{
+		kind:   "custom-openai",
+		chunks: []llm.StreamEvent{{Kind: llm.StreamFinish, Finish: "stop"}},
+		final:  llm.Response{FinishReason: "stop"},
+	}
+	r.RegisterAdapter(adapter)
+	prof := llm.ProviderProfile{
+		ID: "host-none", Kind: "custom-openai", Model: "qwen",
+		Endpoint: "http://127.0.0.1:8081/v1",
+		Defaults: map[string]any{"auth_scheme": "none"},
+	}
+	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := r.Stream(context.Background(), llm.GenerationRequest{ProfileID: "host-none", SessionID: "s"})
+	if err != nil {
+		t.Fatalf("zero credential reference must not fail resolution: %v", err)
+	}
+	for range stream.Events() {
+	}
+	if _, err := stream.Final(); err != nil {
+		t.Fatal(err)
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 1 {
+		t.Fatalf("adapter calls = %d, want 1", n)
+	}
+	if len(adapter.gotCred) != 0 {
+		t.Fatalf("adapter received credential bytes for a zero reference: %d bytes", len(adapter.gotCred))
+	}
+}
+
+// TestRegistry_FleetReferenceWithoutKindStillResolves guards the skip
+// above from widening: a reference with a Fleet Source + CredentialID but
+// no Kind is malformed, not "no credential", so it must reach credref and
+// fail there — never stream unauthenticated. ValidateProfile rejects the
+// shape at LoadProfiles, so the profile is planted directly to exercise
+// the Stream-time check as the second line of defence.
+func TestRegistry_FleetReferenceWithoutKindStillResolves(t *testing.T) {
+	r, _ := newReg(t)
+	r.resolver = credref.New(secrets.NewMemoryBackend())
+	adapter := &fakeAdapter{
+		kind:   "openai",
+		chunks: []llm.StreamEvent{{Kind: llm.StreamFinish, Finish: "stop"}},
+		final:  llm.Response{FinishReason: "stop"},
+	}
+	r.RegisterAdapter(adapter)
+	prof := llm.ProviderProfile{
+		ID: "fleet-nokind", Kind: "openai", Model: "gpt-x",
+		Cred: llm.CredentialReference{Source: llm.CredSourceOrg, CredentialID: "cred_123"},
+	}
+	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err == nil {
+		t.Fatal("LoadProfiles must reject a Fleet reference with no kind")
+	}
+	r.mu.Lock()
+	r.profiles[prof.ID] = prof
+	r.mu.Unlock()
+	_, err := r.Stream(context.Background(), llm.GenerationRequest{ProfileID: "fleet-nokind", SessionID: "s"})
+	if err == nil {
+		t.Fatal("a Fleet reference with no kind must fail credential resolution, got nil")
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 0 {
+		t.Fatalf("adapter must not be dispatched on resolution failure, calls=%d", n)
+	}
+}

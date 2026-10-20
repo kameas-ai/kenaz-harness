@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -660,6 +661,10 @@ func (t *Tool) promptBashGate(ctx context.Context, pattern string, argv []string
 			Argv:       argv,
 			WorkingDir: workingDir,
 			Dangerous:  isDangerous,
+			// The modal disables "Allow always" for a pattern
+			// writePolicySnippet would refuse, so the choice it offers
+			// is the choice that happens.
+			AllowAlwaysUnavailable: !cedar.PersistableFamilyID(pattern),
 		},
 	}
 	resolution, err := t.promptRegistry.RequestInteractive(ctx, surface)
@@ -729,6 +734,21 @@ func (t *Tool) writePolicySnippet(pattern string) {
 		t.logf("bash.gate.snippet_skip", "reason", "no DataDir configured")
 		return
 	}
+	// Refuse to persist a pattern the request side can never match.
+	// BashCommandUID replaces an empty, control-character or
+	// leading-".." pattern with "invalid", so a grant on the raw text
+	// would be dead at best; and a permit on "invalid" itself would
+	// match every such pattern at once. A pattern carrying a newline or
+	// ESC also cannot be what the person read in the prompt. The
+	// in-flight run stays allowed (the person did approve it); the next
+	// run re-prompts — the same outcome as Allow once.
+	if !cedar.PersistableFamilyID(pattern) {
+		t.logf("bash.gate.snippet_refused",
+			"reason", "pattern not persistable (empty, control character, invalid UTF-8 or U+FFFD, leading \"..\", or reserved)",
+			"pattern", strconv.Quote(pattern),
+		)
+		return
+	}
 	sanitized := sanitizePatternForFilename(pattern)
 	dir := filepath.Join(t.dataDir, cedar.PolicyDir)
 	if err := mkdirAll(dir); err != nil {
@@ -739,8 +759,12 @@ func (t *Tool) writePolicySnippet(pattern string) {
 	body := "permit(\n" +
 		"  principal,\n" +
 		"  action == Action::\"run_bash_command\",\n" +
-		"  resource == BashCommand::\"" + pattern + "\"\n" +
+		"  resource == " + cedar.EntityTypeBashCommand + "::" + cedar.QuoteString(pattern) + "\n" +
 		");\n"
+	if err := cedar.ValidateGeneratedSnippet([]byte(body)); err != nil {
+		t.logf("bash.gate.snippet_refused", "reason", err.Error(), "pattern", strconv.Quote(pattern))
+		return
+	}
 	if err := writeFile(filename, []byte(body)); err != nil {
 		t.logf("bash.gate.snippet_write_err", "file", filename, "err", err.Error())
 		return

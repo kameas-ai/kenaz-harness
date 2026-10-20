@@ -172,6 +172,10 @@ type BashPromptSurface struct {
 	Argv      []string `json:"argv"`               // raw for modal display
 	WorkingDir string  `json:"working_dir,omitempty"`
 	Dangerous bool     `json:"dangerous"`          // §4.3 FR-015 flag
+	// AllowAlwaysUnavailable is true when Pattern cannot be persisted as
+	// a durable grant (see PersistableFamilyID): the modal disables
+	// "Allow always" instead of letting it quietly act as Allow once.
+	AllowAlwaysUnavailable bool `json:"allow_always_unavailable,omitempty"`
 }
 
 // FSPromptSurface — fs:permission-pending payload.

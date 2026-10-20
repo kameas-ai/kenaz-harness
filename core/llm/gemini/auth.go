@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/oautherr"
 )
 
@@ -163,13 +164,13 @@ func (a *serviceAccountAuth) mintToken(ctx context.Context) (string, time.Time, 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURI,
 		strings.NewReader(body.Encode()))
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("gemini: build token request: %w", err)
+		return "", time.Time{}, fmt.Errorf("gemini: build token request: %w", llm.RedactURLError(err))
 	}
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := a.httpc.Do(httpReq)
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("gemini: fetch token: %w", err)
+		return "", time.Time{}, fmt.Errorf("gemini: fetch token: %w", llm.RedactURLError(err))
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))

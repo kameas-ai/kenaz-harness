@@ -3,7 +3,9 @@ package llm
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // ClassifyStatus maps an HTTP error response to the connector's typed
@@ -23,14 +25,18 @@ import (
 //   - 5xx → *ErrTransient (retryable)
 //   - everything else → *ErrInvalidRequest (non-retryable)
 //
-// The body is best-effort decoded for the error message; on failure
-// a truncated snippet is included verbatim.
+// The body is best-effort decoded for the error message (see
+// ExtractProviderMessage); on failure a bounded excerpt is used. Either
+// way the message is scrubbed (ScrubSecrets) before it is returned.
 //
 // Adapters whose error envelope differs from the OpenAI/Anthropic
 // union shape should call this function and override the message
 // field in the returned error if the generic extraction misses detail.
-func ClassifyStatus(status int, body []byte) error {
-	return ClassifyStatusMessage(status, extractClassifyMessage(body))
+//
+// secrets are the request's exact secret material (RequestSecrets); the
+// message is always scrubbed of them and of generic credential shapes.
+func ClassifyStatus(status int, body []byte, secrets ...string) error {
+	return ClassifyStatusMessage(status, ScrubSecrets(extractClassifyMessage(body), secrets...))
 }
 
 // ClassifyStatusMessage is ClassifyStatus for callers that already hold
@@ -58,44 +64,114 @@ func ClassifyStatusMessage(status int, msg string) error {
 	}
 }
 
-// extractClassifyMessage best-effort decodes an error message from a
-// JSON body. Handles both the OpenAI envelope:
+// extractClassifyMessage is ExtractProviderMessage; kept as the
+// internal name ClassifyStatus has always used.
+func extractClassifyMessage(body []byte) string { return ExtractProviderMessage(body) }
+
+// providerExcerptMaxBytes bounds the free-text excerpt of an error body
+// that matched no known envelope.
+const providerExcerptMaxBytes = 512
+
+// ExtractProviderMessage best-effort decodes a provider's error message
+// from an HTTP error body. It understands every shape the OpenAI-
+// compatible ecosystem is known to return, because downstream classifiers
+// (context-overflow recovery, the fallback trigger, model-not-found)
+// read this text:
 //
-//	{"error": {"message": "...", "type": "...", "code": "..."}}
+//	{"error": {"message": "...", "type": "..."}}   OpenAI / Anthropic / vLLM
+//	{"error": "..."}                               TGI / Ollama
+//	{"message": "..."}                             older vLLM / OpenRouter
+//	{"detail": "..."}                              FastAPI
+//	{"detail": [{"msg": "..."}, ...]}              FastAPI validation
 //
-// and the Anthropic envelope:
-//
-//	{"type": "error", "error": {"type": "...", "message": "..."}}
-//
-// and a bare top-level "message" field (some OpenRouter responses).
-// Falls back to a truncated body snippet on parse failure.
-func extractClassifyMessage(body []byte) string {
+// Anything else becomes a bounded excerpt (see BodyExcerpt). The result
+// is NOT scrubbed — use ProviderErrorMessage for text that will reach an
+// error, a log line or an event.
+func ExtractProviderMessage(body []byte) string {
 	if len(body) == 0 {
 		return ""
 	}
 	var env struct {
-		Error struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    any    `json:"code"`
-		} `json:"error"`
-		// Bare top-level message (some OpenRouter shapes).
-		Message string `json:"message"`
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+		Detail  json.RawMessage `json:"detail"`
 	}
 	if err := json.Unmarshal(body, &env); err == nil {
-		if env.Error.Message != "" {
-			if env.Error.Type != "" {
-				return env.Error.Type + ": " + env.Error.Message
+		if len(env.Error) > 0 {
+			var flat string
+			if json.Unmarshal(env.Error, &flat) == nil && flat != "" {
+				return flat
 			}
-			return env.Error.Message
+			var nested struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+			}
+			if json.Unmarshal(env.Error, &nested) == nil && nested.Message != "" {
+				if nested.Type != "" {
+					return nested.Type + ": " + nested.Message
+				}
+				return nested.Message
+			}
 		}
 		if env.Message != "" {
 			return env.Message
 		}
+		if len(env.Detail) > 0 {
+			var flat string
+			if json.Unmarshal(env.Detail, &flat) == nil && flat != "" {
+				return flat
+			}
+			var list []struct {
+				Msg string `json:"msg"`
+			}
+			if json.Unmarshal(env.Detail, &list) == nil {
+				var msgs []string
+				for _, d := range list {
+					if d.Msg != "" {
+						msgs = append(msgs, d.Msg)
+					}
+				}
+				if len(msgs) > 0 {
+					return strings.Join(msgs, "; ")
+				}
+			}
+		}
 	}
-	s := strings.TrimSpace(string(body))
-	if len(s) > 200 {
-		s = s[:200] + "…"
+	return BodyExcerpt(body)
+}
+
+var (
+	htmlScriptStyleRe = regexp.MustCompile(`(?is)<(script|style)\b.*?</(script|style)\s*>`)
+	htmlTagRe         = regexp.MustCompile(`(?s)<[^>]*>`)
+)
+
+// BodyExcerpt renders an error body that matched no known envelope as a
+// bounded diagnostic: HTML is reduced to its text (script/style dropped,
+// tags stripped), whitespace is collapsed, and the result is capped at
+// 512 bytes on a rune boundary. Like ExtractProviderMessage it is not
+// scrubbed.
+func BodyExcerpt(body []byte) string {
+	s := string(body)
+	if strings.Contains(s, "<") && strings.Contains(s, ">") && htmlTagRe.MatchString(s) {
+		s = htmlScriptStyleRe.ReplaceAllString(s, " ")
+		s = htmlTagRe.ReplaceAllString(s, " ")
+	}
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > providerExcerptMaxBytes {
+		cut := providerExcerptMaxBytes
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "…"
 	}
 	return s
+}
+
+// ProviderErrorMessage is ExtractProviderMessage scrubbed for any sink:
+// the exact request secrets (RequestSecrets) and every generic credential
+// shape are redacted. Every adapter's HTTP-error path goes through this
+// (directly or via ClassifyStatus), because the message reaches
+// emitter.Error → persisted events.
+func ProviderErrorMessage(body []byte, secrets ...string) string {
+	return ScrubSecrets(ExtractProviderMessage(body), secrets...)
 }

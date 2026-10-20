@@ -2272,7 +2272,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	if errors.As(err, &capMissing) {
 		r.cfg.Broker.Emit("provider:capability-missing", map[string]any{
 			"capability": capMissing.Capability,
-			"endpoint":   capMissing.Endpoint,
+			"endpoint":   corellm.LogSafeEndpoint(capMissing.Endpoint),
 			"profile_id": capMissing.ProfileID,
 		})
 	}

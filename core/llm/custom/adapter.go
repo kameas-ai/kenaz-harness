@@ -166,7 +166,8 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		// A url.Parse failure embeds the raw URL — never surface it.
+		return nil, &llm.ErrInvalidRequest{Status: 0, Message: "custom-openai: build request: " + llm.RedactURLError(err).Error()}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -183,13 +184,17 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	resp, err := a.httpc.Do(httpReq)
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+		// http.Client.Do returns a *url.Error whose text embeds the full
+		// request URL (net/http strips only a password: a bare-username
+		// token and a ?api_key= survive). This error reaches
+		// emitter.Error → persisted events, so rebuild it log-safe.
+		return nil, llm.NewTransportError("custom-openai: ", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		return nil, classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(baseURL, cred)...)
 	}
 
 	s := &chatStream{
@@ -222,7 +227,7 @@ func (a *Adapter) ListModelsForEndpoint(ctx context.Context, baseURL string, sch
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("custom-openai: build models request: %w", err)
+		return nil, fmt.Errorf("custom-openai: build models request: %w", llm.RedactURLError(err))
 	}
 	req.Header.Set("Accept", "application/json")
 	if len(cred) > 0 {
@@ -232,12 +237,12 @@ func (a *Adapter) ListModelsForEndpoint(ctx context.Context, baseURL string, sch
 	}
 	resp, err := a.httpc.Do(req)
 	if err != nil {
-		return nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+		return nil, llm.NewTransportError("custom-openai: ", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, classifyStatus(resp.StatusCode, body)
+		return nil, classifyStatus(resp.StatusCode, body, llm.RequestSecrets(baseURL, cred)...)
 	}
 	var doc struct {
 		Data []struct {
@@ -292,51 +297,22 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 	return json.Marshal(body)
 }
 
-// classifyStatus maps HTTP error status codes to the connector taxonomy.
-func classifyStatus(status int, body []byte) error {
-	msg := extractErrorMessage(body)
-	if msg == "" {
-		msg = http.StatusText(status)
-	}
-	switch {
-	case status == 401 || status == 403:
-		return &llm.ErrAuth{Status: status, Message: msg}
-	case status == 402:
-		// Insufficient credits — never retryable, and never "check the
-		// request shape" (undelivered-message-retry, 2026-10-07).
-		return &llm.ErrPaymentRequired{Status: status, Message: msg}
-	case status == 429:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	case status >= 500 && status < 600:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	case status == 408 || status == 425:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	default:
-		return &llm.ErrInvalidRequest{Status: status, Message: msg}
-	}
+// classifyStatus maps HTTP error status codes to the connector taxonomy
+// via the shared llm.ClassifyStatus (same status table as before).
+// secrets are the request's exact secret material (llm.RequestSecrets);
+// any echo of them in the provider's message is redacted, because the
+// message reaches emitter.Error → persisted events.
+func classifyStatus(status int, body []byte, secrets ...string) error {
+	return llm.ClassifyStatus(status, body, secrets...)
 }
 
+// extractErrorMessage decodes the provider's error message from an error
+// body: every known envelope shape (nested OpenAI error, TGI's flat
+// string error, a top-level message, FastAPI's detail) and otherwise a
+// bounded excerpt — see llm.ExtractProviderMessage. Unscrubbed: callers
+// scrub (classifyStatus via llm.ClassifyStatus, Probe via scrubError).
 func extractErrorMessage(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	var env struct {
-		Error struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
-		if env.Error.Type != "" {
-			return env.Error.Type + ": " + env.Error.Message
-		}
-		return env.Error.Message
-	}
-	s := strings.TrimSpace(string(body))
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
+	return llm.ExtractProviderMessage(body)
 }
 
 // chatStream is the SSE consumer for custom endpoint streaming.
@@ -467,11 +443,11 @@ func (s *chatStream) pump() {
 		case errors.Is(err, context.Canceled):
 			s.finalErr = &llm.ErrCancelled{Reason: "context"}
 		default:
-			s.finalErr = &llm.ErrTransient{Message: "custom-openai: stream read: " + err.Error(), Cause: err}
+			s.finalErr = &llm.ErrTransient{Message: "custom-openai: stream read: " + streamReadErrText(err), Cause: err}
 		}
 		s.mu.Unlock()
 		select {
-		case s.events <- llm.StreamEvent{Kind: llm.StreamError, Err: err.Error()}:
+		case s.events <- llm.StreamEvent{Kind: llm.StreamError, Err: "custom-openai: stream read: " + streamReadErrText(err)}:
 		default:
 		}
 	}
@@ -609,7 +585,8 @@ func (a *Adapter) gateOutgoing(ctx context.Context, req llm.GenerationRequest, b
 	// Check tool calling.
 	if len(req.Tools) > 0 && matrix.ToolCalling == CapabilityValueFalse {
 		return &ErrCustomEndpointMissingCapability{
-			Endpoint:   baseURL,
+			// Log-safe: this error reaches emitter.Error → persisted events.
+			Endpoint:   llm.LogSafeEndpoint(baseURL),
 			Capability: "tool_calling",
 		}
 	}
@@ -626,7 +603,14 @@ type ErrCustomEndpointMissingCapability struct {
 
 func (e *ErrCustomEndpointMissingCapability) Error() string {
 	return fmt.Sprintf("custom-openai: endpoint %q does not support %q (probed capability matrix)",
-		e.Endpoint, e.Capability)
+		llm.LogSafeEndpoint(e.Endpoint), e.Capability)
+}
+
+// streamReadErrText renders a body-read error. Body reads do not carry
+// the request URL, but run the shared redactors anyway: this text lands
+// in the stream error event and the persisted Error event.
+func streamReadErrText(err error) string {
+	return llm.RedactCredentials(llm.RedactURLError(err).Error())
 }
 
 // CapabilityValue is the tri-state for probed capabilities.
