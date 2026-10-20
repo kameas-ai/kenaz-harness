@@ -66,6 +66,13 @@ type ChatRunDispatcherDeps struct {
 	// overlap within this dispatcher (one dispatch per schedule at a
 	// time); production wires the runner (api.go).
 	ActiveRuns llmview.ActiveRunChecker
+	// PausedTurns reports whether a turn in a session is paused awaiting
+	// provider credentials (the chat runner's key-rotation pause). Such a
+	// turn is not "active" — it has no running sub — yet RedriveLastTurn
+	// can re-run it in the session at any time, so a fire in that
+	// conversation is skipped too. nil disables the check; production
+	// wires the runner (api.go).
+	PausedTurns PausedTurnChecker
 	// LLM is the same production LLM view the interactive chat surface
 	// calls — StartStream is dispatched through the ONE chat stack that
 	// exists, not a second one built for scheduling (spec.md §1.3).
@@ -114,6 +121,12 @@ type ChatRunDispatcherDeps struct {
 	Timeout time.Duration
 }
 
+// PausedTurnChecker is the seam onto the chat runner's paused-for-key-
+// rotation turns. *chat.ChatRunner implements it.
+type PausedTurnChecker interface {
+	HasPausedTurnIn(sessionID string) bool
+}
+
 // BannerPublisher is the minimal seam LiveChatRunDispatcher needs to
 // deliver the "banner" output sink. *StreamBroker satisfies this
 // trivially; the interface exists so tests can inject a recording stub
@@ -139,6 +152,7 @@ type LiveChatRunDispatcher struct {
 const (
 	skipReasonInFlight   = "skipped: this schedule's previous run is still in progress"
 	skipReasonActiveTurn = "skipped: a turn is still running in this schedule's conversation (the previous run, or one started there by hand), so this fire did not start another"
+	skipReasonPausedTurn = "skipped: a turn in this schedule's conversation is paused awaiting provider credentials; it resumes once the key is rotated, so this fire did not start another"
 )
 
 // claim marks id in flight and reports whether it was free.
@@ -280,12 +294,12 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	if d.deps.Sessions == nil {
 		return failedRecord(now, "no sessions API wired"), nil
 	}
-	sess, created, skip, serr := d.conversation(ctx, rec)
+	sess, created, skipReason, serr := d.conversation(ctx, rec)
 	if serr != "" {
 		return failedRecord(now, serr), nil
 	}
-	if skip {
-		return skippedRecord(sess.ID, now, skipReasonActiveTurn), nil
+	if skipReason != "" {
+		return skippedRecord(sess.ID, now, skipReason), nil
 	}
 	// model-scheduled-jobs-01PMSJ01 WP06: record this session's origin
 	// for the lifetime of the dispatch, so a filesystem-permission denial
@@ -344,7 +358,19 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	subCh, cancel := d.deps.Bus.Subscribe(64, "llm:stream-closed", topicAuthResumed)
 	defer cancel()
 
-	subID, sterr := d.deps.LLM.StartStream(ctx, profileID, sess.ID, rec.Model)
+	// Answer exactly THIS fire's prompt row, never "the newest user row":
+	// the conversation is shared with the user, and a message they send
+	// between the append above and this call would otherwise be the turn
+	// this run answers (and runs contained), with the scheduled prompt
+	// never answered. A view that cannot target a row is refused rather
+	// than risked.
+	var subID string
+	var sterr error
+	if ts, ok := d.deps.LLM.(llmview.MessageTargetedStreamer); ok {
+		subID, sterr = ts.StartStreamForMessage(ctx, profileID, sess.ID, rec.Model, promptMsg.ID)
+	} else {
+		sterr = errors.New("the LLM view cannot start a stream for a specific message, so a scheduled run could answer another turn in its conversation")
+	}
 	if sterr != nil {
 		// No stream started, so nothing can run under the containment.
 		if containment.Contained {
@@ -692,19 +718,23 @@ func (d *LiveChatRunDispatcher) discardNewEmptySession(ctx context.Context, chat
 
 // conversation resolves the session this fire runs in (sessions/0348):
 // the schedule's stored conversation when it still exists, else a new
-// "Scheduled: <name>" session whose id is stored on the schedule. skip is
-// true when the stored conversation has a turn executing (ActiveRuns) —
-// the fire must not run a second, concurrent turn there. A non-empty
-// failure is the history Error for a fire that cannot proceed.
-func (d *LiveChatRunDispatcher) conversation(ctx context.Context, rec scheduler.ChatRunRecord) (sess sessionsview.Session, created, skip bool, failure string) {
+// "Scheduled: <name>" session whose id is stored on the schedule. A
+// non-empty skipReason means the stored conversation is busy — a turn is
+// executing (ActiveRuns) or paused awaiting credentials (PausedTurns) —
+// and the fire must not start a second turn there. A non-empty failure is
+// the history Error for a fire that cannot proceed.
+func (d *LiveChatRunDispatcher) conversation(ctx context.Context, rec scheduler.ChatRunRecord) (sess sessionsview.Session, created bool, skipReason, failure string) {
 	if rec.SessionID != "" {
 		existing, err := d.deps.Sessions.Get(ctx, rec.SessionID)
 		switch {
 		case err == nil:
 			if d.deps.ActiveRuns != nil && d.deps.ActiveRuns.HasActiveRun(existing.ID) {
-				return existing, false, true, ""
+				return existing, false, skipReasonActiveTurn, ""
 			}
-			return existing, false, false, ""
+			if d.deps.PausedTurns != nil && d.deps.PausedTurns.HasPausedTurnIn(existing.ID) {
+				return existing, false, skipReasonPausedTurn, ""
+			}
+			return existing, false, "", ""
 		case errors.Is(err, session.ErrSessionNotFound):
 			// The user deleted the conversation: start a new one below.
 			logging.L().Info("scheduler.chat_dispatch.conversation_gone",
@@ -713,7 +743,7 @@ func (d *LiveChatRunDispatcher) conversation(ctx context.Context, rec scheduler.
 			// Cannot tell whether it still exists; creating a second
 			// conversation on a transient read error would split the
 			// schedule's history, so this fire fails instead.
-			return sessionsview.Session{}, false, false, fmt.Sprintf("look up the schedule's conversation: %v", err)
+			return sessionsview.Session{}, false, "", fmt.Sprintf("look up the schedule's conversation: %v", err)
 		}
 	}
 	name := rec.Name
@@ -722,7 +752,7 @@ func (d *LiveChatRunDispatcher) conversation(ctx context.Context, rec scheduler.
 	}
 	fresh, err := d.deps.Sessions.Create(ctx, "Scheduled: "+name)
 	if err != nil {
-		return sessionsview.Session{}, false, false, fmt.Sprintf("create session: %v", err)
+		return sessionsview.Session{}, false, "", fmt.Sprintf("create session: %v", err)
 	}
 	if serr := d.deps.Store.SetSessionID(ctx, rec.ID, fresh.ID); serr != nil {
 		// The run still proceeds in the new session; the next fire,
@@ -732,7 +762,7 @@ func (d *LiveChatRunDispatcher) conversation(ctx context.Context, rec scheduler.
 		logging.L().Warn("scheduler.chat_dispatch.store_conversation_failed",
 			"chat_run_id", rec.ID, "session_id", fresh.ID, "error", serr.Error())
 	}
-	return fresh, true, false, ""
+	return fresh, true, "", ""
 }
 
 // lastAssistantSnippet returns the newest non-empty assistant reply among

@@ -1819,6 +1819,26 @@ func (r *ChatRunner) HasActiveRun(sessionID string) bool {
 	return false
 }
 
+// HasPausedTurnIn reports whether a turn in sessionID is paused for key
+// rotation (pausedSubs). Such a sub is finished and out of r.subs, so
+// HasActiveRun is false, yet RedriveLastTurn can re-run it in the session
+// at any time. The scheduled-chat dispatcher treats it as the
+// conversation still being busy (sessions/0348): a fire must not start a
+// second turn there, nor end the paused turn's containment.
+func (r *ChatRunner) HasPausedTurnIn(sessionID string) bool {
+	if r == nil || sessionID == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, pt := range r.pausedSubs {
+		if pt.sessionID == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
 // HasPausedSubFor reports whether a paused turn exists for the given profileID.
 // When ok is true, token is the sub_id originally assigned to the paused turn.
 // Used by the LLM view's TestAndRotateKey to decide whether to mint an

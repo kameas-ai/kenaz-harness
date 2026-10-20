@@ -3998,15 +3998,20 @@ func New(c *core.Core, opts ...Option) *API {
 			// is the one place that knows. A nil runner (no LLM stack)
 			// leaves the interface nil, not a typed-nil pointer.
 			var activeRuns llm.ActiveRunChecker
+			var pausedTurns PausedTurnChecker
 			if a.chatRunner != nil {
 				activeRuns = a.chatRunner
+				pausedTurns = a.chatRunner
 			}
 			live := NewChatRunDispatcher(ChatRunDispatcherDeps{
 				Store:      chatStore,
 				Sessions:   a.sessionsAPI,
 				ActiveRuns: activeRuns,
-				LLM:        a.llmAPI,
-				Bus:        a.eventBus,
+				// A turn paused for key rotation can be redriven in the
+				// conversation at any time: a fire there is skipped too.
+				PausedTurns: pausedTurns,
+				LLM:         a.llmAPI,
+				Bus:         a.eventBus,
 				// Lazy, mirroring wfDeps.DefaultProfileFunc (line ~2046
 				// above): first personal-provider profile wins, re-read
 				// on every dispatch so a profile added after boot is

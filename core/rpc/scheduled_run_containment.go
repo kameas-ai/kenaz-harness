@@ -44,10 +44,13 @@ package rpc
 //
 // Generations (sessions/0348, one conversation per schedule): the same
 // session is contained once per fire, so each Contain returns a fresh
-// generation and Release only drops the entry while it still holds that
-// generation. A late release from an earlier run of the conversation (a
-// timed-out run's watcher seeing its stream end just as the next fire
-// re-arms) cannot end the newer run's containment.
+// generation and the session stays contained while ANY generation is
+// outstanding. Release(gen) retires only its own generation. So a later
+// fire's release cannot end an earlier run that is still able to run —
+// e.g. an auth-paused turn RedriveLastTurn can re-run hours later — and a
+// late release from an earlier run cannot end a newer one. While several
+// generations are outstanding a tool must be on EVERY one's allowlist
+// (the intersection — never wider than any contained turn's boundary).
 //
 // Safe for concurrent use.
 
@@ -72,14 +75,16 @@ const toolFamilyBlocked = "tool"
 type runContainment struct {
 	chatRunID string
 	allow     map[string]struct{}
-	gen       uint64
 }
+
+// sessionContainment is a session's outstanding generations.
+type sessionContainment map[uint64]runContainment
 
 // ScheduledRunContainmentRegistry maps a session id to the allowlist its
 // run is contained to.
 type ScheduledRunContainmentRegistry struct {
 	mu      sync.RWMutex
-	m       map[string]runContainment
+	m       map[string]sessionContainment
 	sink    corefs.BlockedRequestSink
 	lastGen uint64
 }
@@ -87,7 +92,7 @@ type ScheduledRunContainmentRegistry struct {
 // NewScheduledRunContainmentRegistry returns an empty registry recording
 // refused calls through sink (nil records nothing; the deny still holds).
 func NewScheduledRunContainmentRegistry(sink corefs.BlockedRequestSink) *ScheduledRunContainmentRegistry {
-	return &ScheduledRunContainmentRegistry{m: make(map[string]runContainment), sink: sink}
+	return &ScheduledRunContainmentRegistry{m: make(map[string]sessionContainment), sink: sink}
 }
 
 // Contain binds sessionID to allow (published tool names, e.g.
@@ -104,7 +109,10 @@ func (r *ScheduledRunContainmentRegistry) Contain(sessionID, chatRunID string, a
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lastGen++
-	r.m[sessionID] = runContainment{chatRunID: chatRunID, allow: set, gen: r.lastGen}
+	if r.m[sessionID] == nil {
+		r.m[sessionID] = sessionContainment{}
+	}
+	r.m[sessionID][r.lastGen] = runContainment{chatRunID: chatRunID, allow: set}
 	return r.lastGen
 }
 
@@ -118,17 +126,25 @@ func (r *ScheduledRunContainmentRegistry) Inherit(childSessionID, parentSessionI
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	c, ok := r.m[parentSessionID]
-	if !ok {
+	if !ok || len(c) == 0 {
 		return false
 	}
-	r.m[childSessionID] = c
+	child := r.m[childSessionID]
+	if child == nil {
+		child = sessionContainment{}
+		r.m[childSessionID] = child
+	}
+	for g, rc := range c {
+		child[g] = rc
+	}
 	return true
 }
 
-// Release drops sessionID's containment if it is still the binding gen
-// (Contain's return) and reports whether it did. Call only once that run
-// is known to be over (see the file doc's "Lifetime"). A stale gen — the
-// session has since been re-contained by a later run — is a no-op.
+// Release retires generation gen (Contain's return) of sessionID's
+// containment and reports whether it was outstanding. The session stays
+// contained while any other generation is outstanding. Call only once
+// that run is known to be over (see the file doc's "Lifetime"). An
+// unknown or already-retired gen is a no-op.
 func (r *ScheduledRunContainmentRegistry) Release(sessionID string, gen uint64) bool {
 	if r == nil || sessionID == "" {
 		return false
@@ -136,10 +152,16 @@ func (r *ScheduledRunContainmentRegistry) Release(sessionID string, gen uint64) 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	c, ok := r.m[sessionID]
-	if !ok || c.gen != gen {
+	if !ok {
 		return false
 	}
-	delete(r.m, sessionID)
+	if _, ok := c[gen]; !ok {
+		return false
+	}
+	delete(c, gen)
+	if len(c) == 0 {
+		delete(r.m, sessionID)
+	}
 	return true
 }
 
@@ -162,14 +184,25 @@ func (r *ScheduledRunContainmentRegistry) Check(ctx context.Context, sessionID, 
 	if r == nil || sessionID == "" {
 		return toolloop.Resolution{}, false
 	}
-	r.mu.RLock()
-	c, ok := r.m[sessionID]
-	r.mu.RUnlock()
-	if !ok {
-		return toolloop.Resolution{}, false
-	}
 	name := server + "__" + tool
-	if _, allowed := c.allow[name]; allowed {
+	r.mu.RLock()
+	sc, ok := r.m[sessionID]
+	// The tool must be on every outstanding generation's allowlist; c is
+	// the first (lowest-generation, for a deterministic record) that
+	// refuses it.
+	var c runContainment
+	denied := false
+	var lowest uint64
+	for g, rc := range sc {
+		if _, allowed := rc.allow[name]; allowed {
+			continue
+		}
+		if !denied || g < lowest {
+			c, lowest, denied = rc, g, true
+		}
+	}
+	r.mu.RUnlock()
+	if !ok || !denied {
 		return toolloop.Resolution{}, false
 	}
 	// kenaz__load_tools is outside every allowlist's reach: it only

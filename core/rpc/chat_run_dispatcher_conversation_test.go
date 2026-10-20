@@ -188,6 +188,7 @@ func (s *conversationStack) dispatcher(timeout time.Duration) *LiveChatRunDispat
 		Store:          s.store,
 		Sessions:       costingSessions{SessionsAPI: s.sessions, s: s},
 		ActiveRuns:     s.runner,
+		PausedTurns:    s.runner,
 		LLM:            s.llm,
 		Bus:            s.bus,
 		Origins:        s.origins,
@@ -543,19 +544,126 @@ func TestRunTurnRows_SelectsOnlyThisRunsTurn(t *testing.T) {
 	}
 }
 
-// A late release from an earlier run of the conversation cannot end the
-// next run's containment of the same session.
-func TestScheduledRunContainment_StaleGenerationDoesNotRelease(t *testing.T) {
+// Each run's generation is retired only by its own release, and the
+// session stays contained while any generation is outstanding — so a
+// later fire's release cannot end an earlier turn that can still run
+// (an auth-paused one), nor an earlier run's late release a newer one.
+// While two are outstanding a tool must be on both allowlists.
+func TestScheduledRunContainment_GenerationsAreIndependent(t *testing.T) {
+	ctx := context.Background()
 	reg := NewScheduledRunContainmentRegistry(nil)
-	g1 := reg.Contain("s", "cr", []string{"kenaz__alpha"})
+	g1 := reg.Contain("s", "cr", []string{"kenaz__alpha", "kenaz__beta"})
 	g2 := reg.Contain("s", "cr", []string{"kenaz__alpha"})
 	if g1 == g2 {
 		t.Fatal("two Contain calls returned the same generation")
 	}
-	if reg.Release("s", g1) || !reg.Contained("s") {
-		t.Fatal("the earlier run's release ended the later run's containment")
+	if _, denied := reg.Check(ctx, "s", "kenaz", "beta"); !denied {
+		t.Fatal("beta allowed while a generation that does not list it is outstanding")
 	}
-	if !reg.Release("s", g2) || reg.Contained("s") {
-		t.Fatal("the current run's release did not release")
+	if _, denied := reg.Check(ctx, "s", "kenaz", "alpha"); denied {
+		t.Fatal("alpha denied though every outstanding generation lists it")
+	}
+	if !reg.Release("s", g2) || !reg.Contained("s") {
+		t.Fatal("the later run's release ended the earlier run's containment")
+	}
+	if reg.Release("s", g2) {
+		t.Fatal("a retired generation released twice")
+	}
+	if !reg.Release("s", g1) || reg.Contained("s") {
+		t.Fatal("retiring the last generation did not release the session")
+	}
+}
+
+// interleavingSessions appends a user message to the conversation right
+// after the dispatcher appends its prompt — the user typing into the
+// shared conversation between the scheduled append and its stream start.
+type interleavingSessions struct {
+	sessionsview.SessionsAPI
+	prompt, inject string
+	injected       *sessionsview.Message
+}
+
+func (s *interleavingSessions) AppendMessage(ctx context.Context, id, role, content string) (sessionsview.Message, error) {
+	m, err := s.SessionsAPI.AppendMessage(ctx, id, role, content)
+	if err == nil && role == "user" && content == s.prompt && s.injected == nil {
+		u, uerr := s.SessionsAPI.AppendMessage(ctx, id, "user", s.inject)
+		if uerr != nil {
+			return m, uerr
+		}
+		s.injected = &u
+	}
+	return m, err
+}
+
+// The scheduled stream answers exactly its own prompt even when a user
+// message lands between the prompt's append and the stream start.
+// Fail-on-revert: start the stream with plain StartStream (newest user
+// row) -> the run answers the user's message, its own prompt has no
+// reply and the snippet is empty.
+func TestScheduledConversation_StreamAnswersItsOwnPromptDespiteInterleavedUserMessage(t *testing.T) {
+	s := buildConversationStack(t)
+	seedChatRunRow(t, s.store, "cr-race", "scheduled prompt")
+	ctx := context.Background()
+	is := &interleavingSessions{SessionsAPI: s.sessions, prompt: "scheduled prompt", inject: "user typed this meanwhile"}
+	d := NewChatRunDispatcher(ChatRunDispatcherDeps{
+		Store: s.store, Sessions: is, ActiveRuns: s.runner, PausedTurns: s.runner, LLM: s.llm, Bus: s.bus,
+		DefaultProfile: func() string { return "test-profile" },
+		Timeout:        5 * time.Second,
+	})
+	rec, err := d.DispatchChatRun(ctx, chatRunJob("cr-race"), time.Now().UTC())
+	if err != nil || rec.Status != "completed" {
+		t.Fatalf("fire = %+v (err %v), want completed", rec, err)
+	}
+	if is.injected == nil {
+		t.Fatal("the interleaved user message was never appended")
+	}
+	msgs, err := s.sessions.ListMessages(ctx, rec.SessionID)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	var promptID string
+	for _, m := range msgs {
+		if m.Role == "user" && m.Content == "scheduled prompt" {
+			promptID = m.ID
+		}
+	}
+	answered, answeredInjected := false, false
+	for _, m := range msgs {
+		if m.Role == "assistant" && m.TurnSpanID == promptID {
+			answered = true
+		}
+		if m.Role == "assistant" && m.TurnSpanID == is.injected.ID {
+			answeredInjected = true
+		}
+	}
+	if !answered || answeredInjected {
+		t.Fatalf("scheduled prompt answered=%v, user's message answered by the scheduled run=%v; want true/false", answered, answeredInjected)
+	}
+	if rec.OutputSnippet == "" {
+		t.Fatal("the run's record has no reply — it did not answer its own prompt")
+	}
+}
+
+// StartStreamForMessage refuses a message that is not a user row of the
+// session rather than falling back to the newest user row.
+func TestStartStreamForMessage_RefusesUnknownTarget(t *testing.T) {
+	s := buildConversationStack(t)
+	ctx := context.Background()
+	sess, err := s.sessions.Create(ctx, "x")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.sessions.AppendMessage(ctx, sess.ID, "user", "hello"); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	ts, ok := s.llm.(llmview.MessageTargetedStreamer)
+	if !ok {
+		t.Fatal("the production LLM view does not implement MessageTargetedStreamer")
+	}
+	if _, err := ts.StartStreamForMessage(ctx, "test-profile", sess.ID, "", "no-such-message"); err != llmview.ErrTargetMessageNotFound {
+		t.Fatalf("StartStreamForMessage(unknown) = %v, want ErrTargetMessageNotFound", err)
+	}
+	if s.model.callCount() != 0 {
+		t.Fatal("a refused targeted start still ran the model")
 	}
 }
