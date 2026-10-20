@@ -234,9 +234,9 @@ func TestLogSafeEndpoint_MasksUserinfo(t *testing.T) {
 		"https://host/v1?#frag" + key:      "https://host/v1",
 		"http://[::1:8081/v1":              "<unparseable>",
 	} {
-		got := logSafeEndpoint(in)
+		got := corellm.LogSafeEndpoint(in)
 		if got != want {
-			t.Errorf("logSafeEndpoint(%q) = %q, want %q", in, got, want)
+			t.Errorf("corellm.LogSafeEndpoint(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

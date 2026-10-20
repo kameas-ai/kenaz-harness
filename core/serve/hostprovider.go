@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log/slog"
 	"net"
-	"net/url"
 	"strconv"
 	"syscall"
 	"time"
@@ -96,7 +95,7 @@ func HostProviders(get envprovider.Getenv, log *slog.Logger) []corellm.ProviderP
 			"model", res.Model,
 			"cred_env", res.CredEnv,
 			"explicit", res.Explicit,
-			"endpoint", logSafeEndpoint(res.BaseURL),
+			"endpoint", corellm.LogSafeEndpoint(res.BaseURL),
 			"auth_scheme", res.AuthScheme,
 		)
 	}
@@ -143,14 +142,14 @@ func ProbeHostProviders(ctx context.Context, resolver *credref.Resolver, profile
 		if err != nil {
 			if log != nil {
 				log.Warn("harness.serve.host_provider.probe_skipped",
-					"profile_id", p.ID, "endpoint", logSafeEndpoint(p.Endpoint), "reason", "credential_unresolved")
+					"profile_id", p.ID, "endpoint", corellm.LogSafeEndpoint(p.Endpoint), "reason", "credential_unresolved")
 			}
 			continue
 		}
 		if res.Err != nil {
 			if log != nil {
 				log.Warn("harness.serve.host_provider.probe_failed",
-					"profile_id", p.ID, "endpoint", logSafeEndpoint(p.Endpoint), "reason", probeFailureReason(res.Err))
+					"profile_id", p.ID, "endpoint", corellm.LogSafeEndpoint(p.Endpoint), "reason", probeFailureReason(res.Err))
 			}
 			continue
 		}
@@ -163,7 +162,7 @@ func ProbeHostProviders(ctx context.Context, resolver *credref.Resolver, profile
 		if log != nil {
 			log.Info("harness.serve.host_provider.probed",
 				"profile_id", p.ID,
-				"endpoint", logSafeEndpoint(p.Endpoint),
+				"endpoint", corellm.LogSafeEndpoint(p.Endpoint),
 				"streaming", string(res.Matrix.Streaming),
 				"tool_calling", string(res.Matrix.ToolCalling),
 				"streaming_usage", string(res.Matrix.StreamingUsage),
@@ -182,29 +181,6 @@ func applyHint(h map[corellm.Capability]bool, c corellm.Capability, v custom.Cap
 	case custom.CapabilityValueFalse:
 		h[c] = false
 	}
-}
-
-// logSafeEndpoint renders a granted base URL for a log line as scheme,
-// host and path only. An operator can paste http://user:key@host/v1,
-// https://<token>@host/v1 or https://host/v1?api_key=K into
-// KENAZ_HARNESS_BASE_URL; the boot log must not become a second home for
-// that key. Userinfo (password OR bare username) is masked, and the query
-// and fragment are dropped entirely. An unparseable value is logged as a
-// fixed placeholder rather than verbatim, for the same reason. Every log
-// line in this file that mentions the endpoint goes through here.
-func logSafeEndpoint(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "<unparseable>"
-	}
-	if u.User != nil {
-		u.User = url.User("xxxxx")
-	}
-	u.RawQuery = ""
-	u.ForceQuery = false
-	u.Fragment = ""
-	u.RawFragment = ""
-	return u.String()
 }
 
 // probeFailureReason maps a probe failure to a fixed vocabulary for the

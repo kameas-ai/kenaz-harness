@@ -128,19 +128,19 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	url := modelsURL(a.endpoint)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: build models request: %w", err)
+		return nil, fmt.Errorf("anthropic: build models request: %w", llm.RedactURLError(err))
 	}
 	req.Header.Set("x-api-key", string(cred))
 	req.Header.Set("anthropic-version", a.apiVersion)
 	req.Header.Set("accept", "application/json")
 	resp, err := a.httpc.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: list models: %w", err)
+		return nil, fmt.Errorf("anthropic: list models: %w", llm.RedactURLError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("anthropic: list models: HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("anthropic: list models: HTTP %d: %s", resp.StatusCode, llm.ProviderErrorMessage(body, llm.RequestSecrets(url, cred)...))
 	}
 	var doc modelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
@@ -362,7 +362,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		// resends; the call itself does not fail over it.
 		next, retry := a.cacheGuard.Rejected(Kind, prof.ID, prof.Model, req, level, resp.StatusCode, bodySnippet)
 		if !retry {
-			return nil, classifyStatus(resp.StatusCode, bodySnippet)
+			return nil, classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(endpoint, cred)...)
 		}
 		level = next
 		if body, err = buildRequestBodyAt(req, prof, level); err != nil {
@@ -412,7 +412,7 @@ func (a *Adapter) post(ctx context.Context, endpoint, apiVersion string, cred, b
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		cancel()
-		return nil, nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		return nil, nil, &llm.ErrInvalidRequest{Status: 0, Message: llm.RedactURLError(err).Error()}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -427,7 +427,7 @@ func (a *Adapter) post(ctx context.Context, endpoint, apiVersion string, cred, b
 		cancel()
 		// Network failures are transient; the retry middleware decides
 		// whether to retry within its budget.
-		return nil, nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+		return nil, nil, llm.NewTransportError("", err)
 	}
 	return resp, cancel, nil
 }
@@ -436,8 +436,8 @@ func (a *Adapter) post(ctx context.Context, endpoint, apiVersion string, cred, b
 // llm.ClassifyStatus (WP01 of provider-implementation-uniformity-01KQ8V4F).
 // Kept as a thin package-local alias so call sites don't need updating;
 // removed entirely in WP10.
-func classifyStatus(status int, body []byte) error {
-	return llm.ClassifyStatus(status, body)
+func classifyStatus(status int, body []byte, secrets ...string) error {
+	return llm.ClassifyStatus(status, body, secrets...)
 }
 
 // buildRequestBody constructs the JSON body for the Messages API.

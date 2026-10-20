@@ -3,7 +3,6 @@ package gemini
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
@@ -26,8 +25,8 @@ type geminiErrorEnvelope struct {
 //   - 408 / 425 → ErrTransient (timeout / too early)
 //   - 5xx → ErrTransient (server errors)
 //   - other 4xx → ErrInvalidRequest
-func classifyStatus(status int, body []byte) error {
-	msg := extractGeminiError(body)
+func classifyStatus(status int, body []byte, secrets ...string) error {
+	msg := llm.ScrubSecrets(extractGeminiError(body), secrets...)
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
@@ -63,9 +62,6 @@ func extractGeminiError(body []byte) string {
 			return env.Error.Message
 		}
 	}
-	s := strings.TrimSpace(string(body))
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
+	// Unknown shape: the shared bounded excerpt (HTML stripped, capped).
+	return llm.ExtractProviderMessage(body)
 }

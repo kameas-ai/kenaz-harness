@@ -98,7 +98,7 @@ func (a *Adapter) streamWithBearer(ctx context.Context, req llm.GenerationReques
 	)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("bedrock: build request: %w", err)
+		return nil, fmt.Errorf("bedrock: build request: %w", llm.RedactURLError(err))
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -106,7 +106,7 @@ func (a *Adapter) streamWithBearer(ctx context.Context, req llm.GenerationReques
 
 	resp, err := a.bearerClient().Do(httpReq)
 	if err != nil {
-		return nil, &llm.ErrTransient{Message: "bedrock: " + err.Error(), Cause: err}
+		return nil, llm.NewTransportError("bedrock: ", err)
 	}
 	if resp.StatusCode/100 != 2 {
 		defer resp.Body.Close()
@@ -125,7 +125,7 @@ func (a *Adapter) streamWithBearer(ctx context.Context, req llm.GenerationReques
 			bytes.Contains(errBody, []byte("doesn't support tool use in streaming mode")) {
 			return a.converseNonStreamingFallback(ctx, req, prof, apiKey, bodyBytes)
 		}
-		return nil, classifyBedrockHTTPStatus(resp.StatusCode, string(errBody))
+		return nil, classifyBedrockHTTPStatus(resp.StatusCode, errBody, apiKey)
 	}
 
 	stream := &bearerStream{
@@ -154,7 +154,7 @@ func (a *Adapter) converseNonStreamingFallback(ctx context.Context, req llm.Gene
 	)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("bedrock: build non-streaming request: %w", err)
+		return nil, fmt.Errorf("bedrock: build non-streaming request: %w", llm.RedactURLError(err))
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -162,12 +162,12 @@ func (a *Adapter) converseNonStreamingFallback(ctx context.Context, req llm.Gene
 
 	resp, err := a.bearerClient().Do(httpReq)
 	if err != nil {
-		return nil, &llm.ErrTransient{Message: "bedrock: " + err.Error(), Cause: err}
+		return nil, llm.NewTransportError("bedrock: ", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024))
 	if resp.StatusCode/100 != 2 {
-		return nil, classifyBedrockHTTPStatus(resp.StatusCode, string(body))
+		return nil, classifyBedrockHTTPStatus(resp.StatusCode, body, apiKey)
 	}
 
 	final, finishReason, err := parseConverseNonStreamingResponse(body)
@@ -526,13 +526,13 @@ func (a *Adapter) bearerListInferenceProfiles(ctx context.Context, apiKey string
 	url := fmt.Sprintf("https://bedrock.%s.amazonaws.com/inference-profiles", a.listModelsRegion)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, llm.RedactURLError(err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Accept", "application/json")
 	resp, err := a.bearerClient().Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, llm.RedactURLError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -568,18 +568,18 @@ func (a *Adapter) bearerListFoundationModels(ctx context.Context, apiKey string)
 	url := fmt.Sprintf("https://bedrock.%s.amazonaws.com/foundation-models", a.listModelsRegion)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, llm.RedactURLError(err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Accept", "application/json")
 	resp, err := a.bearerClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("bedrock: list models: %w", err)
+		return nil, fmt.Errorf("bedrock: list models: %w", llm.RedactURLError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, classifyBedrockHTTPStatus(resp.StatusCode, string(body))
+		return nil, classifyBedrockHTTPStatus(resp.StatusCode, body, apiKey)
 	}
 	var doc struct {
 		ModelSummaries []struct {
@@ -639,7 +639,10 @@ func containsText(modalities []string) bool {
 
 // classifyBedrockHTTPStatus maps a non-2xx HTTP response to the
 // harness's typed error taxonomy.
-func classifyBedrockHTTPStatus(code int, body string) error {
+func classifyBedrockHTTPStatus(code int, rawBody []byte, apiKey string) error {
+	// Scrubbed + bounded (llm.ProviderErrorMessage): the message reaches
+	// emitter.Error → persisted events.
+	body := llm.ProviderErrorMessage(rawBody, apiKey)
 	switch {
 	case code == 401 || code == 403:
 		return &llm.ErrAuth{Status: code, Message: body}

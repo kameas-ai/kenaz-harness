@@ -297,7 +297,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		return nil, &llm.ErrInvalidRequest{Status: 0, Message: llm.RedactURLError(err).Error()}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -313,14 +313,14 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		// Network failures are transient by default — connection
 		// reset, DNS hiccup, dialer timeout. The retry middleware
 		// decides whether to retry given the configured budget.
-		return nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+		return nil, llm.NewTransportError("", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		return nil, classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(endpoint, cred)...)
 	}
 
 	s := &chatStream{
@@ -337,8 +337,8 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 // classifyStatus delegates to the canonical top-level
 // llm.ClassifyStatus (WP01 of provider-implementation-uniformity-01KQ8V4F).
 // Kept as a thin package-local alias; removed entirely in WP10.
-func classifyStatus(status int, body []byte) error {
-	return llm.ClassifyStatus(status, body)
+func classifyStatus(status int, body []byte, secrets ...string) error {
+	return llm.ClassifyStatus(status, body, secrets...)
 }
 
 // useOpenAIWire reports whether the openaiwire body builder is active.
@@ -872,18 +872,18 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	url := modelsURL(a.endpoint)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("openai: build models request: %w", err)
+		return nil, fmt.Errorf("openai: build models request: %w", llm.RedactURLError(err))
 	}
 	req.Header.Set("Authorization", "Bearer "+string(cred))
 	req.Header.Set("Accept", "application/json")
 	resp, err := a.httpc.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai: list models: %w", err)
+		return nil, fmt.Errorf("openai: list models: %w", llm.RedactURLError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, classifyStatus(resp.StatusCode, body)
+		return nil, classifyStatus(resp.StatusCode, body, llm.RequestSecrets(url, cred)...)
 	}
 	var doc modelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {

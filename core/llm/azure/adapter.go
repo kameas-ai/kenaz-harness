@@ -190,7 +190,7 @@ func (a *Adapter) Stream(
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+		return nil, &llm.ErrInvalidRequest{Status: 0, Message: llm.RedactURLError(err).Error()}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -200,14 +200,14 @@ func (a *Adapter) Stream(
 	resp, err := a.httpc.Do(httpReq)
 	if err != nil {
 		cancel()
-		return nil, &llm.ErrTransient{Status: 0, Message: "azure-openai: " + err.Error(), Cause: err}
+		return nil, llm.NewTransportError("azure-openai: ", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		return nil, classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(endpoint, cred)...)
 	}
 
 	s := &azureChatStream{
@@ -277,14 +277,14 @@ func (a *Adapter) TestKey(ctx context.Context, host string, cred []byte) (TestKe
 
 	req, err := http.NewRequestWithContext(tCtx, http.MethodGet, modURL, nil)
 	if err != nil {
-		return TestKeyResult{}, &llm.ErrInvalidRequest{Status: 0, Message: "azure-openai: build models request: " + err.Error()}
+		return TestKeyResult{}, &llm.ErrInvalidRequest{Status: 0, Message: "azure-openai: build models request: " + llm.RedactURLError(err).Error()}
 	}
 	req.Header.Set("Accept", "application/json")
 	setAPIKeyHeader(req, cred)
 
 	resp, err := a.httpc.Do(req)
 	if err != nil {
-		return TestKeyResult{}, &llm.ErrTransient{Status: 0, Message: "azure-openai: " + err.Error(), Cause: err}
+		return TestKeyResult{}, llm.NewTransportError("azure-openai: ", err)
 	}
 	defer resp.Body.Close()
 
@@ -297,7 +297,7 @@ func (a *Adapter) TestKey(ctx context.Context, host string, cred []byte) (TestKe
 	}
 
 	bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	err = classifyStatus(resp.StatusCode, bodySnippet)
+	err = classifyStatus(resp.StatusCode, bodySnippet, llm.RequestSecrets(modURL, cred)...)
 	return TestKeyResult{OK: false, DeprecationWarning: deprecation}, err
 }
 
@@ -320,8 +320,8 @@ func countModelsInResponse(body []byte) int {
 
 // classifyStatus maps an HTTP error response to the connector taxonomy.
 // Identical classification logic as the openai adapter.
-func classifyStatus(status int, body []byte) error {
-	msg := extractErrorMessage(body)
+func classifyStatus(status int, body []byte, secrets ...string) error {
+	msg := llm.ScrubSecrets(extractErrorMessage(body), secrets...)
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
@@ -364,11 +364,8 @@ func extractErrorMessage(body []byte) string {
 		}
 		return env.Error.Message
 	}
-	s := strings.TrimSpace(string(body))
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
+	// Unknown shape: the shared bounded excerpt (HTML stripped, capped).
+	return llm.ExtractProviderMessage(body)
 }
 
 // buildRequestBody constructs the JSON body for the Azure Chat Completions

@@ -623,5 +623,5 @@ type ErrCustomEndpointMissingCapability struct {
 
 func (e *ErrCustomEndpointMissingCapability) Error() string {
 	return fmt.Sprintf("llm: custom endpoint %q does not support %q (probed capability matrix)",
-		e.Endpoint, e.Capability)
+		LogSafeEndpoint(e.Endpoint), e.Capability)
 }
