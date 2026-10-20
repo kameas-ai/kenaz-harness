@@ -459,8 +459,8 @@ func (a *API) preSeedToolSnippets(ctx context.Context, recipe recipes.Recipe) {
 			continue
 		}
 		body := fmt.Sprintf(
-			"permit(principal, action == Action::\"use_tool\", resource == Tool::\"%s__%s\");",
-			recipe.ID, tool.Name,
+			"permit(principal, action == Action::\"use_tool\", resource == Tool::%s);",
+			cedar.QuoteString(recipe.ID+"__"+tool.Name),
 		)
 		if err := a.cfg.CedarPolicy.WritePolicySnippet(ctx, filename, body); err != nil {
 			slog.Warn("tools: pre-seed snippet write failed; continuing",
@@ -1041,8 +1041,8 @@ func (a *API) writeAllowAlwaysSnippet(ctx context.Context, canonical string) {
 	sanitized := sanitizePathForSnippet(canonical)
 	filename := "fs_allow_recipe_dir_" + sanitized + ".cedar"
 	body := fmt.Sprintf(
-		"permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::\"%s\"\n);\n",
-		canonical,
+		"permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::%s\n);\n",
+		cedar.QuoteString(canonical),
 	)
 	if err := a.cfg.CedarPolicy.WritePolicySnippet(ctx, filename, body); err != nil {
 		slog.Warn("tools.fsrequest.snippet_write_err",

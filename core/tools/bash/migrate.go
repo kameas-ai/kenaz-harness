@@ -29,6 +29,8 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // historicalDefaultAllowlist is a snapshot of the DefaultAllowlist slice
@@ -116,8 +118,8 @@ func MigrateBashAllowlist(ctx context.Context, snippets SnippetWriter, store Mig
 	for _, pattern := range historicalDefaultAllowlist {
 		name := sanitizeName(pattern)
 		body := fmt.Sprintf(
-			"permit(principal, action == Action::\"run_bash_command\", resource == BashCommand::\"%s\");\n",
-			pattern,
+			"permit(principal, action == Action::\"run_bash_command\", resource == BashCommand::%s);\n",
+			cedar.QuoteString(pattern),
 		)
 		if err := snippets.WritePolicySnippet(ctx, name, body); err != nil {
 			return fmt.Errorf("bash.migrate: write snippet for %q: %w", pattern, err)

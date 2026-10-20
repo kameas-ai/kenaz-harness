@@ -303,16 +303,15 @@ func buildExactSnippet(op Op, canonical string) string {
 	if op == OpWrite {
 		action = "write_filesystem"
 	}
-	escaped := strings.ReplaceAll(canonical, `"`, `\"`)
 	return fmt.Sprintf(
 		"permit (\n"+
 			"    principal == User::\"local\",\n"+
 			"    action == Action::\"%s\",\n"+
 			"    resource is FilesystemOp\n"+
 			") when {\n"+
-			"    context.canonical_path == \"%s\"\n"+
+			"    context.canonical_path == %s\n"+
 			"};\n",
-		action, escaped,
+		action, cedar.QuoteString(canonical),
 	)
 }
 
@@ -325,18 +324,20 @@ func buildDirectorySnippet(op Op, dir string) string {
 	if op == OpWrite {
 		action = "write_filesystem"
 	}
-	escaped := strings.ReplaceAll(dir, `"`, `\"`)
-	// Ensure the dir pattern ends with / before the wildcard.
-	prefix := strings.TrimSuffix(escaped, "/") + "/"
+	// Ensure the dir pattern ends with / before the wildcard. The
+	// prefix is escaped as a Cedar pattern literal: quote, backslash
+	// and control characters as in QuoteString, plus a literal `*` in
+	// the directory name, which would otherwise widen the grant.
+	prefix := strings.TrimSuffix(dir, "/") + "/"
 	return fmt.Sprintf(
 		"permit (\n"+
 			"    principal == User::\"local\",\n"+
 			"    action == Action::\"%s\",\n"+
 			"    resource is FilesystemOp\n"+
 			") when {\n"+
-			"    context.canonical_path like \"%s*\"\n"+
+			"    context.canonical_path like %s\n"+
 			"};\n",
-		action, prefix,
+		action, cedar.QuoteLikePrefix(prefix),
 	)
 }
 

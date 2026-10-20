@@ -494,6 +494,12 @@ func WriteMCPSpawnSnippet(ctx context.Context, dataDir string, engine *Engine, r
 	if dataDir == "" || engine == nil {
 		return nil
 	}
+	// CredentialUID swaps a malformed provider for "invalid", so a grant
+	// on such a recipe id could never match its own request — and one on
+	// "invalid" would match every malformed id. Refuse rather than write.
+	if !PersistableFamilyID(recipeID) {
+		return fmt.Errorf("cedar: recipe id %q cannot be persisted as an mcp_spawn grant", recipeID)
+	}
 	sanitized := sanitizeMCPIDForFilename(recipeID)
 	dir := filepath.Join(dataDir, PolicyDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -506,7 +512,7 @@ func WriteMCPSpawnSnippet(ctx context.Context, dataDir string, engine *Engine, r
 	body := "permit(\n" +
 		"  principal,\n" +
 		"  action == Action::\"use_credential\",\n" +
-		"  resource == Credential::\"" + recipeID + "::mcp_spawn\"\n" +
+		"  resource == " + EntityTypeCredential + "::" + QuoteString(recipeID+"::mcp_spawn") + "\n" +
 		");\n"
 	if err := os.WriteFile(filename, []byte(body), 0o644); err != nil {
 		return err

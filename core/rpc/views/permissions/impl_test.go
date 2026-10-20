@@ -739,6 +739,13 @@ func TestExtractFilesystemOpPath(t *testing.T) {
 			want: "/Users/alice/docs",
 		},
 		{
+			// The writer escapes with cedar.QuoteString; the reader must
+			// decode, not cut at the first quote.
+			name: "escaped_quote_and_backslash",
+			body: "permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::" + cedar.QuoteString(`/tmp/a"b\c`) + "\n);\n",
+			want: `/tmp/a"b\c`,
+		},
+		{
 			name: "no_marker",
 			body: `permit(principal, action, resource);`,
 			want: "",

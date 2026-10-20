@@ -377,17 +377,11 @@ func (a *API) trimFSGrantFromRecipeConfig(ctx context.Context, grantFilename str
 //
 //	resource == FilesystemOp::"<path>"
 //
-// Returns the empty string if the marker is not found.
+// The body is parsed as Cedar (not string-searched) so a path the writer
+// escaped — one containing a quote or backslash — decodes exactly.
+// Returns the empty string if the body does not parse or has no such
+// scope.
 func extractFilesystemOpPath(body string) string {
-	const marker = `FilesystemOp::"`
-	idx := strings.Index(body, marker)
-	if idx < 0 {
-		return ""
-	}
-	rest := body[idx+len(marker):]
-	end := strings.Index(rest, `"`)
-	if end < 0 {
-		return ""
-	}
-	return rest[:end]
+	id, _ := cedar.ResourceScopeID([]byte(body), cedar.EntityTypeFilesystemOp)
+	return id
 }
