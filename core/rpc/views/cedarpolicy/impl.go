@@ -142,6 +142,14 @@ func (a *API) WritePolicySnippet(ctx context.Context, name string, body string) 
 	if err := validateSnippetFilename(name); err != nil {
 		return err
 	}
+	// Every caller writes a generated single-policy grant (bash migrate,
+	// MCP pre-seed, recipe-dir and blocked-request grants). Refuse a body
+	// the engine could not load — or one carrying a second, smuggled
+	// policy — before it can reach the policy directory and make the
+	// engine fail closed.
+	if err := cedar.ValidateGeneratedSnippet([]byte(body)); err != nil {
+		return err
+	}
 	dir, err := a.policyDir()
 	if err != nil {
 		return err

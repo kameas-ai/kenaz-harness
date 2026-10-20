@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -452,6 +453,15 @@ func (a *API) preSeedToolSnippets(ctx context.Context, recipe recipes.Recipe) {
 		}
 		// Build snippet filename: sanitize "<recipeID>__<toolName>".
 		raw := recipe.ID + "__" + tool.Name
+		if !cedar.SafeLiteralText(raw) {
+			// A server-advertised name the Cedar parser cannot read back
+			// (invalid UTF-8 / U+FFFD) would make the policy directory
+			// fail to load. Skip this tool's grant only — it falls back
+			// to prompting — and keep pre-seeding the rest.
+			slog.Warn("tools: pre-seed skipped; tool name cannot be carried in a Cedar literal",
+				"recipe", recipe.ID, "tool", strconv.Quote(tool.Name))
+			continue
+		}
 		filename := sanitizeSnippetID(raw)
 		if !snippetNameRE.MatchString(filename) {
 			slog.Warn("tools: pre-seed snippet filename invalid after sanitisation; skipping",
@@ -459,8 +469,8 @@ func (a *API) preSeedToolSnippets(ctx context.Context, recipe recipes.Recipe) {
 			continue
 		}
 		body := fmt.Sprintf(
-			"permit(principal, action == Action::\"use_tool\", resource == Tool::\"%s__%s\");",
-			recipe.ID, tool.Name,
+			"permit(principal, action == Action::\"use_tool\", resource == Tool::%s);",
+			cedar.QuoteString(recipe.ID+"__"+tool.Name),
 		)
 		if err := a.cfg.CedarPolicy.WritePolicySnippet(ctx, filename, body); err != nil {
 			slog.Warn("tools: pre-seed snippet write failed; continuing",
@@ -1038,11 +1048,17 @@ func (a *API) writeAllowAlwaysSnippet(ctx context.Context, canonical string) {
 			"path", canonical)
 		return
 	}
+	if !cedar.PersistableFamilyID(canonical) {
+		slog.Warn("tools.fsrequest.snippet_refused",
+			"reason", "path cannot be persisted in a Cedar literal",
+			"path", strconv.Quote(canonical))
+		return
+	}
 	sanitized := sanitizePathForSnippet(canonical)
 	filename := "fs_allow_recipe_dir_" + sanitized + ".cedar"
 	body := fmt.Sprintf(
-		"permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::\"%s\"\n);\n",
-		canonical,
+		"permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::%s\n);\n",
+		cedar.QuoteString(canonical),
 	)
 	if err := a.cfg.CedarPolicy.WritePolicySnippet(ctx, filename, body); err != nil {
 		slog.Warn("tools.fsrequest.snippet_write_err",

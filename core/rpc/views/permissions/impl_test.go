@@ -403,6 +403,49 @@ func TestRevokeGrant_TrimsRecipeConfig_RecipeDirAddSnippet(t *testing.T) {
 	}
 }
 
+// TestRevokeGrant_TrimsRecipeConfig_LegacyUnescapedWindowsPath: a grant
+// written before the writers escaped carries a raw `C:\Users\...` path,
+// which does not parse as Cedar. Revoking it must still trim the recipe
+// config, or the filesystem MCP server keeps the access just revoked.
+func TestRevokeGrant_TrimsRecipeConfig_LegacyUnescapedWindowsPath(t *testing.T) {
+	t.Parallel()
+	api, _, dir, _ := newAPIForTest(t)
+
+	const canonical = `C:\Users\alice\docs`
+	grantID := writeFSRecipeDirPolicy(t, dir, "c_users_alice_docs", canonical) // raw, legacy shape
+	spy := &spyTrimmer{}
+	api.SetConfigTrimmer(spy)
+
+	if err := api.RevokeGrant(context.Background(), grantID); err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+	if len(spy.calls) != 1 || spy.calls[0].path != canonical {
+		t.Fatalf("TrimAllowedDir calls = %+v, want one call with %q", spy.calls, canonical)
+	}
+}
+
+// TestRevokeGrant_TrimsRecipeConfig_EscapedPath: the current writer
+// escapes; the decoded path, not the escaped text, reaches the trimmer.
+func TestRevokeGrant_TrimsRecipeConfig_EscapedPath(t *testing.T) {
+	t.Parallel()
+	api, _, dir, _ := newAPIForTest(t)
+
+	const canonical = `C:\Users\a"b\docs`
+	name := "fs_allow_recipe_dir_c_users_a_b_docs.cedar"
+	body := "permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::" + cedar.QuoteString(canonical) + "\n);\n"
+	if err := os.WriteFile(filepath.Join(dir, cedar.PolicyDir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spy := &spyTrimmer{}
+	api.SetConfigTrimmer(spy)
+	if err := api.RevokeGrant(context.Background(), name); err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+	if len(spy.calls) != 1 || spy.calls[0].path != canonical {
+		t.Fatalf("TrimAllowedDir calls = %+v, want one call with %q", spy.calls, canonical)
+	}
+}
+
 // TestRevokeGrant_NoTrim_NonRecipeDirSnippet verifies that revoking a
 // "fs_allow_" grant whose name does NOT start with "fs_allow_recipe_dir_"
 // does not invoke TrimAllowedDir (it's a plain read/write/etc. grant, not
@@ -737,6 +780,22 @@ func TestExtractFilesystemOpPath(t *testing.T) {
 			name: "well_formed",
 			body: "permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::\"/Users/alice/docs\"\n);\n",
 			want: "/Users/alice/docs",
+		},
+		{
+			// The writer escapes with cedar.QuoteString; the reader must
+			// decode, not cut at the first quote.
+			name: "escaped_quote_and_backslash",
+			body: "permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::" + cedar.QuoteString(`/tmp/a"b\c`) + "\n);\n",
+			want: `/tmp/a"b\c`,
+		},
+		{
+			// Pre-escaping writers put a raw Windows path in the literal.
+			// That body does not parse ("\U" is not a Cedar escape), so
+			// the extractor must fall back to the marker search, or a
+			// revoke would skip TrimAllowedDir.
+			name: "legacy_unescaped_windows_path",
+			body: "permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::\"C:\\Users\\alice\\docs\"\n);\n",
+			want: `C:\Users\alice\docs`,
 		},
 		{
 			name: "no_marker",

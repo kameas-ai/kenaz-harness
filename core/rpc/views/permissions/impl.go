@@ -377,8 +377,18 @@ func (a *API) trimFSGrantFromRecipeConfig(ctx context.Context, grantFilename str
 //
 //	resource == FilesystemOp::"<path>"
 //
-// Returns the empty string if the marker is not found.
+// The body is parsed as Cedar first, so a path the writer escaped — one
+// containing a quote or backslash — decodes exactly. A body that does
+// not parse falls back to the legacy marker search: grants written
+// before the writers escaped (a raw Windows `C:\Users\...` path, for
+// one) never parse, and returning "" for them would let Revoke delete
+// the .cedar while skipping TrimAllowedDir — the MCP filesystem server
+// would keep the access the user just revoked.
+// Returns the empty string if neither finds the scope.
 func extractFilesystemOpPath(body string) string {
+	if id, ok := cedar.ResourceScopeID([]byte(body), cedar.EntityTypeFilesystemOp); ok {
+		return id
+	}
 	const marker = `FilesystemOp::"`
 	idx := strings.Index(body, marker)
 	if idx < 0 {
