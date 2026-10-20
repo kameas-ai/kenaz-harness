@@ -229,3 +229,32 @@ func TestDefaultPath(t *testing.T) {
 		t.Fatalf("unexpected path %q", got)
 	}
 }
+
+// A custom-openai none-auth row that spells the scheme only in the
+// top-level AuthScheme field must come back from the store with the scheme
+// in Defaults — the one place the adapter and llm.ValidateProfile read —
+// so it validates, instead of aborting the registry's whole
+// MergePersonalProfiles batch.
+func TestFileStore_TopLevelAuthSchemeNoneIsNormalisedIntoDefaults(t *testing.T) {
+	s := newTempStore(t)
+	p := llm.ProviderProfile{
+		ID: "local-llama", Kind: "custom-openai", Model: "qwen",
+		Endpoint: "http://127.0.0.1:8081/v1", AuthScheme: "none",
+	}
+	if err := s.Add(p); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	list, err := s.List()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("List: %v %+v", err, list)
+	}
+	if list[0].Defaults["auth_scheme"] != "none" {
+		t.Fatalf("auth_scheme not normalised into Defaults: %+v", list[0].Defaults)
+	}
+	if err := llm.ValidateProfile(list[0]); err != nil {
+		t.Fatalf("normalised row must validate (else MergePersonalProfiles aborts the batch): %v", err)
+	}
+	if p.Defaults != nil {
+		t.Fatal("NormalizeAuthScheme must not mutate the caller's profile")
+	}
+}

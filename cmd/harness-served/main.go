@@ -46,10 +46,12 @@ import (
 	"github.com/kameas-ai/kenaz-harness/cmd/mcpsubcmd"
 	"github.com/kameas-ai/kenaz-harness/cmd/servedfleet"
 	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 	"github.com/kameas-ai/kenaz-harness/core/serve"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 )
@@ -209,7 +211,7 @@ func main() {
 	// comment above: "both served entry points" describes source-level
 	// intent, not a claim that this binary ships today.
 	api := rpc.New(c,
-		rpc.WithHostProviders(serve.HostProviders(os.Getenv, log)),
+		rpc.WithHostProviders(serve.ProbeHostProviders(context.Background(), credref.New(secrets.NewMemoryBackend()), serve.HostProviders(os.Getenv, log), log)),
 		rpc.WithServedConnectors(connSup),
 		rpc.WithConnectorTokens(connTokens))
 

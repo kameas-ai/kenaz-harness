@@ -141,7 +141,7 @@ func (p *Prober) probeStreaming(ctx context.Context, chatURL, model string, req 
 				fmt.Errorf("custom-openai probe: auth failed (status=%d)", resp.StatusCode)
 		}
 		return CapabilityValueUnknown, CapabilityValueUnknown,
-			fmt.Errorf("custom-openai probe: auth failed (status=%d): %s", resp.StatusCode, msg)
+			&ProbeAuthError{Status: resp.StatusCode, Message: msg}
 	}
 	if resp.StatusCode != 200 {
 		return CapabilityValueFalse, CapabilityValueUnknown, nil
@@ -257,4 +257,17 @@ func scrubError(err error, secrets []string) error {
 		return nil
 	}
 	return &scrubbedError{msg: llm.ScrubSecrets(err.Error(), secrets...), err: err}
+}
+
+// ProbeAuthError is the probe's step-1 401/403 verdict. Error() keeps the
+// pre-existing text (the desktop Probe button shows it); Status lets a
+// caller that must not echo the server's body — the served boot log —
+// classify the failure without reading Message.
+type ProbeAuthError struct {
+	Status  int
+	Message string
+}
+
+func (e *ProbeAuthError) Error() string {
+	return fmt.Sprintf("custom-openai probe: auth failed (status=%d): %s", e.Status, e.Message)
 }
