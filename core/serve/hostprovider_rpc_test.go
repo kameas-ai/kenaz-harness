@@ -216,3 +216,28 @@ func TestHostProvider_IsImmutable(t *testing.T) {
 		t.Errorf("error must tell the user where the provider IS editable, got %q", err)
 	}
 }
+
+// A credential-less custom-openai grant (auth_scheme=none, the host-side
+// llama-server case) must survive the real registry's LoadProfiles. The
+// first cut of this grant rendered a profile llm.ValidateProfile rejected
+// ("credential reference kind is required"), so ensurePersonalLoaded
+// failed and LLM_ListProviders errored for the whole workbench.
+func TestServed_ListProviders_CustomOpenAIAuthNoneLoads(t *testing.T) {
+	baseURL, cancel := newServedHarness(t, "tok", map[string]string{
+		serve.EnvHostProvider: envprovider.CustomOpenAIKind,
+		serve.EnvHostBaseURL:  "http://127.0.0.1:1/v1",
+		serve.EnvHostModel:    "qwen3.8-27b-q4_k_m",
+	})
+	defer cancel()
+
+	got := hostRow(listProviders(t, baseURL, "tok"))
+	if got == nil {
+		t.Fatal("no host-sourced provider in the served list")
+	}
+	if got.Kind != envprovider.CustomOpenAIKind || got.Model != "qwen3.8-27b-q4_k_m" {
+		t.Errorf("unexpected host row: %+v", got)
+	}
+	if got.Cred.Kind != "" || got.Cred.Locator != "" {
+		t.Errorf("auth none must carry no credential reference, got %+v", got.Cred)
+	}
+}

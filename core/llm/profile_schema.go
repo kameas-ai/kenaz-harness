@@ -21,8 +21,15 @@ func ValidateProfile(p ProviderProfile) error {
 	if strings.TrimSpace(p.Model) == "" {
 		return fmt.Errorf("llm: profile %q: model is required", p.ID)
 	}
-	if err := validateCredRef(p.ID, p.Cred); err != nil {
-		return err
+	// A custom-openai profile pinned to auth_scheme=none (a host-granted
+	// local endpoint in a served workbench) carries no credential
+	// reference at all; the registry skips resolution for it. Every other
+	// profile — and any custom-openai profile whose scheme sends a
+	// credential — still needs a valid reference.
+	if !credentialless(p) {
+		if err := validateCredRef(p.ID, p.Cred); err != nil {
+			return err
+		}
 	}
 	if p.Kind == "custom-openai" && strings.TrimSpace(p.Endpoint) == "" {
 		return fmt.Errorf("llm: profile %q: custom-openai kind requires non-empty endpoint", p.ID)
@@ -163,4 +170,40 @@ func ValidCredentialID(id string) bool {
 		}
 	}
 	return true
+}
+
+// credentialless reports whether p is the one profile shape allowed to
+// carry no credential reference: kind custom-openai, a zero reference, and
+// Defaults["auth_scheme"] explicitly "none". The kind is spelled as a
+// literal (core/llm/custom imports this package, not the reverse).
+func credentialless(p ProviderProfile) bool {
+	if p.Kind != "custom-openai" || !p.Cred.IsZero() {
+		return false
+	}
+	scheme, _ := p.Defaults["auth_scheme"].(string)
+	return scheme == "none"
+}
+
+// NormalizeAuthScheme folds the top-level ProviderProfile.AuthScheme field
+// into Defaults["auth_scheme"], the single place the custom-openai adapter,
+// credentialless and the served probe read the scheme from. Before this, a
+// personal-store row carrying only the top-level field passed the store's
+// own none-auth check but failed ValidateProfile, aborting the whole
+// MergePersonalProfiles batch — and the adapter ignored the field anyway.
+// An explicit Defaults value wins; other kinds are returned unchanged. The
+// Defaults map is copied, never mutated in place.
+func NormalizeAuthScheme(p ProviderProfile) ProviderProfile {
+	if p.Kind != "custom-openai" || p.AuthScheme == "" {
+		return p
+	}
+	if s, ok := p.Defaults["auth_scheme"].(string); ok && s != "" {
+		return p
+	}
+	d := make(map[string]any, len(p.Defaults)+1)
+	for k, v := range p.Defaults {
+		d[k] = v
+	}
+	d["auth_scheme"] = p.AuthScheme
+	p.Defaults = d
+	return p
 }
