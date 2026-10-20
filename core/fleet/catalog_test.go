@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -558,5 +559,36 @@ func TestCatalog_List_DecodesFleetEnvelope(t *testing.T) {
 	var bare []CatalogItem
 	if err := json.Unmarshal([]byte(body), &bare); err == nil {
 		t.Error("fixture sanity: the envelope must not decode as a bare array")
+	}
+}
+
+// Legal (Fleet #322): a catalog publish lint_blocked refusal is decoded and
+// names rule + field only — never the raw body, so an older Fleet's excerpt
+// (or a content-shaped rule/field) cannot reach the UI error.
+func TestCatalog_PublishLintBlocked_NeverEchoesContent(t *testing.T) {
+	const planted = "AKIAPLANTEDCATALOG000"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = io.WriteString(w, `{"code":"lint_blocked","message":"blocked: `+planted+`","details":{"findings":[`+
+			`{"rule":"github_pat","severity":"block","field":"frontmatter.api_token","excerpt":"`+planted+`"},`+
+			`{"rule":"x `+planted+`","severity":"block","field":"payload"}]}}`)
+	}))
+	defer srv.Close()
+	stubTokens(t, TokenSet{AccessToken: "at-cat", RefreshToken: "rt-cat", ExpiresAt: time.Now().Add(time.Hour)})
+	c := makeTestClient(t, srv.URL)
+	signer, err := NewDeviceSigner(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewDeviceSigner: %v", err)
+	}
+	_, err = c.Publish(context.Background(), signer, CatalogKindSkill, "s", "1.0.0", "d", CatalogVisTeam, []byte(`{}`))
+	if !errors.Is(err, ErrContextLintBlocked) {
+		t.Fatalf("err = %v, want ErrContextLintBlocked", err)
+	}
+	if strings.Contains(err.Error(), planted) {
+		t.Fatalf("catalog publish UI error echoed rejected content: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "github_pat in frontmatter.api_token; secret in payload") {
+		t.Errorf("UI error %q should name rule + field", err.Error())
 	}
 }

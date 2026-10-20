@@ -283,6 +283,11 @@ func (c *Client) Publish(
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
+		// A lint_blocked refusal is decoded, never echoed: the UI error names
+		// rule + field only (legal: rejected content is not echoed; Fleet #322).
+		if pe := parseContextPushError("catalog publish", resp.StatusCode, body); pe.Code == "lint_blocked" {
+			return CatalogItem{}, pe
+		}
 		return CatalogItem{}, fmt.Errorf("fleet/catalog: publish: status %d: %s", resp.StatusCode, body)
 	}
 	var pr publishResponse

@@ -67,21 +67,25 @@ type LintFinding struct {
 // user-chosen key name, never a value.
 const lintFieldMaxLen = 64
 
-// displayField returns f.Field when it is a plain identifier path
-// ([A-Za-z0-9_.-], bounded), else "" so it is not shown. Field is a
-// location label, so anything that looks like content is dropped.
-func (f LintFinding) displayField() string {
-	if f.Field == "" || len(f.Field) > lintFieldMaxLen {
+// displayField / displayRule return the value when it is a plain
+// identifier path ([A-Za-z0-9_.-], bounded), else "" so it is not shown.
+// Both are labels (a detector name, a location), so anything that looks
+// like content is dropped.
+func (f LintFinding) displayField() string { return lintLabel(f.Field) }
+func (f LintFinding) displayRule() string  { return lintLabel(f.Rule) }
+
+func lintLabel(v string) string {
+	if v == "" || len(v) > lintFieldMaxLen {
 		return ""
 	}
-	for _, r := range f.Field {
+	for _, r := range v {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '.', r == '-':
 		default:
 			return ""
 		}
 	}
-	return f.Field
+	return v
 }
 
 // ContextPushError is a whole-batch refusal from the context write path.
@@ -139,7 +143,10 @@ func (e *ContextPushError) Error() string {
 	if e.Code == "lint_blocked" && len(e.Findings) > 0 {
 		parts := make([]string, 0, len(e.Findings))
 		for _, f := range e.Findings {
-			p := f.Rule
+			p := f.displayRule()
+			if p == "" {
+				p = "secret"
+			}
 			if field := f.displayField(); field != "" {
 				p += " in " + field
 			}
