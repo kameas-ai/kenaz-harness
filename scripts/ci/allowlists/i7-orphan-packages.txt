@@ -52,6 +52,14 @@ core/acp/transports/http_loopback
 core/acp/transports/uds
 core/agentgraph/internal/recorders
 core/asktemplates
+core/auditsink/auditsinktest
+#     Added 2026-10-21 (audit fix, served-mode audit lines). Test kit for
+#     the harness audit line-protocol: a loopback fake of the reporter
+#     collector socket (New/Addr/Records/WaitFor), imported by
+#     core/auditsink's own tests and the chat runner's
+#     audit_line_protocol_test.go. Not dead: a non-_test package so both
+#     packages' tests can share one collector fake. Clears if Go ever lets
+#     _test.go files be imported across packages.
 core/bundle/events
 core/bundle/kinds/testkind
 core/context
