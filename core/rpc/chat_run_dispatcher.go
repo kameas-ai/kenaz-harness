@@ -381,7 +381,8 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		if budget.attempted {
 			// The summary call took time: a turn the user started in the
 			// conversation meanwhile must not get a concurrent one.
-			if d.deps.ActiveRuns != nil && d.deps.ActiveRuns.HasActiveRun(sess.ID) {
+			if (d.deps.ActiveRuns != nil && d.deps.ActiveRuns.HasActiveRun(sess.ID)) ||
+				(d.deps.PausedTurns != nil && d.deps.PausedTurns.HasPausedTurnIn(sess.ID)) {
 				r := skippedRecord(sess.ID, now, skipReasonBusyAfterCompaction)
 				budget.apply(&r)
 				return r, nil
