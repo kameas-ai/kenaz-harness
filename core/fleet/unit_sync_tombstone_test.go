@@ -29,6 +29,7 @@ import (
 const (
 	testAuthor = "u-author"
 	testMember = "u-member"
+	testOrg    = "org-1"
 )
 
 // unitTombstoneSyncerAs wires a UnitSyncer whose signed-in user is self,
@@ -45,7 +46,7 @@ func unitTombstoneSyncerAs(t *testing.T, m *units.Manager, self string, pages ..
 	stubTokens(t, TokenSet{AccessToken: "at-unit-tomb", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
 	dataDir := t.TempDir()
 	if self != "" {
-		if err := SaveIdentity(dataDir, Identity{UserID: self, OrgID: "org-1", TeamID: "team-1"}); err != nil {
+		if err := SaveIdentity(dataDir, Identity{UserID: self, OrgID: testOrg, TeamID: "team-1"}); err != nil {
 			t.Fatalf("SaveIdentity: %v", err)
 		}
 	}
@@ -65,7 +66,7 @@ func page(n ContextPulledNode) contextPullResponse {
 
 func liveUnitNode(id, body string, version int, at string) ContextPulledNode {
 	return ContextPulledNode{
-		ID: id, Kind: "doc", Title: "Team runbook", Body: body, OwnerUserID: testAuthor,
+		ID: id, OrgID: testOrg, Kind: "doc", Title: "Team runbook", Body: body, OwnerUserID: testAuthor,
 		Classification: ClassTeamShared, Version: version, UpdatedAt: at,
 	}
 }
@@ -74,7 +75,7 @@ func liveUnitNode(id, body string, version int, at string) ContextPulledNode {
 // deleted_at set, version unchanged.
 func memberTombstone(id string, version int, at string) ContextPulledNode {
 	return ContextPulledNode{
-		ID: id, Kind: "doc", Title: "", Body: "", Metadata: json.RawMessage(`{}`), OwnerUserID: testAuthor,
+		ID: id, OrgID: testOrg, Kind: "doc", Title: "", Body: "", Metadata: json.RawMessage(`{}`), OwnerUserID: testAuthor,
 		Classification: ClassTeamShared, Version: version, UpdatedAt: at, DeletedAt: &at,
 	}
 }
@@ -355,25 +356,182 @@ func TestUnitPull_OwnerDemoteThenReappearanceDoesNotStall(t *testing.T) {
 	}
 }
 
-// No enrolled identity: ownership cannot be decided, so the unit is kept.
-func TestUnitPull_TombstoneHeldWhenIdentityUnknown(t *testing.T) {
+// No enrolled identity: ownership cannot be decided. The unit is kept, the
+// cursor is NOT advanced (the lane reports identity_pending, not an
+// error), and once the identity lands the SAME page is re-applied: a
+// non-owner's tombstone then deletes, an owner's demotes.
+func TestUnitPull_TombstoneHeldUntilIdentityThenApplied(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		self  string
+		owner bool
+	}{{"non-owner deletes", testMember, false}, {"owner demotes", testAuthor, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, m := openUnitSyncSQLite(t)
+			ctx := context.Background()
+			tomb := page(memberTombstone("srv-u-unk", 1, ts(0)))
+			s, _ := unitTombstoneSyncerAs(t, m, "",
+				page(liveUnitNode("srv-u-unk", "kept body", 1, ts(-time.Minute))),
+				tomb, tomb, // the server re-serves the page while the cursor is held
+			)
+			lanes := NewSyncLanes()
+			s.SetLanes(lanes)
+			mustPullDown(t, s)
+			cursorBefore := s.Status().Cursor
+			savedBefore, _ := loadUnitCursor(s.dataDir)
+
+			mustPullDown(t, s) // tombstone, no identity → held
+			s.reportPoll(nil, 0, time.Time{})
+			if got := s.Status(); got.Cursor != cursorBefore || got.TombstonesHeldIdentityUnknown != 1 || got.TombstonesApplied != 0 {
+				t.Fatalf("held pull: cursor %q→%q held %d applied %d; want cursor unchanged, held 1, applied 0",
+					cursorBefore, got.Cursor, got.TombstonesHeldIdentityUnknown, got.TombstonesApplied)
+			}
+			if saved, _ := loadUnitCursor(s.dataDir); saved != savedBefore {
+				t.Errorf("persisted cursor advanced past a held tombstone: %q → %q", savedBefore, saved)
+			}
+			if l := lanes.Snapshot(LaneUnitPoll); l.Status != LaneOff || l.Reason != ReasonIdentityPending {
+				t.Errorf("lane = %s/%s; want off/%s (not an error)", l.Status, l.Reason, ReasonIdentityPending)
+			}
+			st, err := m.GetSyncStateByNodeID(ctx, "srv-u-unk")
+			if err != nil {
+				t.Fatalf("sidecar gone while held: %v", err)
+			}
+			if u, err := m.Get(ctx, st.UnitID); err != nil || u.Body != "kept body" || u.Classification != units.ClassTeam {
+				t.Fatalf("unit while held = %+v, %v; want kept untouched", u, err)
+			}
+
+			if err := SaveIdentity(s.dataDir, Identity{UserID: tc.self, OrgID: testOrg}); err != nil {
+				t.Fatalf("SaveIdentity: %v", err)
+			}
+			mustPullDown(t, s) // same page again, identity now known
+			s.reportPoll(nil, 0, time.Time{})
+			got := s.Status()
+			if got.TombstonesHeldIdentityUnknown != 0 || got.Cursor == cursorBefore {
+				t.Errorf("after identity: held %d cursor %q; want 0 and advanced", got.TombstonesHeldIdentityUnknown, got.Cursor)
+			}
+			if l := lanes.Snapshot(LaneUnitPoll); l.Status != LaneOK {
+				t.Errorf("lane after identity = %s/%s; want ok", l.Status, l.Reason)
+			}
+			if tc.owner {
+				if u, err := m.Get(ctx, st.UnitID); err != nil || u.Classification != units.ClassPersonal || u.Body != "kept body" {
+					t.Errorf("owner unit = %+v, %v; want demoted to personal with its body", u, err)
+				}
+				if got.TombstonesDemoted != 1 {
+					t.Errorf("TombstonesDemoted = %d, want 1", got.TombstonesDemoted)
+				}
+			} else {
+				assertUnitGone(t, db, m, "srv-u-unk", "kept body")
+				if got.TombstonesApplied != 1 {
+					t.Errorf("TombstonesApplied = %d, want 1", got.TombstonesApplied)
+				}
+			}
+		})
+	}
+}
+
+// Re-applying a held page is idempotent: a first-sight create and a
+// fast-forward in the same page are not duplicated, and the page's node
+// count is counted once (when it is finally committed).
+func TestUnitPull_HeldPageReapplyIsIdempotent(t *testing.T) {
+	db, m := openUnitSyncSQLite(t)
+	at := ts(0)
+	mixed := contextPullResponse{Nodes: []ContextPulledNode{
+		liveUnitNode("srv-u-new", "new body", 1, at),
+		liveUnitNode("srv-u-ff", "ff body v2", 2, at),
+		memberTombstone("srv-u-tomb", 1, at),
+	}, Cursor: at}
+	s, _ := unitTombstoneSyncerAs(t, m, "",
+		contextPullResponse{Nodes: []ContextPulledNode{
+			liveUnitNode("srv-u-ff", "ff body v1", 1, ts(-2*time.Minute)),
+			liveUnitNode("srv-u-tomb", "tomb body", 1, ts(-2*time.Minute)),
+		}, Cursor: ts(-2 * time.Minute)},
+		mixed, mixed, mixed,
+	)
+	mustPullDown(t, s)
+	mustPullDown(t, s) // held
+	mustPullDown(t, s) // held again: re-applies the whole page
+	unitsAfterTwo := countRows(t, db, "SELECT COUNT(*) FROM units")
+	histAfterTwo := countRows(t, db, "SELECT COUNT(*) FROM unit_versions")
+	if unitsAfterTwo != 3 {
+		t.Errorf("units after two held applies = %d, want 3 (no duplicate first-sight create)", unitsAfterTwo)
+	}
+	if histAfterTwo != 1 {
+		t.Errorf("history rows after two held applies = %d, want 1 (one fast-forward)", histAfterTwo)
+	}
+	if got := s.Status(); got.PullCount != 2 || len(s.Conflicts()) != 0 {
+		t.Errorf("held: pull count %d conflicts %d; want 2 (first page only), 0", got.PullCount, len(s.Conflicts()))
+	}
+	if err := SaveIdentity(s.dataDir, Identity{UserID: testMember, OrgID: testOrg}); err != nil {
+		t.Fatalf("SaveIdentity: %v", err)
+	}
+	mustPullDown(t, s)
+	if n := countRows(t, db, "SELECT COUNT(*) FROM units"); n != 2 {
+		t.Errorf("units after commit = %d, want 2 (tombstoned one removed)", n)
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM unit_versions"); n != histAfterTwo {
+		t.Errorf("history rows after commit = %d, want %d", n, histAfterTwo)
+	}
+	if got := s.Status(); got.PullCount != 5 {
+		t.Errorf("pull count after commit = %d, want 5 (2 + the page once)", got.PullCount)
+	}
+}
+
+// An identity for a different org than the node cannot decide ownership:
+// held exactly like an unknown identity.
+func TestUnitPull_TombstoneHeldOnOrgMismatch(t *testing.T) {
 	_, m := openUnitSyncSQLite(t)
 	ctx := context.Background()
 	s, _ := unitTombstoneSyncerAs(t, m, "",
-		page(liveUnitNode("srv-u-unk", "kept body", 1, ts(-time.Minute))),
-		page(memberTombstone("srv-u-unk", 1, ts(0))),
+		page(liveUnitNode("srv-u-org", "kept body", 1, ts(-time.Minute))),
+		page(memberTombstone("srv-u-org", 1, ts(0))),
 	)
+	if err := SaveIdentity(s.dataDir, Identity{UserID: testMember, OrgID: "org-other"}); err != nil {
+		t.Fatalf("SaveIdentity: %v", err)
+	}
 	mustPullDown(t, s)
+	cursor := s.Status().Cursor
 	mustPullDown(t, s)
-	st, err := m.GetSyncStateByNodeID(ctx, "srv-u-unk")
+	if got := s.Status(); got.TombstonesHeldIdentityUnknown != 1 || got.Cursor != cursor || got.TombstonesApplied != 0 {
+		t.Errorf("org mismatch: held %d cursor moved %v applied %d; want 1, false, 0",
+			got.TombstonesHeldIdentityUnknown, got.Cursor != cursor, got.TombstonesApplied)
+	}
+	if _, err := m.GetSyncStateByNodeID(ctx, "srv-u-org"); err != nil {
+		t.Errorf("unit removed on org mismatch: %v", err)
+	}
+}
+
+// First sight of a node whose id is already held by a team unit with no
+// sidecar (a legacy orphan): adopted in place — sidecar written at the
+// server's and the unit's versions, content untouched, no duplicate.
+func TestUnitPull_FirstSightAdoptsLegacyOrphan(t *testing.T) {
+	db, m := openUnitSyncSQLite(t)
+	ctx := context.Background()
+	orphan, err := m.Create(ctx, units.Unit{
+		ID: "srv-u-orphan", Kind: units.KindDoc, Scope: units.ScopeProject, ScopeID: "proj-1",
+		Classification: units.ClassTeam, LoadPolicy: units.LoadOnDemand, Title: "t", Body: "orphan body",
+	})
 	if err != nil {
-		t.Fatalf("sidecar gone with unknown identity: %v", err)
+		t.Fatalf("Create orphan: %v", err)
 	}
-	if u, err := m.Get(ctx, st.UnitID); err != nil || u.Body != "kept body" || u.Classification != units.ClassTeam {
-		t.Errorf("unit = %+v, %v; want kept untouched", u, err)
+	if _, err := m.Update(ctx, orphan.ID, "orphan body edited", nil); err != nil {
+		t.Fatalf("Update orphan: %v", err)
 	}
-	if got := s.Status(); got.TombstonesHeldIdentityUnknown != 1 || got.TombstonesApplied != 0 {
-		t.Errorf("status = held %d applied %d; want 1, 0", got.TombstonesHeldIdentityUnknown, got.TombstonesApplied)
+	s := unitTombstoneSyncer(t, m, page(liveUnitNode("srv-u-orphan", "server body", 3, ts(0))))
+	if _, err := s.PullDown(ctx); err != nil {
+		t.Fatalf("PullDown with a legacy orphan: %v", err)
+	}
+	st, err := m.GetSyncStateByNodeID(ctx, "srv-u-orphan")
+	if err != nil {
+		t.Fatalf("orphan not adopted: %v", err)
+	}
+	if st.UnitID != orphan.ID || st.SyncedServerVersion != 3 || st.SyncedLocalVersion != 1 {
+		t.Errorf("adopted sidecar = %+v; want unit %s server=3 local=1", st, orphan.ID)
+	}
+	if u, _ := m.Get(ctx, orphan.ID); u.Body != "orphan body edited" || u.Classification != units.ClassTeam {
+		t.Errorf("adopted unit content changed: %+v", u)
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM units"); n != 1 {
+		t.Errorf("units = %d, want 1 (adopted, not duplicated)", n)
 	}
 }
 

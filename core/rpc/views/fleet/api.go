@@ -82,8 +82,9 @@ type UnitSyncStatusView struct {
 	// member because it may contain a secret): TombstonesApplied removed a
 	// unit the user does not own; TombstoneDroppedLocalEdits is the subset
 	// that had un-pushed local edits; TombstonesDemoted kept the user's OWN
-	// unit as personal; TombstonesHeldIdentityUnknown kept a unit because
-	// the signed-in user was unknown (re-sign-in).
+	// unit as personal; TombstonesHeldIdentityUnknown (a gauge for the
+	// latest pull) is how many were held — unit kept, retried automatically
+	// every poll — because the signed-in account was not confirmed yet.
 	TombstonesApplied             int `json:"tombstonesApplied"`
 	TombstoneDroppedLocalEdits    int `json:"tombstoneDroppedLocalEdits"`
 	TombstonesDemoted             int `json:"tombstonesDemoted"`

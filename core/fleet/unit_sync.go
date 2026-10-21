@@ -120,18 +120,20 @@ type UnitSyncer struct {
 	// tombstonesApplied — a non-owned unit was deleted;
 	// tombstoneDroppedLocalEdits — the subset that had un-pushed local edits;
 	// tombstonesDemoted — the user's OWN unit was kept as personal;
-	// tombstonesHeldIdentityUnknown — skipped (unit kept) because the
-	// signed-in user id was unknown, so ownership could not be decided.
+	// tombstonesHeldIdentityUnknown — a GAUGE, not cumulative: tombstones
+	// held (unit kept) in the most recent pull because the signed-in
+	// identity was unknown or for another org. While it is > 0 the cursor
+	// is not advanced, so the page is retried on the next tick.
 	tombstonesApplied             int
 	tombstoneDroppedLocalEdits    int
 	tombstonesDemoted             int
 	tombstonesHeldIdentityUnknown int
 
-	// selfUserID returns the signed-in fleet user id ("" = unknown). Read
-	// per tombstone from the enrolled identity under dataDir, the same
+	// selfIdentity returns the signed-in fleet identity (zero = unknown).
+	// Read per tombstone from the enrolled identity under dataDir, the same
 	// source the Contexts view uses to recognise the user's own pulled
 	// entries (WithSelfIdentityFromDataDir). Tests may override it.
-	selfUserID func() string
+	selfIdentity func() Identity
 
 	stopCh chan struct{}
 	once   sync.Once
@@ -162,15 +164,15 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 		ids:     NewWireIDs(dataDir),
 		stopCh:  make(chan struct{}),
 	}
-	s.selfUserID = func() string {
+	s.selfIdentity = func() Identity {
 		if dataDir == "" {
-			return ""
+			return Identity{}
 		}
 		id, err := LoadIdentity(dataDir)
 		if err != nil {
-			return ""
+			return Identity{}
 		}
-		return id.UserID
+		return id
 	}
 	if c, err := loadUnitCursor(dataDir); err == nil {
 		s.cursor = c
@@ -502,7 +504,7 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	}
 
 	applied := 0
-	skippedKinds, skippedInvalid := 0, 0
+	skippedKinds, skippedInvalid, held := 0, 0, 0
 	for _, n := range pullResp.Nodes {
 		// Another lane's node — a Curated "guidance", a bootstrap
 		// "project", or a kind this build has never heard of (a server that
@@ -515,6 +517,14 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 		}
 		ok, err := s.applyPulledNode(ctx, n)
 		if err != nil {
+			if errors.Is(err, errTombstoneHeld) {
+				// Ownership undecidable yet (identity not enrolled, or for
+				// another org): the unit is kept, the rest of the page is
+				// applied, and the cursor is NOT advanced below so this
+				// page is retried once the identity exists.
+				held++
+				continue
+			}
 			if isUnitValidationErr(err) {
 				// The node itself is invalid for the local store (unknown
 				// scope / classification / load policy): a permanent
@@ -533,17 +543,24 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	}
 
 	s.mu.Lock()
-	s.skippedUnknownKinds += skippedKinds
-	s.skippedInvalid += skippedInvalid
-	if pullResp.Cursor != "" {
-		s.cursor = pullResp.Cursor
-		if s.dataDir != "" {
-			if saveErr := saveUnitCursor(s.dataDir, s.cursor); saveErr != nil {
-				logging.L().Warn("fleet.unit.cursor_save_failed", "err", saveErr.Error())
+	s.tombstonesHeldIdentityUnknown = held
+	if held == 0 {
+		// Counted only when the page is committed: a held page is re-applied
+		// next tick (idempotently: first-sight rows now have a sidecar,
+		// fast-forwards are at the baseline, applied tombstones have no
+		// sidecar left), and would otherwise be counted twice.
+		s.skippedUnknownKinds += skippedKinds
+		s.skippedInvalid += skippedInvalid
+		s.pullCount += len(pullResp.Nodes)
+		if pullResp.Cursor != "" {
+			s.cursor = pullResp.Cursor
+			if s.dataDir != "" {
+				if saveErr := saveUnitCursor(s.dataDir, s.cursor); saveErr != nil {
+					logging.L().Warn("fleet.unit.cursor_save_failed", "err", saveErr.Error())
+				}
 			}
 		}
 	}
-	s.pullCount += len(pullResp.Nodes)
 	s.lastPullAt = time.Now().UTC()
 	s.lastPullErr = ""
 	s.mu.Unlock()
@@ -596,14 +613,35 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 
 	st, err := s.store.GetSyncStateByNodeID(ctx, n.ID)
 	if errors.Is(err, units.ErrSyncStateNotFound) {
-		// A unit already holding this id with no sidecar is the user's own
-		// unit an owner tombstone demoted to personal (applyTombstone). It
-		// stays; the re-appearing node gets a fresh local id beside it rather
-		// than a primary-key clash that would fail (and stall) the pull.
+		// A unit already holding this id with no sidecar:
+		//   - personal: the user's own unit an owner tombstone demoted
+		//     (applyTombstone). It stays; the re-appearing node gets a fresh
+		//     local id beside it rather than a primary-key clash that would
+		//     fail (and stall) the pull.
+		//   - team/org: a legacy orphan (its sidecar was lost). Adopt it:
+		//     record its sidecar at the server's version and its own local
+		//     version, without touching content; the normal 3-way rules
+		//     apply from the next server change.
 		if mapped.ID != "" {
-			if _, gerr := s.store.Get(ctx, mapped.ID); gerr == nil {
+			existing, gerr := s.store.Get(ctx, mapped.ID)
+			switch {
+			case gerr == nil && existing.Classification == units.ClassPersonal:
 				mapped.ID = ""
-			} else if !errors.Is(gerr, units.ErrUnitNotFound) {
+			case gerr == nil:
+				if _, uerr := s.store.UpsertSyncState(ctx, units.SyncState{
+					UnitID:              existing.ID,
+					NodeID:              n.ID,
+					SyncedServerVersion: n.Version,
+					SyncedLocalVersion:  existing.Version,
+					Classification:      string(n.Classification),
+					LastSynced:          time.Now().UTC(),
+				}); uerr != nil {
+					return false, fmt.Errorf("fleet: unit pull: adopt orphan %s: %w", n.ID, uerr)
+				}
+				logging.L().Warn("fleet.unit.pull.adopted_orphan_unit",
+					"unit_id", existing.ID, "node_id", n.ID)
+				return false, nil
+			case !errors.Is(gerr, units.ErrUnitNotFound):
 				return false, fmt.Errorf("fleet: unit pull: id check %s: %w", n.ID, gerr)
 			}
 		}
@@ -732,13 +770,25 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 //     the team: Fleet accepts an edit to a node only from its owner. Deleting
 //     the sidecar makes a clean re-appearance (the author's lint-passing edit
 //     clears a quarantine) take the first-sight path and recreate the unit.
-//   - Identity unknown (no enrolled user id): HOLD. Non-ownership cannot be
-//     proven, so the user's data wins: the unit is kept untouched, the
-//     tombstone is skipped, counted and logged. The cursor still advances.
+//   - Identity unknown (no enrolled user id or org id) or for a different
+//     org than the node: HOLD. Non-ownership cannot be proven, so the
+//     user's data wins: the unit is kept untouched and errTombstoneHeld
+//     tells PullDown not to advance the cursor, so the page is retried
+//     every tick until the identity exists (the lane reports
+//     ReasonIdentityPending, not an error).
 //
 // Any pending conflict for the unit is cleared when it is deleted or
 // demoted. Personal units are never touched (they never get a sidecar row,
 // and the store refuses to delete one). Nothing here logs a title or body.
+// errTombstoneHeld reports a tombstone whose ownership cannot be decided
+// yet; PullDown keeps the cursor so it is retried. Never surfaced.
+var errTombstoneHeld = errors.New("fleet: unit pull: tombstone held until the fleet identity is known")
+
+// ReasonIdentityPending is the unit-poll lane's "off" reason while a pulled
+// page is held for an unknown fleet identity (see applyTombstone). Not a
+// failure: the poll retries every tick and clears it once enrolled.
+const ReasonIdentityPending = "identity_pending"
+
 func (s *UnitSyncer) applyTombstone(ctx context.Context, n ContextPulledNode) (bool, error) {
 	if n.ID == "" {
 		return false, nil
@@ -765,20 +815,21 @@ func (s *UnitSyncer) applyTombstone(ctx context.Context, n ContextPulledNode) (b
 		return false, nil
 	}
 
-	self := ""
-	if s.selfUserID != nil {
-		self = s.selfUserID()
+	var self Identity
+	if s.selfIdentity != nil {
+		self = s.selfIdentity()
 	}
-	if self == "" {
-		s.mu.Lock()
-		s.tombstonesHeldIdentityUnknown++
-		s.mu.Unlock()
-		logging.L().Warn("fleet.unit.pull.tombstone_held_identity_unknown",
+	if self.UserID == "" || self.OrgID == "" || !strings.EqualFold(self.OrgID, n.OrgID) {
+		// Unknown (not enrolled yet, sign-in still in flight, identity
+		// write failed) or for another org: ownership cannot be decided,
+		// so the user's data wins. PullDown keeps the cursor so this
+		// tombstone is retried, not lost.
+		logging.L().Info("fleet.unit.pull.tombstone_held_identity_unknown",
 			"unit_id", st.UnitID, "node_id", n.ID)
-		return false, nil
+		return false, errTombstoneHeld
 	}
 
-	if n.OwnerUserID != "" && strings.EqualFold(n.OwnerUserID, self) {
+	if n.OwnerUserID != "" && strings.EqualFold(n.OwnerUserID, self.UserID) {
 		if err := s.store.DemoteToPersonal(ctx, st.UnitID); err != nil {
 			return false, fmt.Errorf("fleet: unit pull: tombstone demote %s: %w", st.UnitID, err)
 		}
@@ -927,6 +978,13 @@ func (s *UnitSyncer) reportPoll(err error, consecutive int, nextRetry time.Time)
 		return
 	}
 	if err == nil {
+		s.mu.RLock()
+		held := s.tombstonesHeldIdentityUnknown
+		s.mu.RUnlock()
+		if held > 0 {
+			lanes.RecordOff(LaneUnitPoll, ReasonIdentityPending)
+			return
+		}
 		lanes.RecordSuccess(LaneUnitPoll)
 		return
 	}
@@ -996,8 +1054,9 @@ type UnitSyncStatus struct {
 	// Tombstone outcomes (see applyTombstone): TombstonesApplied — a unit
 	// the user does not own was removed; TombstoneDroppedLocalEdits — the
 	// subset with un-pushed local edits; TombstonesDemoted — the user's own
-	// unit kept as personal; TombstonesHeldIdentityUnknown — unit kept
-	// because the signed-in user was unknown.
+	// unit kept as personal; TombstonesHeldIdentityUnknown — tombstones
+	// held (unit kept, cursor not advanced, retried next tick) in the most
+	// recent pull because the signed-in identity was unknown (a gauge).
 	TombstonesApplied             int `json:"tombstones_applied"`
 	TombstoneDroppedLocalEdits    int `json:"tombstone_dropped_local_edits"`
 	TombstonesDemoted             int `json:"tombstones_demoted"`

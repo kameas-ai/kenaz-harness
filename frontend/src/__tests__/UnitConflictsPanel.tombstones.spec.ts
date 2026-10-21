@@ -52,6 +52,8 @@ describe('UnitConflictsPanel tombstone counters', () => {
     expect(removed).toContain('3 shared item(s) removed');
     expect(removed).toContain('including 1 with local edits');
     expect(w.find('[data-testid="unit-sync-tombstones-demoted"]').text()).toContain('2 of your own item(s)');
-    expect(w.find('[data-testid="unit-sync-tombstones-held"]').text()).toContain('4 item(s)');
+    const held = w.find('[data-testid="unit-sync-tombstones-held"]').text();
+    expect(held).toContain('4 item(s)');
+    expect(held).toContain('retries automatically');
   });
 });

@@ -160,7 +160,7 @@ async function submitResolve() {
       class="text-xs text-signal-warn"
       data-testid="unit-sync-tombstones-held"
     >
-      {{ syncStatus?.tombstonesHeldIdentityUnknown }} item(s) removed from Fleet are still on this device because your account is unknown. Sign out and back in to refresh it.
+      {{ syncStatus?.tombstonesHeldIdentityUnknown }} item(s) removed from Fleet are still on this device until your account is confirmed. This retries automatically.
     </p>
 
     <!-- Conflict list -->

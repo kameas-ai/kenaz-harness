@@ -5277,7 +5277,7 @@ export interface UnitSyncStatusView {
   tombstoneDroppedLocalEdits?: number;
   /** Tombstones for the user's OWN units: kept here as personal. */
   tombstonesDemoted?: number;
-  /** Tombstones skipped (unit kept): signed-in user unknown. */
+  /** Tombstones held in the latest pull (unit kept; retried automatically) until the account is confirmed. */
   tombstonesHeldIdentityUnknown?: number;
 }
 
