@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // Compile-time assertion: CedarPrompter implements Prompter.
@@ -55,10 +56,16 @@ func (p *CedarPrompter) Prompt(ctx context.Context, s PromptSurface) (PromptResp
 		// is a separate, larger change (it is used across every fs
 		// gate caller, not just this adapter).
 		//
-		// SessionID is intentionally left empty: builtins_wiring.go:502
-		// constructs the gate process-scoped with no session in
-		// context, so every fs grant lands in cedar's "global" transient
-		// bucket rather than being scoped per-session.
+		// SessionID comes from the dispatch ctx (kernelToolAdapter
+		// stamps it via toolloop.WithSessionID before pool.Call). The
+		// served WS pump (core/serve/wsstream.go frameFor) forwards a
+		// non-process-wide frame only to the socket whose session id
+		// matches the payload's, so an empty id here meant the
+		// fs:permission-pending frame was dropped, the modal never
+		// opened, and the tool hung for the full PromptTimeout
+		// (audit finding HR-1). The gate itself stays process-scoped;
+		// only the prompt carries the session.
+		SessionID: toolloop.SessionIDFromContext(ctx),
 	}
 	resolution, err := p.Registry.RequestInteractive(ctx, surface)
 	if err != nil {

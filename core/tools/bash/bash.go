@@ -18,6 +18,7 @@ import (
 	cedargo "github.com/cedar-policy/cedar-go"
 	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // DefaultAllowlist is the set of safe-by-default commands the bash
@@ -666,6 +667,10 @@ func (t *Tool) promptBashGate(ctx context.Context, pattern string, argv []string
 			// is the choice that happens.
 			AllowAlwaysUnavailable: !cedar.PersistableFamilyID(pattern),
 		},
+		// Route the prompt to the session that raised it: the served
+		// WS pump drops a permission-pending frame whose session id
+		// does not match the socket's (audit finding HR-1).
+		SessionID: toolloop.SessionIDFromContext(ctx),
 	}
 	resolution, err := t.promptRegistry.RequestInteractive(ctx, surface)
 	if err != nil {

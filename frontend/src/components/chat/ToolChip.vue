@@ -46,6 +46,19 @@ const expanded = ref(false);
 const hasOutput = computed(() => props.chip.output.length > 0);
 
 /**
+ * A failed call is ALWAYS expandable (audit finding HR-7): the status
+ * word alone ("ERROR") tells the user nothing they can act on. When the
+ * bound tool_result carried the error text it is shown; when it did not
+ * (the live stream carries boundaries, not tool output, and a reload has
+ * not landed yet) the panel says so instead of the chip being inert.
+ */
+const isError = computed(() => props.chip.status === 'error');
+const expandable = computed(() => hasOutput.value || isError.value);
+
+const NO_ERROR_DETAIL =
+  'The tool reported an error but returned no message.';
+
+/**
  * Cut at OUTPUT_CAP code units, then step back off a lone surrogate.
  *
  * `slice` counts UTF-16 code units, so a cap that lands between the two
@@ -65,6 +78,7 @@ function cutAtRuneBoundary(s: string, cap: number): string {
 
 const outputText = computed(() => {
   const raw = props.chip.output;
+  if (raw.length === 0 && isError.value) return NO_ERROR_DETAIL;
   if (raw.length <= OUTPUT_CAP) return raw;
   const head = cutAtRuneBoundary(raw, OUTPUT_CAP);
   const dropped = raw.length - head.length;
@@ -115,7 +129,7 @@ const forkSessionId = computed(() =>
 );
 
 function toggle() {
-  if (!hasOutput.value) return;
+  if (!expandable.value) return;
   expanded.value = !expanded.value;
 }
 </script>
@@ -123,10 +137,10 @@ function toggle() {
 <template>
   <div class="tool-chip" :data-tool-status="chip.status" data-testid="tool-chip">
     <component
-      :is="hasOutput ? 'button' : 'div'"
-      :type="hasOutput ? 'button' : undefined"
+      :is="expandable ? 'button' : 'div'"
+      :type="expandable ? 'button' : undefined"
       :class="shellClass"
-      :aria-expanded="hasOutput ? expanded : undefined"
+      :aria-expanded="expandable ? expanded : undefined"
       :aria-label="`Tool ${chip.name}, ${statusLabel}`"
       :data-testid="`tool-chip-${chip.callId}`"
       @click="toggle"
@@ -141,6 +155,7 @@ function toggle() {
       <span
         v-if="chip.argsSummary"
         class="font-mono truncate text-ink-subtle"
+        title="Argument names and types only. Values are never shown."
         data-testid="tool-chip-args"
       >
         {{ chip.argsSummary }}
@@ -161,7 +176,7 @@ function toggle() {
         </span>
         <component
           :is="expanded ? ChevronDown : ChevronRight"
-          v-if="hasOutput"
+          v-if="expandable"
           :size="12"
           class="text-ink-subtle"
           aria-hidden="true"
@@ -181,8 +196,10 @@ function toggle() {
     <!-- Output on demand. Never in the conversation flow: scrolls inside
          its own box and is capped at OUTPUT_CAP characters. -->
     <pre
-      v-if="expanded && hasOutput"
-      class="mt-1 max-h-64 overflow-auto rounded-sm border border-border-muted bg-surface-0 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-ink-muted whitespace-pre-wrap break-words"
+      v-if="expanded && expandable"
+      class="mt-1 max-h-64 overflow-auto rounded-sm border bg-surface-0 px-2 py-1.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words"
+      :class="isError ? 'border-signal-danger text-ink' : 'border-border-muted text-ink-muted'"
+      :role="isError ? 'alert' : undefined"
       data-testid="tool-chip-output"
     >{{ outputText }}</pre>
   </div>

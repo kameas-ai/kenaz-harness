@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // waitForRequestID polls (bounded) for the dispatcher to have captured a
@@ -198,5 +199,59 @@ func TestCedarPrompter_AllowAlways_ThroughRealRegistry_PersistsSnippet(t *testin
 	}
 	if reloadDecision.Outcome != cedar.Allow {
 		t.Fatalf("reloaded engine outcome = %s, want Allow (grant did not survive reload)", reloadDecision.Outcome)
+	}
+}
+
+// TestCedarPrompter_SessionIDFromContext pins audit finding HR-1: the
+// prompt surface carries the session id the dispatcher stamped on ctx
+// (toolloop.WithSessionID), so the served WS pump routes the
+// fs:permission-pending frame to that session's socket instead of
+// dropping it and leaving the tool hung for PromptTimeout.
+func TestCedarPrompter_SessionIDFromContext(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var captured cedar.PendingRequest
+	registry := cedar.NewRegistry(cedar.WithDispatcher(
+		cedar.PromptDispatcherFunc(func(_ context.Context, _ string, pending cedar.PendingRequest) {
+			mu.Lock()
+			captured = pending
+			mu.Unlock()
+		}),
+	))
+	p := &CedarPrompter{Registry: registry}
+	ctx := toolloop.WithSessionID(context.Background(), "sess-hr1")
+
+	done := make(chan PromptResponse, 1)
+	go func() {
+		resp, _ := p.Prompt(ctx, PromptSurface{Op: OpRead, CanonicalPath: "/workspace"})
+		done <- resp
+	}()
+
+	var capturedID string
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		capturedID = captured.RequestID
+		mu.Unlock()
+		if capturedID != "" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if capturedID == "" {
+		t.Fatal("timed out waiting for RequestInteractive to dispatch")
+	}
+	mu.Lock()
+	gotSession := captured.Surface.SessionID
+	mu.Unlock()
+	if gotSession != "sess-hr1" {
+		t.Fatalf("PromptSurface.SessionID = %q, want %q", gotSession, "sess-hr1")
+	}
+	if err := registry.Resolve(capturedID, cedar.DecisionAllowOnce); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resp := <-done; resp != PromptAllowOnce {
+		t.Fatalf("Prompt = %v, want PromptAllowOnce", resp)
 	}
 }

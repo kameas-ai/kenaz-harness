@@ -972,6 +972,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       return;
     }
     clearStreamTimeout();
+    const closedSub = payload.sub_id ?? streamSubscriptionId.value ?? "sub";
     // long-turn-resilience WP00: commit the partial buffer regardless of
     // `reason`. Previously only `completed` would commit; any other
     // reason silently dropped the bubble. Dedupes against the case-error
@@ -1048,7 +1049,48 @@ export function useSession(id: Ref<string>): UseSessionResult {
     }
     // Refresh from the persisted outcomes (written before this close).
     void loadDelivery(id.value);
+    if (payload.reason === "completed") {
+      void reconcileLiveTurn(closedSub);
+    }
   });
+
+  /**
+   * reconcileLiveTurn swaps a completed turn's live rows for the rows the
+   * backend committed (audit finding HR-7). The live stream carries move
+   * boundaries, not tool output, so until a reload every tool chip from
+   * the turn had an empty `output` — and a failed call rendered as a
+   * bare, unexpandable "ERROR". The persisted tool_result rows carry the
+   * result text (and the error message), so re-reading them here gives
+   * the chip something to show without the user reloading the session.
+   *
+   * Scoped to turns that ran a tool, and to the live span of the stream
+   * that just closed: rows from any other turn — including a NOT
+   * DELIVERED user row that only lives locally — are left untouched.
+   * Only on `completed`: a failed turn keeps its locally stamped partial
+   * bubble, which the server may not have persisted.
+   */
+  async function reconcileLiveTurn(subID: string) {
+    const span = liveSpanID(subID);
+    const hadTool = messages.value.some(
+      (m) =>
+        m.turnSpanId === span &&
+        (m.kind === "tool_call" || m.kind === "tool_result"),
+    );
+    if (!hadTool) return;
+    const sid = id.value;
+    let persisted: readonly Message[];
+    try {
+      persisted = (await fetchMessages(sid, showFullHistory.value)).messages;
+    } catch {
+      return; // Best-effort: the next load shows the same rows.
+    }
+    if (id.value !== sid) return;
+    const kept = messages.value.filter((m) => m.turnSpanId !== span);
+    const keptIds = new Set(kept.map((m) => m.id));
+    const added = persisted.filter((m) => !keptIds.has(m.id));
+    if (added.length === 0) return; // Nothing committed yet — keep live rows.
+    messages.value = [...kept, ...added];
+  }
 
   function scheduleAutoRetry() {
     clearAutoRetry();

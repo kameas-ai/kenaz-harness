@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime/debug"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -685,6 +686,17 @@ func (s *Server) frameFor(ctx context.Context, ev rpc.BusEvent, sessionID string
 	if !processWideTopics[ev.Topic] {
 		payloadSessionID, ok := sessionIDOf(ev.Payload)
 		if !ok || payloadSessionID != sessionID {
+			// A permission prompt with NO session id reaches no socket at
+			// all, so the gate that raised it blocks until PromptTimeout
+			// (audit finding HR-1). That is a producer bug, not routine
+			// scoping — make it visible. A mismatched id is the normal
+			// "belongs to another session" case and stays silent.
+			if !ok && strings.HasSuffix(ev.Topic, ":permission-pending") {
+				logging.L().Warn("serve.ws.permission_pending_dropped",
+					"topic", ev.Topic,
+					"reason", "payload carries no session id",
+				)
+			}
 			return outFrame{}, false
 		}
 	}
