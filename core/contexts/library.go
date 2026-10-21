@@ -743,9 +743,15 @@ func (l *Library) MergeFleetEntries(entries []FleetEntry) {
 			continue
 		}
 
-		// Tombstone: remove from cache.
+		// Tombstone (an FR-103 delete, or a node quarantined for a possible
+		// secret, kenaz-fleet #325): remove from cache, whatever its
+		// version (a quarantine does not bump it). Checked before conflict
+		// detection so a local edit never keeps withdrawn content alive.
+		// The local-version record goes too: the node it tracked is gone,
+		// and a clean re-appearance must not be held back by it.
 		if e.DeletedAt != nil {
 			delete(l.fleetEntries, e.ID)
+			delete(l.localVersions, e.ID)
 			continue
 		}
 

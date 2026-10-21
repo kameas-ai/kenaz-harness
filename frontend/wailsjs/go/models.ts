@@ -3258,6 +3258,10 @@ export namespace fleet {
 	    pushRefused: number;
 	    pushHeldLoadAlways: number;
 	    strippedUnitKeys: number;
+	    tombstonesApplied: number;
+	    tombstoneDroppedLocalEdits: number;
+	    tombstonesDemoted: number;
+	    tombstonesHeldIdentityUnknown: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new UnitSyncStatusView(source);
@@ -3277,6 +3281,10 @@ export namespace fleet {
 	        this.pushRefused = source["pushRefused"];
 	        this.pushHeldLoadAlways = source["pushHeldLoadAlways"];
 	        this.strippedUnitKeys = source["strippedUnitKeys"];
+	        this.tombstonesApplied = source["tombstonesApplied"];
+	        this.tombstoneDroppedLocalEdits = source["tombstoneDroppedLocalEdits"];
+	        this.tombstonesDemoted = source["tombstonesDemoted"];
+	        this.tombstonesHeldIdentityUnknown = source["tombstonesHeldIdentityUnknown"];
 	    }
 	}
 

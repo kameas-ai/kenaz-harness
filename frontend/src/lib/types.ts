@@ -5271,6 +5271,14 @@ export interface UnitSyncStatusView {
   pushHeldLoadAlways?: number;
   /** Case-variant "_unit" metadata keys stripped before push. */
   strippedUnitKeys?: number;
+  /** Pulled tombstones that removed a shared unit the user does not own. */
+  tombstonesApplied?: number;
+  /** Subset of tombstonesApplied whose unit had un-pushed local edits. */
+  tombstoneDroppedLocalEdits?: number;
+  /** Tombstones for the user's OWN units: kept here as personal. */
+  tombstonesDemoted?: number;
+  /** Tombstones held in the latest pull (unit kept; retried automatically) until the account is confirmed. */
+  tombstonesHeldIdentityUnknown?: number;
 }
 
 // ── Catalog types (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────

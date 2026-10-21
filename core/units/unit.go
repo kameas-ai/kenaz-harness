@@ -218,6 +218,11 @@ var (
 	// ErrSyncStateNotFound is returned when a unit (or node id) has no
 	// sync sidecar row — i.e. it has never been synced to fleet.
 	ErrSyncStateNotFound = errors.New("units: sync state not found")
+
+	// ErrPersonalUnit is returned when a sync-driven delete targets a
+	// personal unit. Personal units never leave the machine, so nothing the
+	// server sends may remove one.
+	ErrPersonalUnit = errors.New("units: personal unit is not sync-managed")
 )
 
 // validKind reports whether k is a known Kind value.

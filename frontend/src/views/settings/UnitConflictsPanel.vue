@@ -141,6 +141,27 @@ async function submitResolve() {
     >
       {{ syncStatus?.pushHeldLoadAlways }} always-loaded item(s) not shared yet: your account's role is unknown. Sign out and back in to refresh it.
     </p>
+    <p
+      v-if="(syncStatus?.tombstonesApplied ?? 0) > 0"
+      class="text-xs text-ink-subtle"
+      data-testid="unit-sync-tombstones-removed"
+    >
+      {{ syncStatus?.tombstonesApplied }} shared item(s) removed from this device because they are no longer shared with you<template v-if="(syncStatus?.tombstoneDroppedLocalEdits ?? 0) > 0">, including {{ syncStatus?.tombstoneDroppedLocalEdits }} with local edits you had not shared</template>.
+    </p>
+    <p
+      v-if="(syncStatus?.tombstonesDemoted ?? 0) > 0"
+      class="text-xs text-ink-subtle"
+      data-testid="unit-sync-tombstones-demoted"
+    >
+      {{ syncStatus?.tombstonesDemoted }} of your own item(s) were removed from Fleet. They are kept on this device as personal items.
+    </p>
+    <p
+      v-if="(syncStatus?.tombstonesHeldIdentityUnknown ?? 0) > 0"
+      class="text-xs text-signal-warn"
+      data-testid="unit-sync-tombstones-held"
+    >
+      {{ syncStatus?.tombstonesHeldIdentityUnknown }} item(s) removed from Fleet are still on this device until your account is confirmed. This retries automatically.
+    </p>
 
     <!-- Conflict list -->
     <div>

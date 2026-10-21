@@ -78,6 +78,17 @@ type UnitSyncStatusView struct {
 	// StrippedUnitKeys counts case-variant "_unit" metadata keys stripped
 	// before push (review F13).
 	StrippedUnitKeys int `json:"strippedUnitKeys"`
+	// Pulled tombstones (a shared item deleted, or withdrawn from this
+	// member because it may contain a secret): TombstonesApplied removed a
+	// unit the user does not own; TombstoneDroppedLocalEdits is the subset
+	// that had un-pushed local edits; TombstonesDemoted kept the user's OWN
+	// unit as personal; TombstonesHeldIdentityUnknown (a gauge for the
+	// latest pull) is how many were held — unit kept, retried automatically
+	// every poll — because the signed-in account was not confirmed yet.
+	TombstonesApplied             int `json:"tombstonesApplied"`
+	TombstoneDroppedLocalEdits    int `json:"tombstoneDroppedLocalEdits"`
+	TombstonesDemoted             int `json:"tombstonesDemoted"`
+	TombstonesHeldIdentityUnknown int `json:"tombstonesHeldIdentityUnknown"`
 }
 
 // FleetAPI is the view-scoped RPC surface for fleet telemetry consent and
