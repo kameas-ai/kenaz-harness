@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	"github.com/kameas-ai/kenaz-harness/core/llm/tokenizer"
@@ -77,6 +78,12 @@ type ScheduledBudgetOutcome struct {
 // this chassis (HARNESS_COMPACTION=off, or no engine).
 var ErrScheduledBudgetUnavailable = errors.New("context compaction is not available on this install")
 
+// ScheduledBudgetTimeout bounds one budget pass (list, summarise,
+// write). The dispatcher holds the schedule's one-dispatch-at-a-time
+// claim while it runs, so a hung summariser must not hold it for good;
+// on timeout the pass fails and the fire proceeds uncompacted.
+const ScheduledBudgetTimeout = 2 * time.Minute
+
 // scheduledBudgetTier is the AggressivenessTier the budget's audit
 // events carry, so they are not mistaken for the maximal dial.
 const scheduledBudgetTier = "scheduled_budget"
@@ -148,7 +155,9 @@ func (c *ScheduledBudgetCompactor) CompactForSchedule(ctx context.Context, sessi
 		opts.OnlyIfOverTokens = budget
 	}
 
-	tctx, tally := compaction.WithCallCostTally(ctx)
+	tctx, cancel := context.WithTimeout(ctx, ScheduledBudgetTimeout)
+	defer cancel()
+	tctx, tally := compaction.WithCallCostTally(tctx)
 	res, err := c.deps.Engine.RollingSummarizeWith(tctx, sessionID, model, opts)
 	out.Result = res
 	out.Cost = tally.Snapshot()

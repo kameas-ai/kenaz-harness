@@ -32,6 +32,7 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
+	sessionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/scheduler"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 )
@@ -48,11 +49,23 @@ type summaryRegistry struct {
 	toolCounts  []int
 	containedAt []bool
 	contained   func() bool
+	// onCall, when set, runs (unlocked) at the start of each call with
+	// its 1-based number — to make something happen in the conversation
+	// while the summariser is "thinking".
+	onCall func(n int)
+	calls  int
 }
 
 const summaryCost = 0.01
 
 func (r *summaryRegistry) Stream(_ context.Context, req corellm.GenerationRequest) (corellm.Stream, error) {
+	r.mu.Lock()
+	r.calls++
+	n, hook := r.calls, r.onCall
+	r.mu.Unlock()
+	if hook != nil {
+		hook(n)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var b strings.Builder
@@ -445,10 +458,15 @@ func TestScheduledBudget_ContainmentBindsOnlyTheScheduledTurn(t *testing.T) {
 // delegates every later one to the real view.
 type sessionFullOnceLLM struct {
 	llmview.LLMConnectorAPI
-	bus   *EventBus
+	sessions sessionsview.SessionsAPI
+	bus      *EventBus
 	mu    sync.Mutex
 	calls int
 	full  int // how many leading calls end session-full
+	// toolRow: before ending session-full, the turn writes a tool row
+	// (it ran a tool). delivered: the close reports output delivered.
+	toolRow   bool
+	delivered bool
 }
 
 func (l *sessionFullOnceLLM) StartStreamForMessage(ctx context.Context, profileID, sessionID, model, messageID string) (string, error) {
@@ -458,8 +476,13 @@ func (l *sessionFullOnceLLM) StartStreamForMessage(ctx context.Context, profileI
 	l.mu.Unlock()
 	if n <= l.full {
 		sub := fmt.Sprintf("full-sub-%d", n)
+		if l.toolRow {
+			if _, err := l.sessions.AppendMessage(ctx, sessionID, "tool", "TOOL RESULT: mail sent"); err != nil {
+				return "", err
+			}
+		}
 		go l.bus.Publish("llm:stream-closed", chat.StreamClosedPayload{
-			SubID: sub, SessionID: sessionID, Reason: "backend-error",
+			SubID: sub, SessionID: sessionID, Reason: "backend-error", Delivered: l.delivered,
 			Message: compaction.ErrSessionFull.Error(), ErrorKind: chat.StreamClosedErrorKindSessionFull, TurnSpanID: messageID,
 		})
 		return sub, nil
@@ -479,7 +502,7 @@ func TestScheduledBudget_SessionFullCompactsAndRetriesOnce(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		b.fire(t, plain, "cr-full", chatRunJob("cr-full"))
 	}
-	llm := &sessionFullOnceLLM{LLMConnectorAPI: b.llm, bus: b.bus, full: 1}
+	llm := &sessionFullOnceLLM{LLMConnectorAPI: b.llm, sessions: b.sessions, bus: b.bus, full: 1}
 	d := b.dispatcher(llm)
 	r := b.fire(t, d, "cr-full", chatRunJob("cr-full"))
 	if llm.count() != 2 {
@@ -503,7 +526,7 @@ func TestScheduledBudget_SecondSessionFullIsRecordedNotLooped(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		b.fire(t, plain, "cr-full2", chatRunJob("cr-full2"))
 	}
-	llm := &sessionFullOnceLLM{LLMConnectorAPI: b.llm, bus: b.bus, full: 5}
+	llm := &sessionFullOnceLLM{LLMConnectorAPI: b.llm, sessions: b.sessions, bus: b.bus, full: 5}
 	d := b.dispatcher(llm)
 	b.fires++
 	r, err := d.DispatchChatRun(context.Background(), chatRunJob("cr-full2"), b.base.Add(time.Duration(b.fires)*time.Minute))
@@ -527,7 +550,7 @@ func TestScheduledBudget_SessionFullWithNothingToSummariseSaysSo(t *testing.T) {
 	b := buildBudgetStack(t)
 	seedBudgetRow(t, b.conversationStack.store, "cr-full3", 100_000, 2, "")
 	b.fire(t, b.dispatcher(nil), "cr-full3", chatRunJob("cr-full3"))
-	llm := &sessionFullOnceLLM{LLMConnectorAPI: b.llm, bus: b.bus, full: 5}
+	llm := &sessionFullOnceLLM{LLMConnectorAPI: b.llm, sessions: b.sessions, bus: b.bus, full: 5}
 	b.fires++
 	r, err := b.dispatcher(llm).DispatchChatRun(context.Background(), chatRunJob("cr-full3"), b.base.Add(time.Duration(b.fires)*time.Minute))
 	if err != nil {
@@ -538,5 +561,163 @@ func TestScheduledBudget_SessionFullWithNothingToSummariseSaysSo(t *testing.T) {
 	}
 	if n := len(b.summary.snapshot()); n != 0 {
 		t.Fatalf("summariser called %d time(s) with nothing older than the kept runs, want 0", n)
+	}
+}
+
+
+// startUserTurn starts an interactive turn in sessionID through the real
+// chat view and holds it running (the model waits on the returned gate)
+// until the caller closes the gate.
+func (b *budgetStack) startUserTurn(t *testing.T, sessionID string) chan struct{} {
+	t.Helper()
+	gate := make(chan struct{})
+	b.model.setGate(gate)
+	msg, err := b.sessions.AppendMessage(context.Background(), sessionID, "user", "INTERACTIVE while summarising")
+	if err != nil {
+		t.Fatalf("append user turn: %v", err)
+	}
+	if _, err := b.llm.(llmview.MessageTargetedStreamer).StartStreamForMessage(context.Background(), "test-profile", sessionID, "", msg.ID); err != nil {
+		t.Fatalf("start user turn: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !b.runner.HasActiveRun(sessionID) {
+		if time.Now().After(deadline) {
+			t.Fatal("user turn never became active")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return gate
+}
+
+func (b *budgetStack) releaseUserTurn(t *testing.T, sessionID string, gate chan struct{}) {
+	t.Helper()
+	b.model.setGate(nil)
+	close(gate)
+	b.waitIdle(t, sessionID)
+}
+
+// A turn the user starts while the pre-fire pass is summarising: the fire
+// is skipped (not run beside it) and the summary's cost stays on the row.
+//
+// Fail-on-revert: drop the post-pass busy re-check -> the fire appends its
+// prompt and the record is not skipped.
+func TestScheduledBudget_TurnStartedDuringCompactionSkipsFire(t *testing.T) {
+	b := buildBudgetStack(t)
+	seedBudgetRow(t, b.conversationStack.store, "cr-busy-c", 4000, 2, "")
+	d := b.dispatcher(nil)
+	var sid string
+	for i := 0; i < 6; i++ {
+		sid = b.fire(t, d, "cr-busy-c", chatRunJob("cr-busy-c")).SessionID
+	}
+	var gate chan struct{}
+	b.summary.onCall = func(int) { gate = b.startUserTurn(t, sid) }
+	b.fires++
+	r, err := d.DispatchChatRun(context.Background(), chatRunJob("cr-busy-c"), b.base.Add(time.Duration(b.fires)*time.Minute))
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if gate == nil {
+		t.Fatal("the fire never reached the summariser")
+	}
+	defer b.releaseUserTurn(t, sid, gate)
+	if r.Status != scheduler.ChatRunStatusSkipped || r.Error != skipReasonBusyAfterCompaction {
+		t.Fatalf("fire = %+v, want skipped (%q)", r, skipReasonBusyAfterCompaction)
+	}
+	if r.CompactionCostUSD == nil || *r.CompactionCostUSD != summaryCost {
+		t.Fatalf("skipped fire's compaction cost = %v, want %v", r.CompactionCostUSD, summaryCost)
+	}
+	for _, p := range activeUserPrompts(b.active(t, sid)) {
+		if p == b.promptOf(b.fires) {
+			t.Fatal("the skipped fire appended its prompt")
+		}
+	}
+}
+
+// The user sends a message after seeing the session-full failure, while
+// the forced retry pass is summarising: the retry must not start a second
+// turn beside theirs, nor re-arm the schedule's containment over it.
+//
+// Fail-on-revert: drop the busy check in retryAfterSessionFull -> a second
+// stream starts and the conversation is contained during the user's turn.
+func TestScheduledBudget_SessionFullRetryYieldsToUserTurn(t *testing.T) {
+	b := buildBudgetStack(t)
+	now := time.Now().UTC()
+	k := 1
+	if err := b.conversationStack.store.Create(context.Background(), scheduler.ChatRunRecord{
+		ID: "cr-yield", Name: "contained", Cron: "*/30 * * * *", OutputSink: "none", Enabled: true,
+		PromptTemplate:      "RUN {{date}} {{time}} " + strings.Repeat("lorem ipsum dolor ", 130),
+		CreatedBy:           scheduler.ScheduledRunCreatedByModel,
+		ToolAllowlist:       []string{"kenaz__alpha"},
+		ContextBudgetTokens: 100_000, KeepRecentRuns: &k,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	job := scheduler.Job{ID: "cr-yield", Kind: scheduler.JobKindChatRun, ChatRun: &scheduler.ChatRunSpec{
+		ID: "cr-yield", CreatedBy: scheduler.ScheduledRunCreatedByModel, ToolAllowlist: []string{"kenaz__alpha"},
+	}}
+	var sid string
+	plain := b.dispatcher(nil)
+	for i := 0; i < 3; i++ {
+		sid = b.fire(t, plain, "cr-yield", job).SessionID
+	}
+	llm := &sessionFullOnceLLM{LLMConnectorAPI: b.llm, sessions: b.sessions, bus: b.bus, full: 1}
+	var gate chan struct{}
+	b.summary.onCall = func(int) { gate = b.startUserTurn(t, sid) }
+	b.fires++
+	r, err := b.dispatcher(llm).DispatchChatRun(context.Background(), job, b.base.Add(time.Duration(b.fires)*time.Minute))
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if gate == nil {
+		t.Fatal("the forced pass never reached the summariser")
+	}
+	contained := b.contains.Contained(sid)
+	b.releaseUserTurn(t, sid, gate)
+	if r.Status != "failed" || r.Error != failReasonSessionFullBusy {
+		t.Fatalf("fire = %+v, want failed with the busy reason", r)
+	}
+	if llm.count() != 1 {
+		t.Fatalf("scheduled stream starts = %d, want 1 (no retry beside the user's turn)", llm.count())
+	}
+	if contained {
+		t.Fatal("the schedule's containment was re-armed over the user's interactive turn")
+	}
+}
+
+// A turn that already ran tools (or delivered output) before it ran out of
+// room is not re-run: re-running could repeat what the tools did.
+//
+// Fail-on-revert: drop the Delivered / turnRanTools gate -> the turn is
+// re-run (two stream starts) and completes.
+func TestScheduledBudget_SessionFullAfterToolsIsNotRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		toolRow   bool
+		delivered bool
+	}{
+		{"tool ran", true, false},
+		{"output delivered", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := buildBudgetStack(t)
+			seedBudgetRow(t, b.conversationStack.store, "cr-tools", 100_000, 1, "")
+			plain := b.dispatcher(nil)
+			for i := 0; i < 3; i++ {
+				b.fire(t, plain, "cr-tools", chatRunJob("cr-tools"))
+			}
+			llm := &sessionFullOnceLLM{LLMConnectorAPI: b.llm, sessions: b.sessions, bus: b.bus, full: 1, toolRow: tc.toolRow, delivered: tc.delivered}
+			b.fires++
+			r, err := b.dispatcher(llm).DispatchChatRun(context.Background(), chatRunJob("cr-tools"), b.base.Add(time.Duration(b.fires)*time.Minute))
+			if err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			if r.Status != "failed" || r.Error != failReasonSessionFullRanTools {
+				t.Fatalf("fire = %+v, want failed, not retried", r)
+			}
+			if llm.count() != 1 || len(b.summary.snapshot()) != 0 {
+				t.Fatalf("stream starts = %d, summariser calls = %d, want 1 and 0", llm.count(), len(b.summary.snapshot()))
+			}
+		})
 	}
 }
