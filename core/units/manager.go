@@ -119,6 +119,17 @@ func (m *Manager) UpdateWithSyncState(ctx context.Context, id string, baseVersio
 	return m.store.UpdateWithSyncState(ctx, id, baseVersion, body, []byte(metadata), st)
 }
 
+// DeleteWithSyncState removes a pulled team/org unit, its history, its edges
+// and its sync sidecar atomically (see Store.DeleteWithSyncState). The fleet
+// pull path applies a tombstone through here. ErrPersonalUnit for a personal
+// unit.
+func (m *Manager) DeleteWithSyncState(ctx context.Context, unitID string) error {
+	if unitID == "" {
+		return errors.New("units: DeleteWithSyncState: empty unitID")
+	}
+	return m.store.DeleteWithSyncState(ctx, unitID)
+}
+
 // GetSyncState returns the sidecar for a unit, or ErrSyncStateNotFound when
 // the unit has never been synced.
 func (m *Manager) GetSyncState(ctx context.Context, unitID string) (SyncState, error) {

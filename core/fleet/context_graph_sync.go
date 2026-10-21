@@ -187,8 +187,21 @@ type ContextPulledNode struct {
 	Version        int                   `json:"version"`
 	CreatedAt      string                `json:"created_at"`
 	UpdatedAt      string                `json:"updated_at"`
-	// DeletedAt is non-nil when the entry is a tombstone (FR-103).
+	// DeletedAt is non-nil when the entry is a tombstone. Fleet sends a
+	// tombstone for an FR-103 delete AND for a node quarantined because its
+	// content may contain a secret (kenaz-fleet #325): every member but the
+	// author gets an empty title/body/metadata with deleted_at =
+	// quarantined_at and the version unchanged. Both lanes treat any
+	// non-nil DeletedAt as "remove the local copy", whatever the version.
 	DeletedAt *string `json:"deleted_at,omitempty"`
+	// QuarantinedAt / QuarantineReason (kenaz-fleet #325) are set only on
+	// the AUTHOR's own quarantined node, which arrives with its full
+	// content and no deleted_at: the author keeps it (and can edit it
+	// clean, which clears the quarantine for everyone). Decoded so the
+	// shape is explicit; nothing branches on them and they are never
+	// logged. No UI surfaces them yet.
+	QuarantinedAt    *string `json:"quarantined_at,omitempty"`
+	QuarantineReason string  `json:"quarantine_reason,omitempty"`
 	// Unified-Unit dimensions (fleet ContextNode). Top-level is the ONLY read
 	// path for load_policy (WP03); metadata._unit is write-only compat.
 	UnitKind   string `json:"unit_kind,omitempty"`
@@ -752,6 +765,13 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 			DeletedAt:      n.DeletedAt,
 			OwnerUserID:    n.OwnerUserID,
 		}
+		if entry.DeletedAt != nil {
+			// A tombstone keeps only its identity. Fleet sends a quarantine
+			// tombstone content-free, but whatever a server sends with a
+			// deleted_at must not linger in memory (nor reach the library
+			// merger) as if it were live content.
+			entry.Title, entry.Body, entry.Metadata = "", "", nil
+		}
 		s.upsertPulledLocked(entry)
 	}
 
@@ -1081,6 +1101,20 @@ func (s *ContextGraphSyncer) PulledEntries() []ContextNodeEntry {
 	return out
 }
 
+// pulledEntriesForMerger returns every pulled entry INCLUDING tombstones
+// (DeletedAt != nil, content already zeroed by PullDelta). The library
+// merger needs the tombstones: it removes its copy of a node only when it
+// sees one. Handing it PulledEntries() (which hides tombstones) left a
+// deleted or quarantined node's old body in the library's fleet layer
+// forever.
+func (s *ContextGraphSyncer) pulledEntriesForMerger() []ContextNodeEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]ContextNodeEntry, len(s.pulled))
+	copy(out, s.pulled)
+	return out
+}
+
 // PulledEdges returns a snapshot of all pulled edges. Edges referencing
 // tombstoned nodes are NOT filtered here — callers may filter by node liveness.
 func (s *ContextGraphSyncer) PulledEdges() []ContextEdgeEntry {
@@ -1201,7 +1235,8 @@ func (s *ContextGraphSyncer) Stop() {
 }
 
 // SetLibraryMerger wires a callback that is called after each successful
-// PullDelta with the full current set of pulled (non-tombstoned) entries.
+// PullDelta with the full current set of pulled entries, tombstones included
+// (DeletedAt set, content empty) so the merger can drop its copy.
 // The callback is invoked from the poll goroutine; it must be non-blocking.
 // Safe to call before or after StartPoller. Passing nil clears the merger.
 func (s *ContextGraphSyncer) SetLibraryMerger(f func([]ContextNodeEntry)) {
@@ -1238,24 +1273,11 @@ func (s *ContextGraphSyncer) pollLoop(ctx context.Context, baseInterval time.Dur
 		case <-s.stopCh:
 			return
 		case <-timer.C:
-			n, err := s.PullDelta(ctx)
-			if err != nil {
+			if _, err := s.pullAndMerge(ctx); err != nil {
 				consecutiveErrors++
 				log.Printf("fleet: context pull poll failed (consecutive=%d): %v", consecutiveErrors, err)
 			} else {
 				consecutiveErrors = 0
-				// FR-012: after a successful pull, apply any received entries to
-				// the local context library via the injected libraryMerger. We
-				// always call with the full pulled snapshot (not just the delta)
-				// so the library stays consistent even across restarts.
-				if n > 0 {
-					s.mu.RLock()
-					merger := s.libraryMerger
-					s.mu.RUnlock()
-					if merger != nil {
-						merger(s.PulledEntries())
-					}
-				}
 			}
 			var next time.Duration
 			switch {
@@ -1269,6 +1291,25 @@ func (s *ContextGraphSyncer) pollLoop(ctx context.Context, baseInterval time.Dur
 			timer.Reset(next)
 		}
 	}
+}
+
+// pullAndMerge is one poll iteration: PullDelta, then (FR-012) hand the
+// local context library the full pulled snapshot via the injected
+// libraryMerger. The snapshot includes tombstones so a deleted or
+// quarantined node leaves the library too. Called with the full snapshot
+// (not just the delta) so the library stays consistent.
+func (s *ContextGraphSyncer) pullAndMerge(ctx context.Context) (int, error) {
+	n, err := s.PullDelta(ctx)
+	if err != nil || n == 0 {
+		return n, err
+	}
+	s.mu.RLock()
+	merger := s.libraryMerger
+	s.mu.RUnlock()
+	if merger != nil {
+		merger(s.pulledEntriesForMerger())
+	}
+	return n, nil
 }
 
 // ResetCursor drops the stored cursor (forcing a full backfill on next pull).

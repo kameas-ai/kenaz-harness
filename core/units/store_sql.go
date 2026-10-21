@@ -591,6 +591,44 @@ func (s *sqlStore) DeleteSyncState(ctx context.Context, unitID string) error {
 	})
 }
 
+// DeleteWithSyncState deletes a non-personal unit, its history, its edges
+// and its sidecar in ONE WriteTx. The child deletes are explicit and do not
+// rely on the foreign_keys pragma (see artifacts.deleteArtifactUnitsTx): a
+// tombstone that leaves a historical body behind in unit_versions has not
+// removed the content. See Store.DeleteWithSyncState.
+func (s *sqlStore) DeleteWithSyncState(ctx context.Context, unitID string) error {
+	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		var class string
+		err := tx.QueryRow(ctx, "SELECT classification FROM units WHERE id = ?", unitID).Scan(&class)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// Unit already gone: drop an orphaned sidecar so the node id
+			// no longer resolves to a missing unit.
+			_, derr := tx.Exec(ctx, "DELETE FROM unit_sync_state WHERE unit_id = ?", unitID)
+			return derr
+		case err != nil:
+			return fmt.Errorf("units: DeleteWithSyncState: read classification: %w", err)
+		}
+		if Classification(class) == ClassPersonal {
+			return ErrPersonalUnit
+		}
+		for _, stmt := range []struct {
+			q    string
+			args []any
+		}{
+			{"DELETE FROM unit_versions WHERE unit_id = ?", []any{unitID}},
+			{"DELETE FROM unit_edges WHERE from_id = ? OR to_id = ?", []any{unitID, unitID}},
+			{"DELETE FROM unit_sync_state WHERE unit_id = ?", []any{unitID}},
+			{"DELETE FROM units WHERE id = ?", []any{unitID}},
+		} {
+			if _, err := tx.Exec(ctx, stmt.q, stmt.args...); err != nil {
+				return fmt.Errorf("units: DeleteWithSyncState: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
 func scanSyncState(sc interface{ Scan(dest ...any) error }) (SyncState, error) {
 	var (
 		st           SyncState

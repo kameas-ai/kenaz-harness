@@ -444,5 +444,37 @@ func (s *memStore) DeleteSyncState(_ context.Context, unitID string) error {
 	return nil
 }
 
+// DeleteWithSyncState removes the unit, its history, its edges and its
+// sidecar under one lock. See Store.DeleteWithSyncState.
+func (s *memStore) DeleteWithSyncState(_ context.Context, unitID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.units[unitID]
+	if !ok {
+		delete(s.syncState, unitID)
+		return nil
+	}
+	if u.Classification == ClassPersonal {
+		return ErrPersonalUnit
+	}
+	versions := s.versions[:0:0]
+	for _, v := range s.versions {
+		if v.UnitID != unitID {
+			versions = append(versions, v)
+		}
+	}
+	s.versions = versions
+	edges := s.edges[:0:0]
+	for _, e := range s.edges {
+		if e.FromID != unitID && e.ToID != unitID {
+			edges = append(edges, e)
+		}
+	}
+	s.edges = edges
+	delete(s.syncState, unitID)
+	delete(s.units, unitID)
+	return nil
+}
+
 // ensure memStore implements Store at compile time.
 var _ Store = (*memStore)(nil)

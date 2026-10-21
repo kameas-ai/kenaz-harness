@@ -217,3 +217,31 @@ func TestFleetEntries_TombstonesExcluded(t *testing.T) {
 		t.Errorf("surviving entry ID=%q, want alive", entries[0].ID)
 	}
 }
+
+// TestMergeFleetEntries_TombstoneWinsOverLocalEditAndClearsIt: a tombstone
+// (FR-103 delete, or a kenaz-fleet #325 quarantine at an UNCHANGED version)
+// removes the entry even when a local edit is recorded, and drops that
+// record so the clean re-appearance at the next version is accepted.
+func TestMergeFleetEntries_TombstoneWinsOverLocalEditAndClearsIt(t *testing.T) {
+	lib, _ := newLib(t)
+	lib.MergeFleetEntries([]contexts.FleetEntry{
+		{ID: "q1", Layer: contextpack.LayerTeam, Kind: "guidance", Title: "t", Body: "withdrawn", Version: 3},
+	})
+	lib.MarkLocalVersion("q1", 9)
+
+	at := "2026-10-20T00:00:00Z"
+	lib.MergeFleetEntries([]contexts.FleetEntry{
+		{ID: "q1", Layer: contextpack.LayerTeam, Kind: "guidance", Version: 3, DeletedAt: &at},
+	})
+	if got := lib.FleetEntries(); len(got) != 0 {
+		t.Fatalf("tombstoned entry still present: %d entries", len(got))
+	}
+
+	lib.MergeFleetEntries([]contexts.FleetEntry{
+		{ID: "q1", Layer: contextpack.LayerTeam, Kind: "guidance", Title: "t", Body: "clean", Version: 4},
+	})
+	got := lib.FleetEntries()
+	if len(got) != 1 || got[0].Body != "clean" {
+		t.Errorf("re-appearance = %+v; want the clean body (stale local-version record must not hold it back)", got)
+	}
+}

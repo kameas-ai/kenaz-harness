@@ -75,6 +75,18 @@ type Store interface {
 	// after the syncer's read from being overwritten and baselined.
 	UpdateWithSyncState(ctx context.Context, id string, baseVersion int, body string, metadata []byte, st SyncState) (Unit, SyncState, error)
 
+	// DeleteWithSyncState removes a sync-managed (team/org) unit together
+	// with its version history, every edge touching it and its sync
+	// sidecar row, in a single atomic operation. It is the transactional
+	// primitive behind the fleet pull path's tombstone (a shared node that
+	// was deleted, or quarantined and so withdrawn from this member): the
+	// stored body AND every historical body must be gone, and the sidecar
+	// must go with them so a later clean re-appearance is a first sight.
+	// ErrPersonalUnit (nothing written) when the unit is personal. When the
+	// unit row is already gone, any orphaned sidecar row is still removed
+	// and the call returns nil.
+	DeleteWithSyncState(ctx context.Context, unitID string) error
+
 	// ListEdges returns all edges where FromID or ToID matches id,
 	// ordered by created_at ASC.
 	ListEdges(ctx context.Context, unitID string) ([]Edge, error)
