@@ -2,8 +2,10 @@
 /**
  * ChatRunOutcome — one scheduled-chat run's outcome: status, start time
  * (and duration once ended), model, cost, an "Open conversation" link when
- * the run's session exists, the error text of a failed run, and the
- * reason a fire was skipped. A schedule's runs all continue ONE
+ * the run's session exists, the error text of a failed run, the
+ * reason a fire was skipped, and — when the fire first summarised older
+ * runs to fit the schedule's context budget — what that cost (it is part
+ * of the run's cost, stated on its own so it is not hidden in it). A schedule's runs all continue ONE
  * conversation (migration sessions/0348), so every row of a schedule
  * links to the same session; a fire is "skipped" when that conversation
  * still had a turn running.
@@ -43,6 +45,14 @@ const cost = computed(() =>
   typeof props.run.costUsd === 'number' && props.run.costUsd > 0 ? formatCost(props.run.costUsd) : '',
 );
 
+// Set when the fire compacted first (scheduled-chat-context-budget);
+// 0 is a price the catalog does not know.
+const compaction = computed(() => {
+  const c = props.run.compactionCostUsd;
+  if (typeof c !== 'number') return null;
+  return c > 0 ? `${formatCost(c)} of it summarising older runs` : 'older runs summarised (cost not reported)';
+});
+
 const tid = (part: string) => `${props.testidPrefix}-${part}-${props.run.id}`;
 </script>
 
@@ -56,6 +66,7 @@ const tid = (part: string) => `${props.testidPrefix}-${part}-${props.run.id}`;
       </span>
       <span v-if="run.model" class="font-mono text-ink-muted truncate" :data-testid="tid('model')">{{ run.model }}</span>
       <span v-if="cost" class="font-mono text-ink-muted" :data-testid="tid('cost')">{{ cost }}</span>
+      <span v-if="compaction" class="text-ink-muted" :data-testid="tid('compaction')">({{ compaction }})</span>
       <RouterLink
         v-if="run.sessionId"
         :to="`/sessions/${encodeURIComponent(run.sessionId)}`"

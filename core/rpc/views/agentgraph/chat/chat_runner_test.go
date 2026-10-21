@@ -57,6 +57,12 @@ func (f *fakeCompactionEngine) RollingSummarize(_ context.Context, _ string, _ c
 	return f.rollingID, nil
 }
 
+// RollingSummarizeWith is not on the chat dial's path (the scheduled
+// budget calls it, scheduled_budget.go); the dial tests never script it.
+func (f *fakeCompactionEngine) RollingSummarizeWith(_ context.Context, _ string, _ compaction.ProviderProfileRef, _ compaction.RollingOptions) (compaction.RollingResult, error) {
+	return compaction.RollingResult{}, errors.New("fakeCompactionEngine: RollingSummarizeWith not scripted")
+}
+
 func (f *fakeCompactionEngine) compactCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

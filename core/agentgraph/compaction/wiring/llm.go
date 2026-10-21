@@ -165,6 +165,10 @@ func (a *LLMCaller) CallForSummary(ctx context.Context, model compaction.Provide
 	// we concatenate every text-typed block in declaration order.
 	out := flattenContentText(resp.Content)
 	a.recordOverhead(resp)
+	// Per-trigger attribution: a caller that put a tally on ctx (the
+	// scheduled-chat dispatcher) learns what THIS call cost.
+	compaction.CallCostTallyFrom(ctx).Add(resp.Cost.Total, resp.Cost.Indeterminate,
+		resp.Usage.InputTokens, resp.Usage.OutputTokens)
 	return out, resp.Usage.InputTokens, resp.Usage.OutputTokens, nil
 }
 

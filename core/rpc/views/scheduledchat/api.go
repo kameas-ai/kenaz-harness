@@ -53,6 +53,16 @@ type ChatRunEntry struct {
 	// from scheduled_chat_run_history on List/Get so the Schedules row
 	// shows how the last run went without a second call.
 	LastRun *RunSummary `json:"lastRun,omitempty"`
+	// Context policy of the schedule's conversation (sessions/0349,
+	// scheduled-chat-context-budget). Always populated on read: a
+	// schedule that never set them reads as the defaults (20000 / 2 / "").
+	//
+	// ContextBudgetTokens: before a fire whose conversation is larger
+	// than this, older runs are summarised. KeepRecentRuns: runs kept
+	// verbatim. MemoryFocus: what the summary must remember.
+	ContextBudgetTokens int    `json:"contextBudgetTokens"`
+	KeepRecentRuns      int    `json:"keepRecentRuns"`
+	MemoryFocus         string `json:"memoryFocus"`
 }
 
 // DefaultModel is what a schedule with no model override runs on — the
@@ -61,6 +71,9 @@ type ChatRunEntry struct {
 type DefaultModel struct {
 	ProfileID string `json:"profileId"`
 	Model     string `json:"model"`
+	// MaxContextTokens is that model's context window, the ceiling of a
+	// schedule's context budget. 0 when unknown.
+	MaxContextTokens int `json:"maxContextTokens,omitempty"`
 }
 
 // RunSummary is one row in the History result.
@@ -75,8 +88,13 @@ type RunSummary struct {
 	Error         string     `json:"error,omitempty"`
 	// Model is the model the run was dispatched with; empty when unknown.
 	Model string `json:"model,omitempty"`
-	// CostUSD is the run's cost; 0 when unknown or free.
+	// CostUSD is the run's cost; 0 when unknown or free. Includes
+	// CompactionCostUSD.
 	CostUSD float64 `json:"costUsd,omitempty"`
+	// CompactionCostUSD is set when the fire first summarised older runs
+	// to fit the schedule's context budget: what that cost (0 = price
+	// unknown). Absent when the fire did not compact.
+	CompactionCostUSD *float64 `json:"compactionCostUsd,omitempty"`
 }
 
 // CreateInput is the wire shape for Create.
@@ -111,6 +129,13 @@ type CreateInput struct {
 	// RunAt is the one-shot fire time (ISO 8601). REQUIRED when
 	// TriggerKind == "once"; ignored when TriggerKind == "cron".
 	RunAt string `json:"runAt,omitempty"`
+	// Context policy (sessions/0349). Each is optional: absent takes the
+	// default (ContextBudgetTokens 20000, KeepRecentRuns 2, MemoryFocus
+	// ""). Validated: budget 4000..the model's context window (2,000,000
+	// when unknown), keep 0..10, memory focus at most 2000 characters.
+	ContextBudgetTokens *int    `json:"contextBudgetTokens,omitempty"`
+	KeepRecentRuns      *int    `json:"keepRecentRuns,omitempty"`
+	MemoryFocus         *string `json:"memoryFocus,omitempty"`
 }
 
 // UpdateInput is the wire shape for Update. ID is required.
@@ -127,6 +152,12 @@ type UpdateInput struct {
 	// TriggerKind / RunAt — see CreateInput's docs on each.
 	TriggerKind string `json:"triggerKind,omitempty"`
 	RunAt       string `json:"runAt,omitempty"`
+	// Context policy — see CreateInput. Absent keeps the schedule's
+	// current value (an older client that does not send them cannot
+	// reset a tuned budget).
+	ContextBudgetTokens *int    `json:"contextBudgetTokens,omitempty"`
+	KeepRecentRuns      *int    `json:"keepRecentRuns,omitempty"`
+	MemoryFocus         *string `json:"memoryFocus,omitempty"`
 }
 
 // Registrar is the cron-arming seam into a chat-run cron engine (mission

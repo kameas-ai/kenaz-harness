@@ -117,9 +117,31 @@ type ChatRunDispatcherDeps struct {
 	// rather than run unrestricted; an uncontained (user, no allowlist)
 	// run is unaffected.
 	Containment *ScheduledRunContainmentRegistry
+	// Compactor enforces the schedule's context budget on its reused
+	// conversation (scheduled-chat-context-budget): before a fire appends
+	// its prompt, a conversation over context_budget_tokens keeps its
+	// newest keep_recent_runs runs verbatim and folds the rest into one
+	// rolling summary; a fire that still ends "session full" compacts
+	// and retries once. Production wires chat.ScheduledBudgetCompactor
+	// over the chat stack's compaction deps (api.go). nil (compaction
+	// unavailable: HARNESS_COMPACTION=off, no engine) leaves every fire
+	// replaying the whole conversation, as before the budget existed.
+	Compactor ScheduledConversationCompactor
 	// Timeout overrides defaultDispatchTimeout. Zero uses the default.
 	Timeout time.Duration
 }
+
+// ScheduledConversationCompactor is the seam onto the per-schedule
+// context budget. *chat.ScheduledBudgetCompactor implements it.
+type ScheduledConversationCompactor interface {
+	CompactForSchedule(ctx context.Context, sessionID, profileID, modelOverride string, b chat.ScheduledBudget) (chat.ScheduledBudgetOutcome, error)
+}
+
+// promptHistoryDepth bounds how many history rows a fire reads to find
+// its schedule's run boundaries (prompt_message_id). Only runs still in
+// the active conversation matter — at most keep_recent_runs plus the
+// runs since the last compaction — so this is far above what is used.
+const promptHistoryDepth = 200
 
 // PausedTurnChecker is the seam onto the chat runner's paused-for-key-
 // rotation turns. *chat.ChatRunner implements it.
@@ -157,6 +179,27 @@ const (
 	skipReasonInFlight   = "skipped: this schedule's previous run is still in progress"
 	skipReasonActiveTurn = "skipped: a turn is still running in this schedule's conversation (the previous run, or one started there by hand), so this fire did not start another"
 	skipReasonPausedTurn = "skipped: a turn in this schedule's conversation is paused awaiting provider credentials; it resumes once the key is rotated, so this fire did not start another"
+	// skipReasonBusyAfterCompaction: a turn started in the conversation
+	// while this fire was summarising older runs.
+	skipReasonBusyAfterCompaction = "skipped: a turn started in this schedule's conversation while older runs were being summarised, so this fire did not start another"
+	// failReasonSessionFull is the history Error of a fire that ran out
+	// of context window even after the budget compacted and retried.
+	failReasonSessionFull = "the conversation no longer fits the model's context window, even after summarising older runs and retrying once; this fire was not answered. Lower the schedule's context budget or keep fewer runs verbatim, or delete the conversation to start a new one"
+	// failReasonSessionFullNoRetry: the same, when the retry never
+	// started — nothing older was left to summarise, or summarising
+	// failed (the cause is appended).
+	failReasonSessionFullNoRetry = "the conversation no longer fits the model's context window and no older runs could be summarised to make room, so this fire was not answered. Lower the schedule's context budget or keep fewer runs verbatim, or delete the conversation to start a new one"
+	// failReasonSessionFullRanTools: the turn had already delivered
+	// output or run tools before it ran out of room; re-running it could
+	// repeat their effects (a mail sent twice), the same rule the chat
+	// runner applies to its own partial-turn resume.
+	failReasonSessionFullRanTools = "the conversation ran out of the model's context window after this run had already produced output or run tools; it was not retried, because re-running it could repeat what the tools did. Lower the schedule's context budget or keep fewer runs verbatim"
+	// failReasonSessionFullBusy: a turn started in the conversation
+	// while the retry was summarising; the retry does not run beside it.
+	failReasonSessionFullBusy = "the conversation ran out of the model's context window, and a turn started in it while older runs were being summarised, so this fire was not retried beside it"
+	// failReasonSessionFullRestartFailed: the retry compacted but its
+	// stream could not start (the cause is appended).
+	failReasonSessionFullRestartFailed = "the conversation ran out of the model's context window; older runs were summarised, but the retry could not start"
 )
 
 // claim marks id in flight and reports whether it was free.
@@ -328,6 +371,35 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	// (see ScheduledRunContainmentRegistry). The generation makes that
 	// release specific to this fire: a late release from an earlier run
 	// of the conversation cannot end this one's containment.
+	// scheduled-chat-context-budget: enforce the schedule's context
+	// budget BEFORE this fire's prompt is appended and before its
+	// containment is armed — the summariser runs no tools, and the
+	// containment generation must bind exactly the scheduled turn. A
+	// conversation this fire just created has nothing to compact.
+	var budget budgetAccount
+	var runStarts []string
+	if !created && d.deps.Compactor != nil {
+		runStarts = d.runStartIDs(ctx, id)
+		// model (the override, or what the default resolved to) is the
+		// summariser fallback and the window that caps the budget.
+		budget.add(d.deps.Compactor.CompactForSchedule(ctx, sess.ID, profileID, model, chat.ScheduledBudget{
+			BudgetTokens:   rec.EffectiveContextBudget(),
+			KeepRecentRuns: rec.EffectiveKeepRecentRuns(),
+			MemoryFocus:    rec.MemoryFocus,
+			RunStartIDs:    runStarts,
+			PendingPrompt:  prompt,
+		}))
+		if budget.attempted {
+			// The summary call took time: a turn the user started in the
+			// conversation meanwhile must not get a concurrent one.
+			if d.conversationBusy(sess.ID) {
+				r := skippedRecord(sess.ID, now, skipReasonBusyAfterCompaction)
+				budget.apply(&r)
+				return r, nil
+			}
+		}
+	}
+
 	var containGen uint64
 	if containment.Contained {
 		containGen = d.deps.Containment.Contain(sess.ID, id, containment.Allow)
@@ -348,6 +420,7 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		}
 		r := failedRecord2(sess.ID, now, fmt.Sprintf("append prompt: %v", aerr))
 		r.Model = model
+		budget.apply(&r)
 		d.discardNewEmptySession(ctx, id, created, &r, prompt)
 		return r, nil
 	}
@@ -362,19 +435,8 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	subCh, cancel := d.deps.Bus.Subscribe(64, "llm:stream-closed", topicAuthResumed)
 	defer cancel()
 
-	// Answer exactly THIS fire's prompt row, never "the newest user row":
-	// the conversation is shared with the user, and a message they send
-	// between the append above and this call would otherwise be the turn
-	// this run answers (and runs contained), with the scheduled prompt
-	// never answered. A view that cannot target a row is refused rather
-	// than risked.
-	var subID string
-	var sterr error
-	if ts, ok := d.deps.LLM.(llmview.MessageTargetedStreamer); ok {
-		subID, sterr = ts.StartStreamForMessage(ctx, profileID, sess.ID, rec.Model, promptMsg.ID)
-	} else {
-		sterr = errors.New("the LLM view cannot start a stream for a specific message, so a scheduled run could answer another turn in its conversation")
-	}
+	// Answer exactly THIS fire's prompt row (see startOwnStream).
+	subID, sterr := d.startOwnStream(ctx, profileID, sess.ID, rec.Model, promptMsg.ID)
 	if sterr != nil {
 		// No stream started, so nothing can run under the containment.
 		if containment.Contained {
@@ -382,6 +444,8 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		}
 		r := failedRecord2(sess.ID, now, fmt.Sprintf("start stream: %v", sterr))
 		r.Model = model
+		r.PromptMessageID = promptMsg.ID
+		budget.apply(&r)
 		d.discardNewEmptySession(ctx, id, created, &r, prompt)
 		return r, nil
 	}
@@ -398,12 +462,19 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 
 	deadline := time.NewTimer(d.deps.Timeout)
 	defer deadline.Stop()
+	// retried: the one session-full retry this fire may make;
+	// noRetryReason: why it did not start ("" once it has).
+	retried, noRetryReason := false, ""
 
 	for {
 		select {
 		case ev, ok := <-subCh:
 			if !ok {
-				return failedRecord2(sess.ID, now, "event bus subscription closed before a terminal event arrived"), nil
+				r := failedRecord2(sess.ID, now, "event bus subscription closed before a terminal event arrived")
+				r.Model = model
+				r.PromptMessageID = promptMsg.ID
+				budget.apply(&r)
+				return r, nil
 			}
 			if containment.Contained && own.observe(ev) {
 				d.deps.Containment.Release(sess.ID, own.gen)
@@ -417,8 +488,38 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			if payload.SubID != subID {
 				continue // another stream's terminal event; keep waiting.
 			}
+			sessionFull := payload.ErrorKind == chat.StreamClosedErrorKindSessionFull
+			if sessionFull && !retried && !created && d.deps.Compactor != nil {
+				// Session-full safety net: the conversation outgrew the
+				// window anyway (the budget pass failed, or this run's
+				// own rows are large). Compact once more — forced, this
+				// prompt kept — and answer the same prompt row again.
+				// Once only: a second session-full is recorded, not
+				// looped on.
+				retried = true
+				nsub, ngen, why := d.retryAfterSessionFull(ctx, rec, containment, sess.ID, profileID, model, promptMsg.ID, payload, append(append([]string(nil), runStarts...), promptMsg.ID), &budget)
+				noRetryReason = why
+				if why == "" {
+					subID = nsub
+					own = newOwnStreams(sess.ID, nsub, ngen)
+					deadline.Reset(d.deps.Timeout)
+					log.Info("scheduler.chat_dispatch.session_full_retry",
+						"chat_run_id", id, "session_id", sess.ID, "sub_id", nsub)
+					continue
+				}
+			}
 			histRec := d.buildRecord(ctx, sess.ID, promptMsg.ID, now, payload)
 			histRec.Model = model
+			if sessionFull && d.deps.Compactor != nil && !created {
+				histRec.Error = failReasonSessionFull
+				if noRetryReason != "" {
+					histRec.Error = noRetryReason
+				}
+				if budget.err != nil {
+					histRec.Error += fmt.Sprintf(" (summarising older runs failed: %v)", budget.err)
+				}
+			}
+			budget.apply(&histRec)
 			// The run is over (terminal event), so a failure that never
 			// produced an assistant message in a conversation THIS fire
 			// created leaves an empty session nobody will open: delete
@@ -436,6 +537,8 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			}
 			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("timed out after %s waiting for the run to finish", d.deps.Timeout))
 			histRec.Model = model
+			histRec.PromptMessageID = promptMsg.ID
+			budget.apply(&histRec)
 			if sinkKind == "banner" {
 				d.deliverBanner(id, rec.Name, histRec.SessionID, histRec)
 			}
@@ -446,6 +549,8 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			}
 			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("context cancelled while awaiting completion: %v", ctx.Err()))
 			histRec.Model = model
+			histRec.PromptMessageID = promptMsg.ID
+			budget.apply(&histRec)
 			if sinkKind == "banner" {
 				d.deliverBanner(id, rec.Name, histRec.SessionID, histRec)
 			}
@@ -617,9 +722,10 @@ func (d *LiveChatRunDispatcher) deliverBanner(chatRunID, name, sessionID string,
 func (d *LiveChatRunDispatcher) buildRecord(ctx context.Context, sessionID, promptID string, startedAt time.Time, payload chat.StreamClosedPayload) scheduler.ChatRunHistoryRecord {
 	ended := time.Now().UTC()
 	rec := scheduler.ChatRunHistoryRecord{
-		SessionID: sessionID,
-		StartedAt: startedAt,
-		EndedAt:   &ended,
+		SessionID:       sessionID,
+		StartedAt:       startedAt,
+		EndedAt:         &ended,
+		PromptMessageID: promptID,
 	}
 	switch {
 	case payload.Reason == "completed" && payload.FinishReason == "paused":
@@ -814,6 +920,161 @@ func lastAssistantSnippet(rows []sessionsview.Message) string {
 	return ""
 }
 
+// startOwnStream answers exactly the prompt row promptID, never "the
+// newest user row": the conversation is shared with the user, and a
+// message they send between the append and this call would otherwise be
+// the turn this run answers (and runs contained), with the scheduled
+// prompt never answered. A view that cannot target a row is refused
+// rather than risked.
+func (d *LiveChatRunDispatcher) startOwnStream(ctx context.Context, profileID, sessionID, model, promptID string) (string, error) {
+	ts, ok := d.deps.LLM.(llmview.MessageTargetedStreamer)
+	if !ok {
+		return "", errors.New("the LLM view cannot start a stream for a specific message, so a scheduled run could answer another turn in its conversation")
+	}
+	return ts.StartStreamForMessage(ctx, profileID, sessionID, model, promptID)
+}
+
+// runStartIDs returns the session rows this schedule's earlier fires
+// appended their prompts as — the run boundaries the context budget
+// counts (scheduled_chat_run_history.prompt_message_id, sessions/0349).
+// A read failure returns none: the budget then counts every user row as
+// a run, the reading it gives a conversation from before 0349.
+func (d *LiveChatRunDispatcher) runStartIDs(ctx context.Context, chatRunID string) []string {
+	hist, err := d.deps.Store.History(ctx, chatRunID, promptHistoryDepth)
+	if err != nil {
+		logging.L().Warn("scheduler.chat_dispatch.run_boundaries_unread",
+			"chat_run_id", chatRunID, "error", err.Error())
+		return nil
+	}
+	ids := make([]string, 0, len(hist))
+	for _, h := range hist {
+		if h.PromptMessageID != "" {
+			ids = append(ids, h.PromptMessageID)
+		}
+	}
+	return ids
+}
+
+// retryAfterSessionFull is the one retry a fire gets after its stream
+// ended "session full": a forced budget pass that keeps this fire's
+// prompt (and keep_recent_runs earlier runs, budget permitting), then a
+// new stream for the same prompt row, contained again under a fresh
+// generation when the schedule is contained. It returns the history
+// Error to record ("" when the retry stream started):
+//
+//   - the turn delivered output or ran tools: not retried at all, since
+//     re-running it could repeat their effects;
+//   - nothing could be summarised;
+//   - a turn started in the conversation during the forced pass (the
+//     user, after seeing the failure): the retry must neither run beside
+//     it nor re-arm containment over it;
+//   - the stream could not start.
+func (d *LiveChatRunDispatcher) retryAfterSessionFull(ctx context.Context, rec scheduler.ChatRunRecord, containment scheduler.RunContainment,
+	sessionID, profileID, model, promptID string, payload chat.StreamClosedPayload, runStarts []string, budget *budgetAccount) (subID string, gen uint64, noRetry string) {
+	if payload.Delivered || d.turnRanTools(ctx, sessionID, promptID) {
+		return "", 0, failReasonSessionFullRanTools
+	}
+	budget.add(d.deps.Compactor.CompactForSchedule(ctx, sessionID, profileID, model, chat.ScheduledBudget{
+		BudgetTokens:   rec.EffectiveContextBudget(),
+		KeepRecentRuns: rec.EffectiveKeepRecentRuns() + 1, // + this fire's own run
+		MemoryFocus:    rec.MemoryFocus,
+		RunStartIDs:    runStarts,
+		Force:          true,
+		MinKeepRuns:    1,
+	}))
+	if !budget.compactedLast {
+		return "", 0, failReasonSessionFullNoRetry
+	}
+	if d.conversationBusy(sessionID) {
+		return "", 0, failReasonSessionFullBusy
+	}
+	if containment.Contained {
+		gen = d.deps.Containment.Contain(sessionID, rec.ID, containment.Allow)
+	}
+	sub, err := d.startOwnStream(ctx, profileID, sessionID, rec.Model, promptID)
+	if err != nil {
+		if containment.Contained {
+			d.deps.Containment.Release(sessionID, gen)
+		}
+		logging.L().Warn("scheduler.chat_dispatch.session_full_retry_failed",
+			"chat_run_id", rec.ID, "session_id", sessionID, "error", err.Error())
+		return "", 0, fmt.Sprintf("%s: %v", failReasonSessionFullRestartFailed, err)
+	}
+	return sub, gen, ""
+}
+
+// conversationBusy reports a turn executing, or paused for key rotation,
+// in sessionID — the two states in which a fire must not start a turn.
+func (d *LiveChatRunDispatcher) conversationBusy(sessionID string) bool {
+	return (d.deps.ActiveRuns != nil && d.deps.ActiveRuns.HasActiveRun(sessionID)) ||
+		(d.deps.PausedTurns != nil && d.deps.PausedTurns.HasPausedTurnIn(sessionID))
+}
+
+// turnRanTools reports whether the turn opened by promptID wrote a tool
+// call or result. A read failure answers true: unable to prove the turn
+// is side-effect free, it is not re-run.
+func (d *LiveChatRunDispatcher) turnRanTools(ctx context.Context, sessionID, promptID string) bool {
+	msgs, err := d.deps.Sessions.ListMessages(ctx, sessionID)
+	if err != nil {
+		return true
+	}
+	for _, m := range runTurnRows(msgs, promptID) {
+		if m.Role == "tool" || len(m.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// budgetAccount accumulates what the context budget did during one fire
+// (the pre-fire pass and, at most, one session-full retry) so the
+// history row reports it: the summarisation cost is added to the run's
+// cost and stated on its own (compaction_cost_usd), never dropped.
+type budgetAccount struct {
+	// attempted: some pass was over budget (or forced) and asked the
+	// summariser — the fire's cost line then names it.
+	attempted bool
+	// compactedLast: the latest pass wrote a summary.
+	compactedLast bool
+	calls         int
+	costUSD       float64
+	// err is the latest pass's failure, nil when it succeeded.
+	err error
+}
+
+func (b *budgetAccount) add(out chat.ScheduledBudgetOutcome, err error) {
+	if errors.Is(err, chat.ErrScheduledBudgetUnavailable) {
+		b.compactedLast = false
+		return
+	}
+	b.attempted = b.attempted || out.Attempted
+	b.compactedLast = out.Compacted
+	b.calls += out.Cost.Calls
+	b.costUSD += out.Cost.TotalUSD
+	b.err = err
+}
+
+// apply stamps the account onto a history row: CompactionCostUSD set
+// (possibly 0, a price the catalog does not know) whenever a summariser
+// call was made, and included in CostUSD.
+//
+// A call whose price is unknown (CallCostSnapshot.Indeterminate) adds
+// nothing to the figure; when every call was unpriced the row reads 0
+// and the run list says "cost not reported". A mix of priced and
+// unpriced calls in one fire (at most two passes) is reported at the
+// priced total only — the unpriced count is in the
+// chat.scheduled_budget.compacted log line, not on the row.
+//
+// Over budget with no call made (nothing aged out yet) adds nothing.
+func (b *budgetAccount) apply(r *scheduler.ChatRunHistoryRecord) {
+	if b.calls == 0 {
+		return
+	}
+	c := b.costUSD
+	r.CompactionCostUSD = &c
+	r.CostUSD += c
+}
+
 // failedRecord builds a ChatRunHistoryRecord for a failure that occurred
 // before a session existed.
 func failedRecord(now time.Time, reason string) scheduler.ChatRunHistoryRecord {
@@ -845,3 +1106,13 @@ func failedRecord2(sessionID string, now time.Time, reason string) scheduler.Cha
 }
 
 var _ scheduler.ChatRunDispatcher = (*LiveChatRunDispatcher)(nil)
+
+// scheduledCompactor converts a possibly-nil *chat.ScheduledBudgetCompactor
+// into the dispatcher's interface without producing a typed-nil value
+// (which would read as wired and fail every call).
+func scheduledCompactor(c *chat.ScheduledBudgetCompactor) ScheduledConversationCompactor {
+	if c == nil {
+		return nil
+	}
+	return c
+}

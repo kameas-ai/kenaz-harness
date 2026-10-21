@@ -16,13 +16,25 @@
  * no tool-set field.
  * TODO(dated 2026-10-09, owner alec — follow-up mission "schedule tool
  * set"): wire "Custom servers" once the schedule record carries a tool set.
+ *
+ * Conversation memory (scheduled-chat-context-budget, sessions/0349): every
+ * fire continues one conversation, so the form sets how much of it a run
+ * carries — the context budget (4000 tokens up to the model's window),
+ * how many recent runs stay verbatim (0–10), and what the summary of older
+ * runs must remember. The server validates the same bounds.
  */
 import { ref, computed, watch, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { formatTokens, sendableTokens } from '@/lib/toolExposure';
-import type {
-  ScheduledChatClient,
-  ScheduledChatEntry,
+import {
+  CONTEXT_BUDGET_DEFAULT,
+  CONTEXT_BUDGET_MAX,
+  CONTEXT_BUDGET_MIN,
+  KEEP_RECENT_RUNS_DEFAULT,
+  KEEP_RECENT_RUNS_MAX,
+  MEMORY_FOCUS_MAX_CHARS,
+  type ScheduledChatClient,
+  type ScheduledChatEntry,
 } from '@/lib/scheduledChatClient';
 
 const props = defineProps<{
@@ -52,15 +64,23 @@ const enabled = ref(true);
 // instead of requiring a fabricated cron expression.
 const triggerKind = ref<'cron' | 'once'>('cron');
 const runAt = ref('');
+// Conversation memory (sessions/0349). Number inputs bind as numbers; an
+// emptied field reads as '' and fails validation.
+const contextBudget = ref<number | ''>(CONTEXT_BUDGET_DEFAULT);
+const keepRecentRuns = ref<number | ''>(KEEP_RECENT_RUNS_DEFAULT);
+const memoryFocus = ref('');
 
 // What "active default" resolves to — the same resolution the dispatcher
 // applies at fire time — shown under the field while it is blank. null
 // means it could not be read; '' means no default is configured.
 const defaultModel = ref<string | null>(null);
+// The default model's context window (the budget's ceiling); 0 = unknown.
+const defaultWindow = ref(0);
 onMounted(async () => {
   try {
     const dm = await props.client.defaultModel();
     defaultModel.value = dm.model || '';
+    defaultWindow.value = dm.maxContextTokens ?? 0;
   } catch {
     defaultModel.value = null;
   }
@@ -107,6 +127,9 @@ watch(
       // entry.runAt is ISO 8601 UTC; datetime-local inputs want
       // "YYYY-MM-DDTHH:mm" in LOCAL time.
       runAt.value = entry.runAt ? toDatetimeLocal(entry.runAt) : '';
+      contextBudget.value = entry.contextBudgetTokens ?? CONTEXT_BUDGET_DEFAULT;
+      keepRecentRuns.value = entry.keepRecentRuns ?? KEEP_RECENT_RUNS_DEFAULT;
+      memoryFocus.value = entry.memoryFocus ?? '';
     } else {
       name.value = '';
       promptTemplate.value = '';
@@ -118,6 +141,9 @@ watch(
       enabled.value = true;
       triggerKind.value = 'cron';
       runAt.value = '';
+      contextBudget.value = CONTEXT_BUDGET_DEFAULT;
+      keepRecentRuns.value = KEEP_RECENT_RUNS_DEFAULT;
+      memoryFocus.value = '';
     }
   },
   { immediate: true },
@@ -151,10 +177,52 @@ const sinkValue = computed(() =>
   outputSink.value === 'file' ? `file:${filePath.value}` : outputSink.value,
 );
 
+// The budget's ceiling: the default model's window when the schedule
+// runs on it and the window is known, else the absolute maximum (the
+// server checks a named model's own window).
+const budgetCeiling = computed(() =>
+  !model.value.trim() && defaultWindow.value > 0 ? defaultWindow.value : CONTEXT_BUDGET_MAX,
+);
+// On edit, an unchanged budget is not sent (the server keeps the stored
+// value) and not checked against the ceiling — the server's rule: a
+// stored budget above a smaller model's window is capped at fire time and
+// must not block an unrelated edit.
+const budgetChanged = computed(
+  () =>
+    !props.editing ||
+    contextBudget.value !== (props.editing.contextBudgetTokens ?? CONTEXT_BUDGET_DEFAULT),
+);
+const budgetError = computed(() => {
+  const v = contextBudget.value;
+  if (v === '' || !Number.isInteger(v)) return 'Enter a whole number of tokens';
+  if (v < CONTEXT_BUDGET_MIN) return `At least ${CONTEXT_BUDGET_MIN.toLocaleString()} tokens`;
+  if (budgetChanged.value && v > budgetCeiling.value) {
+    return budgetCeiling.value === CONTEXT_BUDGET_MAX
+      ? `At most ${CONTEXT_BUDGET_MAX.toLocaleString()} tokens`
+      : `At most ${budgetCeiling.value.toLocaleString()} tokens (the model's context window)`;
+  }
+  return '';
+});
+const keepError = computed(() => {
+  const v = keepRecentRuns.value;
+  if (v === '' || !Number.isInteger(v) || v < 0 || v > KEEP_RECENT_RUNS_MAX) {
+    return `Between 0 and ${KEEP_RECENT_RUNS_MAX}`;
+  }
+  return '';
+});
+const focusError = computed(() =>
+  memoryFocus.value.trim().length > MEMORY_FOCUS_MAX_CHARS
+    ? `At most ${MEMORY_FOCUS_MAX_CHARS} characters`
+    : '',
+);
+
 const canSave = computed(
   () =>
     (isOnce.value ? runAtValid.value : cronValid.value) &&
-    (!filePathRequired.value || filePath.value.trim() !== ''),
+    (!filePathRequired.value || filePath.value.trim() !== '') &&
+    !budgetError.value &&
+    !keepError.value &&
+    !focusError.value,
 );
 
 // ── form submission ───────────────────────────────────────────────────────
@@ -174,6 +242,11 @@ async function handleSubmit() {
     const triggerFields = isOnce.value
       ? { cron: '', triggerKind: 'once' as const, runAt: new Date(runAt.value).toISOString() }
       : { cron: cron.value.trim(), triggerKind: 'cron' as const, runAt: undefined };
+    const memoryFields = {
+      contextBudgetTokens: budgetChanged.value ? Number(contextBudget.value) : undefined,
+      keepRecentRuns: Number(keepRecentRuns.value),
+      memoryFocus: memoryFocus.value.trim(),
+    };
     let entry: ScheduledChatEntry;
     if (isEditMode.value && props.editing) {
       entry = await props.client.update({
@@ -185,6 +258,7 @@ async function handleSubmit() {
         model: model.value || undefined,
         outputSink: sinkValue.value,
         enabled: enabled.value,
+        ...memoryFields,
       });
     } else {
       entry = await props.client.create({
@@ -195,6 +269,7 @@ async function handleSubmit() {
         model: model.value || undefined,
         outputSink: sinkValue.value,
         enabled: enabled.value,
+        ...memoryFields,
       });
     }
     emit('saved', entry);
@@ -407,6 +482,75 @@ async function handleSubmit() {
             Choosing servers per schedule is not available yet. Change the default tiers in
             Capabilities.
           </p>
+        </fieldset>
+
+        <!-- Conversation memory (scheduled-chat-context-budget) -->
+        <fieldset data-testid="sc-memory">
+          <legend class="block font-ui text-xs text-ink-muted mb-1">Conversation memory</legend>
+          <p class="mb-2 font-ui text-xs text-ink-muted">
+            Every run continues one conversation. When it grows past the budget, older runs
+            are summarised before the next run starts; the newest runs stay word for word.
+          </p>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block font-ui text-xs text-ink-muted mb-1" for="sc-budget">
+                Context budget (tokens)
+              </label>
+              <input
+                id="sc-budget"
+                v-model.number="contextBudget"
+                type="number"
+                :min="CONTEXT_BUDGET_MIN"
+                :max="budgetCeiling"
+                step="1000"
+                class="w-full rounded-sm border px-3 py-1.5 font-mono text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+                :class="budgetError ? 'border-signal-danger bg-signal-danger-soft' : 'border-border-muted bg-surface-1'"
+                data-testid="sc-budget-input"
+              />
+              <p v-if="budgetError" class="mt-1 font-ui text-xs text-signal-danger" data-testid="sc-budget-error">
+                {{ budgetError }}
+              </p>
+            </div>
+            <div>
+              <label class="block font-ui text-xs text-ink-muted mb-1" for="sc-keep">
+                Recent runs kept verbatim
+              </label>
+              <input
+                id="sc-keep"
+                v-model.number="keepRecentRuns"
+                type="number"
+                min="0"
+                :max="KEEP_RECENT_RUNS_MAX"
+                step="1"
+                class="w-full rounded-sm border px-3 py-1.5 font-mono text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+                :class="keepError ? 'border-signal-danger bg-signal-danger-soft' : 'border-border-muted bg-surface-1'"
+                data-testid="sc-keep-input"
+              />
+              <p v-if="keepError" class="mt-1 font-ui text-xs text-signal-danger" data-testid="sc-keep-error">
+                {{ keepError }}
+              </p>
+            </div>
+          </div>
+          <div class="mt-2">
+            <label class="block font-ui text-xs text-ink-muted mb-1" for="sc-memory-focus">
+              What to remember <span class="text-ink-muted">(optional)</span>
+            </label>
+            <textarea
+              id="sc-memory-focus"
+              v-model="memoryFocus"
+              rows="2"
+              class="w-full rounded-sm border px-3 py-1.5 font-ui text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent resize-none"
+              :class="focusError ? 'border-signal-danger bg-signal-danger-soft' : 'border-border-muted bg-surface-1'"
+              placeholder="e.g. open action items and how each metric changed since the last run"
+              data-testid="sc-memory-focus-input"
+            ></textarea>
+            <p v-if="focusError" class="mt-1 font-ui text-xs text-signal-danger" data-testid="sc-memory-focus-error">
+              {{ focusError }}
+            </p>
+            <p v-else class="mt-1 font-ui text-xs text-ink-subtle">
+              Given to the summary of older runs. Summarising costs a model call, shown on the run.
+            </p>
+          </div>
         </fieldset>
 
         <!-- Output sink -->

@@ -2,7 +2,6 @@ package compaction
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
@@ -80,34 +79,70 @@ invent. Do not editorialize. Output a single block of plain text.
 </rolling_pile>`
 
 // RollingSummarize implements the rolling-summary algorithm from plan
-// §2.5. See the file-level comment for design rationale.
+// §2.5. See the file-level comment for design rationale. It is
+// RollingSummarizeWith with only the user-pair recent window set, so the
+// maximal tier's behaviour (span, prompt bytes, audit payloads) is
+// unchanged by the run-window extension below.
 func (e *engine) RollingSummarize(ctx context.Context, sessionID string,
 	model ProviderProfileRef, recentWindow int) (string, error) {
+	res, err := e.RollingSummarizeWith(ctx, sessionID, model, RollingOptions{RecentWindow: recentWindow})
+	return res.SummaryID, err
+}
+
+// RollingSummarizeWith is the rolling-summary flow with the options a
+// caller other than the maximal tier needs (session_rolling_runs.go
+// documents each one). The algorithm is the one RollingSummarize has
+// always run; the options only change WHERE the live tail starts, what
+// the prompt adds, and whether the pass is needed at all.
+func (e *engine) RollingSummarizeWith(ctx context.Context, sessionID string,
+	model ProviderProfileRef, opts RollingOptions) (RollingResult, error) {
+	tier := opts.Tier
+	if tier == "" {
+		tier = rollingMaximalTier
+	}
 	// Guard: a non-positive window means "everything is recent" so
 	// there's nothing to roll. We treat this as a clean no-op rather
 	// than an error — the chat runner can pass a defaulted-to-zero
-	// window during early bring-up without a special case here.
-	if recentWindow <= 0 {
-		e.emitRollingNoOpAudit(ctx, sessionID, model, 0)
-		return "", nil
+	// window during early bring-up without a special case here. A run
+	// window has its own meaning for zero (keep no runs: roll
+	// everything), so the guard is the user-pair path's only.
+	if opts.RunWindow == nil && opts.RecentWindow <= 0 {
+		e.emitRollingNoOpAudit(ctx, sessionID, model, 0, tier)
+		return RollingResult{}, nil
 	}
 
 	// Step 1: Load active messages.
 	messages, err := e.store.ListActiveMessages(ctx, sessionID)
 	if err != nil {
-		e.emitRollingFailedAudit(ctx, sessionID, model, 0, "store_error")
-		return "", err
+		e.emitRollingFailedAudit(ctx, sessionID, model, 0, "store_error", tier)
+		return RollingResult{}, err
 	}
 	if len(messages) == 0 {
 		// Empty session — nothing to roll. No I/O follow-up needed.
-		e.emitRollingNoOpAudit(ctx, sessionID, model, 0)
-		return "", nil
+		e.emitRollingNoOpAudit(ctx, sessionID, model, 0, tier)
+		return RollingResult{}, nil
+	}
+	res := RollingResult{TokensBefore: e.countMessages(messages)}
+
+	// Step 1b (OnlyIfOverTokens): the caller's trigger. Under it, the
+	// pass is not needed and nothing is read or written further. No
+	// audit: nothing was attempted, and a budgeted caller checks on
+	// every fire.
+	if opts.OnlyIfOverTokens > 0 && res.TokensBefore+opts.PendingTokens <= opts.OnlyIfOverTokens {
+		res.TokensAfter = res.TokensBefore
+		res.UnderBudget = true
+		return res, nil
 	}
 
 	// Step 2: Identify the recent-window tail. tailStart is the index
 	// of the first message that belongs to the live tail; everything
 	// strictly before tailStart is fold-into-summary territory.
-	tailStart := findRecentWindowStart(messages, recentWindow)
+	var tailStart int
+	if opts.RunWindow != nil {
+		tailStart, res.KeptRuns = e.runWindowTailStart(messages, *opts.RunWindow, opts.TailBudgetTokens, opts.PendingTokens)
+	} else {
+		tailStart = findRecentWindowStart(messages, opts.RecentWindow)
+	}
 
 	// Step 3: Tool-pair clamp. If tailStart lands inside a
 	// tool_use/tool_result pair, push it forward (toward higher
@@ -131,8 +166,9 @@ func (e *engine) RollingSummarize(ctx context.Context, sessionID string,
 	// the older-side span, this is a no-op tick.
 	if tailStart <= 0 && prevSummaryID == "" {
 		// Tail covers everything — nothing to roll.
-		e.emitRollingNoOpAudit(ctx, sessionID, model, 0)
-		return "", nil
+		e.emitRollingNoOpAudit(ctx, sessionID, model, 0, tier)
+		res.TokensAfter = res.TokensBefore
+		return res, nil
 	}
 
 	// "rolledTurns" = messages slated for archival that are NOT the
@@ -147,12 +183,22 @@ func (e *engine) RollingSummarize(ctx context.Context, sessionID string,
 		rolledTurns = append(rolledTurns, messages[i])
 	}
 
-	if prevSummaryID == "" && len(rolledTurns) == 0 {
-		// Defensive: tailStart > 0 but the only message in the
-		// older-side span is somehow the prev summary index without
-		// us actually having a prev summary id. Treat as no-op.
-		e.emitRollingNoOpAudit(ctx, sessionID, model, 0)
-		return "", nil
+	if len(rolledTurns) == 0 && (prevSummaryID == "" || opts.RunWindow != nil) {
+		// Defensive on the user-pair path: tailStart > 0 but the only
+		// message in the older-side span is somehow the prev summary
+		// index without us actually having a prev summary id. Treat as
+		// no-op.
+		//
+		// On the run-window path it is also the steady state between
+		// overflows: nothing aged out since the last roll, and the only
+		// row older than the kept runs is the previous summary itself.
+		// Re-summarising a summary alone spends a call to compress text
+		// that is already compressed, so it is a no-op too. (The
+		// user-pair path keeps its historical behaviour here; the
+		// maximal tier's golden tests pin it.)
+		e.emitRollingNoOpAudit(ctx, sessionID, model, 0, tier)
+		res.TokensAfter = res.TokensBefore
+		return res, nil
 	}
 
 	// Step 6: Build the rolling-pile transcript and the prompt. The
@@ -161,7 +207,7 @@ func (e *engine) RollingSummarize(ctx context.Context, sessionID string,
 	// form so it knows what to extend) followed by the freshly-rolled
 	// turns rendered the same way Compact renders its transcript.
 	pileText := renderRollingPile(prevSummaryContent, rolledTurns)
-	userPrompt := fmt.Sprintf(rollingSummaryUserPromptTemplate, pileText)
+	userPrompt := buildRollingPrompt(pileText, opts)
 	systemPrompt := ""
 
 	// Tokens-in-pile is what the audit's TokensInSpan field will
@@ -170,6 +216,8 @@ func (e *engine) RollingSummarize(ctx context.Context, sessionID string,
 	// "what did we ask the model to compress" semantics matches the
 	// raw pile, not the wire-prompt envelope.
 	tokensInPile := e.tokenizePile(prevSummaryContent, rolledTurns)
+	res.PileTokens = tokensInPile
+	res.HadPreviousSummary = prevSummaryID != ""
 
 	// Step 7: Pre-flight cap check. The whole prompt (system + user)
 	// must fit under the compaction model's MaxContextTokens budget.
@@ -181,15 +229,15 @@ func (e *engine) RollingSummarize(ctx context.Context, sessionID string,
 			NeedsTokens:    estimatedPromptTokens,
 			ModelMaxTokens: cap,
 		}
-		e.emitRollingFailedAudit(ctx, sessionID, model, tokensInPile, "model_too_small")
-		return "", err
+		e.emitRollingFailedAudit(ctx, sessionID, model, tokensInPile, "model_too_small", tier)
+		return res, err
 	}
 
 	// Step 8: Run the LLM call.
 	text, _, outputTokens, err := e.llm.CallForSummary(ctx, model, systemPrompt, userPrompt)
 	if err != nil {
-		e.emitRollingFailedAudit(ctx, sessionID, model, tokensInPile, classifyLLMError(err))
-		return "", err
+		e.emitRollingFailedAudit(ctx, sessionID, model, tokensInPile, classifyLLMError(err), tier)
+		return res, err
 	}
 
 	// Step 9: Build the new summary row. Sequence = lowest sequence
@@ -198,8 +246,8 @@ func (e *engine) RollingSummarize(ctx context.Context, sessionID string,
 	// summary (if any) + every rolled-in original.
 	summaryID, err := newSummaryID()
 	if err != nil {
-		e.emitRollingFailedAudit(ctx, sessionID, model, tokensInPile, "id_generation_failed")
-		return "", err
+		e.emitRollingFailedAudit(ctx, sessionID, model, tokensInPile, "id_generation_failed", tier)
+		return res, err
 	}
 	now := e.now()
 
@@ -222,8 +270,8 @@ func (e *engine) RollingSummarize(ctx context.Context, sessionID string,
 
 	// Step 10: Persist atomically.
 	if err := e.store.ApplyCompaction(ctx, sessionID, summary, originalIDs, now); err != nil {
-		e.emitRollingFailedAudit(ctx, sessionID, model, tokensInPile, "persist_error")
-		return "", err
+		e.emitRollingFailedAudit(ctx, sessionID, model, tokensInPile, "persist_error", tier)
+		return res, err
 	}
 
 	// Step 11: Success audit. compression_ratio = output / pile.
@@ -234,7 +282,7 @@ func (e *engine) RollingSummarize(ctx context.Context, sessionID string,
 	if e.auditEm != nil {
 		e.auditEm.Emit(ctx, audit.KindSessionCompacted, audit.SessionCompactedPayload{
 			SessionID:          sessionID,
-			AggressivenessTier: rollingMaximalTier,
+			AggressivenessTier: tier,
 			ModelUsed:          model.String(),
 			TokensInSpan:       tokensInPile,
 			TokensAfterSummary: outputTokens,
@@ -242,7 +290,11 @@ func (e *engine) RollingSummarize(ctx context.Context, sessionID string,
 		})
 	}
 
-	return summary.ID, nil
+	res.SummaryID = summary.ID
+	res.RolledMessages = len(rolledTurns)
+	after := append([]SessionMessage{summary}, messages[tailStart:]...)
+	res.TokensAfter = e.countMessages(after)
+	return res, nil
 }
 
 // findRecentWindowStart returns the index of the first message that
@@ -353,13 +405,13 @@ func (e *engine) tokenizePile(prevSummaryContent string, rolledTurns []SessionMe
 // AggressivenessTier="maximal" and CompressionRatio=1.0 — the rolling-
 // mode mirror of emitNoOpAudit (session_engine.go). Centralized so the no-op
 // return paths above stay consistent.
-func (e *engine) emitRollingNoOpAudit(ctx context.Context, sessionID string, model ProviderProfileRef, tokensInPile int) {
+func (e *engine) emitRollingNoOpAudit(ctx context.Context, sessionID string, model ProviderProfileRef, tokensInPile int, tier string) {
 	if e.auditEm == nil {
 		return
 	}
 	e.auditEm.Emit(ctx, audit.KindSessionCompacted, audit.SessionCompactedPayload{
 		SessionID:          sessionID,
-		AggressivenessTier: rollingMaximalTier,
+		AggressivenessTier: tier,
 		ModelUsed:          model.String(),
 		TokensInSpan:       tokensInPile,
 		TokensAfterSummary: tokensInPile,
@@ -371,13 +423,13 @@ func (e *engine) emitRollingNoOpAudit(ctx context.Context, sessionID string, mod
 // given error classifier, tagged with AggressivenessTier="maximal" so
 // dashboards can break out maximal-mode failures from threshold-mode
 // failures without sniffing other fields.
-func (e *engine) emitRollingFailedAudit(ctx context.Context, sessionID string, model ProviderProfileRef, tokensInPile int, errorKind string) {
+func (e *engine) emitRollingFailedAudit(ctx context.Context, sessionID string, model ProviderProfileRef, tokensInPile int, errorKind, tier string) {
 	if e.auditEm == nil {
 		return
 	}
 	e.auditEm.Emit(ctx, audit.KindCompactionFailed, audit.CompactionFailedPayload{
 		SessionID:          sessionID,
-		AggressivenessTier: rollingMaximalTier,
+		AggressivenessTier: tier,
 		ModelUsed:          model.String(),
 		TokensInSpan:       tokensInPile,
 		ErrorKind:          errorKind,

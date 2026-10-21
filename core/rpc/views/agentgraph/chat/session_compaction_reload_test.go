@@ -95,6 +95,10 @@ func (e *rewritingEngine) RollingSummarize(_ context.Context, _ string, _ fr041.
 	return "rolling-1", nil
 }
 
+func (e *rewritingEngine) RollingSummarizeWith(_ context.Context, _ string, _ fr041.ProviderProfileRef, _ fr041.RollingOptions) (fr041.RollingResult, error) {
+	return fr041.RollingResult{}, nil
+}
+
 func (e *rewritingEngine) counts() (int, int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

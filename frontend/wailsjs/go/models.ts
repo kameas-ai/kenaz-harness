@@ -6987,6 +6987,7 @@ export namespace scheduledchat {
 	    error?: string;
 	    model?: string;
 	    costUsd?: number;
+	    compactionCostUsd?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new RunSummary(source);
@@ -7004,6 +7005,7 @@ export namespace scheduledchat {
 	        this.error = source["error"];
 	        this.model = source["model"];
 	        this.costUsd = source["costUsd"];
+	        this.compactionCostUsd = source["compactionCostUsd"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -7040,6 +7042,9 @@ export namespace scheduledchat {
 	    triggerKind: string;
 	    runAt?: string;
 	    lastRun?: RunSummary;
+	    contextBudgetTokens: number;
+	    keepRecentRuns: number;
+	    memoryFocus: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ChatRunEntry(source);
@@ -7062,6 +7067,9 @@ export namespace scheduledchat {
 	        this.triggerKind = source["triggerKind"];
 	        this.runAt = source["runAt"];
 	        this.lastRun = this.convertValues(source["lastRun"], RunSummary);
+	        this.contextBudgetTokens = source["contextBudgetTokens"];
+	        this.keepRecentRuns = source["keepRecentRuns"];
+	        this.memoryFocus = source["memoryFocus"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -7093,6 +7101,9 @@ export namespace scheduledchat {
 	    toolAllowlist?: string[];
 	    triggerKind?: string;
 	    runAt?: string;
+	    contextBudgetTokens?: number;
+	    keepRecentRuns?: number;
+	    memoryFocus?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CreateInput(source);
@@ -7110,11 +7121,15 @@ export namespace scheduledchat {
 	        this.toolAllowlist = source["toolAllowlist"];
 	        this.triggerKind = source["triggerKind"];
 	        this.runAt = source["runAt"];
+	        this.contextBudgetTokens = source["contextBudgetTokens"];
+	        this.keepRecentRuns = source["keepRecentRuns"];
+	        this.memoryFocus = source["memoryFocus"];
 	    }
 	}
 	export class DefaultModel {
 	    profileId: string;
 	    model: string;
+	    maxContextTokens?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new DefaultModel(source);
@@ -7124,6 +7139,7 @@ export namespace scheduledchat {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profileId = source["profileId"];
 	        this.model = source["model"];
+	        this.maxContextTokens = source["maxContextTokens"];
 	    }
 	}
 	
@@ -7139,6 +7155,9 @@ export namespace scheduledchat {
 	    toolAllowlist?: string[];
 	    triggerKind?: string;
 	    runAt?: string;
+	    contextBudgetTokens?: number;
+	    keepRecentRuns?: number;
+	    memoryFocus?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateInput(source);
@@ -7157,6 +7176,9 @@ export namespace scheduledchat {
 	        this.toolAllowlist = source["toolAllowlist"];
 	        this.triggerKind = source["triggerKind"];
 	        this.runAt = source["runAt"];
+	        this.contextBudgetTokens = source["contextBudgetTokens"];
+	        this.keepRecentRuns = source["keepRecentRuns"];
+	        this.memoryFocus = source["memoryFocus"];
 	    }
 	}
 

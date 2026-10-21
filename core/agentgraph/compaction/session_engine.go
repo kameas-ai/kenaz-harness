@@ -84,6 +84,14 @@ type SessionEngine interface {
 	//                                   the audit error_kind.
 	RollingSummarize(ctx context.Context, sessionID string,
 		model ProviderProfileRef, recentWindow int) (rollingSummaryMessageID string, err error)
+
+	// RollingSummarizeWith is RollingSummarize with RollingOptions
+	// (session_rolling_runs.go): a run-boundary tail, a token trigger, a
+	// tail budget and extra summariser instructions. RollingSummarize is
+	// this method with only RecentWindow set. Errors mirror
+	// RollingSummarize; the result is meaningful on every no-op path.
+	RollingSummarizeWith(ctx context.Context, sessionID string,
+		model ProviderProfileRef, opts RollingOptions) (RollingResult, error)
 }
 
 // ProviderProfileRef is the minimal shape the engine needs to identify
