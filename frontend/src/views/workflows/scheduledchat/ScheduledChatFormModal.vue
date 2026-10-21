@@ -183,11 +183,20 @@ const sinkValue = computed(() =>
 const budgetCeiling = computed(() =>
   !model.value.trim() && defaultWindow.value > 0 ? defaultWindow.value : CONTEXT_BUDGET_MAX,
 );
+// On edit, an unchanged budget is not sent (the server keeps the stored
+// value) and not checked against the ceiling — the server's rule: a
+// stored budget above a smaller model's window is capped at fire time and
+// must not block an unrelated edit.
+const budgetChanged = computed(
+  () =>
+    !props.editing ||
+    contextBudget.value !== (props.editing.contextBudgetTokens ?? CONTEXT_BUDGET_DEFAULT),
+);
 const budgetError = computed(() => {
   const v = contextBudget.value;
   if (v === '' || !Number.isInteger(v)) return 'Enter a whole number of tokens';
   if (v < CONTEXT_BUDGET_MIN) return `At least ${CONTEXT_BUDGET_MIN.toLocaleString()} tokens`;
-  if (v > budgetCeiling.value) {
+  if (budgetChanged.value && v > budgetCeiling.value) {
     return budgetCeiling.value === CONTEXT_BUDGET_MAX
       ? `At most ${CONTEXT_BUDGET_MAX.toLocaleString()} tokens`
       : `At most ${budgetCeiling.value.toLocaleString()} tokens (the model's context window)`;
@@ -234,7 +243,7 @@ async function handleSubmit() {
       ? { cron: '', triggerKind: 'once' as const, runAt: new Date(runAt.value).toISOString() }
       : { cron: cron.value.trim(), triggerKind: 'cron' as const, runAt: undefined };
     const memoryFields = {
-      contextBudgetTokens: Number(contextBudget.value),
+      contextBudgetTokens: budgetChanged.value ? Number(contextBudget.value) : undefined,
       keepRecentRuns: Number(keepRecentRuns.value),
       memoryFocus: memoryFocus.value.trim(),
     };

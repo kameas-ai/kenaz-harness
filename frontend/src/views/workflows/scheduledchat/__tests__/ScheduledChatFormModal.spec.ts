@@ -360,10 +360,11 @@ describe('ScheduledChatFormModal — conversation memory (scheduled-chat-context
       global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } },
       attachTo: document.body,
     });
+    await edit.find('[data-testid="sc-budget-input"]').setValue('9000');
     await edit.find('form').trigger('submit');
     await flushPromises();
     expect(updateMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: STUB_ENTRY.id, contextBudgetTokens: 12000, keepRecentRuns: 0, memoryFocus: 'x' }),
+      expect.objectContaining({ id: STUB_ENTRY.id, contextBudgetTokens: 9000, keepRecentRuns: 0, memoryFocus: 'x' }),
     );
   });
 
@@ -418,5 +419,29 @@ describe('ScheduledChatFormModal — conversation memory (scheduled-chat-context
     await wrapper.find('[data-testid="sc-memory-focus-input"]').setValue('x'.repeat(2001));
     expect(wrapper.find('[data-testid="sc-memory-focus-error"]').text()).toContain('2000 characters');
     expect((wrapper.find('[data-testid="modal-save"]').element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('does not send or ceiling-check an unchanged budget on edit', async () => {
+    const updateMock = vi.fn().mockResolvedValue(STUB_ENTRY);
+    const client = createFakeScheduledChatClient({
+      update: updateMock,
+      defaultModel: () => Promise.resolve({ profileId: 'p', model: 'm', maxContextTokens: 32000 }),
+    });
+    // Stored above the (now smaller) default model's window.
+    const edit = mount(ScheduledChatFormModal, {
+      props: { client, editing: { ...STUB_ENTRY, model: undefined, contextBudgetTokens: 100000 } },
+      global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    expect(edit.find('[data-testid="sc-budget-error"]').exists()).toBe(false);
+    await edit.find('[data-testid="sc-name-input"]').setValue('renamed');
+    await edit.find('form').trigger('submit');
+    await flushPromises();
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(updateMock.mock.calls[0][0].contextBudgetTokens).toBeUndefined();
+    // Changing it brings the ceiling back.
+    await edit.find('[data-testid="sc-budget-input"]').setValue('64000');
+    expect(edit.find('[data-testid="sc-budget-error"]').text()).toContain('32,000');
   });
 });
