@@ -500,38 +500,81 @@ func TestUnitPull_TombstoneHeldOnOrgMismatch(t *testing.T) {
 	}
 }
 
-// First sight of a node whose id is already held by a team unit with no
-// sidecar (a legacy orphan): adopted in place — sidecar written at the
-// server's and the unit's versions, content untouched, no duplicate.
-func TestUnitPull_FirstSightAdoptsLegacyOrphan(t *testing.T) {
-	db, m := openUnitSyncSQLite(t)
+func seedOrphan(t *testing.T, m *units.Manager, id, body string, edits ...string) units.Unit {
+	t.Helper()
 	ctx := context.Background()
-	orphan, err := m.Create(ctx, units.Unit{
-		ID: "srv-u-orphan", Kind: units.KindDoc, Scope: units.ScopeProject, ScopeID: "proj-1",
-		Classification: units.ClassTeam, LoadPolicy: units.LoadOnDemand, Title: "t", Body: "orphan body",
+	u, err := m.Create(ctx, units.Unit{
+		ID: id, Kind: units.KindDoc, Scope: units.ScopeProject, ScopeID: "proj-1",
+		Classification: units.ClassTeam, LoadPolicy: units.LoadOnDemand, Title: "t", Body: body,
 	})
 	if err != nil {
 		t.Fatalf("Create orphan: %v", err)
 	}
-	if _, err := m.Update(ctx, orphan.ID, "orphan body edited", nil); err != nil {
-		t.Fatalf("Update orphan: %v", err)
+	for _, e := range edits {
+		if u, err = m.Update(ctx, id, e, nil); err != nil {
+			t.Fatalf("Update orphan: %v", err)
+		}
 	}
-	s := unitTombstoneSyncer(t, m, page(liveUnitNode("srv-u-orphan", "server body", 3, ts(0))))
-	if _, err := s.PullDown(ctx); err != nil {
-		t.Fatalf("PullDown with a legacy orphan: %v", err)
+	return u
+}
+
+// A legacy orphan (team unit holding the node's id, no sidecar) that was
+// EDITED locally: adoption must not baseline the edit as clean. The edit
+// survives the adopting pull (v3) AND the next server change (v4) as a
+// conflict; nothing is overwritten.
+func TestUnitPull_FirstSightAdoptsEditedOrphanAsConflict(t *testing.T) {
+	db, m := openUnitSyncSQLite(t)
+	ctx := context.Background()
+	orphan := seedOrphan(t, m, "srv-u-orphan", "orphan body", "LOCAL EDIT")
+	s := unitTombstoneSyncer(t, m,
+		page(liveUnitNode("srv-u-orphan", "server v3", 3, ts(-time.Minute))),
+		page(liveUnitNode("srv-u-orphan", "server v4", 4, ts(0))),
+	)
+	for i, want := range []int{3, 4} {
+		if _, err := s.PullDown(ctx); err != nil {
+			t.Fatalf("PullDown %d: %v", i, err)
+		}
+		u, err := m.Get(ctx, orphan.ID)
+		if err != nil || u.Body != "LOCAL EDIT" || u.Version != 1 {
+			t.Fatalf("after server v%d: unit = body %q v%d, %v; want the local edit kept at v1", want, u.Body, u.Version, err)
+		}
+		cs := s.Conflicts()
+		if len(cs) != 1 || cs[0].UnitID != orphan.ID || cs[0].ServerVersion != want || cs[0].LocalVersion != 1 {
+			t.Fatalf("after server v%d: conflicts = %+v; want one for %s (local v1, server v%d)", want, cs, orphan.ID, want)
+		}
 	}
 	st, err := m.GetSyncStateByNodeID(ctx, "srv-u-orphan")
-	if err != nil {
-		t.Fatalf("orphan not adopted: %v", err)
-	}
-	if st.UnitID != orphan.ID || st.SyncedServerVersion != 3 || st.SyncedLocalVersion != 1 {
-		t.Errorf("adopted sidecar = %+v; want unit %s server=3 local=1", st, orphan.ID)
-	}
-	if u, _ := m.Get(ctx, orphan.ID); u.Body != "orphan body edited" || u.Classification != units.ClassTeam {
-		t.Errorf("adopted unit content changed: %+v", u)
+	if err != nil || st.UnitID != orphan.ID || st.SyncedServerVersion != 3 || st.SyncedLocalVersion != 0 {
+		t.Errorf("adopted sidecar = %+v, %v; want unit %s server=3 local=0 (edit stays un-synced)", st, err, orphan.ID)
 	}
 	if n := countRows(t, db, "SELECT COUNT(*) FROM units"); n != 1 {
 		t.Errorf("units = %d, want 1 (adopted, not duplicated)", n)
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM unit_versions WHERE body LIKE 'server v%'"); n != 0 {
+		t.Errorf("server body written into history %d time(s); want 0", n)
+	}
+}
+
+// A never-edited legacy orphan (Version 0) is adopted by a clean
+// fast-forward to the server body with both baselines.
+func TestUnitPull_FirstSightAdoptsUneditedOrphanByFastForward(t *testing.T) {
+	_, m := openUnitSyncSQLite(t)
+	ctx := context.Background()
+	orphan := seedOrphan(t, m, "srv-u-orphan0", "stale body")
+	s := unitTombstoneSyncer(t, m, page(liveUnitNode("srv-u-orphan0", "server v3", 3, ts(0))))
+	if _, err := s.PullDown(ctx); err != nil {
+		t.Fatalf("PullDown: %v", err)
+	}
+	u, err := m.Get(ctx, orphan.ID)
+	if err != nil || u.Body != "server v3" {
+		t.Fatalf("unit = %+v, %v; want fast-forwarded to the server body", u, err)
+	}
+	st, err := m.GetSyncStateByNodeID(ctx, "srv-u-orphan0")
+	if err != nil || st.UnitID != orphan.ID || st.SyncedServerVersion != 3 || st.SyncedLocalVersion != u.Version {
+		t.Errorf("sidecar = %+v, %v; want server=3 local=%d", st, err, u.Version)
+	}
+	if len(s.Conflicts()) != 0 {
+		t.Errorf("conflicts = %+v; want none", s.Conflicts())
 	}
 }
 

@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -543,7 +544,14 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	}
 
 	s.mu.Lock()
+	wasHeld := s.tombstonesHeldIdentityUnknown > 0
 	s.tombstonesHeldIdentityUnknown = held
+	switch {
+	case held > 0 && !wasHeld:
+		logging.L().Info("fleet.unit.pull.held_identity_pending", "held", held)
+	case held == 0 && wasHeld:
+		logging.L().Info("fleet.unit.pull.held_identity_cleared")
+	}
 	if held == 0 {
 		// Counted only when the page is committed: a held page is re-applied
 		// next tick (idempotently: first-sight rows now have a sidecar,
@@ -618,29 +626,17 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 		//     (applyTombstone). It stays; the re-appearing node gets a fresh
 		//     local id beside it rather than a primary-key clash that would
 		//     fail (and stall) the pull.
-		//   - team/org: a legacy orphan (its sidecar was lost). Adopt it:
-		//     record its sidecar at the server's version and its own local
-		//     version, without touching content; the normal 3-way rules
-		//     apply from the next server change.
+		//   - team/org: a legacy orphan (its sidecar was lost). Adopt it
+		//     (adoptOrphan): never edited locally → clean fast-forward;
+		//     edited → kept as an un-synced local edit, and a conflict if it
+		//     differs from the server, so nothing is overwritten.
 		if mapped.ID != "" {
 			existing, gerr := s.store.Get(ctx, mapped.ID)
 			switch {
 			case gerr == nil && existing.Classification == units.ClassPersonal:
 				mapped.ID = ""
 			case gerr == nil:
-				if _, uerr := s.store.UpsertSyncState(ctx, units.SyncState{
-					UnitID:              existing.ID,
-					NodeID:              n.ID,
-					SyncedServerVersion: n.Version,
-					SyncedLocalVersion:  existing.Version,
-					Classification:      string(n.Classification),
-					LastSynced:          time.Now().UTC(),
-				}); uerr != nil {
-					return false, fmt.Errorf("fleet: unit pull: adopt orphan %s: %w", n.ID, uerr)
-				}
-				logging.L().Warn("fleet.unit.pull.adopted_orphan_unit",
-					"unit_id", existing.ID, "node_id", n.ID)
-				return false, nil
+				return s.adoptOrphan(ctx, n, existing, mapped)
 			case !errors.Is(gerr, units.ErrUnitNotFound):
 				return false, fmt.Errorf("fleet: unit pull: id check %s: %w", n.ID, gerr)
 			}
@@ -824,9 +820,7 @@ func (s *UnitSyncer) applyTombstone(ctx context.Context, n ContextPulledNode) (b
 		// write failed) or for another org: ownership cannot be decided,
 		// so the user's data wins. PullDown keeps the cursor so this
 		// tombstone is retried, not lost.
-		logging.L().Info("fleet.unit.pull.tombstone_held_identity_unknown",
-			"unit_id", st.UnitID, "node_id", n.ID)
-		return false, errTombstoneHeld
+		return false, errTombstoneHeld // logged once per transition by PullDown
 	}
 
 	if n.OwnerUserID != "" && strings.EqualFold(n.OwnerUserID, self.UserID) {
@@ -873,6 +867,84 @@ func (s *UnitSyncer) dropConflictLocked(unitID string) {
 		}
 	}
 	s.conflicts = kept
+}
+
+// adoptOrphan attaches a pulled node to a team/org unit that already holds
+// its id but has no sidecar (a legacy orphan). The unit's own history decides,
+// since there is no baseline to compare against:
+//
+//   - Version 0 (never edited here): clean fast-forward to the server's body
+//     with both baselines, in one transaction (UpdateWithSyncState).
+//   - Edited (Version > 0) and identical to the server: baselined as clean.
+//   - Edited and different: the sidecar records the server version with
+//     SyncedLocalVersion 0, so the unit stays localChanged and every later
+//     server change is a conflict, never an overwrite; a conflict is recorded
+//     now so the user resolves it. Nothing is overwritten.
+func (s *UnitSyncer) adoptOrphan(ctx context.Context, n ContextPulledNode, existing, mapped units.Unit) (bool, error) {
+	base := units.SyncState{
+		NodeID:              n.ID,
+		SyncedServerVersion: n.Version,
+		Classification:      string(n.Classification),
+		LastSynced:          time.Now().UTC(),
+	}
+	if existing.Version == 0 {
+		_, _, err := s.store.UpdateWithSyncState(ctx, existing.ID, 0, mapped.Body, mapped.Metadata, base)
+		if err == nil {
+			logging.L().Warn("fleet.unit.pull.adopted_orphan_unit",
+				"unit_id", existing.ID, "node_id", n.ID, "mode", "fast_forward")
+			return true, nil
+		}
+		if !errors.Is(err, units.ErrVersionConflict) {
+			return false, fmt.Errorf("fleet: unit pull: adopt orphan %s: %w", n.ID, err)
+		}
+		// A local edit raced in: treat it as edited.
+		if cur, gerr := s.store.Get(ctx, existing.ID); gerr == nil {
+			existing = cur
+		} else {
+			existing.Version++
+		}
+	}
+	same := existing.Body == mapped.Body && sameMetadata(existing.Metadata, mapped.Metadata)
+	base.UnitID = existing.ID
+	if same {
+		base.SyncedLocalVersion = existing.Version
+	}
+	if _, err := s.store.UpsertSyncState(ctx, base); err != nil {
+		return false, fmt.Errorf("fleet: unit pull: adopt orphan %s: %w", n.ID, err)
+	}
+	mode := "clean"
+	if !same {
+		mode = "conflict"
+		s.recordConflict(UnitConflict{
+			UnitID:        existing.ID,
+			NodeID:        n.ID,
+			LocalVersion:  existing.Version,
+			SyncedVersion: 0, // no known common baseline
+			ServerVersion: n.Version,
+		})
+	}
+	logging.L().Warn("fleet.unit.pull.adopted_orphan_unit",
+		"unit_id", existing.ID, "node_id", n.ID, "mode", mode)
+	return false, nil
+}
+
+// sameMetadata compares two metadata documents semantically (empty / null
+// equal "{}"; key order and whitespace ignored).
+func sameMetadata(a, b json.RawMessage) bool {
+	norm := func(r json.RawMessage) any {
+		if len(r) == 0 {
+			return map[string]any{}
+		}
+		var v any
+		if err := json.Unmarshal(r, &v); err != nil {
+			return string(r)
+		}
+		if v == nil {
+			return map[string]any{}
+		}
+		return v
+	}
+	return reflect.DeepEqual(norm(a), norm(b))
 }
 
 func (s *UnitSyncer) recordConflict(c UnitConflict) {
