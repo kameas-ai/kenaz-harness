@@ -460,9 +460,9 @@ type sessionFullOnceLLM struct {
 	llmview.LLMConnectorAPI
 	sessions sessionsview.SessionsAPI
 	bus      *EventBus
-	mu    sync.Mutex
-	calls int
-	full  int // how many leading calls end session-full
+	mu       sync.Mutex
+	calls    int
+	full     int // how many leading calls end session-full
 	// toolRow: before ending session-full, the turn writes a tool row
 	// (it ran a tool). delivered: the close reports output delivered.
 	toolRow   bool
@@ -563,7 +563,6 @@ func TestScheduledBudget_SessionFullWithNothingToSummariseSaysSo(t *testing.T) {
 		t.Fatalf("summariser called %d time(s) with nothing older than the kept runs, want 0", n)
 	}
 }
-
 
 // startUserTurn starts an interactive turn in sessionID through the real
 // chat view and holds it running (the model waits on the returned gate)
