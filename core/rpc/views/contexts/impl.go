@@ -422,8 +422,8 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		logging.L().Warn("contexts.publish.failed",
 			"node_id", wireID,
 			"effective_layer", string(layer),
-			// Never err.Error(): a lint_blocked refusal carries excerpts of
-			// the body; they belong in the returned (UI) error only.
+			// Never err.Error(): a lint_blocked refusal's findings and the
+			// server message belong in the returned (UI) error only.
 			"err", fleet.LogSafeErr(err),
 		)
 		return ContextPublishResult{}, fmt.Errorf("contexts: publish: %w", err)

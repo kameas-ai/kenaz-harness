@@ -166,3 +166,25 @@ describe('fleetDegradedLanes — latched-unsupported context sync', () => {
     ]);
   });
 });
+
+describe('fleetDegradedLanes — unit poll held for an unconfirmed account', () => {
+  afterEach(() => _resetFleetSessionForTest());
+
+  it('an Off unit-poll lane with identity_pending is shown with its copy', async () => {
+    const { applyFleetSession, fleetDegradedLanes } = await import('@/lib/fleetSession');
+    const lane = { status: 'unknown', consecutiveFailures: 0 };
+    applyFleetSession(
+      fakeFleetSession({
+        state: 'signed_in',
+        sync: {
+          contextSync: { ...lane },
+          unitPoll: { status: 'off', reason: 'identity_pending', consecutiveFailures: 0 },
+          telemetry: { ...lane },
+        },
+      }),
+    );
+    expect(fleetDegradedLanes.value.map((l) => [l.key, l.reason])).toEqual([
+      ['unitPoll', 'waiting for your account to be confirmed — shared-unit deletions are held'],
+    ]);
+  });
+});

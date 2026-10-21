@@ -95,7 +95,9 @@ func TestContextPush_ErrorCodes(t *testing.T) {
 		{"load_policy_requires_admin", 403, `{"code":"load_policy_requires_admin","message":"admin only"}`, ErrLoadPolicyRequiresAdmin, "org admin or owner", "load_policy_requires_admin"},
 		{"capability_not_in_tier", 403, `{"code":"capability_not_in_tier","message":"upgrade"}`, ErrCapabilityNotInTier, "not available in current tier", "capability_not_in_tier"},
 		{"bare_403_is_generic", 403, `Forbidden`, ErrContextPushForbidden, "refused", "push status 403"},
-		{"lint_blocked", 422, `{"code":"lint_blocked","message":"secret","details":{"node_id":"n1","findings":[{"rule":"aws_access_key","severity":"block","excerpt":"AKIA****************"}]}}`, ErrContextLintBlocked, `blocked — a body looks like it contains a secret (aws_access_key: "AKIA****************")`, "lint_blocked"},
+		{"lint_blocked", 422, `{"code":"lint_blocked","message":"secret","details":{"node_id":"n1","findings":[{"rule":"aws_access_key","severity":"block","field":"body"}]}}`, ErrContextLintBlocked, `blocked — a body looks like it contains a secret (aws_access_key in body)`, "lint_blocked"},
+		{"lint_blocked_catalog_frontmatter", 422, `{"code":"lint_blocked","message":"secret","details":{"node_id":"n1","findings":[{"rule":"github_pat","severity":"block","field":"frontmatter.api_token"},{"rule":"stripe_secret_key","severity":"block","field":"payload"}]}}`, ErrContextLintBlocked, `(github_pat in frontmatter.api_token; stripe_secret_key in payload)`, "lint_blocked"},
+		{"lint_blocked_no_field", 422, `{"code":"lint_blocked","message":"secret","details":{"node_id":"n1","findings":[{"rule":"aws_access_key","severity":"block"}]}}`, ErrContextLintBlocked, `secret (aws_access_key)`, "lint_blocked"},
 		{"invalid_classification", 400, `{"code":"invalid_classification","message":"bad"}`, ErrInvalidClassification, "invalid sharing classification", "invalid_classification"},
 		{"missing_node_reference", 400, `{"code":"missing_node_reference","message":"edge endpoint"}`, ErrMissingNodeReference, "isn't visible in your org", "missing_node_reference"},
 	} {
@@ -123,5 +125,31 @@ func TestContextPromote_404NodeNotFound(t *testing.T) {
 	_, err := s.Promote(context.Background(), "n1")
 	if !errors.Is(err, ErrContextNodeNotFound) {
 		t.Fatalf("err = %v, want ErrContextNodeNotFound", err)
+	}
+}
+
+// Legal: rejected content is never echoed. An older Fleet that still sends
+// excerpt/offset, or a field value that looks like content, must not reach
+// the user-facing error.
+func TestContextPush_LintFindingNeverEchoesContent(t *testing.T) {
+	const planted = "AKIAPLANTEDSECRET0000"
+	for _, tc := range []struct{ name, findings, want string }{
+		{"legacy_excerpt_ignored", `[{"rule":"aws_access_key","severity":"block","excerpt":"` + planted + `","offset":12,"field":"body"}]`, "(aws_access_key in body)"},
+		{"field_with_content_dropped", `[{"rule":"aws_access_key","severity":"block","field":"body: ` + planted + `"}]`, "(aws_access_key)"},
+		{"overlong_field_dropped", `[{"rule":"aws_access_key","severity":"block","field":"frontmatter.` + strings.Repeat("k", 80) + planted + `"}]`, "(aws_access_key)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := pushRig(t, 422, `{"code":"lint_blocked","message":"blocked","details":{"node_id":"n1","findings":`+tc.findings+`}}`)
+			_, err := s.PushEntry(context.Background(), teamEntry("n1"), nil)
+			if !errors.Is(err, ErrContextLintBlocked) {
+				t.Fatalf("err = %v, want ErrContextLintBlocked", err)
+			}
+			if strings.Contains(err.Error(), planted) {
+				t.Fatalf("UI error echoed rejected content: %q", err.Error())
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("UI error %q lacks %q", err.Error(), tc.want)
+			}
+		})
 	}
 }

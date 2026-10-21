@@ -8,7 +8,7 @@ package fleet
 //	403 not_team_member            details {node_id} | {edge_id}
 //	403 load_policy_requires_admin node set load_policy "always" without org_admin/org_owner
 //	403 capability_not_in_tier     team_shared needs team_graph_sharing; org_shared needs org_graph_sharing
-//	422 lint_blocked               details {node_id, findings:[{rule,severity,excerpt}]}
+//	422 lint_blocked               details {node_id, findings:[{rule,severity,field}]}
 //	400 invalid_classification     bad edge classification / team_id combination
 //	400 missing_node_reference     edge endpoint not visible in your org
 //	404 node_not_found             promote / merge-request create on a node you can't see
@@ -50,12 +50,42 @@ var (
 	ErrContextPushRejected = errors.New("fleet: the server rejected this entry")
 )
 
-// LintFinding is one block-severity secret-lint finding (excerpt is
-// server-redacted, ~80 chars).
+// LintFinding is one block-severity secret-lint finding. Field names where
+// it was found: "title" | "body" | "metadata" (context) or "payload" |
+// "frontmatter.<key>" (catalog) — kenaz-fleet #322.
+//
+// Legal: rejected content is never echoed. There is deliberately no
+// excerpt/offset field — an older Fleet that still sends one is ignored at
+// decode, so no value from a finding can reach the UI or a log.
 type LintFinding struct {
 	Rule     string `json:"rule"`
 	Severity string `json:"severity"`
-	Excerpt  string `json:"excerpt"`
+	Field    string `json:"field"`
+}
+
+// lintFieldMaxLen bounds a displayed Field; frontmatter.<key> carries a
+// user-chosen key name, never a value.
+const lintFieldMaxLen = 64
+
+// displayField / displayRule return the value when it is a plain
+// identifier path ([A-Za-z0-9_.-], bounded), else "" so it is not shown.
+// Both are labels (a detector name, a location), so anything that looks
+// like content is dropped.
+func (f LintFinding) displayField() string { return lintLabel(f.Field) }
+func (f LintFinding) displayRule() string  { return lintLabel(f.Rule) }
+
+func lintLabel(v string) string {
+	if v == "" || len(v) > lintFieldMaxLen {
+		return ""
+	}
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '.', r == '-':
+		default:
+			return ""
+		}
+	}
+	return v
 }
 
 // ContextPushError is a whole-batch refusal from the context write path.
@@ -113,9 +143,12 @@ func (e *ContextPushError) Error() string {
 	if e.Code == "lint_blocked" && len(e.Findings) > 0 {
 		parts := make([]string, 0, len(e.Findings))
 		for _, f := range e.Findings {
-			p := f.Rule
-			if f.Excerpt != "" {
-				p += `: "` + f.Excerpt + `"`
+			p := f.displayRule()
+			if p == "" {
+				p = "secret"
+			}
+			if field := f.displayField(); field != "" {
+				p += " in " + field
 			}
 			parts = append(parts, p)
 		}
@@ -186,10 +219,8 @@ func describeRejections(rs []ContextPushRejection) string {
 	return "rejected: " + strings.Join(parts, ", ")
 }
 
-// LogValue keeps lint excerpts out of logs: a *ContextPushError logged as a
-// slog value carries only op / status / code / finding count. The excerpt
-// (server-redacted, but still a fragment of the user's body) belongs in the
-// UI error copy only.
+// LogValue keeps lint details out of logs: a *ContextPushError logged as a
+// slog value carries only op / status / code / finding count.
 func (e *ContextPushError) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("op", e.Op),
@@ -200,7 +231,7 @@ func (e *ContextPushError) LogValue() slog.Value {
 }
 
 // LogSafeErr renders err for a log line. A *ContextPushError anywhere in the
-// chain is rendered without its lint excerpts or server message; any other
+// chain is rendered without its lint findings or server message; any other
 // error is err.Error(). Use it wherever a context-push error is logged as a
 // string ("err", err.Error()).
 func LogSafeErr(err error) string {

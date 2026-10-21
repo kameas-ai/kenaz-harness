@@ -409,6 +409,10 @@ export function describeSyncReason(reason: string | undefined): string {
       return "this fleet server doesn't support session sync — events stay local";
     case 'not_authorized':
       return 'not authorized by fleet';
+    // Unit read-down held because the signed-in account isn't confirmed
+    // yet (core/fleet/unit_sync.go ReasonIdentityPending): retried every poll.
+    case IDENTITY_PENDING_REASON:
+      return 'waiting for your account to be confirmed — shared-unit deletions are held';
     case 'server_error':
       return 'fleet returned an error';
     case 'network':
@@ -463,7 +467,12 @@ export const fleetDegradedLanes = computed<DegradedLane[]>(() => {
     // An Off lane is normally deliberate (consent, entitlement) and hidden —
     // except when the backend latched the fleet route as unsupported: sync
     // was asked for and is not happening, so it is shown like a failure.
-    if (lane?.status === 'degraded' || (lane?.status === 'off' && lane.reason === SYNC_UNSUPPORTED_REASON)) {
+    // Same for a lane held for an unconfirmed account (identity_pending):
+    // deletions the server sent are not applied yet, so it is shown.
+    if (
+      lane?.status === 'degraded' ||
+      (lane?.status === 'off' && (lane.reason === SYNC_UNSUPPORTED_REASON || lane.reason === IDENTITY_PENDING_REASON))
+    ) {
       out.push({
         key,
         label,
@@ -482,6 +491,12 @@ export const fleetDegradedLanes = computed<DegradedLane[]>(() => {
 
 /** Lane reason the backend publishes when fleet has no session-sync route. */
 export const SYNC_UNSUPPORTED_REASON = 'fleet_endpoint_unsupported';
+
+/**
+ * Unit-poll lane reason while a pulled page is held because the signed-in
+ * fleet identity is not known yet (core/fleet ReasonIdentityPending).
+ */
+export const IDENTITY_PENDING_REASON = 'identity_pending';
 
 /**
  * fleetSessionSyncUnsupported — true once the backend has latched the fleet

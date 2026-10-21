@@ -336,6 +336,11 @@ func (f *Impl) Unit_SyncStatus(_ context.Context) (UnitSyncStatusView, error) {
 		PushRefused:         st.PushRefused,
 		PushHeldLoadAlways:  st.PushHeldLoadAlways,
 		StrippedUnitKeys:    st.StrippedUnitKeys,
+
+		TombstonesApplied:             st.TombstonesApplied,
+		TombstoneDroppedLocalEdits:    st.TombstoneDroppedLocalEdits,
+		TombstonesDemoted:             st.TombstonesDemoted,
+		TombstonesHeldIdentityUnknown: st.TombstonesHeldIdentityUnknown,
 	}
 	if !st.LastPullAt.IsZero() {
 		v.LastPullAt = st.LastPullAt.UTC().Format(time.RFC3339)
