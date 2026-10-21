@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/scheduler"
@@ -56,6 +58,12 @@ type Config struct {
 	// on — the SAME resolution the dispatcher applies at fire time. nil
 	// reports an unresolved default.
 	DefaultModel func() DefaultModel
+	// ContextWindow reports a model's context window on the default
+	// profile ("" = the default model): the ceiling Create/Update
+	// validate a context budget against, and DefaultModel's
+	// MaxContextTokens. nil, or ok=false, falls back to
+	// scheduler.MaxContextBudgetTokens.
+	ContextWindow func(model string) (int, bool)
 }
 
 // API is the concrete ScheduledChatAPI.
@@ -97,6 +105,12 @@ func (a *API) createInternal(ctx context.Context, in CreateInput, createdBy stri
 	if verr != nil {
 		return ChatRunEntry{}, verr
 	}
+	policy, perr := a.resolveContextPolicy(contextPolicy{
+		budget: scheduler.DefaultContextBudgetTokens, keep: scheduler.DefaultKeepRecentRuns,
+	}, in.ContextBudgetTokens, in.KeepRecentRuns, in.MemoryFocus, in.Model)
+	if perr != nil {
+		return ChatRunEntry{}, perr
+	}
 	if a.cfg.Store == nil {
 		return ChatRunEntry{}, ErrStoreUnavailable
 	}
@@ -128,6 +142,7 @@ func (a *API) createInternal(ctx context.Context, in CreateInput, createdBy stri
 		TriggerKind:    triggerKind,
 		RunAt:          runAt,
 	}
+	policy.applyTo(&rec)
 	if err := a.cfg.Store.Create(ctx, rec); err != nil {
 		return ChatRunEntry{}, fmt.Errorf("scheduledchat: create: %w", err)
 	}
@@ -198,6 +213,22 @@ func (a *API) Update(ctx context.Context, in UpdateInput) (ChatRunEntry, error) 
 		return ChatRunEntry{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
 	}
 
+	// The context policy is optional on the wire: an absent field keeps
+	// the schedule's current value, so read it first.
+	current, gerr := a.cfg.Store.Get(ctx, in.ID)
+	if gerr != nil {
+		if errors.Is(gerr, scheduler.ErrChatRunNotFound) {
+			return ChatRunEntry{}, ErrNotFound
+		}
+		return ChatRunEntry{}, fmt.Errorf("scheduledchat: update get: %w", gerr)
+	}
+	policy, perr := a.resolveContextPolicy(contextPolicy{
+		budget: current.EffectiveContextBudget(), keep: current.EffectiveKeepRecentRuns(), focus: current.MemoryFocus,
+	}, in.ContextBudgetTokens, in.KeepRecentRuns, in.MemoryFocus, in.Model)
+	if perr != nil {
+		return ChatRunEntry{}, perr
+	}
+
 	sink := in.OutputSink
 	if sink == "" {
 		sink = "banner"
@@ -217,6 +248,7 @@ func (a *API) Update(ctx context.Context, in UpdateInput) (ChatRunEntry, error) 
 		TriggerKind:    triggerKind,
 		RunAt:          runAt,
 	}
+	policy.applyTo(&rec)
 	if err := a.cfg.Store.Update(ctx, rec); err != nil {
 		if errors.Is(err, scheduler.ErrChatRunNotFound) {
 			return ChatRunEntry{}, ErrNotFound
@@ -289,7 +321,76 @@ func (a *API) DefaultModel(_ context.Context) (DefaultModel, error) {
 	if a.cfg.DefaultModel == nil {
 		return DefaultModel{}, nil
 	}
-	return a.cfg.DefaultModel(), nil
+	dm := a.cfg.DefaultModel()
+	if a.cfg.ContextWindow != nil {
+		if w, ok := a.cfg.ContextWindow(""); ok && w > 0 {
+			dm.MaxContextTokens = w
+		}
+	}
+	return dm, nil
+}
+
+// contextPolicy is a schedule's resolved context policy (sessions/0349).
+type contextPolicy struct {
+	budget int
+	keep   int
+	focus  string
+}
+
+func (p contextPolicy) applyTo(r *scheduler.ChatRunRecord) {
+	keep := p.keep
+	r.ContextBudgetTokens = p.budget
+	r.KeepRecentRuns = &keep
+	r.MemoryFocus = p.focus
+}
+
+// resolveContextPolicy overlays the wire fields that are present on base
+// and validates the result: budget in [MinContextBudgetTokens, the
+// model's window] (MaxContextBudgetTokens when the window is unknown),
+// keep in [0, MaxKeepRecentRuns], focus at most MaxMemoryFocusChars.
+// model is the schedule's override ("" = the active default), whose
+// window caps the budget.
+func (a *API) resolveContextPolicy(base contextPolicy, budget, keep *int, focus *string, model string) (contextPolicy, error) {
+	p := base
+	if budget != nil {
+		p.budget = *budget
+	}
+	if keep != nil {
+		p.keep = *keep
+	}
+	if focus != nil {
+		p.focus = strings.TrimSpace(*focus)
+	}
+	ceiling := scheduler.MaxContextBudgetTokens
+	window := 0
+	if a.cfg.ContextWindow != nil {
+		if w, ok := a.cfg.ContextWindow(model); ok && w > 0 {
+			window = w
+			if w < ceiling {
+				ceiling = w
+			}
+		}
+	}
+	if p.budget < scheduler.MinContextBudgetTokens {
+		return p, fmt.Errorf("%w: contextBudgetTokens must be at least %d", ErrInvalidInput, scheduler.MinContextBudgetTokens)
+	}
+	// Only an explicit budget is refused for exceeding the window: a
+	// stored or default budget over a small model's window is capped at
+	// fire time instead, so switching a schedule to a small model does
+	// not make it uneditable.
+	if budget != nil && p.budget > ceiling {
+		if window > 0 {
+			return p, fmt.Errorf("%w: contextBudgetTokens must not exceed the model's context window (%d tokens)", ErrInvalidInput, window)
+		}
+		return p, fmt.Errorf("%w: contextBudgetTokens must be at most %d", ErrInvalidInput, ceiling)
+	}
+	if p.keep < 0 || p.keep > scheduler.MaxKeepRecentRuns {
+		return p, fmt.Errorf("%w: keepRecentRuns must be between 0 and %d", ErrInvalidInput, scheduler.MaxKeepRecentRuns)
+	}
+	if utf8.RuneCountInString(p.focus) > scheduler.MaxMemoryFocusChars {
+		return p, fmt.Errorf("%w: memoryFocus must be at most %d characters", ErrInvalidInput, scheduler.MaxMemoryFocusChars)
+	}
+	return p, nil
 }
 
 // Get implements ScheduledChatAPI.
@@ -450,6 +551,10 @@ func chatRunEntryFromRecord(r scheduler.ChatRunRecord) ChatRunEntry {
 		CreatedBy:      createdBy,
 		ToolAllowlist:  r.ToolAllowlist,
 		TriggerKind:    r.EffectiveTriggerKind(),
+
+		ContextBudgetTokens: r.EffectiveContextBudget(),
+		KeepRecentRuns:      r.EffectiveKeepRecentRuns(),
+		MemoryFocus:         r.MemoryFocus,
 	}
 	if r.RunAt != nil {
 		entry.RunAt = r.RunAt.UTC().Format(time.RFC3339)
@@ -468,6 +573,10 @@ func runSummaryFromRecord(r scheduler.ChatRunHistoryRecord) RunSummary {
 		Error:         r.Error,
 		Model:         r.Model,
 		CostUSD:       r.CostUSD,
+	}
+	if r.CompactionCostUSD != nil {
+		c := *r.CompactionCostUSD
+		s.CompactionCostUSD = &c
 	}
 	if r.EndedAt != nil {
 		t := *r.EndedAt

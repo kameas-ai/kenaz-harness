@@ -602,6 +602,11 @@ type API struct {
 	// is disabled at boot (HARNESS_COMPACTION=off or no session store).
 	compactionLLM   *compactionwiring.LLMCaller
 	compactionAudit *compactionwiring.AuditEmitter
+	// scheduledBudget is the per-schedule context budget over the SAME
+	// compaction deps the chat runner's dial uses (newLLMStack ->
+	// buildCompactionWiring), handed to the scheduled-chat dispatcher
+	// (scheduled-chat-context-budget). nil when compaction is disabled.
+	scheduledBudget *chat.ScheduledBudgetCompactor
 	// autotitleLLM is the SAME *autotitlewiring.LLMCaller instance
 	// newLLMStack constructs for the chat runner's automatic post-run
 	// auto-title trigger (chatAutoTitleGen), held here so
@@ -2677,6 +2682,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// gives CompactionOverhead() something to read.
 	a.compactionLLM = stack.compactionLLM
 	a.compactionAudit = stack.compactionAudit
+	a.scheduledBudget = stack.scheduledBudget
 	// laya-advisors-01LAYA001 WP07: Advice_Respond (core/rpc/advice_respond.go)
 	// needs both to drive a chip's accept/dismiss click.
 	a.chatAdvisor = stack.chatAdvisor
@@ -4048,6 +4054,11 @@ func New(c *core.Core, opts ...Option) *API {
 				// "banner" output sink onto the same broker every other
 				// frontend-visible push topic in this file uses.
 				Broker: a.broker,
+				// scheduled-chat-context-budget: the schedule's context
+				// budget, over the chat runner's own compaction deps. A
+				// nil compactor (compaction disabled) leaves the
+				// interface nil, not a typed-nil pointer.
+				Compactor: scheduledCompactor(a.scheduledBudget),
 			})
 			chatDispatcher = live
 			if chatCronEngine != nil {
@@ -4068,6 +4079,19 @@ func New(c *core.Core, opts ...Option) *API {
 			DefaultModel: func() scheduledchatview.DefaultModel {
 				id, model := scheduledDefaultModel()
 				return scheduledchatview.DefaultModel{ProfileID: id, Model: model}
+			},
+			// scheduled-chat-context-budget: the ceiling of a schedule's
+			// context budget is its model's window — the same lookup the
+			// dispatcher's budget pass caps with.
+			ContextWindow: func(model string) (int, bool) {
+				id, def := scheduledDefaultModel()
+				if id == "" {
+					return 0, false
+				}
+				if model == "" {
+					model = def
+				}
+				return a.scheduledBudget.ContextWindow(id, model)
 			},
 		})
 	}
@@ -6123,6 +6147,9 @@ type llmStack struct {
 	// layer queries when surfacing recent compaction events to the
 	// frontend. nil when compaction is disabled.
 	compactionAudit *compactionwiring.AuditEmitter
+	// scheduledBudget runs a schedule's context budget through the chat
+	// runner's compaction deps; nil when compaction is disabled.
+	scheduledBudget *chat.ScheduledBudgetCompactor
 	// autotitleLLM is the *autotitlewiring.LLMCaller the chat runner's
 	// automatic post-run auto-title trigger uses (chatAutoTitleGen,
 	// below). Held on the stack, mirroring compactionLLM immediately
@@ -7252,6 +7279,7 @@ func newLLMStack(
 		compactionScheduler: sweepScheduler,
 		compactionLLM:       compactionLLM,
 		compactionAudit:     compactionAudit,
+		scheduledBudget:     chat.NewScheduledBudgetCompactor(compactionDeps),
 		autotitleLLM:        autotitleLLMCaller,
 		chatRunner:          chatRunner,
 		historyAdapter:      historyAdapter,

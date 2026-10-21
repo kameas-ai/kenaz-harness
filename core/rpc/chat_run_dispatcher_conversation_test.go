@@ -82,6 +82,7 @@ func (m *steppedModel) waitCalls(t *testing.T, n int) {
 }
 
 type conversationStack struct {
+	core     *core.Core
 	sessions sessionsview.SessionsAPI
 	llm      llmview.LLMConnectorAPI
 	runner   *chat.ChatRunner
@@ -151,6 +152,7 @@ func buildConversationStack(t *testing.T) *conversationStack {
 	bus := NewEventBus()
 	broker := chatBrokerAdapter{broker: NewStreamBroker(NewMultiEmitter(&busEmitter{bus: bus}))}
 	s := &conversationStack{
+		core:     c,
 		sessions: sessionsview.NewManagerAPI(c.SessionManager()),
 		bus:      bus,
 		store:    scheduler.NewSQLiteChatStore(c.Storage()),
