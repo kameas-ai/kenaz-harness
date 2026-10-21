@@ -37,6 +37,14 @@ var (
 	// auto_titled flag is already 1 — meaning either the engine already
 	// fired or a user renamed the session — and the write is skipped.
 	ErrAutoTitleSuperseded = errors.New("session: auto-title superseded")
+
+	// ErrCompactionConflict is returned by ApplyCompaction when one of
+	// the originals it was asked to fold is missing or already archived
+	// — another compaction (the maximal dial, a scheduled budget pass)
+	// rewrote the same history between this one's read and its write.
+	// Nothing is written: applying it would leave two live summaries and
+	// overwrite the winner's compacted_into_id links.
+	ErrCompactionConflict = errors.New("session: compaction conflict: the history changed since it was read")
 )
 
 // Store is the persistence contract the Manager consumes. Two
@@ -776,7 +784,20 @@ func (s *memStore) ApplyCompaction(_ context.Context, sessionID string, summary 
 	// Build a set of original ids for the flip pass.
 	idSet := make(map[string]struct{}, len(originalIDs))
 	for _, id := range originalIDs {
-		idSet[id] = struct{}{}
+		if id != "" {
+			idSet[id] = struct{}{}
+		}
+	}
+	// Compare-and-swap, mirroring sqlStore: every original must still be
+	// live, or nothing is written (ErrCompactionConflict).
+	live := 0
+	for _, m := range s.messages[sessionID] {
+		if _, ok := idSet[m.ID]; ok && m.ArchivedAt == nil {
+			live++
+		}
+	}
+	if live != len(idSet) {
+		return ErrCompactionConflict
 	}
 	// Flip every original.
 	src := s.messages[sessionID]
@@ -1850,16 +1871,33 @@ func (s *sqlStore) ApplyCompaction(ctx context.Context, sessionID string, summar
 		// portable (no parameterized IN-list across drivers); the engine
 		// guards the call to a single span per session per turn so the
 		// extra round-trips are bounded.
+		//
+		// Compare-and-swap (scheduled-chat-context-budget): each flip only
+		// matches a row that is still live, and must match exactly one.
+		// Two compactions can race on one session (the maximal dial on a
+		// user's turn and a scheduled budget pass); the loser read the
+		// history before the winner archived it, and applying its write
+		// would leave two live summaries and re-point the winner's
+		// originals. Returning an error rolls the whole transaction back,
+		// summary insert included.
 		for _, id := range originalIDs {
 			if id == "" {
 				continue
 			}
-			if _, err := tx.Exec(ctx, `
+			res, err := tx.Exec(ctx, `
                 UPDATE session_messages
                 SET compacted_into_id = ?, archived_at = ?
-                WHERE session_id = ? AND id = ?
-            `, summary.ID, atNS, sessionID, id); err != nil {
+                WHERE session_id = ? AND id = ? AND archived_at IS NULL
+            `, summary.ID, atNS, sessionID, id)
+			if err != nil {
 				return fmt.Errorf("session: flip original %q: %w", id, err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("session: flip original %q: %w", id, err)
+			}
+			if n != 1 {
+				return ErrCompactionConflict
 			}
 		}
 		return nil
