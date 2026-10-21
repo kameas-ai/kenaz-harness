@@ -66,8 +66,6 @@ type ScheduledBudgetOutcome struct {
 	// Attempted is true when the summariser was (or would have been)
 	// asked — over budget or forced — whatever the result.
 	Attempted bool
-	// EffectiveBudget is BudgetTokens after the model-window cap.
-	EffectiveBudget int
 	// Result is the engine's report (tokens before/after, kept runs,
 	// the pile it summarised).
 	Result compaction.RollingResult
@@ -120,7 +118,6 @@ func (c *ScheduledBudgetCompactor) CompactForSchedule(ctx context.Context, sessi
 			budget = window
 		}
 	}
-	out.EffectiveBudget = budget
 	if budget <= 0 {
 		return out, fmt.Errorf("scheduled budget: no budget")
 	}
@@ -167,7 +164,10 @@ func (c *ScheduledBudgetCompactor) CompactForSchedule(ctx context.Context, sessi
 			"session_id", sessionID, "budget", budget,
 			"tokens_before", res.TokensBefore, "tokens_after", res.TokensAfter,
 			"kept_runs", res.KeptRuns, "rolled_messages", res.RolledMessages,
-			"incremental", res.HadPreviousSummary)
+			"pile_tokens", res.PileTokens, "incremental", res.HadPreviousSummary,
+			"summary_calls", out.Cost.Calls, "summary_input_tokens", out.Cost.InputTokens,
+			"summary_output_tokens", out.Cost.OutputTokens, "summary_cost_usd", out.Cost.TotalUSD,
+			"summary_cost_unpriced_calls", out.Cost.Indeterminate)
 	}
 	return out, nil
 }
