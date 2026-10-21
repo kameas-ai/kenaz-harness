@@ -19,6 +19,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -167,16 +168,27 @@ func TestCuratedPull_QuarantineTombstoneThenCleanReappearance(t *testing.T) {
 	}
 }
 
-// Author view: full content plus quarantined_at / quarantine_reason, no
-// deleted_at → kept, in the library and in PulledEntries.
+// authorQuarantineJSON is the #325 author view: full content, no
+// deleted_at, plus quarantined_at / quarantine_reason (not decoded).
+const authorQuarantineJSON = `{"id":"%s","org_id":"o","owner_user_id":"u-author","kind":"%s","title":"Mine",` +
+	`"body":"author body","classification":"team_shared","version":2,"created_at":"2026-10-01T00:00:00Z",` +
+	`"updated_at":"%s","quarantined_at":"2026-10-20T00:00:00Z","quarantine_reason":"secret_detected"}`
+
+func decodeAuthorQuarantine(t *testing.T, id, kind, updated string) ContextPulledNode {
+	t.Helper()
+	var n ContextPulledNode
+	if err := json.Unmarshal([]byte(fmt.Sprintf(authorQuarantineJSON, id, kind, updated)), &n); err != nil {
+		t.Fatalf("decode author view: %v", err)
+	}
+	return n
+}
+
+// Author view: full content plus quarantine fields, no deleted_at → kept,
+// in the library and in PulledEntries.
 func TestCuratedPull_AuthorQuarantineViewIsKept(t *testing.T) {
 	q := ts(0)
 	syncer, lib := curatedTombstoneHarness(t,
-		contextPullResponse{Nodes: []ContextPulledNode{{
-			ID: "cur-author", Kind: "guidance", Title: "Mine", Body: "author body",
-			Classification: ClassTeamShared, Version: 2, UpdatedAt: q,
-			QuarantinedAt: &q, QuarantineReason: "secret_detected",
-		}}, Cursor: q},
+		contextPullResponse{Nodes: []ContextPulledNode{decodeAuthorQuarantine(t, "cur-author", "guidance", q)}, Cursor: q},
 	)
 	mustPullAndMerge(t, syncer)
 	got, ok := libraryEntry(lib, "cur-author")
@@ -188,8 +200,35 @@ func TestCuratedPull_AuthorQuarantineViewIsKept(t *testing.T) {
 	}
 }
 
+// A tombstone only touches the in-memory fleet layer: the user's own
+// library FILES are never removed by it.
+func TestCuratedPull_TombstoneLeavesLocalLibraryFiles(t *testing.T) {
+	del := ts(0)
+	syncer, lib := curatedTombstoneHarness(t,
+		contextPullResponse{Nodes: []ContextPulledNode{{
+			ID: "cur-own", Kind: "guidance", Title: "My notes", Body: "shared copy",
+			Classification: ClassTeamShared, Version: 1, UpdatedAt: ts(-time.Minute),
+		}}, Cursor: ts(-time.Minute)},
+		contextPullResponse{Nodes: []ContextPulledNode{{
+			ID: "cur-own", Kind: "guidance", Classification: ClassTeamShared,
+			Version: 1, UpdatedAt: del, DeletedAt: &del,
+		}}, Cursor: del},
+	)
+	if err := lib.Save("My notes.md", "my local file"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	mustPullAndMerge(t, syncer)
+	mustPullAndMerge(t, syncer)
+	if _, ok := libraryEntry(lib, "cur-own"); ok {
+		t.Error("tombstoned fleet entry still in the library")
+	}
+	if body, err := lib.Get("My notes.md"); err != nil || body != "my local file" {
+		t.Errorf("local library file after tombstone = %q, %v; want untouched", body, err)
+	}
+}
+
 // The exact #325 wire shapes decode: member tombstone (empty strings, {}
-// metadata, deleted_at) and author view (quarantine fields).
+// metadata, deleted_at) and author view (live; quarantine fields ignored).
 func TestContextPulledNode_DecodesQuarantineShapes(t *testing.T) {
 	member := `{"id":"n1","org_id":"o","owner_user_id":"u","kind":"guidance","title":"","body":"",` +
 		`"metadata":{},"classification":"team_shared","scope":"org.x","version":4,` +
@@ -198,18 +237,11 @@ func TestContextPulledNode_DecodesQuarantineShapes(t *testing.T) {
 	if err := json.Unmarshal([]byte(member), &m); err != nil {
 		t.Fatalf("member shape: %v", err)
 	}
-	if m.DeletedAt == nil || m.QuarantinedAt != nil || m.Version != 4 {
+	if m.DeletedAt == nil || m.Version != 4 || m.Body != "" {
 		t.Errorf("member shape decoded as %+v", m)
 	}
-
-	author := `{"id":"n1","org_id":"o","owner_user_id":"u","kind":"guidance","title":"t","body":"b",` +
-		`"classification":"team_shared","version":4,"created_at":"2026-10-01T00:00:00Z",` +
-		`"updated_at":"2026-10-20T00:00:00Z","quarantined_at":"2026-10-20T00:00:00Z","quarantine_reason":"secret_detected"}`
-	var a ContextPulledNode
-	if err := json.Unmarshal([]byte(author), &a); err != nil {
-		t.Fatalf("author shape: %v", err)
-	}
-	if a.DeletedAt != nil || a.QuarantinedAt == nil || a.QuarantineReason != "secret_detected" {
-		t.Errorf("author shape decoded as %+v", a)
+	a := decodeAuthorQuarantine(t, "n1", "guidance", "2026-10-20T00:00:00Z")
+	if a.DeletedAt != nil || a.Body != "author body" {
+		t.Errorf("author shape decoded as %+v; want a live node", a)
 	}
 }

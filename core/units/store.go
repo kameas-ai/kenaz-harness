@@ -78,14 +78,26 @@ type Store interface {
 	// DeleteWithSyncState removes a sync-managed (team/org) unit together
 	// with its version history, every edge touching it and its sync
 	// sidecar row, in a single atomic operation. It is the transactional
-	// primitive behind the fleet pull path's tombstone (a shared node that
-	// was deleted, or quarantined and so withdrawn from this member): the
-	// stored body AND every historical body must be gone, and the sidecar
-	// must go with them so a later clean re-appearance is a first sight.
-	// ErrPersonalUnit (nothing written) when the unit is personal. When the
-	// unit row is already gone, any orphaned sidecar row is still removed
-	// and the call returns nil.
-	DeleteWithSyncState(ctx context.Context, unitID string) error
+	// primitive behind the fleet pull path's tombstone for a node this user
+	// does NOT own (a shared node that was deleted, or quarantined and so
+	// withdrawn from this member): the stored body AND every historical
+	// body must be gone, and the sidecar must go with them so a later clean
+	// re-appearance is a first sight. hadUnpushedEdits reports, read inside
+	// the same transaction, whether the unit's Version was ahead of the
+	// sidecar's SyncedLocalVersion (local edits never synced). ErrPersonalUnit
+	// (nothing written) when the unit is personal. When the unit row is
+	// already gone, any orphaned sidecar row is still removed and the call
+	// returns (false, nil).
+	DeleteWithSyncState(ctx context.Context, unitID string) (hadUnpushedEdits bool, err error)
+
+	// DemoteToPersonal reclassifies a sync-managed unit as personal and
+	// removes its sync sidecar row, in a single atomic operation. Body,
+	// version, history and edges are kept. It is the pull path's tombstone
+	// for a node this user OWNS (deleted server-side by someone else, e.g.
+	// a project delete or a retention downgrade): the user's own work stays
+	// on the machine, is never pushed again (personal), and the node id no
+	// longer maps to it. ErrUnitNotFound when the unit does not exist.
+	DemoteToPersonal(ctx context.Context, unitID string) error
 
 	// ListEdges returns all edges where FromID or ToID matches id,
 	// ordered by created_at ASC.

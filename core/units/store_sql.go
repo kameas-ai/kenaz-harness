@@ -596,10 +596,14 @@ func (s *sqlStore) DeleteSyncState(ctx context.Context, unitID string) error {
 // rely on the foreign_keys pragma (see artifacts.deleteArtifactUnitsTx): a
 // tombstone that leaves a historical body behind in unit_versions has not
 // removed the content. See Store.DeleteWithSyncState.
-func (s *sqlStore) DeleteWithSyncState(ctx context.Context, unitID string) error {
-	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
-		var class string
-		err := tx.QueryRow(ctx, "SELECT classification FROM units WHERE id = ?", unitID).Scan(&class)
+func (s *sqlStore) DeleteWithSyncState(ctx context.Context, unitID string) (bool, error) {
+	hadUnpushed := false
+	err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		var (
+			class   string
+			version int
+		)
+		err := tx.QueryRow(ctx, "SELECT classification, version FROM units WHERE id = ?", unitID).Scan(&class, &version)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			// Unit already gone: drop an orphaned sidecar so the node id
@@ -607,10 +611,19 @@ func (s *sqlStore) DeleteWithSyncState(ctx context.Context, unitID string) error
 			_, derr := tx.Exec(ctx, "DELETE FROM unit_sync_state WHERE unit_id = ?", unitID)
 			return derr
 		case err != nil:
-			return fmt.Errorf("units: DeleteWithSyncState: read classification: %w", err)
+			return fmt.Errorf("units: DeleteWithSyncState: read unit: %w", err)
 		}
 		if Classification(class) == ClassPersonal {
 			return ErrPersonalUnit
+		}
+		var syncedLocal int
+		switch err := tx.QueryRow(ctx, "SELECT synced_local_version FROM unit_sync_state WHERE unit_id = ?", unitID).Scan(&syncedLocal); {
+		case errors.Is(err, sql.ErrNoRows):
+			hadUnpushed = true // never synced: everything local is un-pushed
+		case err != nil:
+			return fmt.Errorf("units: DeleteWithSyncState: read sidecar: %w", err)
+		default:
+			hadUnpushed = version > syncedLocal
 		}
 		for _, stmt := range []struct {
 			q    string
@@ -624,6 +637,35 @@ func (s *sqlStore) DeleteWithSyncState(ctx context.Context, unitID string) error
 			if _, err := tx.Exec(ctx, stmt.q, stmt.args...); err != nil {
 				return fmt.Errorf("units: DeleteWithSyncState: %w", err)
 			}
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return hadUnpushed, nil
+}
+
+// DemoteToPersonal reclassifies the unit as personal and deletes its sidecar
+// in ONE WriteTx; content, version, history and edges are untouched. See
+// Store.DemoteToPersonal.
+func (s *sqlStore) DemoteToPersonal(ctx context.Context, unitID string) error {
+	now := s.now()
+	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		res, err := tx.Exec(ctx, "UPDATE units SET classification = ?, updated_at = ? WHERE id = ?",
+			string(ClassPersonal), now.UnixNano(), unitID)
+		if err != nil {
+			return fmt.Errorf("units: DemoteToPersonal: update: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("units: DemoteToPersonal: rows: %w", err)
+		}
+		if n == 0 {
+			return ErrUnitNotFound
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM unit_sync_state WHERE unit_id = ?", unitID); err != nil {
+			return fmt.Errorf("units: DemoteToPersonal: sidecar: %w", err)
 		}
 		return nil
 	})

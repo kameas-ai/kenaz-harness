@@ -446,16 +446,20 @@ func (s *memStore) DeleteSyncState(_ context.Context, unitID string) error {
 
 // DeleteWithSyncState removes the unit, its history, its edges and its
 // sidecar under one lock. See Store.DeleteWithSyncState.
-func (s *memStore) DeleteWithSyncState(_ context.Context, unitID string) error {
+func (s *memStore) DeleteWithSyncState(_ context.Context, unitID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.units[unitID]
 	if !ok {
 		delete(s.syncState, unitID)
-		return nil
+		return false, nil
 	}
 	if u.Classification == ClassPersonal {
-		return ErrPersonalUnit
+		return false, ErrPersonalUnit
+	}
+	hadUnpushed := true
+	if st, ok := s.syncState[unitID]; ok {
+		hadUnpushed = u.Version > st.SyncedLocalVersion
 	}
 	versions := s.versions[:0:0]
 	for _, v := range s.versions {
@@ -473,6 +477,22 @@ func (s *memStore) DeleteWithSyncState(_ context.Context, unitID string) error {
 	s.edges = edges
 	delete(s.syncState, unitID)
 	delete(s.units, unitID)
+	return hadUnpushed, nil
+}
+
+// DemoteToPersonal reclassifies the unit and drops its sidecar under one
+// lock. See Store.DemoteToPersonal.
+func (s *memStore) DemoteToPersonal(_ context.Context, unitID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.units[unitID]
+	if !ok {
+		return ErrUnitNotFound
+	}
+	u.Classification = ClassPersonal
+	u.UpdatedAt = s.now()
+	s.units[unitID] = u
+	delete(s.syncState, unitID)
 	return nil
 }
 

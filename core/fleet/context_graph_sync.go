@@ -194,14 +194,11 @@ type ContextPulledNode struct {
 	// quarantined_at and the version unchanged. Both lanes treat any
 	// non-nil DeletedAt as "remove the local copy", whatever the version.
 	DeletedAt *string `json:"deleted_at,omitempty"`
-	// QuarantinedAt / QuarantineReason (kenaz-fleet #325) are set only on
-	// the AUTHOR's own quarantined node, which arrives with its full
-	// content and no deleted_at: the author keeps it (and can edit it
-	// clean, which clears the quarantine for everyone). Decoded so the
-	// shape is explicit; nothing branches on them and they are never
-	// logged. No UI surfaces them yet.
-	QuarantinedAt    *string `json:"quarantined_at,omitempty"`
-	QuarantineReason string  `json:"quarantine_reason,omitempty"`
+	// The AUTHOR's own quarantined node (kenaz-fleet #325) arrives with its
+	// full content, no deleted_at, plus quarantined_at / quarantine_reason.
+	// Those two fields are deliberately NOT decoded: nothing here would
+	// consume them (no UI surfaces quarantine yet), and the author keeps the
+	// node as an ordinary live node, which is the required behaviour.
 	// Unified-Unit dimensions (fleet ContextNode). Top-level is the ONLY read
 	// path for load_policy (WP03); metadata._unit is write-only compat.
 	UnitKind   string `json:"unit_kind,omitempty"`

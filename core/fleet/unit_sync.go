@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,7 +63,11 @@ type UnitStore interface {
 	// DeleteWithSyncState removes a pulled team/org unit, its history, its
 	// edges and its sidecar in ONE storage transaction: the pull path's
 	// tombstone apply. units.ErrPersonalUnit for a personal unit.
-	DeleteWithSyncState(ctx context.Context, unitID string) error
+	DeleteWithSyncState(ctx context.Context, unitID string) (hadUnpushedEdits bool, err error)
+	// DemoteToPersonal reclassifies a unit as personal and drops its
+	// sidecar in ONE transaction, keeping content and history: the pull
+	// path's tombstone for the user's OWN node.
+	DemoteToPersonal(ctx context.Context, unitID string) error
 }
 
 // UnitConflict records a pull-time divergence: the server advanced a unit
@@ -111,11 +116,22 @@ type UnitSyncer struct {
 	// pushHeldLoadAlways counts load_policy=always units held back because
 	// the identity's roles are unknown (review F9); they stay dirty.
 	pushHeldLoadAlways int
-	// tombstonesApplied counts pulled tombstones that removed a local unit.
-	// tombstoneDroppedLocalEdits counts the subset whose local unit carried
-	// un-pushed local edits (see applyTombstone for the rule). Cumulative.
-	tombstonesApplied          int
-	tombstoneDroppedLocalEdits int
+	// Tombstone outcomes (see applyTombstone), cumulative:
+	// tombstonesApplied — a non-owned unit was deleted;
+	// tombstoneDroppedLocalEdits — the subset that had un-pushed local edits;
+	// tombstonesDemoted — the user's OWN unit was kept as personal;
+	// tombstonesHeldIdentityUnknown — skipped (unit kept) because the
+	// signed-in user id was unknown, so ownership could not be decided.
+	tombstonesApplied             int
+	tombstoneDroppedLocalEdits    int
+	tombstonesDemoted             int
+	tombstonesHeldIdentityUnknown int
+
+	// selfUserID returns the signed-in fleet user id ("" = unknown). Read
+	// per tombstone from the enrolled identity under dataDir, the same
+	// source the Contexts view uses to recognise the user's own pulled
+	// entries (WithSelfIdentityFromDataDir). Tests may override it.
+	selfUserID func() string
 
 	stopCh chan struct{}
 	once   sync.Once
@@ -145,6 +161,16 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 		dataDir: dataDir,
 		ids:     NewWireIDs(dataDir),
 		stopCh:  make(chan struct{}),
+	}
+	s.selfUserID = func() string {
+		if dataDir == "" {
+			return ""
+		}
+		id, err := LoadIdentity(dataDir)
+		if err != nil {
+			return ""
+		}
+		return id.UserID
 	}
 	if c, err := loadUnitCursor(dataDir); err == nil {
 		s.cursor = c
@@ -570,6 +596,17 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 
 	st, err := s.store.GetSyncStateByNodeID(ctx, n.ID)
 	if errors.Is(err, units.ErrSyncStateNotFound) {
+		// A unit already holding this id with no sidecar is the user's own
+		// unit an owner tombstone demoted to personal (applyTombstone). It
+		// stays; the re-appearing node gets a fresh local id beside it rather
+		// than a primary-key clash that would fail (and stall) the pull.
+		if mapped.ID != "" {
+			if _, gerr := s.store.Get(ctx, mapped.ID); gerr == nil {
+				mapped.ID = ""
+			} else if !errors.Is(gerr, units.ErrUnitNotFound) {
+				return false, fmt.Errorf("fleet: unit pull: id check %s: %w", n.ID, gerr)
+			}
+		}
 		// First sight of this server node → create a fresh local read layer
 		// AND record BOTH baselines, in one storage transaction
 		// (units-debt-01UNITD01 FR-4, C-review D-1). Two separate writes
@@ -663,40 +700,49 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 	return true, nil
 }
 
-// applyTombstone removes the local read-layer copy of a node the server now
-// serves as a tombstone (deleted_at set). Fleet sends the same content-free
-// shape for two reasons this client cannot tell apart, and both mean the
-// content must not stay on this machine:
+// applyTombstone handles a node the server now serves as a tombstone
+// (deleted_at set). Fleet sends that shape for:
 //
-//   - FR-103 delete: the node was deleted on the server.
-//   - Quarantine (kenaz-fleet #325): the node's content may contain a secret,
-//     so every member but its AUTHOR receives a tombstone (empty title, body
-//     and metadata; deleted_at = quarantined_at). The author receives the
-//     full node with quarantined_at/quarantine_reason and keeps it, so a
-//     quarantine tombstone always means "you are not the author".
+//   - FR-103 delete, by the author or by someone else: a projects:admin
+//     project delete soft-deletes every project-scoped node regardless of
+//     author, and a retention downgrade sets deleted_at without a version
+//     bump. So the OWNER does receive delete tombstones for their own nodes.
+//   - Quarantine (kenaz-fleet #325): a node whose content may contain a
+//     secret reaches every member but its author as a content-free
+//     tombstone (deleted_at = quarantined_at, version unchanged). The
+//     author receives the full node and keeps it. A quarantine tombstone is
+//     therefore never sent to the owner.
 //
-// Version is deliberately NOT compared: a quarantine does not bump the node
-// version, so the tombstone may carry exactly the synced baseline.
+// Version is deliberately NOT compared: neither quarantine nor a retention
+// downgrade bumps it.
 //
-// The unit, its whole version history (older bodies included), every edge
-// touching it and its sidecar row are deleted in one transaction. Deleting
-// the sidecar is what makes a later clean re-appearance (the author's
-// lint-passing edit clears the quarantine; members then pull a live node at
-// a higher version) take the first-sight path and recreate the unit.
+// Rule, decided on the node's owner_user_id against the signed-in user:
 //
-// Un-pushed local edits (local.Version > SyncedLocalVersion): the tombstone
-// still wins and the unit is removed. Keeping it would keep the withdrawn
-// shared content the edits were made on top of. Those edits could not have
-// reached the team anyway: Fleet only accepts an edit to a node from its
-// owner, and the owner receives no tombstone for a quarantine; for a delete
-// the owner already removed the node. The drop is not silent: it is counted
-// (Status().TombstoneDroppedLocalEdits) and logged by ids only. Any pending
-// conflict for the unit is cleared, since the node it conflicted with is
-// gone.
+//   - Owner (owner_user_id == the user): DEMOTE. The unit is the user's own
+//     work, so it is reclassified personal and only its sidecar is removed,
+//     in one transaction: body, history, edges and any un-pushed edits stay;
+//     it is never pushed again and the node id no longer maps to it (spec
+//     008's owner-directed default: a downgrade "demotes the node to
+//     personal"). A later re-appearance is a first sight and arrives as a
+//     separate team/org unit beside the personal copy.
+//   - Not the owner: DELETE the unit, its whole version history, every edge
+//     touching it and its sidecar in one transaction, so the withdrawn
+//     content is gone, including when the unit carries un-pushed local
+//     edits (counted, logged by ids). Those edits could not have reached
+//     the team: Fleet accepts an edit to a node only from its owner. Deleting
+//     the sidecar makes a clean re-appearance (the author's lint-passing edit
+//     clears a quarantine) take the first-sight path and recreate the unit.
+//   - Identity unknown (no enrolled user id): HOLD. Non-ownership cannot be
+//     proven, so the user's data wins: the unit is kept untouched, the
+//     tombstone is skipped, counted and logged. The cursor still advances.
 //
-// Personal units are never touched (they never get a sidecar row, and the
-// store refuses to delete one). Nothing here logs a title or body.
+// Any pending conflict for the unit is cleared when it is deleted or
+// demoted. Personal units are never touched (they never get a sidecar row,
+// and the store refuses to delete one). Nothing here logs a title or body.
 func (s *UnitSyncer) applyTombstone(ctx context.Context, n ContextPulledNode) (bool, error) {
+	if n.ID == "" {
+		return false, nil
+	}
 	st, err := s.store.GetSyncStateByNodeID(ctx, n.ID)
 	if errors.Is(err, units.ErrSyncStateNotFound) {
 		return false, nil // never pulled here (or personal): nothing to remove
@@ -704,45 +750,78 @@ func (s *UnitSyncer) applyTombstone(ctx context.Context, n ContextPulledNode) (b
 	if err != nil {
 		return false, fmt.Errorf("fleet: unit pull: tombstone sidecar lookup %s: %w", n.ID, err)
 	}
-	localChanged := false
 	local, err := s.store.Get(ctx, st.UnitID)
 	switch {
 	case errors.Is(err, units.ErrUnitNotFound):
-		// Orphaned sidecar: the delete below drops it.
+		// Orphaned sidecar: no content to keep or remove; drop the mapping.
+		if _, derr := s.store.DeleteWithSyncState(ctx, st.UnitID); derr != nil {
+			return false, fmt.Errorf("fleet: unit pull: tombstone orphan sidecar %s: %w", st.UnitID, derr)
+		}
+		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("fleet: unit pull: tombstone get local %s: %w", st.UnitID, err)
-	default:
-		if local.Classification == units.ClassPersonal {
-			return false, nil
-		}
-		localChanged = local.Version > st.SyncedLocalVersion
 	}
-	if err := s.store.DeleteWithSyncState(ctx, st.UnitID); err != nil {
+	if local.Classification == units.ClassPersonal {
+		return false, nil
+	}
+
+	self := ""
+	if s.selfUserID != nil {
+		self = s.selfUserID()
+	}
+	if self == "" {
+		s.mu.Lock()
+		s.tombstonesHeldIdentityUnknown++
+		s.mu.Unlock()
+		logging.L().Warn("fleet.unit.pull.tombstone_held_identity_unknown",
+			"unit_id", st.UnitID, "node_id", n.ID)
+		return false, nil
+	}
+
+	if n.OwnerUserID != "" && strings.EqualFold(n.OwnerUserID, self) {
+		if err := s.store.DemoteToPersonal(ctx, st.UnitID); err != nil {
+			return false, fmt.Errorf("fleet: unit pull: tombstone demote %s: %w", st.UnitID, err)
+		}
+		s.mu.Lock()
+		s.tombstonesDemoted++
+		s.dropConflictLocked(st.UnitID)
+		s.mu.Unlock()
+		logging.L().Info("fleet.unit.pull.tombstone_demoted_own_unit",
+			"unit_id", st.UnitID, "node_id", n.ID)
+		return true, nil
+	}
+
+	hadUnpushed, err := s.store.DeleteWithSyncState(ctx, st.UnitID)
+	if err != nil {
 		if errors.Is(err, units.ErrPersonalUnit) {
 			return false, nil
 		}
 		return false, fmt.Errorf("fleet: unit pull: tombstone delete %s: %w", st.UnitID, err)
 	}
-
 	s.mu.Lock()
 	s.tombstonesApplied++
-	if localChanged {
+	if hadUnpushed {
 		s.tombstoneDroppedLocalEdits++
 	}
+	s.dropConflictLocked(st.UnitID)
+	s.mu.Unlock()
+	if hadUnpushed {
+		logging.L().Warn("fleet.unit.pull.tombstone_dropped_local_edits",
+			"unit_id", st.UnitID, "node_id", n.ID)
+	}
+	return true, nil
+}
+
+// dropConflictLocked forgets any surfaced conflict for unitID. Caller holds
+// s.mu.
+func (s *UnitSyncer) dropConflictLocked(unitID string) {
 	kept := s.conflicts[:0]
 	for _, c := range s.conflicts {
-		if c.UnitID != st.UnitID {
+		if c.UnitID != unitID {
 			kept = append(kept, c)
 		}
 	}
 	s.conflicts = kept
-	s.mu.Unlock()
-
-	if localChanged {
-		logging.L().Warn("fleet.unit.pull.tombstone_dropped_local_edits",
-			"unit_id", st.UnitID, "node_id", n.ID, "local_version", local.Version)
-	}
-	return true, nil
 }
 
 func (s *UnitSyncer) recordConflict(c UnitConflict) {
@@ -914,11 +993,15 @@ type UnitSyncStatus struct {
 	PushRefused         int `json:"push_refused"`
 	PushHeldLoadAlways  int `json:"push_held_load_always"`
 	StrippedUnitKeys    int `json:"stripped_unit_keys"`
-	// TombstonesApplied counts pulled tombstones (delete or quarantine)
-	// that removed a local unit; TombstoneDroppedLocalEdits the subset
-	// whose unit had un-pushed local edits (see applyTombstone).
-	TombstonesApplied          int `json:"tombstones_applied"`
-	TombstoneDroppedLocalEdits int `json:"tombstone_dropped_local_edits"`
+	// Tombstone outcomes (see applyTombstone): TombstonesApplied — a unit
+	// the user does not own was removed; TombstoneDroppedLocalEdits — the
+	// subset with un-pushed local edits; TombstonesDemoted — the user's own
+	// unit kept as personal; TombstonesHeldIdentityUnknown — unit kept
+	// because the signed-in user was unknown.
+	TombstonesApplied             int `json:"tombstones_applied"`
+	TombstoneDroppedLocalEdits    int `json:"tombstone_dropped_local_edits"`
+	TombstonesDemoted             int `json:"tombstones_demoted"`
+	TombstonesHeldIdentityUnknown int `json:"tombstones_held_identity_unknown"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -940,8 +1023,10 @@ func (s *UnitSyncer) Status() UnitSyncStatus {
 		PushHeldLoadAlways:  s.pushHeldLoadAlways,
 		StrippedUnitKeys:    int(s.mapper.StrippedUnitKeys()),
 
-		TombstonesApplied:          s.tombstonesApplied,
-		TombstoneDroppedLocalEdits: s.tombstoneDroppedLocalEdits,
+		TombstonesApplied:             s.tombstonesApplied,
+		TombstoneDroppedLocalEdits:    s.tombstoneDroppedLocalEdits,
+		TombstonesDemoted:             s.tombstonesDemoted,
+		TombstonesHeldIdentityUnknown: s.tombstonesHeldIdentityUnknown,
 	}
 }
 
