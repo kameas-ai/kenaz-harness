@@ -41,12 +41,34 @@ export interface ScheduledChatEntry {
    * run.
    */
   lastRun?: ScheduledChatRunSummary;
+  /**
+   * Context policy of the schedule's conversation (sessions/0349). Always
+   * populated on the real wire response (defaults 20000 / 2 / ""); optional
+   * here so fixtures written before the fields existed keep compiling.
+   * Before a fire whose conversation is over `contextBudgetTokens`, older
+   * runs are summarised; `keepRecentRuns` stay verbatim; `memoryFocus` is
+   * what the summary must remember.
+   */
+  contextBudgetTokens?: number;
+  keepRecentRuns?: number;
+  memoryFocus?: string;
 }
+
+/** Context-policy defaults and bounds — mirror core/scheduler/chat_store.go. */
+export const CONTEXT_BUDGET_DEFAULT = 20000;
+export const CONTEXT_BUDGET_MIN = 4000;
+/** Ceiling when the model's context window is unknown. */
+export const CONTEXT_BUDGET_MAX = 2_000_000;
+export const KEEP_RECENT_RUNS_DEFAULT = 2;
+export const KEEP_RECENT_RUNS_MAX = 10;
+export const MEMORY_FOCUS_MAX_CHARS = 2000;
 
 /** What "active default" resolves to for a schedule with no model override. */
 export interface ScheduledChatDefaultModel {
   profileId: string;
   model: string;
+  /** That model's context window — the context budget's ceiling. Absent when unknown. */
+  maxContextTokens?: number;
 }
 
 export interface ScheduledChatRunSummary {
@@ -64,8 +86,13 @@ export interface ScheduledChatRunSummary {
   error?: string;
   /** Model the run was dispatched with; absent when unknown. */
   model?: string;
-  /** Run cost in USD; absent/0 when unknown or free. */
+  /** Run cost in USD; absent/0 when unknown or free. Includes compactionCostUsd. */
   costUsd?: number;
+  /**
+   * Set when the fire first summarised older runs to fit the schedule's
+   * context budget: what that cost (0 = price unknown). Absent otherwise.
+   */
+  compactionCostUsd?: number;
 }
 
 export interface ScheduledChatCreateInput {
@@ -81,6 +108,10 @@ export interface ScheduledChatCreateInput {
   triggerKind?: 'cron' | 'once';
   /** Required (ISO 8601) when triggerKind is "once"; ignored for "cron". */
   runAt?: string;
+  /** Context policy; absent fields take the defaults. */
+  contextBudgetTokens?: number;
+  keepRecentRuns?: number;
+  memoryFocus?: string;
 }
 
 export interface ScheduledChatUpdateInput {
@@ -94,6 +125,10 @@ export interface ScheduledChatUpdateInput {
   enabled: boolean;
   triggerKind?: 'cron' | 'once';
   runAt?: string;
+  /** Context policy; absent fields keep the schedule's current values. */
+  contextBudgetTokens?: number;
+  keepRecentRuns?: number;
+  memoryFocus?: string;
 }
 
 // ── client interface ──────────────────────────────────────────────────────

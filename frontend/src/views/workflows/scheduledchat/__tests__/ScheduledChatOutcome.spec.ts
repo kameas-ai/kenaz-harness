@@ -197,3 +197,24 @@ describe('Runs tab — chat run history rows', () => {
     wrapper.unmount();
   });
 });
+
+// scheduled-chat-context-budget: a fire that first summarised older runs
+// states that cost on its own line (it is part of the run's cost).
+describe('ChatRunOutcome — context-budget compaction cost', () => {
+  it('names the summarisation cost when the fire compacted, and nothing otherwise', async () => {
+    const { default: ChatRunOutcome } = await import('@/views/workflows/scheduledchat/ChatRunOutcome.vue');
+    const compacted: ScheduledChatRunSummary = { ...COMPLETED_RUN, id: 'hist-c', costUsd: 0.12, compactionCostUsd: 0.02 };
+    const w = mount(ChatRunOutcome, { props: { run: compacted }, global: { stubs: { RouterLink: RouterLinkStub } } });
+    expect(w.find('[data-testid="chat-run-outcome-cost-hist-c"]').text()).toBe('$0.120');
+    expect(w.find('[data-testid="chat-run-outcome-compaction-hist-c"]').text()).toBe('($0.020 of it summarising older runs)');
+
+    const unpriced = mount(ChatRunOutcome, {
+      props: { run: { ...compacted, id: 'hist-u', compactionCostUsd: 0 } },
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    });
+    expect(unpriced.find('[data-testid="chat-run-outcome-compaction-hist-u"]').text()).toContain('cost not reported');
+
+    const plain = mount(ChatRunOutcome, { props: { run: COMPLETED_RUN }, global: { stubs: { RouterLink: RouterLinkStub } } });
+    expect(plain.find('[data-testid="chat-run-outcome-compaction-hist-2"]').exists()).toBe(false);
+  });
+});

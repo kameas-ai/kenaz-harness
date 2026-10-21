@@ -317,3 +317,106 @@ describe('ScheduledChatFormModal — tool set', () => {
     expect(wrapper.find('fieldset[data-testid="sc-tool-set"] legend').text()).toBe('Tool set');
   });
 });
+
+describe('ScheduledChatFormModal — conversation memory (scheduled-chat-context-budget)', () => {
+  it('shows the context-policy defaults on a new schedule', () => {
+    const { wrapper } = mountCreate();
+    expect((wrapper.find('[data-testid="sc-budget-input"]').element as HTMLInputElement).value).toBe('20000');
+    expect((wrapper.find('[data-testid="sc-keep-input"]').element as HTMLInputElement).value).toBe('2');
+    expect((wrapper.find('[data-testid="sc-memory-focus-input"]').element as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('pre-populates the context policy when editing', () => {
+    const { wrapper } = mountEdit({ ...STUB_ENTRY, contextBudgetTokens: 12000, keepRecentRuns: 0, memoryFocus: 'open items' });
+    expect((wrapper.find('[data-testid="sc-budget-input"]').element as HTMLInputElement).value).toBe('12000');
+    expect((wrapper.find('[data-testid="sc-keep-input"]').element as HTMLInputElement).value).toBe('0');
+    expect((wrapper.find('[data-testid="sc-memory-focus-input"]').element as HTMLTextAreaElement).value).toBe('open items');
+  });
+
+  it('sends the context policy on create and update', async () => {
+    const createMock = vi.fn().mockResolvedValue({ ...STUB_ENTRY, id: 'new-id' });
+    const { wrapper } = (() => {
+      const client = createFakeScheduledChatClient({ create: createMock });
+      const w = mount(ScheduledChatFormModal, {
+        props: { client, editing: null },
+        global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } },
+        attachTo: document.body,
+      });
+      return { wrapper: w };
+    })();
+    await wrapper.find('[data-testid="sc-budget-input"]').setValue('8000');
+    await wrapper.find('[data-testid="sc-keep-input"]').setValue('3');
+    await wrapper.find('[data-testid="sc-memory-focus-input"]').setValue('  track open items  ');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ contextBudgetTokens: 8000, keepRecentRuns: 3, memoryFocus: 'track open items' }),
+    );
+
+    const updateMock = vi.fn().mockResolvedValue(STUB_ENTRY);
+    const client = createFakeScheduledChatClient({ update: updateMock });
+    const edit = mount(ScheduledChatFormModal, {
+      props: { client, editing: { ...STUB_ENTRY, contextBudgetTokens: 12000, keepRecentRuns: 0, memoryFocus: 'x' } },
+      global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } },
+      attachTo: document.body,
+    });
+    await edit.find('form').trigger('submit');
+    await flushPromises();
+    expect(updateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: STUB_ENTRY.id, contextBudgetTokens: 12000, keepRecentRuns: 0, memoryFocus: 'x' }),
+    );
+  });
+
+  it.each([
+    ['3999', 'At least 4,000 tokens'],
+    ['', 'whole number'],
+    ['4500.5', 'whole number'],
+  ])('rejects a context budget of %j', async (value, message) => {
+    const { wrapper } = mountCreate();
+    await wrapper.find('[data-testid="sc-budget-input"]').setValue(value);
+    expect(wrapper.find('[data-testid="sc-budget-error"]').text()).toContain(message);
+    expect((wrapper.find('[data-testid="modal-save"]').element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('caps the budget at the default model\'s context window', async () => {
+    const client = createFakeScheduledChatClient({
+      defaultModel: () => Promise.resolve({ profileId: 'p', model: 'm', maxContextTokens: 32000 }),
+    });
+    const wrapper = mount(ScheduledChatFormModal, {
+      props: { client, editing: null },
+      global: { provide: { [HarnessClientKey as symbol]: createFakeHarnessClient() } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    await wrapper.find('[data-testid="sc-budget-input"]').setValue('32001');
+    expect(wrapper.find('[data-testid="sc-budget-error"]').text()).toContain("32,000 tokens (the model's context window)");
+    await wrapper.find('[data-testid="sc-budget-input"]').setValue('32000');
+    expect(wrapper.find('[data-testid="sc-budget-error"]').exists()).toBe(false);
+    // A named model is checked by the server against its own window.
+    await wrapper.find('[data-testid="sc-budget-input"]').setValue('64000');
+    await wrapper.find('[data-testid="sc-model-input"]').setValue('other-model');
+    expect(wrapper.find('[data-testid="sc-budget-error"]').exists()).toBe(false);
+  });
+
+  it.each([['-1'], ['11'], ['']])('rejects keeping %j recent runs', async (value) => {
+    const { wrapper } = mountCreate();
+    await wrapper.find('[data-testid="sc-keep-input"]').setValue(value);
+    expect(wrapper.find('[data-testid="sc-keep-error"]').text()).toContain('Between 0 and 10');
+    expect((wrapper.find('[data-testid="modal-save"]').element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('accepts keeping 0 and 10 recent runs', async () => {
+    const { wrapper } = mountCreate();
+    for (const v of ['0', '10']) {
+      await wrapper.find('[data-testid="sc-keep-input"]').setValue(v);
+      expect(wrapper.find('[data-testid="sc-keep-error"]').exists()).toBe(false);
+    }
+  });
+
+  it('rejects a memory focus over 2000 characters', async () => {
+    const { wrapper } = mountCreate();
+    await wrapper.find('[data-testid="sc-memory-focus-input"]').setValue('x'.repeat(2001));
+    expect(wrapper.find('[data-testid="sc-memory-focus-error"]').text()).toContain('2000 characters');
+    expect((wrapper.find('[data-testid="modal-save"]').element as HTMLButtonElement).disabled).toBe(true);
+  });
+});
