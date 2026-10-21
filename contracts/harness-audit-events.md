@@ -1,8 +1,18 @@
 # Harness audit-event line-protocol
 
 **Status:** Phase A (audit sink). **Owner:** `golang`.
-**Producer:** the in-VM harness service (`kenaz-harness/cmd/harness-vm/`,
-`auditsink.go`). **Consumer:** the reporter's collector audit source.
+**Producers:** the in-VM harness task service (`kenaz-harness/cmd/harness-vm/`)
+and the served harness (`cmd/harness-served/`, `--serve`), both through
+`core/auditsink`. **Consumer:** the reporter's collector audit source.
+
+**Served harness mapping** (audit finding WC-6, 2026-10-21): a *task* is one
+chat turn and `task_id` is the turn's run id (the chat stream's sub id).
+`task.start` is written when the turn's run starts, `task.complete` when it
+ends (`exit_code` 0 = completed, 1 = stopped or failed). Each tool call the
+model makes writes `task.tool_call` / `task.tool_result` with `tool` = the
+namespaced tool name (`server__tool`), `node` empty, and `exit_code` 1 when
+the call errored or was denied. The same metadata-only rule applies: no
+prompt, no arguments, no output.
 
 The harness writes **line-delimited JSON** records — one object per line — to
 the Unix socket named by the environment variable `KENAZ_HARNESS_EVENT_SOCK`.

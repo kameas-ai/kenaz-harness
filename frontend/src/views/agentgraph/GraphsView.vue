@@ -9,7 +9,7 @@ import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import { useServedMode } from '@/lib/useServedMode';
+import { servedUnavailable } from '@/lib/servedCapabilities';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type { GraphInfo } from '@/lib/types';
 import { SPEC_PROVENANCE_MODEL_AUTHORED } from '@/lib/canvas/graphAdapter';
@@ -19,7 +19,12 @@ import { SPEC_PROVENANCE_MODEL_AUTHORED } from '@/lib/canvas/graphAdapter';
 // entry in core/serve/methods.go, no dispatch case — verified, not a gap
 // pending a port) and routing them in would be new capability work, not a
 // parity fix. This is an honest refusal, not a deferred one.
-const servedMode = useServedMode();
+//
+// Audit findings HR-4/HR-5: the decision now comes from the one served
+// capability map (lib/servedCapabilities.ts) that also marks the nav, and
+// it gates newGraph() too — a NEW GRAPH reachable in served mode would
+// open an editor whose save hits an unrouted Graph_* RPC.
+const graphsUnavailable = servedUnavailable('graphs');
 
 /**
  * UNIT-6: the canvas is the review step. An unreviewed row is one
@@ -69,6 +74,7 @@ function openEditor(g: GraphInfo) {
 }
 
 function newGraph() {
+  if (graphsUnavailable) return;
   void router.push({ name: 'graph-editor', params: { id: '__new__' } });
 }
 
@@ -98,7 +104,7 @@ defineExpose({ refresh });
 
 <template>
   <NotAvailableInServedMode
-    v-if="servedMode"
+    v-if="graphsUnavailable"
     feature="Agent graphs"
     reason="Graph authoring and execution run through Graph_* RPCs that are not routed in served mode — porting them would put graph authoring and execution behind the shared workbench token, which the served build's confinement model does not support yet."
   />
@@ -120,6 +126,7 @@ defineExpose({ refresh });
         type="button"
         class="rounded-sm border border-accent bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-accent"
         data-testid="graphs-new"
+        :disabled="!!graphsUnavailable"
         @click="newGraph"
       >
         New graph

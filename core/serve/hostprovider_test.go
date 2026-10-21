@@ -353,3 +353,24 @@ func TestProbeFailureReason_IsClassified(t *testing.T) {
 		t.Errorf("opaque error → %q, want probe_error", got)
 	}
 }
+
+// HR-6: KENAZ_HARNESS_MODELS populates the host profile's model list, so
+// the served model picker offers more than the one default model.
+func TestHostProviders_ModelsListFromEnv(t *testing.T) {
+	get := func(k string) string {
+		return map[string]string{
+			"ANTHROPIC_API_KEY": "k",
+			EnvHostModels:       "claude-sonnet-4-6, claude-opus-4-6",
+		}[k]
+	}
+	got := HostProviders(get, nil)
+	if len(got) != 1 {
+		t.Fatalf("HostProviders returned %d profiles, want 1", len(got))
+	}
+	if got[0].Model != "claude-sonnet-4-6" {
+		t.Fatalf("Model = %q, want claude-sonnet-4-6", got[0].Model)
+	}
+	if m := got[0].AvailableModels(); len(m) != 2 || m[1] != "claude-opus-4-6" {
+		t.Fatalf("AvailableModels = %v, want [claude-sonnet-4-6 claude-opus-4-6]", m)
+	}
+}

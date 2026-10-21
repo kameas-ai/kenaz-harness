@@ -18,6 +18,7 @@
 import { ref, nextTick, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useHarnessClient, useProjects } from '@/lib/useHarnessAPI';
+import { servedUnavailable } from '@/lib/servedCapabilities';
 import type { Session } from '@/lib/types';
 import AutonomyChip from '@/components/chat/AutonomyChip.vue';
 import PlanModeBadge from '@/components/chat/PlanModeBadge.vue';
@@ -58,6 +59,10 @@ const emit = defineEmits<{
 }>();
 
 const client = useHarnessClient();
+// Audit finding HR-10: Sessions_Export* is not in the served RPC allowlist,
+// so the workbench build withholds Export… instead of offering a menu
+// whose every item fails. Move… and Suggest new title are served.
+const exportAvailable = servedUnavailable('session.export') === null;
 
 // ── Rename (session-actions-relocation) ──────────────────────────────
 // Rename moved out of the left-rail rows: clicking the title here turns
@@ -255,7 +260,7 @@ function cancelConfirm() {
     <DeferredAskPill :session-id="session.id" />
 
     <!-- Export dropdown (WP03: replaced window.confirm picker) -->
-    <div class="relative shrink-0">
+    <div v-if="exportAvailable" class="relative shrink-0">
       <button
         type="button"
         data-testid="export-session-btn"

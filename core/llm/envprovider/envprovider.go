@@ -25,7 +25,11 @@
 //	               openai, gemini, ...). Unset → auto-detect.
 //	<CredVar>      optional name of the env var holding the API key.
 //	               Defaults to the kind's conventional variable.
-//	<ModelVar>     optional model id override. Unset → DefaultModels[kind].
+//	<ModelVar>     optional model id override. Unset → the first entry of
+//	               <ModelsVar>, else DefaultModels[kind].
+//	<ModelsVar>    optional comma-separated list of model ids the credential
+//	               may use; becomes ProviderProfile.Models (the model picker).
+//	               The default model is always included, first.
 //
 // # Privacy
 //
@@ -38,6 +42,7 @@ package envprovider
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
@@ -86,8 +91,15 @@ var Detections = []Detection{
 // default-model resolution, so the same typo that shipped in
 // core/agents/bundled/*.yaml was live here too, on a path the bundled-
 // profile audit doesn't reach.
+//
+// Anthropic moved from claude-sonnet-4-5 to claude-sonnet-4-6 (audit finding
+// HR-6, 2026-10-21): the served model picker offered only the older model.
+// claude-sonnet-4-6 is the id the workflow templates and the template
+// editor already use, and the pricing/tier catalogs cover it via their
+// claude-sonnet-4* rows. OpenRouter keeps its 4.5 id: no 4.6 OpenRouter id
+// is confirmed anywhere in this repo, and a wrong one fails every request.
 var DefaultModels = map[string]string{
-	"anthropic":  "claude-sonnet-4-5",
+	"anthropic":  "claude-sonnet-4-6",
 	"openrouter": "anthropic/claude-sonnet-4.5",
 	"openai":     "gpt-4o",
 	"gemini":     "gemini-2.5-flash",
@@ -129,6 +141,9 @@ type Options struct {
 	CredVar string
 	// ModelVar is the env var naming an explicit model id.
 	ModelVar string
+	// ModelsVar is the env var holding a comma-separated list of model ids
+	// to offer (Resolution.Models). Optional.
+	ModelsVar string
 	// BaseURLVar names the env var carrying the endpoint base URL. Only
 	// consulted when ProviderVar resolves to CustomOpenAIKind; ignored
 	// (and never required) for the conventional kinds.
@@ -160,6 +175,9 @@ type Resolution struct {
 	Kind string
 	// Model is the resolved model id.
 	Model string
+	// Models is the full list of model ids to offer, default first. Empty
+	// when ModelsVar was unset or blank (the profile then offers [Model]).
+	Models []string
 	// CredEnv is the NAME of the env var holding the API key. Never its value.
 	CredEnv string
 	// Explicit is true when Kind came from the caller's ProviderVar override
@@ -194,6 +212,9 @@ func (r Resolution) Profile(id string) llm.ProviderProfile {
 		ID:    id,
 		Kind:  r.Kind,
 		Model: r.Model,
+	}
+	if len(r.Models) > 0 {
+		p.Models = append([]string(nil), r.Models...)
 	}
 	// A credential-less custom endpoint (auth_scheme=none) carries NO
 	// reference at all; the registry skips resolution for an empty
@@ -273,7 +294,11 @@ func Resolve(get Getenv, opts Options) (Resolution, error) {
 		}
 	}
 
+	listed := ParseModelList(lookup(opts.ModelsVar))
 	model := lookup(opts.ModelVar)
+	if model == "" && len(listed) > 0 {
+		model = listed[0]
+	}
 	if model == "" {
 		model = DefaultModelFor(kind)
 	}
@@ -283,7 +308,48 @@ func Resolve(get Getenv, opts Options) (Resolution, error) {
 			kind, orPlaceholder(opts.ModelVar, "an explicit model env var"))
 	}
 
-	return Resolution{Kind: kind, Model: model, CredEnv: credEnv, Explicit: explicit}, nil
+	return Resolution{
+		Kind:     kind,
+		Model:    model,
+		Models:   withDefaultFirst(model, listed),
+		CredEnv:  credEnv,
+		Explicit: explicit,
+	}, nil
+}
+
+// ParseModelList splits a comma-separated model list, trimming blanks and
+// dropping empty and duplicate entries while keeping first-seen order.
+func ParseModelList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		id := strings.TrimSpace(part)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// withDefaultFirst returns listed with model moved (or added) to the front,
+// matching ProviderProfile.Models' "first entry is the default" contract.
+// A nil listed stays nil so a profile with no list keeps Models empty.
+func withDefaultFirst(model string, listed []string) []string {
+	if len(listed) == 0 {
+		return nil
+	}
+	out := []string{model}
+	for _, id := range listed {
+		if id != model {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // resolveCustom handles ProviderVar=custom-openai: endpoint + model are
@@ -345,6 +411,7 @@ func resolveCustom(get Getenv, lookup func(string) string, opts Options, credEnv
 	return Resolution{
 		Kind:       CustomOpenAIKind,
 		Model:      model,
+		Models:     withDefaultFirst(model, ParseModelList(lookup(opts.ModelsVar))),
 		CredEnv:    credEnv,
 		Explicit:   true,
 		BaseURL:    baseURL,

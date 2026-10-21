@@ -23,6 +23,7 @@ import {
 import { useSessions, useProjects, useHarnessClient } from '@/lib/useHarnessAPI';
 import { signedIn, capability } from '@/lib/featureFlags';
 import { isServedMode } from '@/lib/useServedMode';
+import { servedUnavailable, servedLibraryPath } from '@/lib/servedCapabilities';
 import { useConnectionState } from '@/lib/useConnectionState';
 import NewSessionDialog from './NewSessionDialog.vue';
 import MemoryBadge from './MemoryBadge.vue';
@@ -1053,21 +1054,21 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
              /marketplace redirects here (main.ts, main-served.ts). Icon:
              Blocks, not Wrench — skills, workflows and bundles are not tools. -->
         <li data-testid="nav-capabilities">
-          <RailEntry :icon="Blocks" label="Capabilities" to="/tools" match-prefix="/tools" />
+          <RailEntry :icon="Blocks" label="Capabilities" to="/tools" match-prefix="/tools" :unavailable="servedUnavailable('nav.capabilities')" />
         </li>
-        <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" match-prefix="/workflows" /></li>
+        <li data-testid="nav-workflows"><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" match-prefix="/workflows" :unavailable="servedUnavailable('nav.workflows')" /></li>
         <!-- knowledge-home-01DOGF0E WP02: one Knowledge entry replaces the
              separate Contexts and Memory entries (Curated / Learned sections
              inside; stores unchanged). match-prefix keeps it active on
              either section. /contexts and /memory redirect into it. -->
         <li data-testid="nav-knowledge">
-          <RailEntry :icon="BookOpen" label="Knowledge" to="/knowledge/curated" match-prefix="/knowledge" />
+          <RailEntry :icon="BookOpen" label="Knowledge" to="/knowledge/curated" match-prefix="/knowledge" :unavailable="servedUnavailable('nav.knowledge')" />
         </li>
         <!-- artifacts-as-units-01DOGF0C WP06: one Library entry replaces the
              separate Artifacts and Documents entries (Captured / Authored
              views inside). match-prefix keeps it active on either view. -->
         <li data-testid="nav-library">
-          <RailEntry :icon="Archive" label="Library" to="/library/captured" match-prefix="/library" />
+          <RailEntry :icon="Archive" label="Library" :to="servedLibraryPath()" match-prefix="/library" :unavailable="servedUnavailable('nav.library')" />
         </li>
         <!-- No "Agent graphs" entry — agentgraph-settings-linkage-01DOGF0D.
              History, so the next IA pass neither re-demotes nor re-promotes
@@ -1117,6 +1118,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
             label="Settings"
             to="/settings"
             :match-prefix="SETTINGS_HUB_PREFIXES"
+            :unavailable="servedUnavailable('nav.settings')"
           />
         </li>
       </ul>
