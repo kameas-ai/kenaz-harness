@@ -792,6 +792,14 @@ jobs:
         # and "...PlantedStaleManifestEntryFails".
         run: bash scripts/ci/check-recipe-token-substitution.sh
 
+      - name: go-test-shards coverage guard
+        # The Go race suite is sharded across test-go-shard's matrix
+        # (definitions: scripts/ci/go-test-shards.sh). Fails if the shards
+        # the matrix runs miss any package of `./core/... ./cmd/... .` or
+        # run one twice. Planted proofs: gates_can_fail_test.go
+        # TestGoTestShardsGate_Planted*.
+        run: bash scripts/ci/check-go-test-shards.sh
+
       - name: installer-payload guard
         # entry-points-and-crash-reporting-01PMZD13 UNIT-2. Placed here
         # (not release.yml) in the 2026-08-25 unwired sweep: this is a
@@ -812,30 +820,52 @@ jobs:
       # the real frontend/dist/index.html — there's no point checking
       # the CSP of a stub.
 
-  test-go:
-    name: Go tests (-race -short)
-    # ci-large (c7g.xlarge, 8 GB) not ci-medium (t4g.medium, 4 GB): the
-    # `go test ./core/... -race` suite (5,400+ tests across 229 packages)
-    # peaks well past 4 GB under the race detector, OOM-killing the runner
-    # mid-job (blank step conclusion + BlobNotFound logs) — especially when
-    # several PRs run concurrently and saturate the medium pool. ci-large is
-    # an on-demand ephemeral tier (autostarter EPHEMERAL_TIERS=ci-medium,ci-large).
-    runs-on: ${{ fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') }}
+  # ---------------------------------------------------------------------
+  # Go race suite, sharded (2026-10-22). Until this change ONE job ran
+  # `go test ./core/... ./cmd/... . -race` (~21.5 min) and then the gate
+  # meta-tests (~11 min) back to back on ci-large — a single runner
+  # (kameas-ci-large-1) that test-frontend also queued on, so queue waits
+  # of 0-100 min dominated PR wall time. Now:
+  #
+  #   test-go-shard (matrix)  the same `go test` flags, env and setup over
+  #                           three package shards defined in ONE place,
+  #                           scripts/ci/go-test-shards.sh.
+  #   gate-meta-tests         `go test ./scripts/...`, its own job.
+  #   test-go                 aggregator, named exactly "Go tests (-race
+  #                           -short)" — the required check in ruleset
+  #                           15871858 — green only if every shard AND the
+  #                           meta-tests succeeded.
+  #
+  # check-go-test-shards.sh (lint-go) fails if the shards the matrix runs
+  # do not cover every package of `./core/... ./cmd/... .` exactly once.
+  # ---------------------------------------------------------------------
+  test-go-shard:
+    name: Go race shard (${{ matrix.shard }})
+    # Runner per shard:
+    #   rpc   -> ci-large (c7g.xlarge, 8 GB). core/rpc alone took 580.9 s
+    #            in v0.91.0 and is the biggest -race binary in the module;
+    #            it is the package whose memory peak motivated #195 (the
+    #            4 GB t4g.medium was OOM-killed mid-job), so it keeps the
+    #            8 GB tier. It is now the ONLY job on ci-large.
+    #   heavy, rest -> ci-medium (t4g.medium, 4 GB, several runners). Each
+    #            is roughly a third of the old package set without
+    #            core/rpc; at -p 2 (2 vCPU) only two race binaries are live
+    #            at once. If either OOMs (blank step conclusion +
+    #            BlobNotFound), flip its `runner:` to large — the guard does
+    #            not care which runner a shard uses.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: rpc
+            runner: large
+          - shard: heavy
+            runner: medium
+          - shard: rest
+            runner: medium
+    runs-on: ${{ matrix.runner == 'large' && fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') || fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-        with:
-          # The `gate meta-tests` step below runs gates_can_fail_test.go,
-          # which invokes the real gate scripts -- and
-          # check-manifest-version-bump.sh reads its baseline from
-          # `HEAD~1:core/agentgraph/manifest_versions_gen.go`. At the
-          # default depth of 1 there IS no HEAD~1, so the gate saw an empty
-          # baseline, reported every node kind as "new" rather than
-          # "changed", and exited 0 -- so its planted-violation proof
-          # failed with "the gate cannot see an unbumped version". The gate
-          # itself runs in lint-go, which already sets fetch-depth: 0, so
-          # the gate was never blind where it actually runs; only the job
-          # PROVING it could fail was. Same requirement, same fix.
-          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -862,29 +892,62 @@ jobs:
           # `-race` flag requires CGO; pin it on explicitly so the
           # detector can't flip it back to 0.
           CGO_ENABLED: "1"
+        # Universe = the pre-sharding `./core/... ./cmd/... .`:
         # cmd/harness-vm carries the in-VM dispatch RPC service and its
-        # audit/privacy + auth tests; ./core/... alone never exercised them
-        # (Phase A follow-up B1). The audit lifecycle test is deterministic
-        # under -race (accept-sequence ordering in the fake sock).
+        # audit/privacy + auth tests (Phase A follow-up B1); cmd/kenaz-updater
+        # and cmd/mcpsubcmd carried tests CI never ran until
+        # entry-points-and-crash-reporting-01PMZD13 UNIT-1 widened it; the
+        # module root (`.`) carries main_test.go's
+        # TestCSPMiddlewareSetsStrictHeaders (privacy CI invariant #1).
+        # cmd/harness-served's dispatch needs -tags serve for its build and
+        # is exercised by lint-go's serve-tag build step.
         #
-        # Widened from ./cmd/harness-vm/... to ./cmd/... . —
-        # entry-points-and-crash-reporting-01PMZD13 UNIT-1. cmd/kenaz-updater
-        # and cmd/mcpsubcmd carried 573 lines of passing tests CI never ran
-        # (16 tests, verified green locally before this change). The module
-        # root (`.`) carries main_test.go's TestCSPMiddlewareSetsStrictHeaders
-        # — privacy CI invariant #1 on the Wails asset-server middleware
-        # itself, distinct from check-csp.sh's check of the built HTML — and
-        # was covered by nothing until now. cmd/harness-served has no test
-        # files and no effect on this pattern (it also requires -tags serve,
-        # exercised separately by the lint-go job's serve-tag build step).
+        # -timeout 20m (2026-10-07, v0.93.0): Go's default is 10m PER
+        # PACKAGE. core/rpc took 580.9s in the v0.91.0 run — within 20s of
+        # the default — and v0.93.0's added real-sqlite tests tipped it
+        # over. This keeps the alarm meaningful (a genuine hang still
+        # fails, at 20m).
         #
-        # -timeout 20m (2026-10-07, v0.93.0): Go's default is 10m PER PACKAGE.
-        # core/rpc took 580.9s in the v0.91.0 run — within 20s of the
-        # default — and v0.93.0's added real-sqlite tests tipped it over
-        # (the goroutine dump showed one just-started test, no hang).
-        # Splitting / parallelising core/rpc is ledgered; this keeps the
-        # alarm meaningful (a genuine hang still fails, at 20m).
-        run: go test ./core/... ./cmd/... . -race -count=1 -short -timeout 20m
+        # The lister exits non-zero on an unknown or EMPTY shard (a bare
+        # `go test` would test only the cwd), and bash -e aborts the step.
+        run: |
+          pkgs="$(bash scripts/ci/go-test-shards.sh list "${{ matrix.shard }}")"
+          echo "shard ${{ matrix.shard }}: $(echo "$pkgs" | wc -l) packages"
+          go test $pkgs -race -count=1 -short -timeout 20m
+
+  gate-meta-tests:
+    name: Gate meta-tests
+    # Not -race; shells out to the check scripts. Was the second step of
+    # the ci-large test-go job — ci-medium has the memory for it (lint-go
+    # runs these same scripts there).
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # gates_can_fail_test.go invokes the real gate scripts -- and
+          # check-manifest-version-bump.sh reads its baseline from
+          # `HEAD~1:core/agentgraph/manifest_versions_gen.go`. At the
+          # default depth of 1 there IS no HEAD~1, so the gate saw an empty
+          # baseline, reported every node kind as "new" rather than
+          # "changed", and exited 0 -- so its planted-violation proof
+          # failed with "the gate cannot see an unbumped version". The gate
+          # itself runs in lint-go, which already sets fetch-depth: 0, so
+          # the gate was never blind where it actually runs; only the job
+          # PROVING it could fail was. Same requirement, same fix.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: go mod download
+        run: go mod download
+
+      - name: ensure frontend/dist exists for embed
+        run: |
+          mkdir -p frontend/dist
+          touch frontend/dist/.gitkeep
 
       - name: gate meta-tests
         # scripts/ci/gates_can_fail_test.go plants a violation per CI gate
@@ -897,11 +960,34 @@ jobs:
         # vacuous and CI would stay green — the exact failure this file
         # exists to prevent.
         #
-        # Not merged into the step above: these tests shell out to the
-        # check scripts and mutate a scratch tree, so they must not run
-        # concurrently with the -race suite (a build racing a mutation
-        # poisons the Go build cache under the clean content hash).
+        # Kept out of the -race jobs: these tests mutate THIS job's
+        # checkout, and must not run concurrently with a build of the same
+        # tree (a build racing a mutation poisons the Go build cache under
+        # the clean content hash). A separate job has its own checkout, so
+        # the shards never compile a mutated file.
         run: go test ./scripts/... -count=1 -timeout 25m
+
+  test-go:
+    # EXACT name is a required status check in ruleset 15871858 — do not
+    # rename. Aggregates the shards + meta-tests: `if: always()` so it
+    # reports FAILURE (never "skipped", which a required check would count
+    # as passing) when anything upstream failed or was cancelled.
+    name: Go tests (-race -short)
+    needs: [test-go-shard, gate-meta-tests]
+    if: always()
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
+    steps:
+      - name: all shards and gate meta-tests succeeded
+        env:
+          SHARDS: ${{ needs.test-go-shard.result }}
+          META: ${{ needs.gate-meta-tests.result }}
+        run: |
+          echo "test-go-shard (all matrix legs): $SHARDS"
+          echo "gate-meta-tests:                 $META"
+          if [ "$SHARDS" != "success" ] || [ "$META" != "success" ]; then
+            echo "::error::Go race shards and gate meta-tests must all succeed (shards=$SHARDS, meta=$META)"
+            exit 1
+          fi
 
   wire-golden-locked:
     name: Wire golden tests (locked tier)
@@ -967,11 +1053,14 @@ jobs:
     # ubuntu-latest hosted runners are reserved for Apple / Microsoft
     # platform builds (kameas-ai org policy). Linux CI runs on the
     # kameas-ci-* self-hosted pool to keep us off the Actions billing cap.
-    # ci-large (8 GB) not ci-medium (4 GB): vue-tsc + vitest over the full
-    # frontend peak past 4 GB and OOM-killed the medium runner mid-job
-    # (runner-died / BlobNotFound signature), flaking this job on ~every PR
-    # under concurrency — same fix as test-go. ci-large is an on-demand tier.
-    runs-on: ${{ fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') }}
+    # Back on ci-medium (2026-10-22). #201 moved it to ci-large (8 GB)
+    # because vue-tsc + vitest OOM-killed the 4 GB medium under concurrency
+    # (runner-died / BlobNotFound signature). But ci-large is ONE runner,
+    # and this ~3.6 min job queued behind the ~32 min Go suite for up to
+    # 100 min. If the OOM signature returns, move it back to
+    # CI_RUNNER_LARGE (one line) — the Go race suite now holds ci-large
+    # only for its core/rpc shard, so the queue is far shorter than before.
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     defaults:
       run:
         working-directory: frontend
@@ -1071,7 +1160,7 @@ jobs:
   # cross-platform release builds already happen in release.yml against
   # tagged versions on the proper OS runners (macos-latest,
   # windows-latest, and a future self-hosted Linux amd64). PR-time CI
-  # is now: pr-title (semantic) + lint-go + test-go (-race) +
+  # is now: pr-title (semantic) + lint-go + test-go (sharded -race) +
   # test-frontend (vitest + typecheck). Re-add a smoke build only if
   # we get a self-hosted runner image with the Linux Wails toolchain
   # pre-installed.
