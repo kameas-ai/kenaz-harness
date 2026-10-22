@@ -23,15 +23,17 @@
 #   lands in a shard automatically instead of failing CI. A package matched
 #   by two explicit shards is a duplicate and fails the guard.
 #
-# BALANCING (2026-10-22, by test-function count — wall time per package is
-# not recorded anywhere CI can read; rebalance by moving patterns between
-# `heavy` and REST, the guard keeps it honest):
+# BALANCING. Per-package wall time is not exported anywhere CI can read, so
+# shards are balanced from observed SHARD wall times; rebalance by moving
+# patterns between `heavy` and REST — the guard keeps it honest.
 #   rpc    core/rpc alone — 553 tests, ~580 s on its own in v0.91.0; it is
 #          the critical path whatever else happens, so it runs alone on the
-#          8 GB runner.
+#          8 GB runner. (PR #456 first run: 16.3 min incl. setup.)
 #   heavy  core/rpc subpackages + core/llm + core/fleet + core/agentgraph
-#          (~3,900 tests)
-#   rest   everything else (~4,200 tests)
+#          + core/mcp + core/tools
+#   rest   everything else
+# PR #456 first run, before core/mcp + core/tools moved from rest to heavy:
+# heavy 11.2 min, rest 29.4 min (ci-medium, 2 vCPU).
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/ci-gate.sh"
 
@@ -43,7 +45,7 @@ UNIVERSE_PATTERNS=(./core/... ./cmd/... .)
 shard_patterns() {
   case "$1" in
     rpc)   echo "core/rpc" ;;
-    heavy) echo "core/rpc/middleware/... core/rpc/views/... core/llm/... core/fleet/... core/agentgraph/..." ;;
+    heavy) echo "core/rpc/middleware/... core/rpc/views/... core/llm/... core/fleet/... core/agentgraph/... core/mcp/... core/tools/..." ;;
     rest)  echo "REST" ;;
     *)     return 1 ;;
   esac

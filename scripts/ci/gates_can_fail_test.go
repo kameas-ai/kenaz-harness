@@ -6112,7 +6112,7 @@ func TestGoTestShardsGate_PlantedGapFires(t *testing.T) {
 		t.Fatalf("check-go-test-shards.sh exited 0 with the rest shard removed from the "+
 			"matrix — the gate cannot see a gap.\noutput:\n%s", out)
 	}
-	if !strings.Contains(out, "GAP") || !strings.Contains(out, "./core/mcp") {
-		t.Fatalf("gate failed, but not on the planted gap (expected ./core/mcp listed):\n%s", out)
+	if !strings.Contains(out, "GAP") || !strings.Contains(out, "./core/policy") {
+		t.Fatalf("gate failed, but not on the planted gap (expected ./core/policy listed):\n%s", out)
 	}
 }
