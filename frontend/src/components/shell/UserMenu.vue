@@ -20,6 +20,14 @@
  *   signing_in  "Waiting for browser…"
  *   signed_out  Sign in
  *   disabled    render nothing (OSS-first, HARNESS_FLEET_DISABLED=1)
+ *
+ * Served mode + host session (kenaz audit HR-8): inside a Kenaz workbench the
+ * host app owns sign-in, and the workbench chrome posts its display-only
+ * account state (lib/hostSession.ts). When the harness's own fleet snapshot
+ * is not signed in but the host is, the menu shows the HOST identity (name,
+ * org, plan) with "Signed in through Kenaz" instead of reading as signed
+ * out; when the host is signed out it says where to sign in. Display only —
+ * it unlocks nothing.
  */
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
@@ -32,6 +40,7 @@ import {
   useFleetSession,
 } from '@/lib/fleetSession';
 import { isServedMode } from '@/lib/useServedMode';
+import { hostInitials, useHostSession } from '@/lib/hostSession';
 
 const client = useHarnessClient();
 const router = useRouter();
@@ -70,6 +79,18 @@ const isSigningIn = computed(() => state.value === 'signing_in');
  */
 const served = isServedMode();
 const canSignIn = computed(() => !served && state.value === 'signed_out');
+
+/** Host account state from the Kenaz chrome (served mode only; HR-8). */
+const host = useHostSession();
+/** The harness's own snapshot is not signed in, but the host is. */
+const hostIdentity = computed(() =>
+  served && !fleet.signedIn.value && host.value?.signedIn ? host.value : null,
+);
+/** The host reported signed out and the harness has no session either. */
+const hostSignedOut = computed(
+  () => served && !fleet.signedIn.value && host.value !== null && !host.value.signedIn,
+);
+const hostAvatar = computed(() => hostInitials(hostIdentity.value));
 
 const profile = computed(() => fleet.session.value?.profile ?? null);
 const initials = fleet.initials;
@@ -192,12 +213,12 @@ async function handleSignOut() {
 
 <template>
   <!-- Fleet disabled: render nothing (OSS-first, spec FR-020) -->
-  <template v-if="!fleetDisabled">
+  <template v-if="!fleetDisabled || hostIdentity">
     <div class="relative" data-user-menu data-testid="user-menu">
       <button
         type="button"
         class="relative flex items-center gap-1.5 rounded-sm px-1.5 py-1 hover:bg-surface-2 transition-fast ease-kenaz"
-        :aria-label="isSignedIn ? `Account (${emailDisplay})` : 'Account'"
+        :aria-label="isSignedIn ? `Account (${emailDisplay})` : hostIdentity ? `Account (${hostIdentity.displayName || hostIdentity.org || 'signed in'})` : 'Account'"
         :aria-expanded="menuOpen"
         aria-haspopup="menu"
         data-testid="user-menu-trigger"
@@ -210,6 +231,12 @@ async function handleSignOut() {
           aria-hidden="true"
           data-testid="user-menu-avatar"
         >{{ initials }}</span>
+        <span
+          v-else-if="hostIdentity"
+          class="grid h-5 w-5 place-items-center rounded-full bg-accent-dim font-ui text-[10px] font-semibold text-accent"
+          aria-hidden="true"
+          data-testid="user-menu-host-avatar"
+        >{{ hostAvatar }}</span>
         <span
           v-else
           class="grid h-5 w-5 place-items-center rounded-full bg-surface-3 text-ink-muted"
@@ -302,6 +329,25 @@ async function handleSignOut() {
           </div>
           <div class="user-menu-divider" />
         </template>
+
+        <!-- Host identity (served mode, HR-8): signed in through Kenaz. -->
+        <div
+          v-if="hostIdentity"
+          class="user-menu-header"
+          data-testid="user-menu-host-identity"
+        >
+          <div class="user-menu-email">{{ hostIdentity.displayName || hostIdentity.org || 'Signed in' }}</div>
+          <div v-if="hostIdentity.org && hostIdentity.displayName" class="user-menu-sub">{{ hostIdentity.org }}</div>
+          <div v-if="hostIdentity.plan" class="user-menu-sub user-menu-tier">{{ hostIdentity.plan }}</div>
+          <div class="user-menu-sub">Signed in through Kenaz</div>
+        </div>
+        <div
+          v-else-if="hostSignedOut"
+          class="user-menu-header"
+          data-testid="user-menu-host-signed-out"
+        >
+          <div class="user-menu-sub">Not signed in. Sign in from the Kenaz app.</div>
+        </div>
 
         <div
           v-if="isSigningIn"
