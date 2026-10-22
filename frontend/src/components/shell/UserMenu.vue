@@ -44,10 +44,12 @@ const signOutError = ref<string | null>(null);
 
 onMounted(() => {
   document.addEventListener('click', onDocumentClick);
+  document.addEventListener('keydown', onDocumentKeydown);
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick);
+  document.removeEventListener('keydown', onDocumentKeydown);
 });
 
 const state = fleet.state;
@@ -119,6 +121,18 @@ function onDocumentClick(e: MouseEvent) {
   if (!menuOpen.value) return;
   const root = (e.target as HTMLElement | null)?.closest('[data-user-menu]');
   if (!root) menuOpen.value = false;
+}
+
+/**
+ * Escape closes the open popover (audit finding WC-8). preventDefault so
+ * the key is consumed here: inside the workbench window an unhandled
+ * Escape fell through to the host and exited macOS full screen while the
+ * menu stayed open. A closed menu leaves Escape alone.
+ */
+function onDocumentKeydown(e: KeyboardEvent) {
+  if (!menuOpen.value || e.key !== 'Escape') return;
+  e.preventDefault();
+  close();
 }
 
 function close() {

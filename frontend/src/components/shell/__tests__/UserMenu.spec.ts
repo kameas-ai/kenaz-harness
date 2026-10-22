@@ -209,6 +209,29 @@ describe('UserMenu', () => {
     expect(wrapper.find('[data-testid="menu-sign-out"]').exists()).toBe(false);
   });
 
+  it('WC-8: Escape closes the open popover and consumes the key', async () => {
+    const wrapper = mountUserMenu(buildClient(signedIn()).client);
+    await flushPromises();
+    expect((await openPopover(wrapper)).exists()).toBe(true);
+
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    document.dispatchEvent(ev);
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="user-menu-popover"]').exists()).toBe(false);
+    expect(ev.defaultPrevented).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('WC-8: Escape with the popover closed is left alone', async () => {
+    const wrapper = mountUserMenu(buildClient(signedIn()).client);
+    await flushPromises();
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    document.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+    wrapper.unmount();
+  });
+
   it('signed-in: identity header + Account settings + Sign out', async () => {
     const wrapper = mountUserMenu(buildClient(signedIn()).client);
     await flushPromises();
