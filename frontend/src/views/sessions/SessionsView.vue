@@ -17,6 +17,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { isServedMode } from '@/lib/useServedMode';
+import { servedUnavailable } from '@/lib/servedCapabilities';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
@@ -440,7 +441,17 @@ const sessionTitle = computed(() => {
 const sessionSubtitle = computed(() => {
   switch (surfaceState.value) {
     case 'no-sessions':
-      return 'Configure a provider, then start your first conversation.';
+      // HR-13: say the same thing the welcome body says. In the workbench
+      // there is no provider screen to configure — the provider comes
+      // from Kenaz on the host.
+      if (servedMode) {
+        return hasAnyProvider.value
+          ? 'This workbench has a model ready. Start your first conversation.'
+          : 'No provider yet. This workbench gets its provider from Kenaz on the host.';
+      }
+      return hasAnyProvider.value
+        ? 'Pick a model and start your first conversation.'
+        : 'Configure a provider, then start your first conversation.';
     case 'no-selection':
       return 'Pick a session from the rail or start a new one.';
     case 'session-not-found':
@@ -1203,6 +1214,24 @@ watch(
   { immediate: true },
 );
 
+const welcomeReadyHelp = servedMode
+  ? 'Pick one of the models this workbench was given and start chatting. Sessions persist in the workbench across restarts.'
+  : 'Pick a model and start chatting — sessions live locally and persist across restarts.';
+
+// Session chrome the served build cannot back (audit finding HR-10). One
+// map decides, the same one that marks the left-rail nav.
+const fleetSyncAvailable = servedUnavailable('session.syncToFleet') === null;
+const shareAvailable = servedUnavailable('session.share') === null;
+const purgeRemoteAvailable = servedUnavailable('session.purgeRemote') === null;
+
+/** HR-12: SessionHeader is on screen, so the canvas title would repeat it. */
+const sessionHeaderShown = computed(
+  () =>
+    surfaceState.value === 'loaded' &&
+    activeTab.value === 'chat' &&
+    !!session.session.value,
+);
+
 const noProviderHelp = computed(() =>
   servedMode
     ? 'No provider was delivered to this workbench. Add one in Kenaz → profile → provider, then reopen the workbench.'
@@ -1884,7 +1913,12 @@ async function onShared() {
   <div class="grid h-full" style="grid-template-rows: auto 1fr">
     <!-- header -->
     <div>
+      <!-- HR-12: when the chat surface is up, SessionHeader below already
+           shows the session name (with rename / suggest-title), so the big
+           canvas title only repeated it and added a second rule with an
+           empty band between. Other tabs and empty states keep it. -->
       <CanvasHead
+        v-if="!sessionHeaderShown"
         :number="showSessionBreadcrumb ? '01' : undefined"
         :section="showSessionBreadcrumb ? 'SESSIONS' : undefined"
         :title="sessionTitle"
@@ -1900,13 +1934,18 @@ async function onShared() {
       />
       <!-- Fleet sync toolbar (fleet-context-sync-01NDFSEX15 WP07) -->
       <!-- Only rendered when a session is loaded. -->
+      <!-- HR-10: in the workbench (served) build fleet sync, share and
+           purge have no backend (lib/servedCapabilities.ts), so they are
+           withheld rather than shown as controls that silently fail. The
+           toolbar then only appears when it has something to show. -->
       <div
-        v-if="surfaceState === 'loaded'"
+        v-if="surfaceState === 'loaded' && (fleetSyncAvailable || shareAvailable || inboxItems.length > 0)"
         class="flex items-center gap-2 px-4 py-1 border-b border-border-muted bg-surface-1"
         data-testid="session-sync-toolbar"
       >
         <!-- Sync toggle -->
         <button
+          v-if="fleetSyncAvailable"
           type="button"
           class="flex items-center gap-1.5 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] transition-colors"
           :class="isSyncEnabled
@@ -1926,7 +1965,7 @@ async function onShared() {
         </button>
         <!-- Context-sync failure badge (fleet-session-truth-01DOGF0A FR-6) -->
         <span
-          v-if="syncFailure || syncUnsupported"
+          v-if="fleetSyncAvailable && (syncFailure || syncUnsupported)"
           class="rounded px-2 py-0.5 font-ui text-[11px] text-signal-warn border border-signal-warn/40 bg-surface-2"
           role="status"
           :title="syncFailureTitle"
@@ -1936,6 +1975,7 @@ async function onShared() {
         </span>
         <!-- Share button (only shown when session is loaded) -->
         <button
+          v-if="shareAvailable"
           type="button"
           class="flex items-center gap-1 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] text-ink-muted border border-border-muted bg-surface-2 hover:bg-surface-3 transition-colors"
           data-testid="session-share-btn"
@@ -1948,6 +1988,7 @@ async function onShared() {
              turning sync off leaves already-uploaded events on the server,
              and this is the only in-app control that removes them. -->
         <button
+          v-if="purgeRemoteAvailable"
           type="button"
           class="flex items-center gap-1 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] text-danger border border-danger/40 bg-surface-2 hover:bg-danger/10 transition-colors"
           :disabled="purgingRemote"
@@ -2041,7 +2082,7 @@ async function onShared() {
           <p class="mt-2 font-ui text-sm text-ink-muted">
             {{
               hasAnyProvider
-                ? 'Pick a model and start chatting — sessions live locally and persist across restarts.'
+                ? welcomeReadyHelp
                 : noProviderHelp
             }}
           </p>

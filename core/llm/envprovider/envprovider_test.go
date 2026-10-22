@@ -370,3 +370,57 @@ func TestResolve_CustomOpenAI_CustomSchemeIsRefused(t *testing.T) {
 		t.Fatalf("custom scheme cannot be granted (no header var), got %v", err)
 	}
 }
+
+// HR-6 (audit 2026-10-21): the served model picker offered one model. An
+// optional ModelsVar list becomes ProviderProfile.Models, default first.
+func TestResolve_ModelsList(t *testing.T) {
+	opts := Options{ModelVar: "M", ModelsVar: "MS"}
+
+	t.Run("unset leaves Models empty", func(t *testing.T) {
+		got, err := Resolve(env(map[string]string{"ANTHROPIC_API_KEY": "k"}), opts)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if got.Models != nil {
+			t.Fatalf("Models = %v, want nil", got.Models)
+		}
+		if p := got.Profile("x"); len(p.Models) != 0 || len(p.AvailableModels()) != 1 {
+			t.Fatalf("profile Models = %v, available = %v", p.Models, p.AvailableModels())
+		}
+	})
+
+	t.Run("list alone picks its first entry as the default", func(t *testing.T) {
+		got, err := Resolve(env(map[string]string{
+			"ANTHROPIC_API_KEY": "k",
+			"MS":                " claude-opus-4-6 , claude-sonnet-4-6,,claude-opus-4-6 ",
+		}), opts)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if got.Model != "claude-opus-4-6" {
+			t.Fatalf("Model = %q, want claude-opus-4-6", got.Model)
+		}
+		want := []string{"claude-opus-4-6", "claude-sonnet-4-6"}
+		if strings.Join(got.Models, ",") != strings.Join(want, ",") {
+			t.Fatalf("Models = %v, want %v", got.Models, want)
+		}
+		if p := got.Profile("x"); strings.Join(p.Models, ",") != strings.Join(want, ",") {
+			t.Fatalf("profile Models = %v, want %v", p.Models, want)
+		}
+	})
+
+	t.Run("explicit model is moved or added to the front", func(t *testing.T) {
+		got, err := Resolve(env(map[string]string{
+			"ANTHROPIC_API_KEY": "k",
+			"M":                 "claude-haiku-4-5",
+			"MS":                "claude-opus-4-6,claude-sonnet-4-6",
+		}), opts)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		want := "claude-haiku-4-5,claude-opus-4-6,claude-sonnet-4-6"
+		if got.Model != "claude-haiku-4-5" || strings.Join(got.Models, ",") != want {
+			t.Fatalf("got Model=%q Models=%v, want %s", got.Model, got.Models, want)
+		}
+	})
+}

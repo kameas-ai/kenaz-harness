@@ -41,6 +41,10 @@ const (
 	EnvHostCredVar = "KENAZ_HARNESS_CRED_ENV"
 	// EnvHostModel pins the model id, overriding the kind's default.
 	EnvHostModel = "KENAZ_HARNESS_MODEL"
+	// EnvHostModels is a comma-separated list of model ids the host
+	// credential may use; it populates the profile's Models so the served
+	// model picker offers more than one model (audit finding HR-6).
+	EnvHostModels = "KENAZ_HARNESS_MODELS"
 	// EnvHostBaseURL is the OpenAI-compatible endpoint base URL. Required
 	// (and only consulted) when EnvHostProvider=custom-openai — the
 	// in-workbench path to a host-side llama-server (e.g.
@@ -63,6 +67,7 @@ var HostProviderOptions = envprovider.Options{
 	ProviderVar:      EnvHostProvider,
 	CredVar:          EnvHostCredVar,
 	ModelVar:         EnvHostModel,
+	ModelsVar:        EnvHostModels,
 	BaseURLVar:       EnvHostBaseURL,
 	AuthSchemeVar:    EnvHostAuthScheme,
 	NoCredentialHint: hostNoCredentialHint,
@@ -93,6 +98,7 @@ func HostProviders(get envprovider.Getenv, log *slog.Logger) []corellm.ProviderP
 			"profile_id", HostProviderProfileID,
 			"provider", res.Kind,
 			"model", res.Model,
+			"models", len(res.Models),
 			"cred_env", res.CredEnv,
 			"explicit", res.Explicit,
 			"endpoint", corellm.LogSafeEndpoint(res.BaseURL),

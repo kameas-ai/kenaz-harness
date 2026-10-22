@@ -46,6 +46,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/cmd/mcpsubcmd"
 	"github.com/kameas-ai/kenaz-harness/cmd/servedfleet"
 	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/auditsink"
 	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
@@ -210,6 +211,19 @@ func main() {
 	// whether the workbench boots configured. Same E-002 caveat as the
 	// comment above: "both served entry points" describes source-level
 	// intent, not a claim that this binary ships today.
+	// Harness audit line-protocol (audit finding WC-6): the reporter's
+	// collector socket, when the image sets it. Every chat turn writes
+	// task.start / task.complete and every tool call task.tool_call /
+	// task.tool_result — metadata only (tool names, exit codes, durations;
+	// never prompts, arguments or output). Unset ⇒ disabled, nothing blocks.
+	auditSink := auditsink.New(os.Getenv(auditsink.SocketEnv), "", log)
+	auditsink.SetDefault(auditSink)
+	if auditSink.Enabled() {
+		log.Info("harness-served: audit emission enabled", "event_sock", auditSink.Addr())
+	} else {
+		log.Info("harness-served: audit emission disabled (KENAZ_HARNESS_EVENT_SOCK unset)")
+	}
+
 	api := rpc.New(c,
 		rpc.WithHostProviders(serve.ProbeHostProviders(context.Background(), credref.New(secrets.NewMemoryBackend()), serve.HostProviders(os.Getenv, log), log)),
 		rpc.WithServedConnectors(connSup),

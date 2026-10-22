@@ -14,6 +14,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/advice"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/auditsink"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
@@ -2003,6 +2004,13 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	// below, before the run is released to Drain.
 	ctx, turnSpan := genaitrace.StartTurn(ctx, sub.sessionID)
 	defer turnSpan.End()
+	// Harness audit line-protocol (audit finding WC-6): one task.start
+	// per chat turn, keyed by the run id, and the id on ctx so
+	// kernelToolAdapter.dispatch can attribute tool_call/tool_result to
+	// this turn. task.complete is written by fireTurnEnded. No-op unless
+	// the binary installed a sink (cmd/harness-served does).
+	ctx = auditsink.WithTask(ctx, sub.id)
+	auditsink.Default().EmitTaskStart(sub.id)
 	log := logging.L()
 	// flushDone is closed when the periodic checkpoint flusher exits (nil
 	// when none was started).
@@ -2638,7 +2646,11 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 // panic-proof: an observer bug must never break the terminal path (it runs
 // before the stream-closed emission).
 func (r *ChatRunner) fireTurnEnded(ctx context.Context, sub *chatSub, env *coreag.Env, outcome string) {
-	if r.cfg.TurnUsage == nil || sub == nil {
+	if sub == nil {
+		return
+	}
+	emitAuditTaskComplete(sub, outcome)
+	if r.cfg.TurnUsage == nil {
 		return
 	}
 	defer func() {
@@ -2656,6 +2668,21 @@ func (r *ChatRunner) fireTurnEnded(ctx context.Context, sub *chatSub, env *corea
 		dur = time.Since(sub.turnStartedAt)
 	}
 	r.cfg.TurnUsage.TurnEnded(ctx, sub.sessionID, outcome, modelCalls, toolCalls, dur)
+}
+
+// emitAuditTaskComplete writes the turn's task.complete audit record
+// (audit finding WC-6): exit 0 for a completed turn, 1 for a stopped or
+// failed one, plus the turn's wall-clock duration. Metadata only.
+func emitAuditTaskComplete(sub *chatSub, outcome string) {
+	exit := 0
+	if outcome != TurnEndCompleted {
+		exit = 1
+	}
+	var durMs int64
+	if !sub.turnStartedAt.IsZero() {
+		durMs = time.Since(sub.turnStartedAt).Milliseconds()
+	}
+	auditsink.Default().EmitTaskComplete(sub.id, exit, durMs)
 }
 
 // failureCodeBudget is the run-failure code for a per-run budget cap. It

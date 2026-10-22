@@ -3,6 +3,7 @@ import type { Component } from 'vue';
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { railPathMatches } from './railMatch';
+import { DESKTOP_ONLY_LABEL } from '@/lib/servedCapabilities';
 
 const props = withDefaults(
   defineProps<{
@@ -18,6 +19,13 @@ const props = withDefaults(
      * on an exact path match. Segment-bounded (see railMatch.ts).
      */
     matchPrefix?: string | readonly string[];
+    /**
+     * Audit findings HR-4 / HR-5: when set, the surface does not work in
+     * this build (lib/servedCapabilities.ts). The entry is muted, marked
+     * "Desktop only", does not navigate, and the value is its tooltip —
+     * the user learns it is unavailable in the nav, not by clicking in.
+     */
+    unavailable?: string | null;
   }>(),
   {
     to: undefined,
@@ -27,6 +35,7 @@ const props = withDefaults(
     // "absent" distinguishable from "false".
     active: undefined,
     matchPrefix: undefined,
+    unavailable: null,
   },
 );
 
@@ -42,8 +51,24 @@ const isActive = computed(() => {
 </script>
 
 <template>
+  <span
+    v-if="unavailable"
+    class="flex items-center gap-2 px-3 py-2 rounded-sm w-full text-left text-sm font-ui text-ink-subtle opacity-60 cursor-not-allowed"
+    role="link"
+    aria-disabled="true"
+    :aria-label="`${label} (${DESKTOP_ONLY_LABEL})`"
+    :title="`${DESKTOP_ONLY_LABEL}. ${unavailable}`"
+    data-rail-unavailable="true"
+  >
+    <component :is="icon" :size="14" />
+    <span class="truncate hidden two-col:inline">{{ label }}</span>
+    <span
+      class="ml-auto hidden two-col:inline shrink-0 font-ui text-[9px] uppercase tracking-[0.14em]"
+    >{{ DESKTOP_ONLY_LABEL }}</span>
+  </span>
   <component
     :is="to ? 'router-link' : 'button'"
+    v-else
     :to="to"
     type="button"
     class="flex items-center gap-2 px-3 py-2 rounded-sm w-full text-left text-sm font-ui transition-fast ease-kenaz"

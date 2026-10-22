@@ -8,6 +8,7 @@ import (
 	"time"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/auditsink"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -371,7 +372,17 @@ func (a *kernelToolAdapter) Call(ctx context.Context, call coreag.ToolCall) (cor
 // dispatch is Call's body: permission resolution followed by the pool
 // invocation. Returns IsError=true on deny / pool failure so the kernel
 // surfaces the failure to the model without crashing the run.
-func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) (coreag.ToolResult, error) {
+func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) (res coreag.ToolResult, err error) {
+	// Harness audit line-protocol (audit finding WC-6): task.tool_call now,
+	// task.tool_result on every return path. The record carries the tool
+	// NAME and an exit code only — never arguments or output. No-op unless
+	// a sink is installed and the turn stamped its task id on ctx.
+	auditDone := auditsink.Tool(ctx, call.Name)
+	defer func() { auditDone(err != nil || res.IsError) }()
+	return a.dispatchCall(ctx, call)
+}
+
+func (a *kernelToolAdapter) dispatchCall(ctx context.Context, call coreag.ToolCall) (coreag.ToolResult, error) {
 	if a == nil || a.pool == nil {
 		logging.L().Error("chat.tool_adapter.nil_pool", "tool", call.Name)
 		return coreag.ToolResult{}, errors.New("chat: nil tool pool adapter")
