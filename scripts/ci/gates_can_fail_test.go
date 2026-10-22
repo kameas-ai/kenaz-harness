@@ -190,6 +190,11 @@ var cwdSensitiveGates = []string{
 	// falls back to the cwd when git is unavailable — the class this
 	// list exists to catch.
 	"check-ml-producer-minimisation.sh",
+
+	// check-go-test-shards.sh (2026-10-22, sharded -race suite): sources
+	// lib/ci-gate.sh and runs `go list` + the shard lister by repo-relative
+	// path.
+	"check-go-test-shards.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -6066,5 +6071,48 @@ func TestFleetCredLogsGate_BenignLogsPass(t *testing.T) {
 		"}\n", "")()
 	if code, out := runGate(t, "check-no-credential-in-fleet-logs.sh", root); code != 0 {
 		t.Fatalf("benign namespace logging tripped the gate (exit %d):\n%s", code, out)
+	}
+}
+
+// TestGoTestShardsGate_PlantedDuplicateFires — check-go-test-shards.sh
+// (2026-10-22). pr.yml's Go -race suite is split across the test-go-shard
+// matrix by scripts/ci/go-test-shards.sh. This plant makes the `rpc` shard
+// also claim core/llm/..., which the `heavy` shard already runs, and proves
+// the guard reports the DUPLICATE rather than passing.
+func TestGoTestShardsGate_PlantedDuplicateFires(t *testing.T) {
+	root := repoRoot(t)
+	lister := filepath.Join(root, "scripts", "ci", "go-test-shards.sh")
+	defer plantReplace(t, lister,
+		`rpc)   echo "core/rpc" ;;`,
+		`rpc)   echo "core/rpc core/llm/..." ;;`)()
+
+	code, out := runGate(t, "check-go-test-shards.sh", root)
+	if code == 0 {
+		t.Fatalf("check-go-test-shards.sh exited 0 with core/llm/... in two shards — "+
+			"the gate cannot see a duplicate.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "DUPLICATE") || !strings.Contains(out, "core/llm") {
+		t.Fatalf("gate failed, but not on the planted duplicate (core/llm):\n%s", out)
+	}
+}
+
+// TestGoTestShardsGate_PlantedGapFires — the other direction: drop the
+// catch-all `rest` shard from pr.yml's matrix. Every package only `rest`
+// covers (including the module root, which carries the CSP middleware
+// test) would silently stop running; the guard must report the GAP.
+func TestGoTestShardsGate_PlantedGapFires(t *testing.T) {
+	root := repoRoot(t)
+	wf := filepath.Join(root, ".github", "workflows", "pr.yml")
+	defer plantReplace(t, wf,
+		"          - shard: rest\n            runner: medium\n",
+		"")()
+
+	code, out := runGate(t, "check-go-test-shards.sh", root)
+	if code == 0 {
+		t.Fatalf("check-go-test-shards.sh exited 0 with the rest shard removed from the "+
+			"matrix — the gate cannot see a gap.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "GAP") || !strings.Contains(out, "./core/secrets") {
+		t.Fatalf("gate failed, but not on the planted gap (expected ./core/secrets listed):\n%s", out)
 	}
 }
