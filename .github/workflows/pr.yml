@@ -828,7 +828,7 @@ jobs:
   # of 0-100 min dominated PR wall time. Now:
   #
   #   test-go-shard (matrix)  the same `go test` flags, env and setup over
-  #                           three package shards defined in ONE place,
+  #                           four package shards defined in ONE place,
   #                           scripts/ci/go-test-shards.sh.
   #   gate-meta-tests         `go test ./scripts/...`, its own job.
   #   test-go                 aggregator, named exactly "Go tests (-race
@@ -847,8 +847,8 @@ jobs:
     #            it is the package whose memory peak motivated #195 (the
     #            4 GB t4g.medium was OOM-killed mid-job), so it keeps the
     #            8 GB tier. It is now the ONLY job on ci-large.
-    #   heavy, rest -> ci-medium (t4g.medium, 4 GB, several runners). Each
-    #            is roughly a third of the old package set without
+    #   heavy, state, rest -> ci-medium (t4g.medium, 4 GB, several runners). Each
+    #            is roughly a quarter of the old package set without
     #            core/rpc; at -p 2 (2 vCPU) only two race binaries are live
     #            at once. If either OOMs (blank step conclusion +
     #            BlobNotFound), flip its `runner:` to large — the guard does
@@ -860,6 +860,8 @@ jobs:
           - shard: rpc
             runner: large
           - shard: heavy
+            runner: medium
+          - shard: state
             runner: medium
           - shard: rest
             runner: medium

@@ -31,9 +31,14 @@
 #          8 GB runner. (PR #456 first run: 16.3 min incl. setup.)
 #   heavy  core/rpc subpackages + core/llm + core/fleet + core/agentgraph
 #          + core/mcp + core/tools
+#   state  the sqlite/state-heavy half of the old `rest`: core/policy,
+#          core/workflows, core/mlsidecar, core/serve, core/event,
+#          core/slashcmd, core/session, core/memory, core/storage
 #   rest   everything else
 # PR #456 first run, before core/mcp + core/tools moved from rest to heavy:
-# heavy 11.2 min, rest 29.4 min (ci-medium, 2 vCPU).
+# heavy 11.2 min, rest 29.4 min (ci-medium, 2 vCPU). After that move: heavy
+# 11.3, rest 28.6 — rest was the critical path, so it was split in two
+# (`state` + `rest`) by Test-function count, roughly half each.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/ci-gate.sh"
 
@@ -46,11 +51,12 @@ shard_patterns() {
   case "$1" in
     rpc)   echo "core/rpc" ;;
     heavy) echo "core/rpc/middleware/... core/rpc/views/... core/llm/... core/fleet/... core/agentgraph/... core/mcp/... core/tools/..." ;;
+    state) echo "core/policy/... core/workflows/... core/mlsidecar/... core/serve/... core/event/... core/slashcmd/... core/session/... core/memory/... core/storage/..." ;;
     rest)  echo "REST" ;;
     *)     return 1 ;;
   esac
 }
-SHARD_NAMES=(rpc heavy rest)
+SHARD_NAMES=(rpc heavy state rest)
 
 module_path() {
   awk '$1 == "module" { print $2; exit }' go.mod
