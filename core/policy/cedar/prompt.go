@@ -38,6 +38,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // Default timing + capacity constants. Spec §4.2 FR-011 + tasks.md WP02.
@@ -909,6 +910,15 @@ func (r *Registry) RequestInteractive(
 	fam := surface.Family()
 	if fam == "" {
 		return Resolution{Decision: DecisionDeny, Reason: "invalid surface"}, ErrInvalidSurface
+	}
+	// Backstop for gate sites that build the surface without a session
+	// id (audit finding HR-1): the dispatch ctx carries the session the
+	// tool call runs in, and the served WS pump only forwards a
+	// permission-pending frame to the socket whose session id matches.
+	// An unanchored prompt there is never seen, so the call hangs until
+	// PromptTimeout. An explicit SessionID on the surface always wins.
+	if surface.SessionID == "" {
+		surface.SessionID = toolloop.SessionIDFromContext(ctx)
 	}
 
 	// model-scheduled-jobs-01PMSJ01 WP05 — the unattended-run posture

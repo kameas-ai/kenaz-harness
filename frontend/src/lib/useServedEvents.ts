@@ -25,6 +25,14 @@
  *   off(); // or offServedEvent(id)
  */
 
+/**
+ * The topic the Wails broker uses to say "the sessions list changed".
+ * Served mode re-dispatches its `sessions:update` / `sessions:snapshot`
+ * WS frames, and its own session mutations, under the same name so
+ * useSessions() has one subscription in both builds.
+ */
+export const SESSION_LIST_CHANGED_TOPIC = 'session.list_changed';
+
 export type ServedEventHandler = (payload: unknown) => void;
 
 /** Internal registry: topic → Map<id, handler> */

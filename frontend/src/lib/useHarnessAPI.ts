@@ -17,6 +17,7 @@ import {
 } from 'vue';
 import { useHarnessClient } from './harnessClientContext';
 import { useEventStream } from './useEventStream';
+import { onServedEvent, SESSION_LIST_CHANGED_TOPIC } from './useServedEvents';
 import { adaptHealthEntry, type WireHealthEntry } from './harnessClient';
 import type {
   Session,
@@ -203,7 +204,13 @@ export function useSessions(): UseSessionsResult {
 
   onMounted(() => {
     if (typeof window !== 'undefined' && window.runtime?.EventsOn) {
-      offListChanged = window.runtime.EventsOn('session.list_changed', scheduleRefresh);
+      offListChanged = window.runtime.EventsOn(SESSION_LIST_CHANGED_TOPIC, scheduleRefresh);
+    } else {
+      // Served mode: no Wails bridge. The served client re-dispatches
+      // sessions:update frames and its own create/rename/delete/move
+      // calls onto the in-process bus (audit finding HR-3) — without
+      // this the rail only ever showed the list it loaded on mount.
+      offListChanged = onServedEvent(SESSION_LIST_CHANGED_TOPIC, scheduleRefresh);
     }
   });
 

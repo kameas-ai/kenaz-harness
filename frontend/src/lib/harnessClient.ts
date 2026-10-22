@@ -16,7 +16,7 @@
 
 import { ServedTransport } from './servedTransport';
 import { ServedUnsupportedError } from './errors';
-import { dispatchServedEvent } from './useServedEvents';
+import { dispatchServedEvent, SESSION_LIST_CHANGED_TOPIC } from './useServedEvents';
 import { SERVED_STREAM_TOPICS } from './servedStreamTopics.gen';
 
 import type {
@@ -5427,21 +5427,38 @@ export function createServedHarnessClient(opts?: {
         transport.call<Session>('Sessions_Get', { id }),
 
       // ── conversation lifecycle ──────────────────────────────────────
-      create: (name: string) =>
-        transport.call<Session>('Sessions_Create', { name }),
+      //
+      // Each mutation re-announces the list locally as
+      // SESSION_LIST_CHANGED_TOPIC (audit finding HR-3). The desktop build
+      // gets that event from the Wails broker; served mode only hears
+      // `sessions:update` on a Sessions_Stream socket, and no socket is
+      // open while the user is on /sessions with nothing selected — so a
+      // session created from there never reached the rail.
+      create: async (name: string) => {
+        const s = await transport.call<Session>('Sessions_Create', { name });
+        dispatchServedEvent(SESSION_LIST_CHANGED_TOPIC, { kind: 'created', id: s.id });
+        return s;
+      },
 
-      rename: (id: string, name: string) =>
-        transport.call<void>('Sessions_Rename', { id, name }),
+      rename: async (id: string, name: string) => {
+        await transport.call<void>('Sessions_Rename', { id, name });
+        dispatchServedEvent(SESSION_LIST_CHANGED_TOPIC, { kind: 'renamed', id });
+      },
 
-      delete: (id: string) => transport.call<void>('Sessions_Delete', { id }),
+      delete: async (id: string) => {
+        await transport.call<void>('Sessions_Delete', { id });
+        dispatchServedEvent(SESSION_LIST_CHANGED_TOPIC, { kind: 'deleted', id });
+      },
 
       // moveToProject + setSystemPrompt exist here because the new-session
       // dialog uses them in the same submit as create(): it optionally
       // files the session under a project and seeds it with a system
       // prompt. Wiring create() alone would leave that dialog throwing
       // halfway through, with the session already made.
-      moveToProject: (id: string, projectId: string) =>
-        transport.call<void>('Sessions_MoveToProject', { id, projectId }),
+      moveToProject: async (id: string, projectId: string) => {
+        await transport.call<void>('Sessions_MoveToProject', { id, projectId });
+        dispatchServedEvent(SESSION_LIST_CHANGED_TOPIC, { kind: 'moved', id });
+      },
 
       setSystemPrompt: (id: string, content: string, kind: 'system' | 'user_seed') =>
         transport.call<void>('Sessions_SetSystemPrompt', { id, content, kind }),
@@ -5528,8 +5545,13 @@ export function createServedHarnessClient(opts?: {
                 dispatchServedEvent('elicit:pending', req);
               }
             }
-            // sessions:snapshot and sessions:update are handled via
-            // sessions.list() polling; no action needed here.
+            if (event === 'sessions:update' || event === 'sessions:snapshot') {
+              // The backend's session list changed (auto-title, branch,
+              // another tab…). Re-announce it under the topic the desktop
+              // broker uses so useSessions() refreshes the rail through
+              // one code path in both builds (audit finding HR-3).
+              dispatchServedEvent(SESSION_LIST_CHANGED_TOPIC, data);
+            }
           },
         });
         // Store the cancel fn keyed by subId so stopStream can find it.
