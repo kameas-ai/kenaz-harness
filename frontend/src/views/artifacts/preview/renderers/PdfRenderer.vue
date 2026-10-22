@@ -22,7 +22,9 @@ const canvasRef = ref<HTMLCanvasElement | null>(null);
 const pdfJsError = ref<string | null>(null);
 const pdfJsLoading = ref(false);
 
-let pdfDocument: { destroy(): void } | null = null;
+// pdfjs-dist 6 removed PDFDocumentProxy.destroy(); teardown (document +
+// worker) now goes through the loading task.
+let loadingTask: { destroy(): Promise<void> } | null = null;
 
 async function loadWithPdfJs() {
   pdfJsLoading.value = true;
@@ -41,8 +43,26 @@ async function loadWithPdfJs() {
       import.meta.url,
     ).href;
 
-    const pdf = await pdfjsLib.getDocument({ data: decodedBytes() }).promise;
-    pdfDocument = pdf;
+    // Security posture (GHSA-hq66-cqwq-w95j / CVE-2026-16633, fixed in
+    // pdfjs-dist 6.2.108): artifact PDFs can be attacker-influenced (agent-
+    // fetched URLs, tool output, uploads). This renderer deliberately uses
+    // ONLY the core API — getDocument + page.render to a <canvas>. It never
+    // mounts pdf.js's AnnotationLayer, XfaLayer, PDFViewer or the
+    // PDFScriptingManager / pdf.sandbox bridge, which is where that
+    // advisory's exploit chain lives. Keep it that way: do not add
+    // `enableScripting`, an annotation/XFA layer, or the web/ viewer here
+    // without a security review. `enableXfa: false` is the default; it is
+    // pinned explicitly so a future default flip cannot turn on the XFA
+    // HTML path. (`isEvalSupported` — the CVE-2024-4367 mitigation — no
+    // longer exists in pdfjs-dist 6.x; font programs are no longer
+    // compiled with eval/new Function, and script-src 'self' forbids eval
+    // regardless.)
+    const task = pdfjsLib.getDocument({
+      data: decodedBytes(),
+      enableXfa: false,
+    });
+    loadingTask = task;
+    const pdf = await task.promise;
 
     const page = await pdf.getPage(1);
     const viewport = page.getViewport({ scale: 1.5 });
@@ -79,13 +99,11 @@ function onEmbedError() {
 }
 
 onBeforeUnmount(() => {
-  if (pdfDocument) {
-    try {
-      pdfDocument.destroy();
-    } catch {
-      // ignore
-    }
-    pdfDocument = null;
+  if (loadingTask) {
+    loadingTask.destroy().catch(() => {
+      // ignore — best-effort teardown on unmount
+    });
+    loadingTask = null;
   }
 });
 </script>
@@ -121,8 +139,14 @@ onBeforeUnmount(() => {
       >
         Could not render PDF: {{ pdfJsError }}
       </div>
+      <!--
+        v-show, not v-else: loadWithPdfJs() reads canvasRef while
+        pdfJsLoading is still true, so the canvas must already be in the DOM.
+        With v-else it was unmounted during loading, canvasRef was null, and
+        the fallback silently rendered nothing.
+      -->
       <canvas
-        v-else
+        v-show="!pdfJsLoading && !pdfJsError"
         ref="canvasRef"
         class="block mx-auto max-w-full"
         data-testid="pdf-renderer-canvas"
