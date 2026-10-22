@@ -473,6 +473,7 @@ func translateAGStreamEvent(ev coreag.StreamEvent) corellm.StreamEvent {
 			ToolName:    ev.ToolName,
 			ToolCallID:  ev.ToolID,
 			ArgsSummary: ev.MoveArgsSummary,
+			ArgsDisplay: ev.MoveArgsDisplay,
 			IsError:     ev.MoveIsError,
 		}
 		return out

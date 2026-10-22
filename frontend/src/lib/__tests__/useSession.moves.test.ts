@@ -164,6 +164,7 @@ describe('useSession — move boundaries', () => {
         tool_name: 'bash',
         tool_call_id: 'c1',
         args_summary: 'cmd:string',
+        args_display: 'bash(cmd=ls -la)',
       },
     });
     await nextTick();
@@ -172,8 +173,14 @@ describe('useSession — move boundaries', () => {
     expect(rows).toHaveLength(2);
     expect(rows[1].kind).toBe('tool_call');
     expect(rows[1].role).toBe('tool');
+    // Content mirrors the persisted names-and-types row; the chip gets
+    // the display string with values (audit finding HR-7).
     expect(rows[1].content).toBe('cmd:string');
-    expect(rows[1].toolCalls?.[0]).toMatchObject({ id: 'c1', name: 'bash' });
+    expect(rows[1].toolCalls?.[0]).toMatchObject({
+      id: 'c1',
+      name: 'bash',
+      argsSummary: 'bash(cmd=ls -la)',
+    });
 
     chunk(rt, {
       kind: 'move_start',

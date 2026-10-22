@@ -221,6 +221,13 @@ type StreamEvent struct {
 	// tool_result boundary closes its pair with a failure.
 	MoveArgsSummary string `json:"move_args_summary,omitempty"`
 	MoveIsError     bool   `json:"move_is_error,omitempty"`
+	// MoveArgsDisplay is the tool chip's on-screen rendering of a
+	// tool_call boundary: argument values the core/tooldisplay policy
+	// allows, `<redacted>` for the rest. It is a DISPLAY field only —
+	// it is not persisted (the row keeps MoveArgsSummary's
+	// names-and-types string) and must never be copied into an audit,
+	// hook, log or telemetry payload (audit finding HR-7).
+	MoveArgsDisplay string `json:"move_args_display,omitempty"`
 }
 
 // StreamSink is the kernel-side seam the LLMNode-bound provider feeds

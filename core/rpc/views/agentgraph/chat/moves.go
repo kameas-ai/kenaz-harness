@@ -11,6 +11,7 @@ import (
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/tooldisplay"
 )
 
 // ---------------------------------------------------------------------------
@@ -335,10 +336,15 @@ func (j *turnJournal) records() bool {
 // argsSummary is the DISPLAY-LAYER summary — the same string the
 // tool_call entry persists as its Content. Raw arguments never enter
 // this struct; see RecordToolCall's redaction note.
+//
+// argsDisplay is the chip's on-screen string (core/tooldisplay policy:
+// non-secret values shown, the rest `<redacted>`). It rides the live
+// boundary only; it is never persisted.
 type moveDetail struct {
 	toolName    string
 	toolCallID  string
 	argsSummary string
+	argsDisplay string
 	isError     bool
 }
 
@@ -356,6 +362,7 @@ func (j *turnJournal) allocate(kind string, d moveDetail) int {
 			ToolName:        d.toolName,
 			ToolID:          d.toolCallID,
 			MoveArgsSummary: d.argsSummary,
+			MoveArgsDisplay: d.argsDisplay,
 			MoveIsError:     d.isError,
 		})
 	}
@@ -608,6 +615,11 @@ func (j *turnJournal) RecordToolCall(ctx context.Context, call coreag.ToolCall) 
 		toolName:    call.Name,
 		toolCallID:  call.ID,
 		argsSummary: summary,
+		// The chip's on-screen string (audit finding HR-7): values the
+		// tooldisplay policy allows. Streamed only — the persisted
+		// Content below stays names-and-types, and the reloaded chip
+		// recomputes this from ModelToolArgs with the same policy.
+		argsDisplay: tooldisplay.Summary(call.Name, call.Args),
 	})
 	j.persist(ctx, coreag.HistoryEntry{
 		Role:       "tool",

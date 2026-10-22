@@ -378,9 +378,15 @@ func (m Message) TurnSpanID() string { return m.moveTurnSpanID }
 //	                 authored them in the first place. This is history,
 //	                 not logs.
 //
-// Neither is a correct implementation of the other. If you are here
-// because a display surface is missing argument values, you want
-// displayArgsSummary and the answer is "by design". If you are here
+// Neither is a correct implementation of the other.
+//
+// One bounded display reader exists (audit finding HR-7, 2026-10-21):
+// the sessions view's toolCallArgsDisplay feeds these arguments through
+// core/tooldisplay — the redaction policy that shows non-secret values
+// and replaces the rest with `<redacted>` — to render the reloaded tool
+// chip. It never touches Content, export, search, audit or logs. A new
+// display surface that wants argument values goes through that policy,
+// never around it. If you are here
 // because a provider rejected a request for a malformed tool_use, you
 // are in the right place.
 //

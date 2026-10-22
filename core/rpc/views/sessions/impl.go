@@ -19,6 +19,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 	"github.com/kameas-ai/kenaz-harness/core/sessions/export"
+	"github.com/kameas-ai/kenaz-harness/core/tooldisplay"
 	"github.com/kameas-ai/kenaz-harness/core/toolexposure"
 	"github.com/kameas-ai/kenaz-harness/core/usage"
 )
@@ -611,8 +612,9 @@ func (a *managerAPI) StopStream(_ context.Context, _ string) error {
 }
 
 // messageToView projects the durable session.Message into the
-// rpc-layer wire shape. Tool-call args are coerced to a one-line
-// summary; the full structured payload stays in the durable record.
+// rpc-layer wire shape. Tool-call args become the chip's one-line
+// display string (toolCallArgsDisplay, core/tooldisplay policy); the
+// full structured payload stays in the durable record.
 //
 // Compaction bookkeeping (WP07): CompactedIntoID / CompactedAt /
 // ArchivedAt are surfaced on the wire as RFC3339Nano UTC strings (or
@@ -632,7 +634,7 @@ func messageToView(m session.Message) Message {
 			out.ToolCalls = append(out.ToolCalls, ToolCall{
 				ID:          tc.ID,
 				Name:        tc.Name,
-				ArgsSummary: "",
+				ArgsSummary: toolCallArgsDisplay(m, tc),
 				UsedSecrets: tc.UsedSecrets,
 				IsError:     tc.IsError,
 			})
@@ -671,6 +673,40 @@ func messageToView(m session.Message) Message {
 	out.MoveIndex = m.MoveIndex()
 	out.TurnSpanID = m.TurnSpanID()
 	return out
+}
+
+// toolCallArgsDisplay renders the tool chip's on-screen argument string
+// for one call (audit finding HR-7) through core/tooldisplay — the same
+// policy the live boundary used, so a reloaded chip reads exactly as the
+// live one did.
+//
+// Sources, in order:
+//   - a tool_call move row: the model layer's raw arguments
+//     (ModelLayerToolArgs). Reading them here is deliberate and bounded:
+//     the values only leave this function through the tooldisplay
+//     redaction policy, and the row's Content — what export, search and
+//     the provider history see — is untouched;
+//   - a classic (pre-moves) row that persisted a structured Arguments
+//     map: the same policy over that map.
+//
+// Anything else returns "", and the frontend falls back to the row's
+// names-and-types Content. Rows written before the model layer carried
+// arguments simply keep that fallback; no migration is needed.
+func toolCallArgsDisplay(m session.Message, tc session.ToolCall) string {
+	if m.MoveKind() == session.MoveKindToolCall {
+		raw, ok := m.ModelLayerToolArgs()[tc.ID]
+		if !ok {
+			return ""
+		}
+		if s, ok := tooldisplay.SummaryJSON(tc.Name, raw); ok {
+			return s
+		}
+		return ""
+	}
+	if m.MoveKind() == "" && len(tc.Arguments) > 0 {
+		return tooldisplay.Summary(tc.Name, tc.Arguments)
+	}
+	return ""
 }
 
 // ListMessages implements SessionsAPI.
