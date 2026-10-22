@@ -698,6 +698,13 @@ type MoveBoundary struct {
 	// this field; the model-visible layer that needs them composes them
 	// from the provider history.
 	ArgsSummary string `json:"args_summary,omitempty"`
+	// ArgsDisplay is what the tool chip shows for a "tool_call"
+	// boundary: argument values the core/tooldisplay policy allows,
+	// `<redacted>` for secret-named or secret-looking ones. The reloaded
+	// chip gets the same string from the sessions view's
+	// ToolCall.ArgsSummary, computed with the same policy. Display only:
+	// never persisted, never audited (audit finding HR-7).
+	ArgsDisplay string `json:"args_display,omitempty"`
 	// IsError reports that a "tool_result" boundary closes its pair with
 	// a failure — the tool returned an error result, or the dispatch
 	// itself failed. It is the live half of the chip's running→ok/error

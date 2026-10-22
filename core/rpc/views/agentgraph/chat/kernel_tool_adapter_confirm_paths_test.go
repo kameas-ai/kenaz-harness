@@ -691,3 +691,52 @@ func TestConfirmLadder_AuditPayloadCarriesNoArgumentData(t *testing.T) {
 		}
 	}
 }
+
+// TestConfirmLadder_AuditAndPromptCarryNoArgumentValues pins that the
+// tool-chip change for audit finding HR-7 (chips show non-secret
+// argument values) did not reach the audit sink or the confirm prompt:
+// both stay metadata-only. The value used here is one the chip policy
+// WOULD show, so this fails if anyone routes the display string into
+// an audit or prompt payload.
+func TestConfirmLadder_AuditAndPromptCarryNoArgumentValues(t *testing.T) {
+	t.Parallel()
+	const visible = "/workspace/chip-visible-marker"
+
+	var mu sync.Mutex
+	var prompts []toolloop.ConfirmRequest
+	f := newLadder(t, toolloop.ConfirmDecision{Approved: true, RememberSession: true}, nil)
+	f.bus = toolloop.NewConfirmBus(func(req toolloop.ConfirmRequest) {
+		mu.Lock()
+		prompts = append(prompts, req)
+		mu.Unlock()
+		_ = f.bus.Resolve(req.SessionID, req.CallID, toolloop.ConfirmDecision{Approved: true, RememberSession: true})
+	})
+	f.adapter = f.adapter.withConfirm(f.bus)
+
+	if _, err := f.adapter.Call(context.Background(), coreag.ToolCall{
+		Name: "filesystem__write_file",
+		Args: map[string]any{"path": visible},
+	}); err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	events := f.audit.snapshot()
+	if len(events) == 0 {
+		t.Fatal("no audit events recorded — the assertion below would be vacuous")
+	}
+	for _, e := range events {
+		if strings.Contains(string(e.Payload), visible) {
+			t.Errorf("audit %s payload carries an argument value: %s", e.Kind, e.Payload)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(prompts) == 0 {
+		t.Fatal("no confirm prompt raised")
+	}
+	for _, p := range prompts {
+		if strings.Contains(p.ArgsSummary, visible) {
+			t.Errorf("confirm prompt carries an argument value: %q", p.ArgsSummary)
+		}
+	}
+}

@@ -615,6 +615,8 @@ export function useSession(id: Ref<string>): UseSessionResult {
     tool_name?: string;
     tool_call_id?: string;
     args_summary?: string;
+    /** The chip's display string: non-secret values, the rest `<redacted>` (HR-7). */
+    args_display?: string;
     is_error?: boolean;
   };
   /**
@@ -723,7 +725,10 @@ export function useSession(id: Ref<string>): UseSessionResult {
           {
             id: mv.tool_call_id ?? "",
             name: mv.tool_name ?? "",
-            argsSummary: isResult ? "" : summary,
+            // The chip shows the backend's display string (values through
+            // its redaction policy); the row content above stays the
+            // names-and-types summary, exactly as persisted.
+            argsSummary: isResult ? "" : mv.args_display || summary,
             ...(isResult ? { isError: mv.is_error === true } : {}),
           },
         ],

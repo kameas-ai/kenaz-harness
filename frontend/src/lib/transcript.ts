@@ -69,10 +69,12 @@ type ToolChipStatus = 'running' | 'ok' | 'error';
  * `tool_call` move supplies identity + the args summary, and the
  * `tool_result` move that names the same call id resolves it.
  *
- * `argsSummary` is the DISPLAY-LAYER summary the backend already
- * computed (`displayArgsSummary` — argument names and value types). Raw
- * argument values never reach this shape; the wire type has no field
- * that could carry them.
+ * `argsSummary` is the chip string the backend rendered through its
+ * redaction policy (core/tooldisplay, audit finding HR-7): non-secret
+ * argument values shown, secret ones `<redacted>`. It comes from the
+ * tool_call's `toolCalls[0].argsSummary`; a row that predates the
+ * model-layer arguments has none, and falls back to the row's persisted
+ * names-and-types content.
  */
 export interface ToolChip {
   /** Tool-call id, the value `tool_result` binds on. */
@@ -282,8 +284,10 @@ export function projectTranscript(
       const chip: ToolChip = {
         callId,
         name: call?.name ?? '',
-        // The tool_call row's content IS the args summary WP02 persisted.
-        argsSummary: m.content ?? '',
+        // The backend's display string (values through the redaction
+        // policy) when it has one; otherwise the names-and-types summary
+        // the row persisted as its content.
+        argsSummary: call?.argsSummary || m.content || '',
         status: 'running',
         output: '',
       };

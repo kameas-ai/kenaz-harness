@@ -19,9 +19,13 @@
  *   ok      → signal-ok
  *   error   → signal-danger, and the chip itself takes the danger tint
  *
- * REDACTION. `argsSummary` is the display-layer summary the backend
- * computed (argument names + value types). The wire type carries no raw
- * argument values at all, so there is nothing here that could leak them.
+ * REDACTION. `argsSummary` is the chip string the backend rendered
+ * through its single redaction policy (core/tooldisplay, audit finding
+ * HR-7): non-secret argument values are shown (`path=/workspace/src`),
+ * secret-named or secret-looking ones arrive as `<redacted>`, and tools
+ * whose arguments are inherently sensitive arrive as names + types.
+ * Nothing here decides what is secret — the frontend renders what it is
+ * given and never sees the raw arguments.
  */
 
 import { computed, ref } from 'vue';
@@ -54,6 +58,15 @@ const hasOutput = computed(() => props.chip.output.length > 0);
  */
 const isError = computed(() => props.chip.status === 'error');
 const expandable = computed(() => hasOutput.value || isError.value);
+
+/**
+ * The args text truncates to one line, so the full string is on hover,
+ * with a note on why some values read `<redacted>`.
+ */
+const argsTitle = computed(
+  () =>
+    `${props.chip.argsSummary}\n\nValues that look like secrets are shown as <redacted>.`,
+);
 
 const NO_ERROR_DETAIL =
   'The tool reported an error but returned no message.';
@@ -155,7 +168,7 @@ function toggle() {
       <span
         v-if="chip.argsSummary"
         class="font-mono truncate text-ink-subtle"
-        title="Argument names and types only. Values are never shown."
+        :title="argsTitle"
         data-testid="tool-chip-args"
       >
         {{ chip.argsSummary }}

@@ -50,10 +50,10 @@ describe('ToolChip — error detail', () => {
     expect(w.get('[data-testid="tool-chip-c1"]').element.tagName).toBe('DIV');
   });
 
-  it('shows argument types only, and says so', async () => {
+  it('renders the args string it is given, full text on hover', async () => {
     const w = await mountChip(base);
     const args = w.get('[data-testid="tool-chip-args"]');
     expect(args.text()).toBe('path=<string>');
-    expect(args.attributes('title')).toMatch(/types only/i);
+    expect(args.attributes('title')).toContain('path=<string>');
   });
 });

@@ -1470,3 +1470,57 @@ func TestMoves_FailedToolIsErrorOnBoundaryAndRow(t *testing.T) {
 		t.Error("the failed tool did not persist is_error — a reload would downgrade it to ok")
 	}
 }
+
+// TestMoves_ToolCallBoundaryShowsNonSecretValues pins the live half of
+// audit finding HR-7: the boundary's ArgsDisplay (what the chip renders)
+// shows a non-secret value and redacts a secret one, while the persisted
+// Content — and the boundary's ArgsSummary that mirrors it — stay
+// names-and-types.
+//
+// MUTATION EVIDENCE: drop argsDisplay from RecordToolCall's moveDetail
+// -> the display assertion fails; set argsDisplay to a raw `%v`
+// rendering -> the secret assertion fails.
+func TestMoves_ToolCallBoundaryShowsNonSecretValues(t *testing.T) {
+	t.Parallel()
+	const secret = "sk-live-DO-NOT-STREAM-THIS-0123456789"
+
+	reg := &scriptedRegistry{}
+	args, err := json.Marshal(map[string]any{"path": "/workspace/src", "token": secret})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	reg.push(toolTurn("reading", "tu-1", "fs__read", string(args)))
+	reg.push(textTurn("done"))
+
+	pool := &scriptedPool{entries: []ToolEntry{{Server: "fs", Name: "read"}}}
+	runner, broker, writer := buildMoveRunner(t, reg, pool)
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", testTurn("read it")); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
+		t.Fatalf("run failed: %s", closed.Message)
+	}
+
+	var callMark *corellm.MoveBoundary
+	marks := boundaries(broker)
+	for i := range marks {
+		if marks[i].Kind == moveKindToolCall {
+			callMark = &marks[i]
+			break
+		}
+	}
+	if callMark == nil {
+		t.Fatal("no tool_call boundary on the stream")
+	}
+	if want := "fs__read(path=/workspace/src, token=<redacted>)"; callMark.ArgsDisplay != want {
+		t.Errorf("boundary ArgsDisplay = %q, want %q", callMark.ArgsDisplay, want)
+	}
+	if strings.Contains(callMark.ArgsSummary, "/workspace/src") {
+		t.Errorf("ArgsSummary (the persisted layer) carries a value: %q", callMark.ArgsSummary)
+	}
+	for _, e := range moveEntries(writer) {
+		if strings.Contains(e.Content, secret) || (e.MoveKind == moveKindToolCall && strings.Contains(e.Content, "/workspace/src")) {
+			t.Errorf("persisted %s row carries an argument value: %q", e.MoveKind, e.Content)
+		}
+	}
+}
