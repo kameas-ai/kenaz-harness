@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"sort"
 
-	otellog "go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/attribute"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
@@ -237,11 +237,11 @@ func LogKindsAdmittedBy(optIns []TelemetryOptInItem) map[LogEventKind]struct{} {
 func logRecordEventKind(r sdklog.Record) (string, bool) {
 	var kind string
 	var found bool
-	r.WalkAttributes(func(kv otellog.KeyValue) bool {
+	r.WalkAttributes(func(kv attribute.KeyValue) bool {
 		if kv.Key != AttrEventKind {
 			return true
 		}
-		if kv.Value.Kind() != otellog.KindString {
+		if kv.Value.Type() != attribute.STRING {
 			return false
 		}
 		kind = kv.Value.AsString()

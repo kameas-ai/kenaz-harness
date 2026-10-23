@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/telemetry"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
@@ -35,7 +36,7 @@ func TestNewOTLPLogExporter_RoundTrip(t *testing.T) {
 	var r log.Record
 	r.SetTimestamp(time.Now())
 	r.SetSeverity(log.SeverityInfo)
-	r.SetBody(log.StringValue("hello-otlp"))
+	r.SetBody(attribute.StringValue("hello-otlp"))
 	lp.Logger("test").Emit(context.Background(), r)
 	if err := lp.ForceFlush(context.Background()); err != nil {
 		t.Fatalf("ForceFlush: %v", err)
@@ -70,7 +71,7 @@ func TestNewOTLPLogExporter_HeadersForwarded(t *testing.T) {
 	var r log.Record
 	r.SetTimestamp(time.Now())
 	r.SetSeverity(log.SeverityInfo)
-	r.SetBody(log.StringValue("auth-log"))
+	r.SetBody(attribute.StringValue("auth-log"))
 	lp.Logger("test").Emit(context.Background(), r)
 	_ = lp.ForceFlush(context.Background())
 

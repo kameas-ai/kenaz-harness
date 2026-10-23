@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0" /></a>
-  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8.svg" alt="Go 1.25+" />
+  <img src="https://img.shields.io/badge/Go-1.26+-00ADD8.svg" alt="Go 1.26+" />
   <img src="https://img.shields.io/badge/Wails-v2-FF0000.svg" alt="Wails v2" />
   <img src="https://img.shields.io/badge/Vue-3-4FC08D.svg" alt="Vue 3" />
   <img src="https://img.shields.io/badge/Privacy-Local_first-22C55E.svg" alt="Privacy: Local-first" />
@@ -115,7 +115,7 @@ carve-out documented in [`docs/adr/`](docs/adr/)).
 
 ## Build from source
 
-Requires Go 1.25+, Node 20+, and the Wails CLI.
+Requires Go 1.26+ (release builds use go1.27.3), Node 20+, and the Wails CLI.
 
 ```bash
 # Wails CLI
@@ -157,7 +157,7 @@ The deep docs live under [`docs/`](docs/):
 
 | Layer | Tech |
 |---|---|
-| Backend | Go 1.25+, stdlib + `gopkg.in/yaml.v3`, `modernc.org/sqlite` (CGo-free) |
+| Backend | Go 1.26+, stdlib + `gopkg.in/yaml.v3`, `modernc.org/sqlite` (CGo-free) |
 | Frontend | Vue 3, Vite, Vitest, TypeScript 5 |
 | Desktop shell | Wails v2 |
 | Storage | SQLite WAL (single `data.db`) + filesystem CAS for media + per-corpus gob vector store |
