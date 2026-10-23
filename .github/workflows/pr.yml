@@ -1267,6 +1267,8 @@ jobs:
         with:
           name: govulncheck-results
           path: .vuln-gate/
+          # upload-artifact >= v4.4 skips dot-directories unless told otherwise.
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 30
 
