@@ -178,226 +178,226 @@ func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
 	switch kind {
 	case NodeKindActivity:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "out", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "out", Type: PortType("any")},
+		}
 	case NodeKindApproval:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "approved", Type: PortType("any")},
-				{Name: "rejected", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "approved", Type: PortType("any")},
+			{Name: "rejected", Type: PortType("any")},
+		}
 	case NodeKindArtifact:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "ack", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "ack", Type: PortType("any")},
+		}
 	case NodeKindAsk:
 		return []Port{
-				{Name: "context", Type: PortType("any")},
-			}, []Port{
-				{Name: "answer", Type: PortType("any")},
-			}
+			{Name: "context", Type: PortType("any")},
+		}, []Port{
+			{Name: "answer", Type: PortType("any")},
+		}
 	case NodeKindAttachment:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "block", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "block", Type: PortType("any")},
+		}
 	case NodeKindBranch:
 		return []Port{
-				{Name: "parent", Type: PortType("any")},
-			}, []Port{
-				{Name: "branch_id", Type: PortType("any")},
-			}
+			{Name: "parent", Type: PortType("any")},
+		}, []Port{
+			{Name: "branch_id", Type: PortType("any")},
+		}
 	case NodeKindCheckpoint:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "ack", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "ack", Type: PortType("any")},
+		}
 	case NodeKindCompact:
 		return []Port{
-				{Name: "input", Type: PortType("messages")},
-			}, []Port{
-				{Name: "result", Type: PortType("any")},
-			}
+			{Name: "input", Type: PortType("messages")},
+		}, []Port{
+			{Name: "result", Type: PortType("any")},
+		}
 	case NodeKindCorpusRead:
 		return []Port{
-				{Name: "query", Type: PortType("any")},
-			}, []Port{
-				{Name: "hits", Type: PortType("any")},
-			}
+			{Name: "query", Type: PortType("any")},
+		}, []Port{
+			{Name: "hits", Type: PortType("any")},
+		}
 	case NodeKindCorpusWrite:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "job_handle", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "job_handle", Type: PortType("any")},
+		}
 	case NodeKindDecision:
 		return []Port{
-				{Name: "in", Type: PortType("any"), Required: true},
-			}, []Port{
-				{Name: "true", Type: PortType("any")},
-				{Name: "false", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any"), Required: true},
+		}, []Port{
+			{Name: "true", Type: PortType("any")},
+			{Name: "false", Type: PortType("any")},
+		}
 	case NodeKindEscalate:
 		return []Port{
-				{Name: "trigger", Type: PortType("any")},
-			}, []Port{
-				{Name: "result", Type: PortType("any")},
-			}
+			{Name: "trigger", Type: PortType("any")},
+		}, []Port{
+			{Name: "result", Type: PortType("any")},
+		}
 	case NodeKindEscalationLadder:
 		return []Port{
-				{Name: "trigger", Type: PortType("any")},
-			}, []Port{
-				{Name: "result", Type: PortType("any")},
-			}
+			{Name: "trigger", Type: PortType("any")},
+		}, []Port{
+			{Name: "result", Type: PortType("any")},
+		}
 	case NodeKindHistoryRead:
 		return []Port{
-				{Name: "query", Type: PortType("any")},
-			}, []Port{
-				{Name: "messages", Type: PortType("messages")},
-			}
+			{Name: "query", Type: PortType("any")},
+		}, []Port{
+			{Name: "messages", Type: PortType("messages")},
+		}
 	case NodeKindJoin:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "out", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "out", Type: PortType("any")},
+		}
 	case NodeKindLoop:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "out", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "out", Type: PortType("any")},
+		}
 	case NodeKindMemory:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "out", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "out", Type: PortType("any")},
+		}
 	case NodeKindMerge:
 		return []Port{
-				{Name: "branch", Type: PortType("branch_id"), Required: true},
-			}, []Port{
-				{Name: "merged", Type: PortType("messages")},
-			}
+			{Name: "branch", Type: PortType("branch_id"), Required: true},
+		}, []Port{
+			{Name: "merged", Type: PortType("messages")},
+		}
 	case NodeKindModel:
 		return []Port{
-				{Name: "messages", Type: PortType("messages"), Required: true},
-			}, []Port{
-				{Name: "response", Type: PortType("messages")},
-			}
+			{Name: "messages", Type: PortType("messages"), Required: true},
+		}, []Port{
+			{Name: "response", Type: PortType("messages")},
+		}
 	case NodeKindParallel:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "out", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "out", Type: PortType("any")},
+		}
 	case NodeKindPlanner:
 		return []Port{
-				{Name: "task", Type: PortType("text"), Required: true},
-			}, []Port{
-				{Name: "plan", Type: PortType("messages")},
-			}
+			{Name: "task", Type: PortType("text"), Required: true},
+		}, []Port{
+			{Name: "plan", Type: PortType("messages")},
+		}
 	case NodeKindReadBashOutput:
 		return []Port{
-				{Name: "query", Type: PortType("any")},
-			}, []Port{
-				{Name: "result", Type: PortType("messages")},
-			}
+			{Name: "query", Type: PortType("any")},
+		}, []Port{
+			{Name: "result", Type: PortType("messages")},
+		}
 	case NodeKindReadFile:
 		return []Port{
-				{Name: "query", Type: PortType("any")},
-			}, []Port{
-				{Name: "result", Type: PortType("messages")},
-			}
+			{Name: "query", Type: PortType("any")},
+		}, []Port{
+			{Name: "result", Type: PortType("messages")},
+		}
 	case NodeKindReflect:
 		return []Port{
-				{Name: "draft", Type: PortType("messages"), Required: true},
-			}, []Port{
-				{Name: "critique", Type: PortType("json")},
-				{Name: "revision", Type: PortType("messages")},
-			}
+			{Name: "draft", Type: PortType("messages"), Required: true},
+		}, []Port{
+			{Name: "critique", Type: PortType("json")},
+			{Name: "revision", Type: PortType("messages")},
+		}
 	case NodeKindRetry:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "out", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "out", Type: PortType("any")},
+		}
 	case NodeKindReview:
 		return []Port{
-				{Name: "draft", Type: PortType("any"), Required: true},
-			}, []Port{
-				{Name: "verdict", Type: PortType("any")},
-				{Name: "approved", Type: PortType("any")},
-			}
+			{Name: "draft", Type: PortType("any"), Required: true},
+		}, []Port{
+			{Name: "verdict", Type: PortType("any")},
+			{Name: "approved", Type: PortType("any")},
+		}
 	case NodeKindRouter:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "next", Type: PortType("text")},
-				{Name: "out", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "next", Type: PortType("text")},
+			{Name: "out", Type: PortType("any")},
+		}
 	case NodeKindSessionWrite:
 		return []Port{
-				{Name: "text", Type: PortType("any")},
-			}, []Port{
-				{Name: "message_id", Type: PortType("any")},
-				{Name: "appended", Type: PortType("any")},
-			}
+			{Name: "text", Type: PortType("any")},
+		}, []Port{
+			{Name: "message_id", Type: PortType("any")},
+			{Name: "appended", Type: PortType("any")},
+		}
 	case NodeKindSleep:
 		return []Port{
-				{Name: "args", Type: PortType("any")},
-			}, []Port{
-				{Name: "result", Type: PortType("any")},
-			}
+			{Name: "args", Type: PortType("any")},
+		}, []Port{
+			{Name: "result", Type: PortType("any")},
+		}
 	case NodeKindSubagentDispatch:
 		return []Port{
-				{Name: "args", Type: PortType("any")},
-			}, []Port{
-				{Name: "result", Type: PortType("any")},
-			}
+			{Name: "args", Type: PortType("any")},
+		}, []Port{
+			{Name: "result", Type: PortType("any")},
+		}
 	case NodeKindToolDispatch:
 		return []Port{
-				{Name: "tool_calls", Type: PortType("any"), Required: true},
-				{Name: "response", Type: PortType("messages")},
-				{Name: "assistant", Type: PortType("any")},
-				{Name: "finish_reason", Type: PortType("text")},
-			}, []Port{
-				{Name: "tool_results", Type: PortType("any")},
-				{Name: "messages", Type: PortType("messages")},
-				{Name: "tool_messages", Type: PortType("messages")},
-				{Name: "tool_call_count", Type: PortType("number")},
-				{Name: "assistant", Type: PortType("any")},
-				{Name: "assistant_text", Type: PortType("text")},
-				{Name: "response", Type: PortType("messages")},
-				{Name: "finish_reason", Type: PortType("text")},
-				{Name: "should_replan", Type: PortType("bool")},
-				{Name: "doom_loop_hits", Type: PortType("any")},
-			}
+			{Name: "tool_calls", Type: PortType("any"), Required: true},
+			{Name: "response", Type: PortType("messages")},
+			{Name: "assistant", Type: PortType("any")},
+			{Name: "finish_reason", Type: PortType("text")},
+		}, []Port{
+			{Name: "tool_results", Type: PortType("any")},
+			{Name: "messages", Type: PortType("messages")},
+			{Name: "tool_messages", Type: PortType("messages")},
+			{Name: "tool_call_count", Type: PortType("number")},
+			{Name: "assistant", Type: PortType("any")},
+			{Name: "assistant_text", Type: PortType("text")},
+			{Name: "response", Type: PortType("messages")},
+			{Name: "finish_reason", Type: PortType("text")},
+			{Name: "should_replan", Type: PortType("bool")},
+			{Name: "doom_loop_hits", Type: PortType("any")},
+		}
 	case NodeKindTraceWrite:
 		return []Port{
-				{Name: "in", Type: PortType("any")},
-			}, []Port{
-				{Name: "ack", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any")},
+		}, []Port{
+			{Name: "ack", Type: PortType("any")},
+		}
 	case NodeKindTransform:
 		return []Port{
-				{Name: "in", Type: PortType("any"), Required: true},
-			}, []Port{
-				{Name: "out", Type: PortType("any")},
-			}
+			{Name: "in", Type: PortType("any"), Required: true},
+		}, []Port{
+			{Name: "out", Type: PortType("any")},
+		}
 	case NodeKindWriteFile:
 		return []Port{
-				{Name: "payload", Type: PortType("any")},
-			}, []Port{
-				{Name: "ack", Type: PortType("bool")},
-			}
+			{Name: "payload", Type: PortType("any")},
+		}, []Port{
+			{Name: "ack", Type: PortType("bool")},
+		}
 	}
 	return nil, nil
 }
