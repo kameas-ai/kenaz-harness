@@ -1172,8 +1172,13 @@ jobs:
     # Not a required check yet: add "govulncheck" to ruleset 15871858 once it
     # has run green on main (see CLAUDE.md "Branch ruleset gotcha").
     name: govulncheck
-    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
-    timeout-minutes: 20
+    # ci-large (8 GB), not ci-fast: symbol-level govulncheck builds SSA for the
+    # whole module and was OOM-killed (exit 137) on ci-fast in #460. ci-large is
+    # a single runner shared with the rpc race shard, so expect some queueing.
+    # Memory is also bounded below, and the scan step degrades to binary mode
+    # rather than failing if the source scan is still killed.
+    runs-on: ${{ fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') }}
+    timeout-minutes: 30
     env:
       GOVULNCHECK_VERSION: v1.9.0
       # Space-separated GO-YYYY-NNNN IDs accepted as risk; each needs a dated
@@ -1220,13 +1225,46 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Run govulncheck
+        env:
+          # Bound the source scan's heap: GC harder as it nears 6 GiB of the
+          # runner's 8 GB instead of growing until the kernel OOM-kills it.
+          GOMEMLIMIT: 6GiB
+          GOGC: "50"
+          GOMAXPROCS: "2"
         run: |
-          set -euo pipefail
+          set -uo pipefail
           mkdir -p .vuln-gate
           echo "Go $(go env GOVERSION); govulncheck ${GOVULNCHECK_VERSION}"
-          # -format json exits 0 on findings; non-zero means the scan itself
-          # failed (build error, network), which must not pass silently.
-          govulncheck -format json ./... > .vuln-gate/govulncheck-root.json
+          # Primary: symbol-level source scan. -format json exits 0 on findings;
+          # non-zero means the scan itself failed.
+          govulncheck -format json ./... > .vuln-gate/govulncheck-source.json
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "source scan OK"; exit 0
+          fi
+          rm -f .vuln-gate/govulncheck-source.json
+          # Only an OOM kill / SIGTERM (137/143) falls back. Any other failure
+          # (build error, vuln.go.dev unreachable) fails the job.
+          if [ "$rc" -ne 137 ] && [ "$rc" -ne 143 ]; then
+            echo "::error::govulncheck source scan failed (exit $rc)"; exit "$rc"
+          fi
+          echo "::warning::source scan killed (exit $rc); falling back to binary mode on the shipped binaries"
+          # Fallback, still blocking: binary mode resolves vulnerable SYMBOLS
+          # linked into each shipped binary (reported as "called"), so the
+          # evaluate step blocks on them exactly as for the source scan. The
+          # package-level scan covers test-only and non-shipped packages and
+          # is report-only (it never reaches the "called" level).
+          set -e
+          export CGO_ENABLED=0 GOOS=linux
+          mkdir -p "$RUNNER_TEMP/vulnbin"
+          go build -trimpath -o "$RUNNER_TEMP/vulnbin/kenaz-harness" .
+          go build -trimpath -tags serve -o "$RUNNER_TEMP/vulnbin/harness-served" ./cmd/harness-served
+          go build -trimpath -o "$RUNNER_TEMP/vulnbin/harness-vm" ./cmd/harness-vm
+          go build -trimpath -o "$RUNNER_TEMP/vulnbin/kenaz-updater" ./cmd/kenaz-updater
+          for b in "$RUNNER_TEMP"/vulnbin/*; do
+            govulncheck -mode=binary -format json "$b" > ".vuln-gate/govulncheck-bin-$(basename "$b").json"
+          done
+          govulncheck -scan package -format json ./... > .vuln-gate/govulncheck-package.json
 
       - name: Evaluate findings
         run: |
@@ -1238,9 +1276,10 @@ jobs:
             echo "| ID | Level | Fixed in | Package | Status |"
             echo "|---|---|---|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
-          # One row per OSV id; "called" = trace[0].function set (vulnerable
-          # symbol reachable), else "imported"/"required".
-          rows=$(jq -sc --argjson allow "$allow_json" '
+          # One row per OSV id across every scan file (source scan, or the
+          # binary + package fallback); "called" = trace[0].function set
+          # (vulnerable symbol reachable / linked), else "imported"/"required".
+          rows=$(cat .vuln-gate/govulncheck-*.json | jq -sc --argjson allow "$allow_json" '
             [ .[] | select(.finding) | .finding
               | { id: .osv,
                   fixed: (.fixed_version // ""),
@@ -1252,7 +1291,7 @@ jobs:
             | map( (map(select(.level=="called")) | first) // first )
             | map(. + { allowed: (.id as $i | $allow | index($i) != null) })
             | map(. + { blocks: (.level=="called" and .fixed != "" and (.allowed|not)) })
-          ' .vuln-gate/govulncheck-root.json)
+          ')
           echo "$rows" | jq -r '.[] |
             "| \(.id) | \(.level) | \(if .fixed=="" then "no fix" else .fixed end) | \(.pkg) | \(if .blocks then "**BLOCKING**" elif .allowed then "accepted risk" else "report" end) |"' \
             >> "$GITHUB_STEP_SUMMARY"
