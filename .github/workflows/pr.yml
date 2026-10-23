@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.25'
+  GO_VERSION: '1.27.3'
   NODE_VERSION: '20'
 
 jobs:
@@ -76,8 +76,11 @@ jobs:
         run: go vet ./core/... ./cmd/... .
 
       - name: golangci-lint
-        # v8 supports golangci-lint v2.x, which is built with go1.25 and can
-        # load configs targeting Go 1.25.0 (go.mod's `go` directive).
+        # golangci-lint refuses to load a module whose `go` directive is newer
+        # than the Go it was built with. go.mod is `go 1.26.0` (forced by
+        # golang.org/x/net + x/crypto, 2026-10-22), so the pin must be a
+        # release built with go>=1.26: v2.14.0 (2026-09-24; its own go.mod is
+        # go 1.26.0). v2.5.0 was built with go1.25.
         # only-new-issues: true scopes failures to PR-introduced issues so
         # the lint gate does not fail on the existing debt the codebase
         # accumulated while lint was misconfigured. Burn down the
@@ -90,7 +93,7 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         continue-on-error: true
         with:
-          version: v2.5.0
+          version: v2.14.0
           args: --timeout=5m
           working-directory: .
           only-new-issues: true
@@ -1155,6 +1158,117 @@ jobs:
             node scripts/ci/check-css-tokens.mjs
           fi
         continue-on-error: true
+
+  govulncheck:
+    # Security baseline 2026-10-22 (WS1/WS4). Inline copy of the govulncheck job
+    # from the WS4 template (workspace docs/ci-templates/vuln-gate.yml); switch to
+    # the org reusable workflow once it lands in kameas-ai/.github.
+    #
+    # BLOCKS only on findings reachable from our code ("called") that have a
+    # fixed version. Imported-only and no-fix findings are listed in the job
+    # summary. Stdlib findings count: the fix is a toolchain bump (GO_VERSION
+    # above + go.mod's `toolchain` line).
+    #
+    # Not a required check yet: add "govulncheck" to ruleset 15871858 once it
+    # has run green on main (see CLAUDE.md "Branch ruleset gotcha").
+    name: govulncheck
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
+    timeout-minutes: 20
+    env:
+      GOVULNCHECK_VERSION: v1.9.0
+      # Space-separated GO-YYYY-NNNN IDs accepted as risk; each needs a dated
+      # justification here. Empty today.
+      ALLOW: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Ensure jq
+        # The kameas-ci-* images are not Debian-family (no apt-get) and are not
+        # guaranteed to ship jq; fetch a checksum-verified static binary if absent.
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null && { jq --version; exit 0; }
+          case "$(uname -m)" in
+            x86_64)        a=amd64; sum=020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d ;;
+            aarch64|arm64) a=arm64; sum=6bc62f25981328edd3cfcfe6fe51b073f2d7e7710d7ef7fcdac28d4e384fc3d4 ;;
+          esac
+          d="$RUNNER_TEMP/jq"; mkdir -p "$d"
+          curl -fsSL -o "$d/jq" "https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-${a}"
+          echo "${sum}  $d/jq" | sha256sum -c -
+          chmod +x "$d/jq"; echo "$d" >> "$GITHUB_PATH"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # Self-hosted runners persist GOPATH; cache restore fails with
+          # "tar: Cannot open: File exists".
+          cache: false
+
+      - name: ensure embed targets exist
+        # main.go embeds frontend/dist; cmd/harness-served embeds
+        # frontend/dist-served. govulncheck loads every package, so both must
+        # exist on a clean checkout (same stubs as lint-go).
+        run: |
+          mkdir -p frontend/dist cmd/harness-served/frontend/dist-served
+          touch frontend/dist/.gitkeep cmd/harness-served/frontend/dist-served/.gitkeep
+
+      - name: Install govulncheck
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run govulncheck
+        run: |
+          set -euo pipefail
+          mkdir -p .vuln-gate
+          echo "Go $(go env GOVERSION); govulncheck ${GOVULNCHECK_VERSION}"
+          # -format json exits 0 on findings; non-zero means the scan itself
+          # failed (build error, network), which must not pass silently.
+          govulncheck -format json ./... > .vuln-gate/govulncheck-root.json
+
+      - name: Evaluate findings
+        run: |
+          set -euo pipefail
+          allow_json=$(printf '%s\n' $ALLOW | jq -R . | jq -sc 'map(select(length>0))')
+          {
+            echo "## govulncheck"
+            echo
+            echo "| ID | Level | Fixed in | Package | Status |"
+            echo "|---|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # One row per OSV id; "called" = trace[0].function set (vulnerable
+          # symbol reachable), else "imported"/"required".
+          rows=$(jq -sc --argjson allow "$allow_json" '
+            [ .[] | select(.finding) | .finding
+              | { id: .osv,
+                  fixed: (.fixed_version // ""),
+                  pkg: (.trace[0].package // .trace[0].module // ""),
+                  level: (if (.trace[0].function // "") != "" then "called"
+                          elif (.trace[0].package // "") != "" then "imported"
+                          else "required" end) } ]
+            | group_by(.id)
+            | map( (map(select(.level=="called")) | first) // first )
+            | map(. + { allowed: (.id as $i | $allow | index($i) != null) })
+            | map(. + { blocks: (.level=="called" and .fixed != "" and (.allowed|not)) })
+          ' .vuln-gate/govulncheck-root.json)
+          echo "$rows" | jq -r '.[] |
+            "| \(.id) | \(.level) | \(if .fixed=="" then "no fix" else .fixed end) | \(.pkg) | \(if .blocks then "**BLOCKING**" elif .allowed then "accepted risk" else "report" end) |"' \
+            >> "$GITHUB_STEP_SUMMARY"
+          n=$(echo "$rows" | jq '[.[] | select(.blocks)] | length')
+          echo "$rows" | jq -r '.[] | select(.blocks) |
+            "::error title=govulncheck \(.id)::reachable vulnerability \(.id) in \(.pkg); fixed in \(.fixed)"'
+          printf '\nBlocking findings: %s\n' "$n" >> "$GITHUB_STEP_SUMMARY"
+          [ "$n" -eq 0 ]
+
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: govulncheck-results
+          path: .vuln-gate/
+          if-no-files-found: ignore
+          retention-days: 30
 
   # NOTE: the previous `build-smoke` job (Wails build of main.go on
   # ubuntu-latest with GTK/WebKit apt deps) was removed in v0.8.5. The

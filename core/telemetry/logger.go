@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 )
 
@@ -109,7 +110,7 @@ func (s *SlogBridge) emitOTel(ctx context.Context, rec slog.Record) {
 	}
 	otelRec.SetSeverity(slogLevelToOTel(rec.Level))
 	otelRec.SetSeverityText(rec.Level.String())
-	otelRec.SetBody(log.StringValue(rec.Message))
+	otelRec.SetBody(attribute.StringValue(rec.Message))
 	rec.Attrs(func(a slog.Attr) bool {
 		otelRec.AddAttributes(slogAttrToOTel(a))
 		return true
@@ -135,36 +136,36 @@ func slogLevelToOTel(l slog.Level) log.Severity {
 	}
 }
 
-func slogAttrToOTel(a slog.Attr) log.KeyValue {
-	return log.KeyValue{Key: a.Key, Value: slogValueToOTel(a.Value)}
+func slogAttrToOTel(a slog.Attr) attribute.KeyValue {
+	return attribute.KeyValue{Key: attribute.Key(a.Key), Value: slogValueToOTel(a.Value)}
 }
 
-func slogValueToOTel(v slog.Value) log.Value {
+func slogValueToOTel(v slog.Value) attribute.Value {
 	switch v.Kind() {
 	case slog.KindBool:
-		return log.BoolValue(v.Bool())
+		return attribute.BoolValue(v.Bool())
 	case slog.KindInt64:
-		return log.Int64Value(v.Int64())
+		return attribute.Int64Value(v.Int64())
 	case slog.KindUint64:
-		return log.Int64Value(int64(v.Uint64()))
+		return attribute.Int64Value(int64(v.Uint64()))
 	case slog.KindFloat64:
-		return log.Float64Value(v.Float64())
+		return attribute.Float64Value(v.Float64())
 	case slog.KindString:
-		return log.StringValue(v.String())
+		return attribute.StringValue(v.String())
 	case slog.KindDuration:
-		return log.Int64Value(int64(v.Duration()))
+		return attribute.Int64Value(int64(v.Duration()))
 	case slog.KindTime:
-		return log.Int64Value(v.Time().UnixNano())
+		return attribute.Int64Value(v.Time().UnixNano())
 	case slog.KindGroup:
 		group := v.Group()
-		kvs := make([]log.KeyValue, 0, len(group))
+		kvs := make([]attribute.KeyValue, 0, len(group))
 		for _, ga := range group {
 			kvs = append(kvs, slogAttrToOTel(ga))
 		}
-		return log.MapValue(kvs...)
+		return attribute.MapValue(kvs...)
 	case slog.KindLogValuer:
 		return slogValueToOTel(v.LogValuer().LogValue())
 	default:
-		return log.StringValue(fmt.Sprint(v.Any()))
+		return attribute.StringValue(fmt.Sprint(v.Any()))
 	}
 }

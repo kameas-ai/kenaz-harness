@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/storage"
-	"go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/attribute"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
@@ -226,20 +226,20 @@ func logRowFrom(rec sdklog.Record) logRow {
 	return row
 }
 
-func logValueString(v log.Value) string {
-	switch v.Kind() {
-	case log.KindString:
+func logValueString(v attribute.Value) string {
+	switch v.Type() {
+	case attribute.STRING:
 		return v.AsString()
-	case log.KindBool:
+	case attribute.BOOL:
 		if v.AsBool() {
 			return "true"
 		}
 		return "false"
-	case log.KindFloat64:
+	case attribute.FLOAT64:
 		return formatFloat(v.AsFloat64())
-	case log.KindInt64:
+	case attribute.INT64:
 		return formatInt(v.AsInt64())
-	case log.KindEmpty:
+	case attribute.EMPTY:
 		return ""
 	default:
 		return v.String()
@@ -264,8 +264,8 @@ func formatInt(i int64) string {
 
 func encodeLogAttributes(r *sdklog.Record) string {
 	m := map[string]any{}
-	r.WalkAttributes(func(kv log.KeyValue) bool {
-		m[kv.Key] = logValueAny(kv.Value)
+	r.WalkAttributes(func(kv attribute.KeyValue) bool {
+		m[string(kv.Key)] = logValueAny(kv.Value)
 		return true
 	})
 	if len(m) == 0 {
@@ -278,19 +278,19 @@ func encodeLogAttributes(r *sdklog.Record) string {
 	return string(b)
 }
 
-func logValueAny(v log.Value) any {
-	switch v.Kind() {
-	case log.KindBool:
+func logValueAny(v attribute.Value) any {
+	switch v.Type() {
+	case attribute.BOOL:
 		return v.AsBool()
-	case log.KindInt64:
+	case attribute.INT64:
 		return v.AsInt64()
-	case log.KindFloat64:
+	case attribute.FLOAT64:
 		return v.AsFloat64()
-	case log.KindString:
+	case attribute.STRING:
 		return v.AsString()
-	case log.KindBytes:
-		return v.AsBytes()
-	case log.KindEmpty:
+	case attribute.BYTESLICE:
+		return v.AsByteSlice()
+	case attribute.EMPTY:
 		return nil
 	default:
 		return v.String()

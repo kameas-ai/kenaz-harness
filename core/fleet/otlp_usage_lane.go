@@ -39,6 +39,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	otellog "go.opentelemetry.io/otel/log"
@@ -556,7 +557,7 @@ func (l *usageLane) close(ctx context.Context, discard bool) {
 //
 // body must be a closed, content-free shape. This package's only caller is
 // UsageEmitter, which builds bodies from typed structs.
-func (p *FleetOTLPPipeline) EmitEvent(ctx context.Context, kind LogEventKind, body []otellog.KeyValue) bool {
+func (p *FleetOTLPPipeline) EmitEvent(ctx context.Context, kind LogEventKind, body []attribute.KeyValue) bool {
 	p.mu.Lock()
 	lane := p.usage
 	p.mu.Unlock()
@@ -573,8 +574,8 @@ func (p *FleetOTLPPipeline) EmitEvent(ctx context.Context, kind LogEventKind, bo
 	rec.SetTimestamp(now)
 	rec.SetObservedTimestamp(now)
 	rec.SetSeverity(otellog.SeverityInfo)
-	rec.SetBody(otellog.MapValue(body...))
-	rec.AddAttributes(otellog.String(AttrEventKind, string(kind)))
+	rec.SetBody(attribute.MapValue(body...))
+	rec.AddAttributes(attribute.String(AttrEventKind, string(kind)))
 	lane.logger.Emit(ctx, rec)
 	p.stats.eventsAccepted.Add(1)
 	return true

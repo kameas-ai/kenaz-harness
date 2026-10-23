@@ -23,7 +23,7 @@ Thanks for your interest in contributing.
 ## Development setup
 
 Requires:
-- Go 1.25+
+- Go 1.26+ (release builds use go1.27.3, pinned by the `toolchain` line in go.mod)
 - Node 20+
 - [Wails CLI](https://wails.io/docs/gettingstarted/installation): `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
 

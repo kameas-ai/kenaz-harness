@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/telemetry"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
@@ -30,8 +31,8 @@ func TestLocalLogExporter_RoundTrip(t *testing.T) {
 	var rec log.Record
 	rec.SetTimestamp(time.Now())
 	rec.SetSeverity(log.SeverityInfo)
-	rec.SetBody(log.StringValue("hello-world"))
-	rec.AddAttributes(log.String("session_id", "sess-1"))
+	rec.SetBody(attribute.StringValue("hello-world"))
+	rec.AddAttributes(attribute.String("session_id", "sess-1"))
 	logger.Emit(context.Background(), rec)
 
 	if err := lp.ForceFlush(context.Background()); err != nil {
