@@ -450,7 +450,16 @@ jobs:
       - name: install wails CLI
         # Pin to the same version we've validated locally; @latest can ship
         # breaking generator changes (the Wails CLI emits TS bindings, etc.).
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+        #
+        # v2.17.0 (2026-10-18), not v2.12.0: the CLI parses the project with
+        # golang.org/x/tools/go/packages from ITS OWN go.mod. v2.12.0 carries
+        # x/tools v0.30.0, which cannot load packages under go1.27.3 and dies
+        # in the binding step with `internal error: package "unicode/utf8"
+        # without types was imported from ...` (v0.100.1, run 40260348216:
+        # all six platform builds). v2.17.0 carries x/tools v0.47.0. Bump this
+        # pin whenever GO_VERSION crosses a Go minor. The go.mod wails runtime
+        # (v2.12.0) is deliberately unchanged; the CLI only reads it.
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0
 
       # @kameas-ai/kenaz-design-system is published to GitHub Packages —
       # NODE_AUTH_TOKEN from the workflow's own GITHUB_TOKEN has
