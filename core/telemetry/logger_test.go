@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/telemetry"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/embedded"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -42,8 +43,8 @@ func (r *recordingLogger) Emit(ctx context.Context, rec log.Record) {
 		Severity: rec.Severity(),
 		Attrs:    map[string]any{},
 	}
-	rec.WalkAttributes(func(kv log.KeyValue) bool {
-		rl.Attrs[kv.Key] = kv.Value.String()
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
+		rl.Attrs[string(kv.Key)] = kv.Value.String()
 		return true
 	})
 	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {

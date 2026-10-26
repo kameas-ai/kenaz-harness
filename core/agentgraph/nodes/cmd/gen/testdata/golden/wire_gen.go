@@ -50,16 +50,16 @@ func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
 	switch kind {
 	case NodeKindDecision:
 		return []Port{
-				{Name: "signal", Type: PortType("any")},
-			}, []Port{
-				{Name: "next", Type: PortType("any")},
-			}
+			{Name: "signal", Type: PortType("any")},
+		}, []Port{
+			{Name: "next", Type: PortType("any")},
+		}
 	case NodeKindModel:
 		return []Port{
-				{Name: "input", Type: PortType("messages")},
-			}, []Port{
-				{Name: "output", Type: PortType("messages")},
-			}
+			{Name: "input", Type: PortType("messages")},
+		}, []Port{
+			{Name: "output", Type: PortType("messages")},
+		}
 	}
 	return nil, nil
 }

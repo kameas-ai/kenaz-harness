@@ -38,7 +38,7 @@ import (
 	"strings"
 	"time"
 
-	otellog "go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // ExternalToolName is what every non-builtin tool is reported as.
@@ -160,7 +160,7 @@ type ConsentLevelReader interface {
 // usageSink is the pipeline surface UsageEmitter writes to.
 // *FleetOTLPPipeline satisfies it.
 type usageSink interface {
-	EmitEvent(ctx context.Context, kind LogEventKind, body []otellog.KeyValue) bool
+	EmitEvent(ctx context.Context, kind LogEventKind, body []attribute.KeyValue) bool
 	AddCount(ctx context.Context, name UsageCounter, n int64) bool
 }
 
@@ -198,9 +198,9 @@ func (e *UsageEmitter) ConversationStarted(ctx context.Context, conversationID, 
 		if conversationID == "" {
 			return false
 		}
-		return e.sink.EmitEvent(ctx, LogKindHarnessConversationStarted, []otellog.KeyValue{
-			otellog.String("conversation_id", conversationID),
-			otellog.String("model_provider", ProjectModelProvider(providerKind)),
+		return e.sink.EmitEvent(ctx, LogKindHarnessConversationStarted, []attribute.KeyValue{
+			attribute.String("conversation_id", conversationID),
+			attribute.String("model_provider", ProjectModelProvider(providerKind)),
 		})
 	default:
 		return false
@@ -240,12 +240,12 @@ func (e *UsageEmitter) ConversationEnded(
 			// closed inside the same millisecond still happened.
 			ms = 1
 		}
-		return e.sink.EmitEvent(ctx, LogKindHarnessConversationEnded, []otellog.KeyValue{
-			otellog.String("conversation_id", conversationID),
-			otellog.Int64("duration_ms", ms),
-			otellog.Int64("token_in", tokenIn),
-			otellog.Int64("token_out", tokenOut),
-			otellog.Float64("cost_usd", costUSD),
+		return e.sink.EmitEvent(ctx, LogKindHarnessConversationEnded, []attribute.KeyValue{
+			attribute.String("conversation_id", conversationID),
+			attribute.Int64("duration_ms", ms),
+			attribute.Int64("token_in", tokenIn),
+			attribute.Int64("token_out", tokenOut),
+			attribute.Float64("cost_usd", costUSD),
 		})
 	default:
 		return false
@@ -263,10 +263,10 @@ func (e *UsageEmitter) ToolInvoked(ctx context.Context, toolName string, latency
 		if ms < 0 {
 			ms = 0
 		}
-		return e.sink.EmitEvent(ctx, LogKindHarnessToolInvoked, []otellog.KeyValue{
-			otellog.String("tool_name", ProjectToolName(toolName)),
-			otellog.Int64("latency_ms", ms),
-			otellog.Bool("success", success),
+		return e.sink.EmitEvent(ctx, LogKindHarnessToolInvoked, []attribute.KeyValue{
+			attribute.String("tool_name", ProjectToolName(toolName)),
+			attribute.Int64("latency_ms", ms),
+			attribute.Bool("success", success),
 		})
 	default:
 		return false
@@ -279,9 +279,9 @@ func (e *UsageEmitter) Error(ctx context.Context, category ErrorCategory, recove
 	case ConsentAggregate:
 		return e.sink.AddCount(ctx, CounterErrors, 1)
 	case ConsentFull:
-		return e.sink.EmitEvent(ctx, LogKindHarnessError, []otellog.KeyValue{
-			otellog.String("category", string(ProjectErrorCategory(string(category)))),
-			otellog.Bool("recoverable", recoverable),
+		return e.sink.EmitEvent(ctx, LogKindHarnessError, []attribute.KeyValue{
+			attribute.String("category", string(ProjectErrorCategory(string(category)))),
+			attribute.Bool("recoverable", recoverable),
 		})
 	default:
 		return false

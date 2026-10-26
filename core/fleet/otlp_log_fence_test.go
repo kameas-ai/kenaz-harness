@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -274,8 +275,8 @@ func TestKindGatedLogExporter_AdmitsOnlyAllowlistedKinds(t *testing.T) {
 
 	records := []sdklog.Record{
 		newTestLogRecord(markerUntagged),
-		newTestLogRecord(markerUnknown, otellog.String(AttrEventKind, "harness.definitely_not_a_kind")),
-		newTestLogRecord(markerAllowed, otellog.String(AttrEventKind, string(LogKindHarnessToolInvoked))),
+		newTestLogRecord(markerUnknown, attribute.String(AttrEventKind, "harness.definitely_not_a_kind")),
+		newTestLogRecord(markerAllowed, attribute.String(AttrEventKind, string(LogKindHarnessToolInvoked))),
 	}
 
 	if err := gate.Export(ctx, records); err != nil {
@@ -364,7 +365,7 @@ func TestKindGatedLogExporter_RedactsAdmittedBodies(t *testing.T) {
 	const secret = "sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	body := "tool call rejected: " + secret
 
-	rc := newTestLogRecord(body, otellog.String(AttrEventKind, string(LogKindHarnessError)))
+	rc := newTestLogRecord(body, attribute.String(AttrEventKind, string(LogKindHarnessError)))
 	if err := gate.Export(ctx, []sdklog.Record{rc}); err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -456,12 +457,12 @@ func TestFleetCannotWidenTheCompiledCeiling(t *testing.T) {
 	records := []sdklog.Record{
 		// A record tagged with a kind the server "authorised" but which the
 		// binary does not know.
-		newTestLogRecord(markerServerNamed, otellog.String(AttrEventKind, "harness.raw_logs")),
-		newTestLogRecord(markerServerNamed+"-2", otellog.String(AttrEventKind, "harness.everything")),
+		newTestLogRecord(markerServerNamed, attribute.String(AttrEventKind, "harness.raw_logs")),
+		newTestLogRecord(markerServerNamed+"-2", attribute.String(AttrEventKind, "harness.everything")),
 		// A plain slog line, exactly what a widened ceiling would let escape.
 		newTestLogRecord(markerRawLog),
 		// The control: something genuinely in the ceiling still flows.
-		newTestLogRecord(markerInCeiling, otellog.String(AttrEventKind, string(LogKindHarnessToolInvoked))),
+		newTestLogRecord(markerInCeiling, attribute.String(AttrEventKind, string(LogKindHarnessToolInvoked))),
 	}
 	if err := gate.Export(ctx, records); err != nil {
 		t.Fatalf("Export: %v", err)
@@ -528,7 +529,7 @@ func TestNoOptInSnapshotAdmitsNothing(t *testing.T) {
 
 	// And at the record level: a ceiling kind with no snapshot is still
 	// refused.
-	rc := newTestLogRecord("body", otellog.String(AttrEventKind, string(LogKindHarnessError)))
+	rc := newTestLogRecord("body", attribute.String(AttrEventKind, string(LogKindHarnessError)))
 	if logRecordExportable(rc, nil) {
 		t.Error("a ceiling kind was judged exportable with no Fleet opt-in snapshot")
 	}
@@ -583,7 +584,7 @@ func TestLogEventKindAllowed_FailsClosed(t *testing.T) {
 func TestLogRecordEventKind_NonStringKindIsRefused(t *testing.T) {
 	t.Parallel()
 
-	rc := newTestLogRecord("body", otellog.Int(AttrEventKind, 7))
+	rc := newTestLogRecord("body", attribute.Int(AttrEventKind, 7))
 	if _, ok := logRecordEventKind(rc); ok {
 		t.Error("a non-string kameas.event.kind was accepted as a kind")
 	}
@@ -604,7 +605,7 @@ func TestLogRecordEventKind_NonStringKindIsRefused(t *testing.T) {
 // pick up the real limits from the provider that emits them. Tests that build
 // records by hand therefore appear to strip kameas.event.kind and would make
 // the gate look stricter than it is.
-func newTestLogRecord(body string, attrs ...otellog.KeyValue) sdklog.Record {
+func newTestLogRecord(body string, attrs ...attribute.KeyValue) sdklog.Record {
 	var captured sdklog.Record
 	cp := &capturingProcessor{onEmit: func(r sdklog.Record) { captured = r }}
 	lp := sdklog.NewLoggerProvider(sdklog.WithProcessor(cp))
@@ -613,7 +614,7 @@ func newTestLogRecord(body string, attrs ...otellog.KeyValue) sdklog.Record {
 	rec.SetTimestamp(time.Now())
 	rec.SetObservedTimestamp(time.Now())
 	rec.SetSeverity(otellog.SeverityInfo)
-	rec.SetBody(otellog.StringValue(body))
+	rec.SetBody(attribute.StringValue(body))
 	if len(attrs) > 0 {
 		rec.AddAttributes(attrs...)
 	}

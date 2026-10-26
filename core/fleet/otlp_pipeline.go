@@ -12,7 +12,6 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -831,10 +830,10 @@ func (e *kindGatedLogExporter) Export(ctx context.Context, records []sdklog.Reco
 		// (security fix: NFR-001 / FR-005 on the live OTLP path —
 		// harness-fleet-otlp-export-01NTLMEX01).
 		body := r.Body()
-		if body.Kind() == otellog.KindString {
+		if body.Type() == attribute.STRING {
 			cleaned := DefaultRedactor.RedactLogBody(body.AsString())
 			if cleaned != body.AsString() {
-				r.SetBody(otellog.StringValue(cleaned))
+				r.SetBody(attribute.StringValue(cleaned))
 			}
 		}
 		admitted = append(admitted, r)
