@@ -1,13 +1,10 @@
 name: PR
+# kameas-ci: check
 
+# Manual only (owner decision 2026-10-30): no automated runs. Dispatch this on
+# a PR's branch (`gh workflow run pr.yml --ref <branch>`); the check runs
+# attach to the branch head SHA, so they satisfy the required status checks.
 on:
-  pull_request:
-    branches: [main]
-    # CI spend: skip drafts. `ready_for_review` runs the full suite when a
-    # draft is marked ready; every job below carries the matching draft `if:`.
-    types: [opened, synchronize, reopened, ready_for_review]
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -18,12 +15,11 @@ permissions:
   # explicitly or GITHUB_TOKEN can't authenticate against npm.pkg.github.com.
   packages: read
 
-# CI spend: cancel superseded PR runs only. Push-to-main and dispatch runs
-# are grouped by SHA so they never cancel (or displace) each other — main CI
-# health and the upgrade-snapshot checks rely on every main run completing.
+# Cancel superseded runs: a new dispatch on the same branch cancels the
+# in-flight one; runs on main queue instead.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   GO_VERSION: '1.27.3'
@@ -31,7 +27,6 @@ env:
 
 jobs:
   lint-go:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft  # CI spend: skip drafts
     name: Go lint + vet + codegen drift
     runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     steps:
@@ -850,7 +845,6 @@ jobs:
   # do not cover every package of `./core/... ./cmd/... .` exactly once.
   # ---------------------------------------------------------------------
   test-go-shard:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft  # CI spend: skip drafts
     name: Go race shard (${{ matrix.shard }})
     # Runner per shard:
     #   rpc   -> ci-large (c7g.xlarge, 8 GB). core/rpc alone took 580.9 s
@@ -929,7 +923,6 @@ jobs:
           go test $pkgs -race -count=1 -short -timeout 20m
 
   gate-meta-tests:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft  # CI spend: skip drafts
     name: Gate meta-tests
     # Not -race; shells out to the check scripts. Was the second step of
     # the ci-large test-go job — ci-medium has the memory for it (lint-go
@@ -986,11 +979,9 @@ jobs:
     # rename. Aggregates the shards + meta-tests: `if: always()` so it
     # reports FAILURE (never "skipped", which a required check would count
     # as passing) when anything upstream failed or was cancelled.
-    # Exception (CI spend): on a draft PR every job, this one included, is
-    # skipped on purpose; `ready_for_review` re-runs the full suite.
     name: Go tests (-race -short)
     needs: [test-go-shard, gate-meta-tests]
-    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (always())  # CI spend: skip drafts
+    if: always()
     runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     steps:
       - name: all shards and gate meta-tests succeeded
@@ -1006,7 +997,6 @@ jobs:
           fi
 
   wire-golden-locked:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft  # CI spend: skip drafts
     name: Wire golden tests (locked tier)
     # Locked-tier wire-shape regression gate (integration-test-harness-01KQ8TD1 WP05).
     # Runs all *_WireGolden tests across the LLM adapter + chat view packages.
@@ -1035,7 +1025,6 @@ jobs:
         run: go test ./core/llm/... ./core/rpc/views/agentgraph/chat/... -run WireGolden -count=1 -short -race
 
   upgrade-path:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft  # CI spend: skip drafts
     name: Upgrade-path coverage
     # upgrade-path-coverage-01PMUG01 WP02. Materialises every committed
     # snapshot under core/storage/sqlite/testdata/upgrade/<tag>/dump.sql
@@ -1067,7 +1056,6 @@ jobs:
         run: go test ./core/storage/sqlite/... -run TestUpgradePath -count=1 -short -race -v
 
   test-frontend:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft  # CI spend: skip drafts
     name: Frontend tests + typecheck
     # ubuntu-latest hosted runners are reserved for Apple / Microsoft
     # platform builds (kameas-ai org policy). Linux CI runs on the
@@ -1174,7 +1162,6 @@ jobs:
         continue-on-error: true
 
   govulncheck:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft  # CI spend: skip drafts
     # Security baseline 2026-10-22 (WS1/WS4). Inline copy of the govulncheck job
     # from the WS4 template (workspace docs/ci-templates/vuln-gate.yml); switch to
     # the org reusable workflow once it lands in kameas-ai/.github.

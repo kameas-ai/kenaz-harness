@@ -12,6 +12,7 @@
 # Adopted from kameas-ai/.github → workflow-templates/oss-attributions.yml.
 
 name: OSS attributions
+# kameas-ci: maintenance
 
 on:
   release:
@@ -41,6 +42,12 @@ permissions:
   # installs @kameas-ai/kenaz-design-system from GitHub Packages — needs
   # to be explicit since this block zeroes out every unlisted scope.
   packages: read
+
+# Cancel superseded runs: a new dispatch on the same branch cancels the
+# in-flight one; runs on main queue instead.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   regenerate:

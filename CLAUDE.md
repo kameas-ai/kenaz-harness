@@ -52,14 +52,16 @@ Examples from the v0.10.x patch lane:
 
 The decision boundary: **if the working tree had observable wrong behaviour or a type-safety hole that hid a runtime risk, prefix `fix:` and let SemVer bump the patch.** If the change is pure cleanup with no observable difference (formatting, unused imports, comment rewording), use `chore:` / `docs:` / `style:` / `refactor:` so the patch lane stays signal-rich.
 
-### Workflows that run on each PR / merge
+### Workflows (all manual since 2026-10-30; nothing runs automatically except `cla.yml`)
+
+Run the PR checks on the PR's branch: `gh workflow run pr.yml --ref <branch>` and `gh workflow run pr-title.yml --ref <branch>`. Their check runs attach to the branch head SHA, so they satisfy the required status checks. Re-dispatch after every push; a newer dispatch on the same branch cancels the older run.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `pr-title.yml` | PR open/edit | Conventional Commits gate (single source of truth for the bump computation) |
-| `pr.yml` | PR push | Go lint+vet+codegen drift, Go tests `-race -short`, Frontend tests + typecheck |
-| `tag-on-merge.yml` | push to `main` | Reads the squash-commit subject, computes next tag, pushes the tag, creates the GitHub Release, dispatches `release.yml` for binary builds |
-| `release.yml` | tag push or `workflow_dispatch` | Cross-platform signed builds (macOS .dmg + Windows NSIS + Linux AppImage), publish to env-specific S3 (dev/stage/prod chosen by trigger) |
+| `pr-title.yml` | `workflow_dispatch` on the PR branch | Conventional Commits gate on the open PR's title (single source of truth for the bump computation) |
+| `pr.yml` | `workflow_dispatch` on the PR branch (or main) | Go lint+vet+codegen drift, Go tests `-race -short`, Frontend tests + typecheck |
+| `tag-on-merge.yml` | `workflow_dispatch` on `main` | Reads the squash-commit subjects, computes next tag, pushes the tag, creates the GitHub Release, dispatches `release.yml` for binary builds |
+| `release.yml` | tag push, release, or `workflow_dispatch` (`--ref <tag> -f version=<tag>` → prod; `--ref main` without version → rolling dev build) | Cross-platform signed builds (macOS .dmg + Windows NSIS + Linux AppImage), publish to env-specific S3 |
 
 ### Runner pool policy
 
@@ -562,7 +564,7 @@ The harness sub-agent system creates `.claude/worktrees/agent-<id>/` worktrees t
 4. Run `go test -race -short ./core/...` + `vitest run` + `bash scripts/ci/check-codegen.sh` on the merged release branch.
 5. `git push -u origin release/v<X.Y.Z>`.
 6. `gh pr create --base main --head release/v<X.Y.Z> --title "feat: v<X.Y.Z> — <theme>"` (NOT `release(…)`).
-7. Wait for `pr.yml` + `pr-title.yml` green. Fix any CI issues with a follow-up commit on the same branch.
+7. Dispatch `pr.yml` + `pr-title.yml` on the branch (`gh workflow run <file> --ref release/v<X.Y.Z>`) and wait for green. Fix any CI issues with a follow-up commit on the same branch.
 8. `gh pr merge <num> --squash --delete-branch`.
-9. `tag-on-merge.yml` auto-tags + dispatches `release.yml`. Verify the tag is pushed and the GitHub Release is created (the latter is failing today — see "Self-hosted runner gotcha" above).
+9. `gh workflow run tag-on-merge.yml --ref main` tags + dispatches `release.yml`. Verify the tag is pushed and the GitHub Release is created (the latter is failing today — see "Self-hosted runner gotcha" above).
 10. Archive shipped specs to `kitty-specs/_archive/`. Update `docs/roadmap.md`. Open follow-up PRs for any tracked patch-lane items.

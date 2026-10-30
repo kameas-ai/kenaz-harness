@@ -1,4 +1,5 @@
 name: Wire golden live tier (nightly)
+# kameas-ci: maintenance
 
 # Nightly cron that re-runs the wire-golden tests against real upstream APIs,
 # then either opens an auto-PR (response drift) or a regression-labelled PR
@@ -6,16 +7,13 @@ name: Wire golden live tier (nightly)
 #
 # FR-006b, FR-006c, FR-006d from integration-test-harness-01KQ8TD1.
 #
-# Trigger table:
-#   schedule (09:00 UTC daily) → live run against real APIs
-#   workflow_dispatch          → manual one-shot (useful for debugging)
+# Trigger: workflow_dispatch only (owner decision 2026-10-30 removed the
+# 09:00 UTC nightly schedule). Run by hand: gh workflow run wire-golden-live.yml
 #
 # Live-tier failures NEVER block commit-time CI (pr.yml is the gate).
 # This workflow is informational + auto-repair only.
 
 on:
-  schedule:
-    - cron: '0 9 * * *'   # 09:00 UTC daily
   workflow_dispatch:
     inputs:
       adapter:
@@ -32,10 +30,11 @@ permissions:
   pull-requests: write # open auto-PR
   issues: write        # add labels
 
+# Cancel superseded runs: a new dispatch on the same branch cancels the
+# in-flight one; runs on main queue instead.
 concurrency:
-  # Only one live-tier run at a time; a fresh run cancels the previous.
-  group: wire-golden-live
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   GO_VERSION: '1.27.3'

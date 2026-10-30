@@ -1,4 +1,5 @@
 name: PR Title
+# kameas-ci: check
 
 # Enforces conventional-commits on PR titles. The branch ruleset on
 # `main` squashes PRs and uses the PR title verbatim as the merge-commit
@@ -7,55 +8,55 @@ name: PR Title
 # version. A non-conventional title would land an un-versioned commit on
 # main and silently skip the release.
 
+# Manual only (owner decision 2026-10-30). Dispatch on the PR's branch; the
+# check looks up the open PR for that branch and validates its title. The job
+# name `Conventional Commits` is a REQUIRED status check — do not rename it.
+# (amannn/action-semantic-pull-request only works on pull_request events, so
+# the check is inline. python3 + the REST API, not gh: the ci-fast runner
+# image lacks the gh CLI.)
 on:
-  pull_request:
-    types: [opened, edited, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
   pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   conventional-commits:
     name: Conventional Commits
     runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     steps:
-      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+      - name: PR title is a Conventional Commit
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          # Keep this list aligned with release-please-config.json
-          # changelog-sections so unknown types can never sneak in.
-          types: |
-            feat
-            fix
-            perf
-            revert
-            deps
-            docs
-            style
-            chore
-            refactor
-            test
-            build
-            ci
-          # Scope is optional but if supplied must be lowercase tokens
-          # (e.g. feat(llm): ..., fix(ui,sessions): ...).
-          requireScope: false
-          # Subject must be non-empty and not end in a period or trailing
-          # space. We do NOT enforce lowercase-first because the repo's
-          # spec-kitty WP-naming convention uses uppercase prefixes like
-          # "feat(scope): WP## — description" (see git log for examples).
-          subjectPattern: ^[^\s.][^\n]*[^. ]$
-          subjectPatternError: |
-            The subject "{subject}" found in the PR title "{title}" is invalid.
-            It must:
-              - not start with whitespace or a period
-              - not end with a period or trailing space
-              - not be empty
-          # Disable validation on PRs whose head branch is the
-          # release-please bot — the bot sets its own conventional title
-          # ("chore(main): release vX.Y.Z") which already passes anyway,
-          # so this is belt-and-suspenders.
-          ignoreLabels: |
-            autorelease: pending
-            autorelease: tagged
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Open PR whose head is this branch ('' when there is none).
+          title="$(python3 - <<'PY'
+          import json, os, urllib.parse, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]
+          owner = repo.split("/")[0]
+          q = urllib.parse.urlencode({"head": f"{owner}:{os.environ['GITHUB_REF_NAME']}", "state": "open"})
+          req = urllib.request.Request(
+              f"{os.environ['GITHUB_API_URL']}/repos/{repo}/pulls?{q}",
+              headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                       "Accept": "application/vnd.github+json"})
+          prs = json.load(urllib.request.urlopen(req))
+          print(prs[0]["title"] if prs else "")
+          PY
+          )"
+          [ -n "$title" ] || { echo "::error::no open PR for $GITHUB_REF_NAME"; exit 1; }
+          echo "PR title: $title"
+          # Keep this type list aligned with release-please-config.json
+          # changelog-sections so unknown types can never sneak in. Scope is
+          # optional but if supplied must be lowercase tokens (e.g.
+          # feat(llm): ...). Subject must be non-empty and not start with
+          # whitespace/a period or end with a period/space. Uppercase-first
+          # subjects are allowed (spec-kitty "feat(scope): WP## — ..." titles).
+          re='^(feat|fix|perf|revert|deps|docs|style|chore|refactor|test|build|ci)(\([a-z0-9][a-z0-9._/,-]*\))?!?: [^[:space:].](.*[^. ])?$'
+          [[ "$title" =~ $re ]] || { echo "::error::PR title is not a Conventional Commit: $title"; exit 1; }
+          echo "OK"
