@@ -1,10 +1,10 @@
 name: PR
-# kameas-ci: check
 
-# Manual only (owner decision 2026-10-30): no automated runs. Dispatch this on
-# a PR's branch (`gh workflow run pr.yml --ref <branch>`); the check runs
-# attach to the branch head SHA, so they satisfy the required status checks.
 on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,11 +15,9 @@ permissions:
   # explicitly or GITHUB_TOKEN can't authenticate against npm.pkg.github.com.
   packages: read
 
-# Cancel superseded runs: a new dispatch on the same branch cancels the
-# in-flight one; runs on main queue instead.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   GO_VERSION: '1.27.3'
@@ -28,7 +26,7 @@ env:
 jobs:
   lint-go:
     name: Go lint + vet + codegen drift
-    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["ubuntu-24.04-arm"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
@@ -870,7 +868,7 @@ jobs:
             runner: medium
           - shard: rest
             runner: medium
-    runs-on: ${{ matrix.runner == 'large' && fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') || fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
+    runs-on: ${{ matrix.runner == 'large' && fromJson(vars.CI_RUNNER_LARGE || '["ubuntu-24.04-arm"]') || fromJson(vars.CI_RUNNER_MEDIUM || '["ubuntu-24.04-arm"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -927,7 +925,7 @@ jobs:
     # Not -race; shells out to the check scripts. Was the second step of
     # the ci-large test-go job — ci-medium has the memory for it (lint-go
     # runs these same scripts there).
-    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["ubuntu-24.04-arm"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
@@ -982,7 +980,7 @@ jobs:
     name: Go tests (-race -short)
     needs: [test-go-shard, gate-meta-tests]
     if: always()
-    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["ubuntu-24.04-arm"]') }}
     steps:
       - name: all shards and gate meta-tests succeeded
         env:
@@ -1002,7 +1000,7 @@ jobs:
     # Runs all *_WireGolden tests across the LLM adapter + chat view packages.
     # No network keys required — each test drives a real adapter against an
     # httptest.Server that replays recorded fixture responses.
-    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["ubuntu-24.04-arm"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -1033,7 +1031,7 @@ jobs:
     # the v0.63.0 P0 proved the rest of the suite structurally cannot
     # provide (spec.md §1.2: every other test starts from an empty
     # database, where the max-based-selection defect cannot occur).
-    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["ubuntu-24.04-arm"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -1057,9 +1055,9 @@ jobs:
 
   test-frontend:
     name: Frontend tests + typecheck
-    # ubuntu-latest hosted runners are reserved for Apple / Microsoft
-    # platform builds (kameas-ai org policy). Linux CI runs on the
-    # kameas-ci-* self-hosted pool to keep us off the Actions billing cap.
+    # PR CI runs on GitHub's free hosted ARM runners (ubuntu-24.04-arm;
+    # owner decision 2026-10-31: this repo is public, so they cost nothing).
+    # The CI_RUNNER_* repo variables can still point a job elsewhere.
     # Back on ci-medium (2026-10-22). #201 moved it to ci-large (8 GB)
     # because vue-tsc + vitest OOM-killed the 4 GB medium under concurrency
     # (runner-died / BlobNotFound signature). But ci-large is ONE runner,
@@ -1067,7 +1065,7 @@ jobs:
     # 100 min. If the OOM signature returns, move it back to
     # CI_RUNNER_LARGE (one line) — the Go race suite now holds ci-large
     # only for its core/rpc shard, so the queue is far shorter than before.
-    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["ubuntu-24.04-arm"]') }}
     defaults:
       run:
         working-directory: frontend
@@ -1179,7 +1177,7 @@ jobs:
     # a single runner shared with the rpc race shard, so expect some queueing.
     # Memory is also bounded below, and the scan step degrades to binary mode
     # rather than failing if the source scan is still killed.
-    runs-on: ${{ fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') }}
+    runs-on: ${{ fromJson(vars.CI_RUNNER_LARGE || '["ubuntu-24.04-arm"]') }}
     timeout-minutes: 30
     env:
       GOVULNCHECK_VERSION: v1.9.0
@@ -1323,32 +1321,3 @@ jobs:
   # test-frontend (vitest + typecheck). Re-add a smoke build only if
   # we get a self-hosted runner image with the Linux Wails toolchain
   # pre-installed.
-
-  # Manual CI: required status checks ignore check runs from workflow_dispatch,
-  # so mirror every job's result as a commit status with the job's name.
-  report-statuses:
-    name: report statuses
-    needs: [lint-go, test-go-shard, gate-meta-tests, test-go, wire-golden-locked, upgrade-path, test-frontend, govulncheck]
-    if: ${{ always() && !cancelled() }}
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      statuses: write
-    steps:
-      # Public repo: inlined from kameas-ai/.github/actions/report-statuses.
-      - env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # filter=latest: after "re-run failed jobs", report each job's newest attempt.
-          jobs="$(gh api --paginate \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
-            -q '.jobs[] | select(.status == "completed") | [.name, .conclusion, .html_url] | @tsv')"
-          [ -n "$jobs" ] || { echo "::error::no completed jobs in run $GITHUB_RUN_ID"; exit 1; }
-          while IFS=$'\t' read -r name conclusion url; do
-            case "$conclusion" in success|skipped|neutral) state=success ;; *) state=failure ;; esac
-            gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-              -f state="$state" -f context="$name" -f target_url="$url" \
-              -f description="$conclusion (${GITHUB_WORKFLOW:0:80})" >/dev/null
-            printf '%-50s %s\n' "$name" "$state"
-          done <<< "$jobs"

@@ -1,5 +1,4 @@
 name: Release
-# kameas-ci: deploy
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Trigger → environment mapping
@@ -7,8 +6,8 @@ name: Release
 #
 #   Trigger                                 Target env   Notes
 #   ─────────────────────────────────────── ──────────── ────────────────────────
-#   workflow_dispatch on main, no version   dev          Rolling "latest" build
-#   (replaces the old push-to-main path)                 (manual since 2026-10-30).
+#   push to main (any non-tag commit)       dev          Rolling "latest" build.
+#   (only when repo var AUTO_RELEASE=true)
 #                                                        Published to
 #                                                        s3://kameas-ai-dev-releases-use2
 #                                                        and served from
@@ -22,8 +21,7 @@ name: Release
 #
 #   tag  v*  (no -rc, e.g. v1.2.0)         prod         Stable release.
 #   OR   release event (release-please)                  Published to
-#   OR   workflow_dispatch with version=    (at --ref     s3://kameas-ai-prod-releases-use2
-#        <tag>)
+#   OR   workflow_dispatch with version=                 s3://kameas-ai-prod-releases-use2
 #                                                        and served from
 #                                                        downloads.kameas.ai.
 #                                                        ← unchanged from prior behavior
@@ -52,21 +50,22 @@ on:
   # release-please dispatches via `gh workflow run release.yml --ref vX.Y.Z`
   # after merging a release PR (the primary path).
   # A human creating a Release in the GitHub UI also lands here (rare).
-  # ── dev: dispatch on main with NO version ─────────────────────────────────
-  # Rolling dev build of main (formerly every push to main under
-  # AUTO_RELEASE=true; manual-only since 2026-10-30):
-  #   gh workflow run release.yml --ref main
   workflow_dispatch:
     inputs:
       version:
-        description: 'Tag to build (e.g. v0.1.0) → prod; run with --ref <tag>. Leave empty on main for a rolling dev build.'
-        required: false
-        default: ''
+        description: 'Tag to build (e.g. v0.1.0). Required for prod dispatch.'
+        required: true
   release:
     types: [published]
 
-  # Tags are only created by the manual tag-on-merge or a human.
+  # ── dev: every merge to main ──────────────────────────────────────────────
+  # Non-versioning commits (chore/docs/ci/etc.) produce a rolling dev build.
+  # (The PR-time `build-smoke` job was removed; release builds now cover
+  # cross-platform build-health on tagged versions. This is for dev download
+  # parity.)
   push:
+    branches:
+      - main
     tags:
       # ── stage: release-candidate tags (v*-rc*) ───────────────────────────
       - 'v*-rc*'
@@ -78,8 +77,9 @@ permissions:
   packages: write
 
 concurrency:
-  # Never cancel a release; runs for the same ref queue.
-  group: release-${{ github.ref }}
+  # Push-to-main runs that AUTO_RELEASE skips get their own group so a no-op
+  # run can never displace a queued run on main.
+  group: release-${{ github.ref }}${{ (github.event_name == 'push' && github.ref_type != 'tag' && vars.AUTO_RELEASE != 'true') && '-noop' || '' }}
   cancel-in-progress: false
 
 env:
@@ -109,6 +109,10 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   resolve-env:
     name: Resolve target environment
+    # Push-to-main (dev) builds are opt-in via the repository variable
+    # AUTO_RELEASE=true; tag pushes, release events and dispatches always run.
+    # Every other job needs this one, so a skip here skips the whole run.
+    if: github.event_name != 'push' || github.ref_type == 'tag' || vars.AUTO_RELEASE == 'true'
     # Trivial bash coordinator — moved off ubuntu-latest to keep release
     # runs entirely on the self-hosted pool except for the Apple/Microsoft
     # platform builds below that genuinely need macos-latest / windows-latest.
@@ -137,34 +141,25 @@ jobs:
           APPDEPLOY_ROLE_ARN_DEV: ${{ vars.APPDEPLOY_ROLE_ARN_DEV }}
           APPDEPLOY_ROLE_ARN_STAGE: ${{ vars.APPDEPLOY_ROLE_ARN_STAGE }}
           APPDEPLOY_ROLE_ARN_PROD: ${{ vars.APPDEPLOY_ROLE_ARN_PROD }}
-          # Via env, never interpolated into the script (injection-safe).
-          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           REF="${{ github.ref }}"
           EVENT="${{ github.event_name }}"
 
           # Determine target environment from the trigger:
-          #   1. release event OR workflow_dispatch with version → prod
-          #   2. workflow_dispatch on main with no version       → dev
-          #      (the old push-to-main rolling build)
-          #   3. tag push matching v*-rc*                        → stage
-          #   4. tag push matching v* (no -rc)                   → prod
-          if [[ "$EVENT" == "workflow_dispatch" && -z "$INPUT_VERSION" ]]; then
-            if [[ "$REF" != "refs/heads/main" ]]; then
-              echo "::error::a dispatch without 'version' builds the rolling dev release and must run on main (this run is on $REF). For a tagged release: gh workflow run release.yml --ref <tag> -f version=<tag>"
-              exit 1
-            fi
-            TARGET="dev"
-          elif [[ "$EVENT" == "release" || "$EVENT" == "workflow_dispatch" ]]; then
+          #   1. release event OR workflow_dispatch          → prod
+          #   2. tag push matching v*-rc*                    → stage
+          #   3. tag push matching v* (no -rc)               → prod
+          #   4. push to main (branch, not tag)              → dev
+          if [[ "$EVENT" == "release" || "$EVENT" == "workflow_dispatch" ]]; then
             TARGET="prod"
           elif [[ "$REF" == refs/tags/v*-rc* ]]; then
             TARGET="stage"
           elif [[ "$REF" == refs/tags/v* ]]; then
             TARGET="prod"
           else
-            echo "::error::unexpected trigger: event=$EVENT ref=$REF"
-            exit 1
+            # main branch push
+            TARGET="dev"
           fi
 
           case "$TARGET" in
@@ -303,23 +298,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - id: set
         shell: bash
-        env:
-          # Via env, never interpolated into the script (injection-safe).
-          INPUT_VERSION: ${{ inputs.version }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
           TARGET_ENV="${{ needs.resolve-env.outputs.target_env }}"
 
           if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="$RELEASE_TAG"
-          elif [ -n "$INPUT_VERSION" ]; then
-            VERSION="$INPUT_VERSION"
+            VERSION="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             # tag push (stage rc or prod stable)
             VERSION="${{ github.ref_name }}"
           else
-            # dev: dispatch on main without a version — rolling label based on short SHA
+            # dev: main branch push — use rolling label based on short SHA
             SHORT_SHA="${{ github.sha }}"
             SHORT_SHA="${SHORT_SHA:0:7}"
             VERSION="v0.0.0-dev.${SHORT_SHA}"
@@ -337,7 +328,7 @@ jobs:
           # GITHUB_SHA. Dispatched from main (the UI default), that is main's
           # code shipped under the tag's name. Refuse unless the tag IS the
           # commit being built — i.e. the run was dispatched with --ref <tag>.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT_VERSION" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
             git fetch --force --depth=1 origin "refs/tags/${VERSION}:refs/tags/${VERSION}" \
               || { echo "::error::version '$VERSION' is not a tag on origin"; exit 1; }
             TAG_SHA="$(git rev-parse "${VERSION}^{commit}")"

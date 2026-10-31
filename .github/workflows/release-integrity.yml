@@ -1,5 +1,4 @@
 name: release-integrity
-# kameas-ci: maintenance
 
 # Reconciles git tags against published GitHub Releases and FAILS when a tag
 # has no downloadable artifacts.
@@ -9,16 +8,23 @@ name: release-integrity
 # release.yml broke on 2026-08-02, eleven tags were cut over four days with
 # nothing published, and every check stayed green. Silence read as success.
 #
-# This workflow is the thing that makes silence audible: a failure here turns
-# into a red run in the Actions tab.
+# This workflow is the thing that makes silence audible. A scheduled failure
+# here turns into a red run in the Actions tab and a notification to the repo
+# owner, which is the signal that was missing.
 #
-# MANUAL ONLY (owner decision 2026-10-30: no schedules, no workflow_run
-# chaining). Run it after a release (or any time you want to audit tags vs
-# releases): gh workflow run release-integrity.yml --ref main. The script
-# treats an already-failed release run as out-of-grace, so running it right
-# after a failed Release reports immediately.
+# It runs on a schedule (the backstop — catches anything, including a release
+# deleted long after the fact) and immediately after every Release run
+# completes (the fast lane — a failed release is reported in minutes rather
+# than at the next scheduled tick, because the script treats an already-failed
+# release run as out-of-grace).
 
 on:
+  schedule:
+    # Every 6h. A four-day outage becomes a six-hour outage.
+    - cron: '23 */6 * * *'
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   workflow_dispatch:
     inputs:
       grace_minutes:
@@ -30,11 +36,9 @@ permissions:
   contents: read
   actions: read
 
-# Cancel superseded runs: a new dispatch on the same branch cancels the
-# in-flight one; runs on main queue instead.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: release-integrity
+  cancel-in-progress: false
 
 jobs:
   reconcile:
