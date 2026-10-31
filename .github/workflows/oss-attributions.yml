@@ -221,8 +221,9 @@ jobs:
         continue-on-error: true
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          # Pass the App-minted token so the push triggers sibling
-          # workflows (CI, CLA). The default GITHUB_TOKEN, by GitHub
+          # Pass the App-minted token so the PR triggers the CLA workflow
+          # (since 2026-10-30 every other workflow is manual-only — run
+          # `ci run <pr#>` for the checks). The default GITHUB_TOKEN, by GitHub
           # design, does not trigger downstream workflow runs when it
           # opens a PR — that's the loop-prevention safeguard. The App
           # token is treated as a third-party identity for trigger

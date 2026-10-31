@@ -52,9 +52,14 @@ Examples from the v0.10.x patch lane:
 
 The decision boundary: **if the working tree had observable wrong behaviour or a type-safety hole that hid a runtime risk, prefix `fix:` and let SemVer bump the patch.** If the change is pure cleanup with no observable difference (formatting, unused imports, comment rewording), use `chore:` / `docs:` / `style:` / `refactor:` so the patch lane stays signal-rich.
 
-### Workflows (all manual since 2026-10-30; nothing runs automatically except `cla.yml`)
+### Workflows (manual since 2026-10-30)
 
-Run the PR checks on the PR's branch: `gh workflow run pr.yml --ref <branch>` and `gh workflow run pr-title.yml --ref <branch>`. Their check runs attach to the branch head SHA, so they satisfy the required status checks. Re-dispatch after every push; a newer dispatch on the same branch cancels the older run.
+Nothing runs on PRs, pushes or schedules any more. The exceptions are `cla.yml`, which still reacts to PRs and comments, and **pushing a `v*` tag**, which still fires `release.yml` and `oss-attributions.yml` automatically. Tags come only from `tag-on-merge.yml` or a person.
+
+Run the PR checks with `ci run <pr#>` (kameas-ai/.github `scripts/ci`), or dispatch them yourself: `gh workflow run pr.yml --ref <branch>` and `gh workflow run pr-title.yml --ref <branch>`. Their check runs attach to the branch head SHA, so they satisfy the required status checks. Re-dispatch after every push; a newer dispatch on the same branch cancels the older run.
+
+- **Dispatched checks test the branch HEAD, not the PR merge ref.** Run `gh pr update-branch <n>` before `ci run`. Otherwise a branch that is behind main can pass here and fail after merge. In particular, `check-upgrade-snapshot-present` can fail after a new tag until the branch has main's snapshot.
+- **Fork PRs can't get the required checks**: a dispatch only runs on branches in this repo. A maintainer must push the fork's branch to `origin` and run the checks there.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
@@ -107,17 +112,17 @@ The harness is a desktop app; its "environments" are the env-specific S3 + Cloud
 
 | Trigger | Env | Channel |
 |---|---|---|
-| **push to `main`** (any commit) | **dev** | rolling "latest" → `s3://kameas-ai-dev-releases-use2` → dev.downloads.kameas.ai |
+| **`workflow_dispatch --ref main`** (no `version`) | **dev** | rolling "latest" → `s3://kameas-ai-dev-releases-use2` → dev.downloads.kameas.ai |
 | **tag `v*-rc*`** (e.g. `v1.2.0-rc1`) | **stage** | release candidate → `s3://kameas-ai-stage-releases-use2` → stage.downloads.kameas.ai |
 | **tag `v*`** (no `-rc`) **or** `workflow_dispatch` with `version=` | **prod** | stable → `s3://kameas-ai-prod-releases-use2` → prod.downloads.kameas.ai |
 
 **Develop → promote ladder:**
-1. **Develop** locally with `wails dev` + the test commands under *Local dev commands*. Open a PR; `pr.yml` (lint/vet/codegen-drift, `-race -short` Go tests, frontend tests+typecheck) is the gate.
-2. **Merge → main** ⇒ a **dev** rolling build is published automatically (every merge, incl. `chore`/`docs`). Smoke it from the dev channel.
+1. **Develop** locally with `wails dev` + the test commands under *Local dev commands*. Open a PR; `pr.yml` (lint/vet/codegen-drift, `-race -short` Go tests, frontend tests+typecheck), dispatched with `ci run <pr#>`, is the gate.
+2. **Merge → main**, then dispatch `release.yml --ref main` (no `version`) for a **dev** rolling build (`gh workflow run release.yml --ref main`). Smoke it from the dev channel.
 3. **Stage (optional RC):** push a `v<X.Y.Z>-rc1` tag manually ⇒ a **stage** release-candidate build. Soak it.
-4. **Prod:** a stable `v<X.Y.Z>` tag ⇒ a **prod** build. `tag-on-merge.yml` auto-cuts this stable tag from a `feat:`/`fix:` PR — so a normal feature merge yields **both** a dev rolling build (from the push) **and**, once the tag lands, a prod build. To gate prod behind an RC, push the `-rc` tag (and soak) **before** the stable tag, or land the work as a no-bump prefix (`chore`/`docs`/`refactor`) so only the dev rolling build is produced until you choose to tag.
+4. **Prod:** a stable `v<X.Y.Z>` tag ⇒ a **prod** build. Run `tag-on-merge.yml --ref main` (`gh workflow run tag-on-merge.yml --ref main`). It cuts the stable tag from the `feat:`/`fix:` merges since the last tag and dispatches `release.yml` at it. To gate prod behind an RC, push the `-rc` tag (and soak) **before** you run tag-on-merge.
 
-Note: `tag-on-merge` cutting the stable tag immediately means **a `feat:`/`fix:` merge ships to prod downloads without a stage stop** unless you deliberately RC-tag first. Treat that as the default and plan RC soak explicitly when a release warrants it.
+Note: running `tag-on-merge.yml --ref main` ships to prod downloads without a stage stop unless you RC-tag first. Plan the RC soak explicitly when a release warrants it.
 
 ---
 

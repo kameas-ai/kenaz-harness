@@ -70,7 +70,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT: ${{ github.event_name }}
-          # Empty on push; auto|patch|minor|major on workflow_dispatch.
+          # auto|patch|minor|major (workflow_dispatch input).
           BUMP_INPUT: ${{ inputs.bump }}
         run: |
           set -euo pipefail
@@ -86,7 +86,7 @@ jobs:
           LAST=${LAST:-v0.0.0}
 
           # HEAD already carries a release tag → nothing to cut (a re-run, or a
-          # manual dispatch right after an automatic tag).
+          # second dispatch at the same commit).
           if git tag --points-at HEAD | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             EXISTING=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
             echo "::warning::HEAD is already tagged $EXISTING; nothing new to tag. To rebuild it: gh workflow run release.yml --ref $EXISTING -f version=$EXISTING"
@@ -95,11 +95,9 @@ jobs:
             exit 0
           fi
 
-          # Classify EVERY commit since LAST and take the highest bump. On an
-          # automatic (per-merge) run this is just the merged commit plus any
-          # non-releasing commits before it; on a manual run with
-          # AUTO_RELEASE off it is every merge that has accumulated since the
-          # last release. --first-parent walks main's own history, so a
+          # Classify EVERY commit since LAST and take the highest bump: every
+          # merge that has accumulated on main since the last release.
+          # --first-parent walks main's own history, so a
           # merge-commit PR is classified by its merge subject (the PR title)
           # and squash/rebase merges by their commits.
           if git rev-parse -q --verify "refs/tags/$LAST" >/dev/null; then

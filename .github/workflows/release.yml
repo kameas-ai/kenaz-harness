@@ -137,11 +137,12 @@ jobs:
           APPDEPLOY_ROLE_ARN_DEV: ${{ vars.APPDEPLOY_ROLE_ARN_DEV }}
           APPDEPLOY_ROLE_ARN_STAGE: ${{ vars.APPDEPLOY_ROLE_ARN_STAGE }}
           APPDEPLOY_ROLE_ARN_PROD: ${{ vars.APPDEPLOY_ROLE_ARN_PROD }}
+          # Via env, never interpolated into the script (injection-safe).
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           REF="${{ github.ref }}"
           EVENT="${{ github.event_name }}"
-          INPUT_VERSION="${{ github.event.inputs.version }}"
 
           # Determine target environment from the trigger:
           #   1. release event OR workflow_dispatch with version → prod
@@ -302,14 +303,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - id: set
         shell: bash
+        env:
+          # Via env, never interpolated into the script (injection-safe).
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
           TARGET_ENV="${{ needs.resolve-env.outputs.target_env }}"
 
           if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
-          elif [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+            VERSION="$RELEASE_TAG"
+          elif [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             # tag push (stage rc or prod stable)
             VERSION="${{ github.ref_name }}"
@@ -332,7 +337,7 @@ jobs:
           # GITHUB_SHA. Dispatched from main (the UI default), that is main's
           # code shipped under the tag's name. Refuse unless the tag IS the
           # commit being built — i.e. the run was dispatched with --ref <tag>.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT_VERSION" ]; then
             git fetch --force --depth=1 origin "refs/tags/${VERSION}:refs/tags/${VERSION}" \
               || { echo "::error::version '$VERSION' is not a tag on origin"; exit 1; }
             TAG_SHA="$(git rev-parse "${VERSION}^{commit}")"
