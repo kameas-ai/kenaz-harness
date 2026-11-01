@@ -163,12 +163,3 @@ func keys(m map[string]bool) []string {
 	return out
 }
 
-// ResetAllowlistForTesting clears both layers and the seal. Test seam only:
-// production never unseals (cross-package tests cannot reset the singleton
-// otherwise).
-func ResetAllowlistForTesting() {
-	globalAllowlist.mu.Lock()
-	defer globalAllowlist.mu.Unlock()
-	globalAllowlist.active, globalAllowlist.ids = false, nil
-	globalAllowlist.sealed, globalAllowlist.servedIDs = false, nil
-}

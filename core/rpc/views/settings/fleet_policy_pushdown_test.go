@@ -7,6 +7,7 @@ package settings
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	gocedar "github.com/cedar-policy/cedar-go"
@@ -83,19 +84,55 @@ func TestCompositeApplier_CedarSnapshotAndAllowlistReplace(t *testing.T) {
 	}
 }
 
-// Served mode: the fleet allow-list narrows the sealed profile whitelist.
-func TestCompositeApplier_FleetAllowlistNarrowsServedWhitelist(t *testing.T) {
-	recipes.ApplyServedAllowlist([]string{"github", "datadog"})
-	t.Cleanup(func() { recipes.ResetAllowlistForTesting() })
-	applier := &compositeConfigApplier{state: &fleetState{}}
-	var b fleet.Bundle
-	if err := json.Unmarshal([]byte(`{"bundle_id":1,"mcp_allowlist":["github","slack"]}`), &b); err != nil {
-		t.Fatal(err)
+// A narrowing allow-list apply drives the enforcer, reports the blocked
+// recipes in status, and turns a failed stop into an apply error.
+func TestCompositeApplier_AllowlistNarrowingStopsRunningServers(t *testing.T) {
+	if recipes.AllowlistSealed() {
+		t.Skip("global allow-list sealed")
 	}
-	if errs := applier.ApplyBundle(context.Background(), &b); len(errs) != 0 {
+	t.Cleanup(func() { recipes.ApplyFleetAllowlist(nil) })
+	a := &API{fleet: newFleetState()}
+	calls := 0
+	fail := false
+	a.SetMCPAllowlistEnforcer(func(context.Context) []MCPAllowlistStop {
+		calls++
+		if recipes.IsAllowed("slack") {
+			return nil
+		}
+		r := MCPAllowlistStop{RecipeID: "slack", Stopped: !fail}
+		if fail {
+			r.Err = errors.New("boom")
+		}
+		return []MCPAllowlistStop{r}
+	})
+	applier := &compositeConfigApplier{state: a.fleet}
+	apply := func(js string) []error {
+		var b fleet.Bundle
+		if err := json.Unmarshal([]byte(js), &b); err != nil {
+			t.Fatal(err)
+		}
+		return applier.ApplyBundle(context.Background(), &b)
+	}
+	if errs := apply(`{"bundle_id":1,"mcp_allowlist":["github"]}`); len(errs) != 0 {
 		t.Fatal(errs)
 	}
-	if !recipes.IsAllowed("github") || recipes.IsAllowed("datadog") || recipes.IsAllowed("slack") {
-		t.Error("served ∩ fleet not enforced")
+	if calls != 1 {
+		t.Fatalf("enforcer calls = %d", calls)
+	}
+	st, _ := a.FleetConfigPullStatus(context.Background())
+	if len(st.MCPRecipesBlocked) != 1 || st.MCPRecipesBlocked[0] != "slack" {
+		t.Errorf("blocked = %v", st.MCPRecipesBlocked)
+	}
+	fail = true
+	if errs := apply(`{"bundle_id":2,"mcp_allowlist":["github"]}`); len(errs) != 1 {
+		t.Fatalf("failed stop must be an apply error, got %v", errs)
+	}
+	// Widening clears the blocked list.
+	if errs := apply(`{"bundle_id":3}`); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	h, _ := a.FleetHealth(context.Background())
+	if len(h.MCPRecipesBlocked) != 0 {
+		t.Errorf("blocked after clear = %v", h.MCPRecipesBlocked)
 	}
 }

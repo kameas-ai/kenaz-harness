@@ -80,12 +80,12 @@ func (p *ConfigPoller) restoreCachedBundle(ctx context.Context) {
 		return
 	}
 	if err != nil {
-		discard("read: " + err.Error())
+		discard("cache unreadable")
 		return
 	}
 	var b Bundle
 	if err := json.Unmarshal(raw, &b); err != nil {
-		discard("parse: " + err.Error())
+		discard("cache is not valid bundle JSON")
 		return
 	}
 	if b.BundleID != id {
@@ -105,6 +105,8 @@ func (p *ConfigPoller) restoreCachedBundle(ctx context.Context) {
 		applyErrs = p.applier.ApplyBundle(rctx, &b)
 	}
 	if len(applyErrs) > 0 {
+		// Apply errors are sanitized at their source (CedarApplyError:
+		// category + rule id, never parser text).
 		discard(fmt.Sprintf("apply failed: %v", applyErrs[0]))
 		return
 	}
@@ -112,6 +114,14 @@ func (p *ConfigPoller) restoreCachedBundle(ctx context.Context) {
 	p.lastAppliedAt = time.Now()
 	p.source = "cache"
 	p.lastError = ""
+	// Rollback hardening: the 304 gate must name the bundle actually in
+	// force, never a separately-persisted checksum. Otherwise a planted
+	// older bundle.json + id + the CURRENT bundle's checksum would be pinned
+	// in place by the server's 304. F1's cleared checksum (re-fetch
+	// requested) is kept cleared.
+	if p.checksum != "" {
+		p.checksum = hexChecksumOf(raw)
+	}
 	p.mu.Unlock()
 	logging.L().Info("fleet.config_poller.cache_reapplied", "bundle_id", id)
 }

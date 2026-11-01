@@ -73,6 +73,31 @@ func (d *CedarDelta) snapshot() map[string]string {
 	return nil
 }
 
+// Sanitized Cedar apply failure categories. An apply error carries one of
+// these plus the team_rule_id, NEVER the parser message: cedar-go's
+// messages can quote rule text, and the error reaches lastError (served
+// status), logs, and the ACK.
+const (
+	CedarErrInvalidCedar   = "invalid_cedar"   // a rule failed to parse
+	CedarErrMalformedDelta = "malformed_delta" // cedar_delta JSON did not decode
+	CedarErrEmptyRuleID    = "empty_rule_id"   // a rules entry had an empty key
+	CedarErrNoEngine       = "no_engine"       // no Cedar engine wired
+	CedarErrInstall        = "install_failed"  // engine refused the snapshot
+)
+
+// CedarApplyError is a sanitized cedar_delta apply failure.
+type CedarApplyError struct {
+	RuleID   string // team_rule_id, "" when not rule-specific
+	Category string // one of the CedarErr* constants
+}
+
+func (e *CedarApplyError) Error() string {
+	if e.RuleID != "" {
+		return fmt.Sprintf("cedar apply: rule %q: %s", e.RuleID, e.Category)
+	}
+	return "cedar apply: " + e.Category
+}
+
 // CedarBundleApplier applies fleet-distributed Cedar policy snapshots to a
 // cedar.Engine.
 type CedarBundleApplier struct {
@@ -90,18 +115,22 @@ func NewCedarBundleApplier(engine *cedarpolicy.Engine) *CedarBundleApplier {
 // removes every fleet-team rule.
 func (a *CedarBundleApplier) SetTeamBundle(ctx context.Context, delta *CedarDelta) error {
 	if a.engine == nil {
-		return errors.New("cedar apply: engine is nil")
+		return &CedarApplyError{Category: CedarErrNoEngine}
 	}
 	rules := delta.snapshot()
 	snippets := make(map[string][]byte, len(rules))
 	for ruleID, src := range rules {
 		if ruleID == "" {
-			return errors.New("cedar apply: rule with empty team_rule_id")
+			return &CedarApplyError{Category: CedarErrEmptyRuleID}
 		}
 		snippets[fleetTeamSnippetPrefix+ruleID] = []byte(src)
 	}
 	if err := a.engine.ReplaceHarnessSnippets(fleetTeamSnippetPrefix, snippets); err != nil {
-		return fmt.Errorf("cedar apply: install team bundle: %w", err)
+		var pe *cedarpolicy.SnippetParseError
+		if errors.As(err, &pe) {
+			return &CedarApplyError{RuleID: strings.TrimPrefix(pe.Name, fleetTeamSnippetPrefix), Category: CedarErrInvalidCedar}
+		}
+		return &CedarApplyError{Category: CedarErrInstall}
 	}
 	_ = ctx
 	return nil
@@ -115,7 +144,7 @@ func ApplyCedarDelta(ctx context.Context, engine *cedarpolicy.Engine, rawDelta j
 	var delta CedarDelta
 	if len(rawDelta) > 0 {
 		if err := json.Unmarshal(rawDelta, &delta); err != nil {
-			return fmt.Errorf("cedar apply: decode delta: %w", err)
+			return &CedarApplyError{Category: CedarErrMalformedDelta}
 		}
 	}
 	return NewCedarBundleApplier(engine).SetTeamBundle(ctx, &delta)

@@ -923,7 +923,7 @@ func (e *Engine) ReplaceHarnessSnippets(prefix string, snippets map[string][]byt
 		}
 		fileSet, err := cedar.NewPolicySetFromBytes(name, body)
 		if err != nil {
-			return fmt.Errorf("cedar: ReplaceHarnessSnippets parse %s: %w", name, err)
+			return &SnippetParseError{Name: name, Err: err}
 		}
 		parsed[name] = fileSet
 	}
@@ -976,6 +976,20 @@ func (e *Engine) ReplaceHarnessSnippets(prefix string, snippets map[string][]byt
 	e.policies.Store(ps)
 	return nil
 }
+
+// SnippetParseError is ReplaceHarnessSnippets' parse failure. Err is the
+// cedar-go parser message, which can QUOTE the policy source: callers that
+// log or surface the failure (the fleet apply path) must use Name only.
+type SnippetParseError struct {
+	Name string
+	Err  error
+}
+
+func (e *SnippetParseError) Error() string {
+	return fmt.Sprintf("cedar: ReplaceHarnessSnippets parse %s: %v", e.Name, e.Err)
+}
+
+func (e *SnippetParseError) Unwrap() error { return e.Err }
 
 // HarnessSnippetNames returns the sorted names of the retained snippets
 // starting with prefix (status surfaces: "which fleet rules are active").

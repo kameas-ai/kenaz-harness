@@ -3146,6 +3146,21 @@ func New(c *core.Core, opts ...Option) *API {
 	// tool is registered unconditionally; the EnabledFilter gates
 	// dispatch based on the LoadFSRequestAccessEnabled setting.
 	registerFSRequestTool(a.builtins, a.toolsAPI)
+	// Live fleet MCP allow-list enforcement on running servers
+	// (fleet-policy push-down): a narrowed allow-list stops servers it no
+	// longer permits through the tools view's CloseOne lifecycle.
+	if stopper, ok := a.toolsAPI.(interface {
+		StopDisallowedRecipes(ctx context.Context) []tools.AllowlistStopResult
+	}); ok && settingsImpl != nil {
+		settingsImpl.SetMCPAllowlistEnforcer(func(ctx context.Context) []settings.MCPAllowlistStop {
+			res := stopper.StopDisallowedRecipes(ctx)
+			out := make([]settings.MCPAllowlistStop, 0, len(res))
+			for _, r := range res {
+				out = append(out, settings.MCPAllowlistStop{RecipeID: r.RecipeID, Stopped: r.Stopped, Err: r.Err})
+			}
+			return out
+		})
+	}
 	// Wire the recipe-config trimmer into the permissions view now that
 	// toolsAPI is available. The tools.API implements
 	// permissions.RecipeConfigTrimmer via its TrimAllowedDir method.

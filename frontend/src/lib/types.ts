@@ -5189,6 +5189,8 @@ export interface FleetConfigPullStatusView {
   fleetCedarRules?: string[];
   /** true when a fleet MCP allow-list restriction is in force. */
   mcpAllowlistActive?: boolean;
+  /** enabled MCP recipes the allow-list blocks (their servers were stopped). */
+  mcpRecipesBlocked?: string[];
 }
 
 /**
@@ -5218,6 +5220,8 @@ export interface FleetHealthView {
   fleetCedarRules?: string[];
   /** true when a fleet MCP allow-list restriction is in force. */
   mcpAllowlistActive?: boolean;
+  /** enabled MCP recipes the allow-list blocks (their servers were stopped). */
+  mcpRecipesBlocked?: string[];
 }
 
 /**

@@ -2009,6 +2009,9 @@ type FleetConfigPullStatusView struct {
 	// MCPAllowlistActive is true when a fleet MCP allow-list restriction is
 	// in force (null in the bundle clears it).
 	MCPAllowlistActive bool `json:"mcpAllowlistActive"`
+	// MCPRecipesBlocked lists enabled MCP recipes the allow-list currently
+	// blocks; their running servers were stopped on the last apply.
+	MCPRecipesBlocked []string `json:"mcpRecipesBlocked"`
 }
 
 // FleetHealthView is the wire-safe projection of overall fleet health
@@ -2038,6 +2041,9 @@ type FleetHealthView struct {
 	// MCPAllowlistActive is true when a fleet MCP allow-list restriction is
 	// in force (null in the bundle clears it).
 	MCPAllowlistActive bool `json:"mcpAllowlistActive"`
+	// MCPRecipesBlocked lists enabled MCP recipes the allow-list currently
+	// blocks; their running servers were stopped on the last apply.
+	MCPRecipesBlocked []string `json:"mcpRecipesBlocked"`
 }
 
 // AuditSettings holds the operator-configurable audit log retention policy.

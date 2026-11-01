@@ -7922,6 +7922,7 @@ export namespace settings {
 	    fleetRulesActive: boolean;
 	    fleetCedarRules: string[];
 	    mcpAllowlistActive: boolean;
+	    mcpRecipesBlocked: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new FleetConfigPullStatusView(source);
@@ -7938,6 +7939,7 @@ export namespace settings {
 	        this.fleetRulesActive = source["fleetRulesActive"];
 	        this.fleetCedarRules = source["fleetCedarRules"];
 	        this.mcpAllowlistActive = source["mcpAllowlistActive"];
+	        this.mcpRecipesBlocked = source["mcpRecipesBlocked"];
 	    }
 	}
 	export class FleetDeviceKeysView {
@@ -7966,6 +7968,7 @@ export namespace settings {
 	    fleetRulesActive: boolean;
 	    fleetCedarRules: string[];
 	    mcpAllowlistActive: boolean;
+	    mcpRecipesBlocked: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new FleetHealthView(source);
@@ -7982,6 +7985,7 @@ export namespace settings {
 	        this.fleetRulesActive = source["fleetRulesActive"];
 	        this.fleetCedarRules = source["fleetCedarRules"];
 	        this.mcpAllowlistActive = source["mcpAllowlistActive"];
+	        this.mcpRecipesBlocked = source["mcpRecipesBlocked"];
 	    }
 	}
 	export class FleetIdentity {

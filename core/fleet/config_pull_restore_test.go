@@ -241,3 +241,37 @@ func TestConfigPoller_WakesWhenTokenSourceInstalled(t *testing.T) {
 		t.Errorf("a renewal notification while signed in caused %d extra polls", n-gets)
 	}
 }
+
+// Rollback hardening: a planted OLDER (validly signed) bundle.json + its id
+// + the CURRENT bundle's checksum must not be pinned by a 304. The restore
+// re-derives the checksum from the body it applied, so the server sees a
+// stale checksum and serves the current bundle.
+func TestConfigPoller_PlantedOlderBundleCannotBePinnedBy304(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	setTestSigningKey(t, pub)
+	older := buildAndSignBundle(t, priv, 3)
+	current := buildAndSignBundle(t, priv, 8)
+	currentBody := bundleToJSON(t, current)
+	srv := httptest.NewServer(&fakeFleetConfigServer{response: currentBody})
+	defer srv.Close()
+
+	dataDir := t.TempDir()
+	olderBody := bundleToJSON(t, older)
+	if err := saveBundleBody(dataDir, olderBody); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveBundleState(dataDir, 3, hexChecksumOf(currentBody)); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveBundleApplyMeta(dataDir, bundleApplyMeta{BuildVersion: "v1"}); err != nil {
+		t.Fatal(err)
+	}
+	a := &fakeApplier{}
+	p := newPollerForTest(t, srv, a, dataDir)
+	p.SetBuildVersion("v1")
+	p.interval = time.Hour
+	runUntil(t, p, "current bundle applied", func() bool { return p.Status().LastAppliedID == 8 })
+	if st := p.Status(); st.BundleChecksum != hexChecksumOf(currentBody) {
+		t.Errorf("checksum = %q, want the current bundle's", st.BundleChecksum)
+	}
+}

@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -378,4 +379,29 @@ func TestApplyCedarDelta_ConcurrentEvaluate(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+// Privacy: a Cedar parse failure must not carry the parser message (which
+// can quote rule text) into the error that reaches lastError / logs / ACK.
+// Only the sanitized category and the team_rule_id.
+func TestApplyCedarDelta_ParseErrorIsSanitized(t *testing.T) {
+	e := baseEngine(t)
+	const secretish = `forbid(principal, action == Action::"use_tool", resource == Tool::"SECRET_TOKEN_abc123"`
+	err := applyRaw(t, e, deltaJSON(t, map[string]string{"rule-42": secretish}))
+	if err == nil {
+		t.Fatal("want error")
+	}
+	var ce *CedarApplyError
+	if !errors.As(err, &ce) || ce.RuleID != "rule-42" || ce.Category != CedarErrInvalidCedar {
+		t.Fatalf("err = %#v, want CedarApplyError{rule-42, invalid_cedar}", err)
+	}
+	for _, leak := range []string{"SECRET_TOKEN", "forbid", "Tool::"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("error text %q leaks rule source (%q)", err.Error(), leak)
+		}
+	}
+	err = applyRaw(t, e, `{"rules": {"x": 7}}`)
+	if !errors.As(err, &ce) || ce.Category != CedarErrMalformedDelta {
+		t.Fatalf("decode err = %v", err)
+	}
 }

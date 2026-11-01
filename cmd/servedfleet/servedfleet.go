@@ -47,8 +47,6 @@ func Start(ctx context.Context, api *rpc.API, cfg authbroker.Config, session *au
 	return sup
 }
 
-// identityKey is the account the current token asserts. A renewal keeps it
-// stable; a different subject, org or issuer changes it.
 // wakeOnToken calls fleet.NotifyTokensAvailable for every auth change that
 // leaves a token in place. A poller already signed in ignores it.
 func wakeOnToken(ctx context.Context, changes <-chan struct{}, token func() string) {
@@ -64,6 +62,8 @@ func wakeOnToken(ctx context.Context, changes <-chan struct{}, token func() stri
 	}
 }
 
+// identityKey is the account the current token asserts. A renewal keeps it
+// stable; a different subject, org or issuer changes it.
 func identityKey() string { return fleet.TokenIdentityKey() }
 
 // enrollSettings is the slice of the settings API the enroll step needs.

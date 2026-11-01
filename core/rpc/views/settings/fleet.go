@@ -46,6 +46,14 @@ type fleetState struct {
 	lockdownWatcher *fleet.Watcher
 	lockdownBroker  fleet.BrokerSink
 
+	// mcpEnforcer stops already-running MCP servers a narrowed fleet
+	// allow-list no longer permits (SetMCPAllowlistEnforcer). nil = not
+	// wired (tests / no tools view): the allow-list still gates install and
+	// boot load, only live enforcement is skipped.
+	mcpEnforcer func(context.Context) []MCPAllowlistStop
+	// mcpBlocked is the sorted ids of enabled recipes the last apply found
+	// blocked by the allow-list (status surfaces).
+	mcpBlocked []string
 	// cedarEngine is the Cedar policy engine wired at SetCedarEngine time.
 	// Used by the composite ConfigApplier to apply team policy bundles.
 	cedarEngine *cedarpolicy.Engine
@@ -389,6 +397,26 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 	if a.fleet.client != nil {
 		a.fleet.client.SetSessionBroker(sessionExpiredTap{api: a, inner: sink})
 	}
+}
+
+// MCPAllowlistStop is one enabled MCP recipe the fleet allow-list blocks:
+// Stopped when a running server was shut down, Err when that failed.
+type MCPAllowlistStop struct {
+	RecipeID string
+	Stopped  bool
+	Err      error
+}
+
+// SetMCPAllowlistEnforcer wires live enforcement of the fleet MCP
+// allow-list onto running servers (fleet-policy push-down). Called from
+// rpc.New once the tools view exists, before MarkConfigConsumersWired.
+func (a *API) SetMCPAllowlistEnforcer(fn func(context.Context) []MCPAllowlistStop) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	a.fleet.mcpEnforcer = fn
+	a.fleet.mu.Unlock()
 }
 
 // SetCedarEngine wires the Cedar policy engine into the fleet state so that
@@ -1791,6 +1819,7 @@ func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusVie
 			FleetRulesActive:          len(rules) > 0 || mcpActive,
 			FleetCedarRules:           rules,
 			MCPAllowlistActive:        mcpActive,
+			MCPRecipesBlocked:         a.blockedMCPRecipes(),
 		}, nil
 	}
 	st := p.Status()
@@ -1804,6 +1833,7 @@ func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusVie
 		FleetRulesActive:          len(rules) > 0 || mcpActive,
 		FleetCedarRules:           rules,
 		MCPAllowlistActive:        mcpActive,
+		MCPRecipesBlocked:         a.blockedMCPRecipes(),
 	}, nil
 }
 
@@ -1822,6 +1852,18 @@ func (a *API) activeFleetRules() ([]string, bool) {
 	}
 	mcpActive, _ := recipes.FleetAllowlistActive()
 	return rules, mcpActive
+}
+
+// blockedMCPRecipes is the last apply's list of enabled recipes the
+// allow-list blocks (and whose servers were stopped).
+func (a *API) blockedMCPRecipes() []string {
+	out := []string{}
+	if a.fleet == nil {
+		return out
+	}
+	a.fleet.mu.RLock()
+	defer a.fleet.mu.RUnlock()
+	return append(out, a.fleet.mcpBlocked...)
 }
 
 // FleetHealth returns a compact fleet-health summary for the global health
@@ -1881,6 +1923,7 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 		FleetRulesActive:          len(rules) > 0 || mcpActive,
 		FleetCedarRules:           rules,
 		MCPAllowlistActive:        mcpActive,
+		MCPRecipesBlocked:         a.blockedMCPRecipes(),
 	}, nil
 }
 
@@ -1957,6 +2000,28 @@ func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.
 	// served mode it intersects the sealed profile whitelist (it can narrow,
 	// never widen — core/mcp/recipes/allowlist.go).
 	recipes.ApplyFleetAllowlist(b.MCPAllowlist)
+	// Live enforcement: stop running servers the (possibly narrowed)
+	// allow-list no longer permits. A failed stop is an apply error so the
+	// bundle is retried and the ACK says which recipe (errors[]; Fleet's
+	// items[] accepts only catalog UUIDs, so recipes cannot ride there).
+	{
+		a.state.mu.RLock()
+		enforce := a.state.mcpEnforcer
+		a.state.mu.RUnlock()
+		if enforce != nil {
+			blocked := []string{}
+			for _, r := range enforce(ctx) {
+				blocked = append(blocked, r.RecipeID)
+				if r.Err != nil {
+					logging.L().Warn("fleet.config.mcp_allowlist.stop_failed", "recipe_id", r.RecipeID)
+					errs = append(errs, fmt.Errorf("fleet/config: mcp_allowlist: stop blocked recipe %q failed", r.RecipeID))
+				}
+			}
+			a.state.mu.Lock()
+			a.state.mcpBlocked = blocked
+			a.state.mu.Unlock()
+		}
+	}
 
 	// Model prefs.
 	//
