@@ -83,7 +83,7 @@ func TestProvisionFromEnv_ValidList(t *testing.T) {
 	if recipes.IsAllowed("github") {
 		t.Error("non-whitelisted id allowed")
 	}
-	recipes.ApplyFleetAllowlist(nil) // must be a no-op — sole-writer rule
+	recipes.ApplyFleetAllowlist(nil) // clears only the fleet layer — the sealed served layer stays
 	if recipes.IsAllowed("github") {
 		t.Error("fleet write re-opened a sealed served allow-list")
 	}

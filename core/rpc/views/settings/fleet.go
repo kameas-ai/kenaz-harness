@@ -1782,11 +1782,15 @@ func (a *API) fleetConfigPoller() *fleet.ConfigPoller {
 // Returns a zero-value view when fleet is disabled or the poller is not yet wired.
 func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusView, error) {
 	enabled := fleet.ConfigDistributionEnabled()
+	rules, mcpActive := a.activeFleetRules()
 	p := a.fleetConfigPoller()
 	if p == nil {
 		return FleetConfigPullStatusView{
 			Source:                    "default-deny",
 			ConfigDistributionEnabled: enabled,
+			FleetRulesActive:          len(rules) > 0 || mcpActive,
+			FleetCedarRules:           rules,
+			MCPAllowlistActive:        mcpActive,
 		}, nil
 	}
 	st := p.Status()
@@ -1797,7 +1801,27 @@ func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusVie
 		Source:                    st.Source,
 		BundleChecksum:            st.BundleChecksum,
 		ConfigDistributionEnabled: enabled,
+		FleetRulesActive:          len(rules) > 0 || mcpActive,
+		FleetCedarRules:           rules,
+		MCPAllowlistActive:        mcpActive,
 	}, nil
+}
+
+// activeFleetRules reports the fleet Cedar rules in force (team_rule_ids,
+// never rule text) and whether a fleet MCP allow-list restriction is active.
+func (a *API) activeFleetRules() ([]string, bool) {
+	var engine *cedarpolicy.Engine
+	if a.fleet != nil {
+		a.fleet.mu.RLock()
+		engine = a.fleet.cedarEngine
+		a.fleet.mu.RUnlock()
+	}
+	rules := fleet.ActiveFleetCedarRules(engine)
+	if rules == nil {
+		rules = []string{}
+	}
+	mcpActive, _ := recipes.FleetAllowlistActive()
+	return rules, mcpActive
 }
 
 // FleetHealth returns a compact fleet-health summary for the global health
@@ -1813,7 +1837,8 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 	enabled := fleet.ConfigDistributionEnabled()
 
 	// Config source + last error.
-	var configSource, configLastError string
+	var configSource, configLastError, lastAppliedAt string
+	var lastAppliedID int64
 	if !enabled {
 		configSource = "no-key"
 	} else {
@@ -1824,6 +1849,7 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 			st := p.Status()
 			configSource = st.Source
 			configLastError = st.LastError
+			lastAppliedID, lastAppliedAt = st.LastAppliedID, st.LastAppliedAt
 			switch {
 			case st.SigningKeyUnknown:
 				// Parallel to "no-key" (ErrSigningKeyNotConfigured): the
@@ -1844,11 +1870,17 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 	// handling) as the account UI, rather than a divergent inline check.
 	signedIn, _ := a.FleetSignedIn(ctx)
 
+	rules, mcpActive := a.activeFleetRules()
 	return FleetHealthView{
 		ConfigDistributionEnabled: enabled,
 		ConfigSource:              configSource,
 		ConfigLastError:           configLastError,
 		SignedIn:                  signedIn,
+		LastAppliedID:             lastAppliedID,
+		LastAppliedAt:             lastAppliedAt,
+		FleetRulesActive:          len(rules) > 0 || mcpActive,
+		FleetCedarRules:           rules,
+		MCPAllowlistActive:        mcpActive,
 	}, nil
 }
 
@@ -1900,23 +1932,31 @@ func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.
 	// config_pull.go's "len(applyErrs) == 0" success check goes false,
 	// lastAppliedID does not advance, and the bundle is re-attempted on
 	// the next poll instead of being reported as enforced.
-	if len(b.CedarDelta) > 0 {
+	//
+	// fleet-policy push-down (2026-10-31, contract #1): cedar_delta is the
+	// org's FULL rule snapshot and is applied on EVERY bundle — an absent /
+	// null section clears every fleet-installed rule (ApplyCedarDelta →
+	// Engine.ReplaceHarnessSnippets). A bundle with no cedar_delta and no
+	// engine wired has nothing to clear and is not an error.
+	{
 		a.state.mu.RLock()
 		engine := a.state.cedarEngine
 		a.state.mu.RUnlock()
-		if engine != nil {
+		switch {
+		case engine != nil:
 			if err := fleet.ApplyCedarDelta(ctx, engine, b.CedarDelta); err != nil {
 				errs = append(errs, err)
 			}
-		} else {
+		case len(b.CedarDelta) > 0:
 			errs = append(errs, fmt.Errorf("fleet/config: cedar_delta present but no Cedar engine wired (SetCedarEngine never called)"))
 		}
 	}
 
-	// MCP allow-list.
-	if b.MCPAllowlist != nil {
-		recipes.ApplyFleetAllowlist(b.MCPAllowlist)
-	}
+	// MCP allow-list — replace semantics on every bundle: null/absent
+	// removes the fleet restriction, [] blocks all, a list replaces. In
+	// served mode it intersects the sealed profile whitelist (it can narrow,
+	// never widen — core/mcp/recipes/allowlist.go).
+	recipes.ApplyFleetAllowlist(b.MCPAllowlist)
 
 	// Model prefs.
 	//

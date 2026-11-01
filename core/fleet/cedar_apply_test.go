@@ -3,6 +3,9 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 
 	gocedar "github.com/cedar-policy/cedar-go"
@@ -158,23 +161,221 @@ func TestApplyCedarDelta_NilRaw(t *testing.T) {
 	}
 }
 
-// TestTeamRuleIDFromPolicyID verifies the prefix extraction helper.
-func TestTeamRuleIDFromPolicyID(t *testing.T) {
-	tests := []struct {
-		id      string
-		wantID  string
-		wantOK  bool
-	}{
-		{"fleet-team/rule-001", "rule-001", true},
-		{"fleet-team/", "", false},   // prefix only, no id
-		{"harness-self/foo", "", false},
-		{"fleet-team/r", "r", true},
+// ── Snapshot-replace (fleet-policy push-down, contract #1) ──────────────────
+
+const (
+	permitAllCedar   = `permit(principal, action, resource);`
+	forbidGithubTool = `forbid(principal, action == Action::"use_tool", resource == Tool::"github__search");`
+)
+
+// baseEngine is an engine whose base set permits everything, so a fleet
+// forbid is observable as Allow → Deny.
+func baseEngine(t *testing.T) *cedarpolicy.Engine {
+	t.Helper()
+	e := newTestEngine(t)
+	if err := e.SetPolicyText("base.cedar", []byte(permitAllCedar)); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range tests {
-		id, ok := TeamRuleIDFromPolicyID(gocedar.PolicyID(tc.id))
-		if ok != tc.wantOK || id != tc.wantID {
-			t.Errorf("TeamRuleIDFromPolicyID(%q) = (%q, %v), want (%q, %v)",
-				tc.id, id, ok, tc.wantID, tc.wantOK)
+	return e
+}
+
+func githubOutcome(e *cedarpolicy.Engine) cedarpolicy.Outcome {
+	return e.Evaluate(context.Background(), gocedar.EntityUID{}, cedarpolicy.ActionUseTool,
+		cedarpolicy.ToolUID("github", "search"), nil).Outcome
+}
+
+func applyRaw(t *testing.T, e *cedarpolicy.Engine, raw string) error {
+	t.Helper()
+	var rm json.RawMessage
+	if raw != "" {
+		rm = json.RawMessage(raw)
+	}
+	return ApplyCedarDelta(context.Background(), e, rm)
+}
+
+func deltaJSON(t *testing.T, rules map[string]string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"rules": rules, "published_at": "2026-10-31T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestApplyCedarDelta_SnapshotReplace(t *testing.T) {
+	e := baseEngine(t)
+	if got := githubOutcome(e); got != cedarpolicy.Allow {
+		t.Fatalf("baseline = %v, want allow", got)
+	}
+
+	// Publish a forbid → Deny.
+	if err := applyRaw(t, e, deltaJSON(t, map[string]string{"r1": forbidGithubTool})); err != nil {
+		t.Fatal(err)
+	}
+	if got := githubOutcome(e); got != cedarpolicy.Deny {
+		t.Fatalf("after forbid publish = %v, want deny", got)
+	}
+	if got := ActiveFleetCedarRules(e); len(got) != 1 || got[0] != "r1" {
+		t.Fatalf("ActiveFleetCedarRules = %v", got)
+	}
+
+	// Republish WITHOUT it (new key, as Fleet does on every publish) → Allow.
+	if err := applyRaw(t, e, deltaJSON(t, map[string]string{"r2": `permit(principal, action == Action::"use_tool", resource);`})); err != nil {
+		t.Fatal(err)
+	}
+	if got := githubOutcome(e); got != cedarpolicy.Allow {
+		t.Fatalf("after republish without forbid = %v, want allow (rule removed in Fleet still enforced)", got)
+	}
+	if got := ActiveFleetCedarRules(e); len(got) != 1 || got[0] != "r2" {
+		t.Fatalf("ActiveFleetCedarRules after republish = %v, want [r2]", got)
+	}
+
+	// Re-add, then clear via absent cedar_delta → Allow, no fleet rules.
+	if err := applyRaw(t, e, deltaJSON(t, map[string]string{"r3": forbidGithubTool})); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRaw(t, e, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := githubOutcome(e); got != cedarpolicy.Allow {
+		t.Fatalf("after clear = %v, want allow", got)
+	}
+	if got := ActiveFleetCedarRules(e); len(got) != 0 {
+		t.Fatalf("fleet rules after clear = %v", got)
+	}
+	for _, f := range e.ListPolicies() {
+		if strings.HasPrefix(f.Name, "fleet-team/") {
+			t.Errorf("listing still shows %s after clear", f.Name)
 		}
 	}
+
+	// JSON null clears too.
+	if err := applyRaw(t, e, deltaJSON(t, map[string]string{"r4": forbidGithubTool})); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRaw(t, e, "null"); err != nil {
+		t.Fatal(err)
+	}
+	if got := githubOutcome(e); got != cedarpolicy.Allow {
+		t.Fatalf("after null delta = %v, want allow", got)
+	}
+}
+
+// A rule that shrinks under the SAME key (fewer statements) must not leave
+// stale #n policies behind.
+func TestApplyCedarDelta_ShrunkRuleSameKey(t *testing.T) {
+	e := baseEngine(t)
+	two := forbidGithubTool + "\n" + `forbid(principal, action == Action::"use_tool", resource == Tool::"slack__post");`
+	if err := applyRaw(t, e, deltaJSON(t, map[string]string{"r": two})); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRaw(t, e, deltaJSON(t, map[string]string{"r": `permit(principal, action, resource);`})); err != nil {
+		t.Fatal(err)
+	}
+	if got := githubOutcome(e); got != cedarpolicy.Allow {
+		t.Fatalf("shrunk rule left a stale forbid: %v", got)
+	}
+}
+
+func TestApplyCedarDelta_BadDeltaKeepsPreviousRules(t *testing.T) {
+	e := baseEngine(t)
+	if err := applyRaw(t, e, deltaJSON(t, map[string]string{"r1": forbidGithubTool})); err != nil {
+		t.Fatal(err)
+	}
+	// One valid + one unparseable rule: whole apply refused.
+	bad := deltaJSON(t, map[string]string{"ok": permitAllCedar, "bad": `permit(principal, action`})
+	if err := applyRaw(t, e, bad); err == nil {
+		t.Fatal("unparseable delta: want error")
+	}
+	if got := githubOutcome(e); got != cedarpolicy.Deny {
+		t.Fatalf("after bad delta = %v, want deny (previous rule must stay enforced)", got)
+	}
+	if got := ActiveFleetCedarRules(e); len(got) != 1 || got[0] != "r1" {
+		t.Fatalf("fleet rules after bad delta = %v, want [r1]", got)
+	}
+	// Undecodable JSON: same.
+	if err := applyRaw(t, e, `{"rules": 7}`); err == nil {
+		t.Fatal("undecodable delta: want error")
+	}
+	if got := githubOutcome(e); got != cedarpolicy.Deny {
+		t.Fatalf("after undecodable delta = %v, want deny", got)
+	}
+}
+
+// Regression (coordinator addendum 2026-10-31): prod Fleet emits
+// {"rule_text": ..., "published_at": ...} with no "rules" map. Before the
+// fix that decoded to zero rules → no-op → ACKed applied while nothing was
+// enforced. The harness now applies rule_text as the single rule.
+func TestApplyCedarDelta_LegacyRuleTextOnly(t *testing.T) {
+	e := baseEngine(t)
+	raw, _ := json.Marshal(map[string]string{"rule_text": forbidGithubTool, "published_at": "2026-10-31T00:00:00Z"})
+	if err := applyRaw(t, e, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if got := githubOutcome(e); got != cedarpolicy.Deny {
+		t.Fatalf("rule_text-only delta not enforced: %v", got)
+	}
+	// rules wins over rule_text when both are present.
+	both, _ := json.Marshal(map[string]any{"rules": map[string]string{"k": permitAllCedar}, "rule_text": forbidGithubTool})
+	if err := applyRaw(t, e, string(both)); err != nil {
+		t.Fatal(err)
+	}
+	if got := githubOutcome(e); got != cedarpolicy.Allow {
+		t.Fatalf("rule_text must be ignored when rules is present: %v", got)
+	}
+	// An unparseable rule_text is an apply error, not a silent success.
+	badLegacy, _ := json.Marshal(map[string]string{"rule_text": "permit(principal"})
+	if err := applyRaw(t, e, string(badLegacy)); err == nil {
+		t.Fatal("unparseable rule_text: want error")
+	}
+}
+
+// Fleet snapshot replace must not disturb other harness-self snippets.
+func TestApplyCedarDelta_LeavesOtherSnippets(t *testing.T) {
+	e := baseEngine(t)
+	if err := e.LoadHarnessSnippets(map[string][]byte{"harness_write_forbid.cedar": []byte(forbidGithubTool)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRaw(t, e, deltaJSON(t, map[string]string{"r": permitAllCedar})); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRaw(t, e, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := githubOutcome(e); got != cedarpolicy.Deny {
+		t.Fatalf("clearing fleet rules removed a non-fleet snippet: %v", got)
+	}
+}
+
+// Race: applies swap the set while Evaluate runs (go test -race).
+func TestApplyCedarDelta_ConcurrentEvaluate(t *testing.T) {
+	e := baseEngine(t)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = githubOutcome(e)
+				}
+			}
+		}()
+	}
+	for i := 0; i < 50; i++ {
+		rules := map[string]string{fmt.Sprintf("r%d", i): forbidGithubTool}
+		if i%2 == 1 {
+			rules = nil
+		}
+		if err := applyRaw(t, e, deltaJSON(t, rules)); err != nil {
+			t.Fatal(err)
+		}
+		_ = e.LoadHarnessSnippets(map[string][]byte{"other.cedar": []byte(permitAllCedar)})
+	}
+	close(stop)
+	wg.Wait()
 }

@@ -51,6 +51,27 @@ describe('FleetHealthChip', () => {
     expect(chip.attributes('title')).toContain('bundle signed with an unknown key');
   });
 
+  it('names the applied bundle and the fleet rules in force (fleet-policy push-down)', async () => {
+    const w = await mountChip({
+      configSource: 'fleet',
+      lastAppliedId: 42,
+      lastAppliedAt: '2026-10-31T12:00:00Z',
+      fleetRulesActive: true,
+      fleetCedarRules: ['r1'],
+      mcpAllowlistActive: true,
+    });
+    const title = w.find('[data-testid="fleet-health-chip"]').attributes('title');
+    expect(title).toContain('Bundle #42 applied at 2026-10-31T12:00:00Z.');
+    expect(title).toContain('In force: 1 fleet Cedar rule, fleet MCP allow-list.');
+  });
+
+  it('says when a bundle is applied but no fleet rules are in force', async () => {
+    const w = await mountChip({ lastAppliedId: 7, fleetRulesActive: false, fleetCedarRules: [] });
+    expect(w.find('[data-testid="fleet-health-chip"]').attributes('title')).toContain(
+      'No fleet rules in force.',
+    );
+  });
+
   it('keeps the healthy fleet state green', async () => {
     const w = await mountChip({ configSource: 'fleet' });
     const chip = w.find('[data-testid="fleet-health-chip"]');

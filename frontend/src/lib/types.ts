@@ -5182,6 +5182,13 @@ export interface FleetConfigPullStatusView {
   bundleChecksum: string;
   /** true when a fleet signing key is injected in this binary (FR-002). */
   configDistributionEnabled: boolean;
+  /** true when fleet Cedar rules or a fleet MCP allow-list restriction are in
+   *  force (fleet-policy push-down). Optional: older backends omit it. */
+  fleetRulesActive?: boolean;
+  /** team_rule_ids of the fleet Cedar rules in force (ids only, no rule text). */
+  fleetCedarRules?: string[];
+  /** true when a fleet MCP allow-list restriction is in force. */
+  mcpAllowlistActive?: boolean;
 }
 
 /**
@@ -5200,6 +5207,17 @@ export interface FleetHealthView {
   configLastError: string;
   /** true when the client has a valid (non-expired) session. */
   signedIn: boolean;
+  /** bundle_id in force, 0 if none (fleet-policy push-down). */
+  lastAppliedId?: number;
+  /** RFC3339 time the bundle in force was (re-)applied, "" if never. */
+  lastAppliedAt?: string;
+  /** true when fleet Cedar rules or a fleet MCP allow-list restriction are in
+   *  force (fleet-policy push-down). Optional: older backends omit it. */
+  fleetRulesActive?: boolean;
+  /** team_rule_ids of the fleet Cedar rules in force (ids only, no rule text). */
+  fleetCedarRules?: string[];
+  /** true when a fleet MCP allow-list restriction is in force. */
+  mcpAllowlistActive?: boolean;
 }
 
 /**

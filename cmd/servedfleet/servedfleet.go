@@ -25,6 +25,11 @@ func Start(ctx context.Context, api *rpc.API, cfg authbroker.Config, session *au
 	// The guest has no OS keychain and renewal is host-owned; no refresh
 	// token crosses the boundary.
 	fleet.SetExternalTokenSource(session.AccessToken)
+	// The config poller started inside rpc.New, before this source existed,
+	// so its first poll found no session. Wake it whenever the broker hands
+	// us a token, so fleet policy applies right after boot / sign-in rather
+	// than on the next 5-minute tick (fleet-policy push-down #4).
+	go wakeOnToken(ctx, session.Subscribe(), session.AccessToken)
 
 	st := api.Settings()
 	// A 401 from Fleet's OTLP receiver nudges an immediate broker renewal.
@@ -44,6 +49,21 @@ func Start(ctx context.Context, api *rpc.API, cfg authbroker.Config, session *au
 
 // identityKey is the account the current token asserts. A renewal keeps it
 // stable; a different subject, org or issuer changes it.
+// wakeOnToken calls fleet.NotifyTokensAvailable for every auth change that
+// leaves a token in place. A poller already signed in ignores it.
+func wakeOnToken(ctx context.Context, changes <-chan struct{}, token func() string) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-changes:
+			if token() != "" {
+				fleet.NotifyTokensAvailable()
+			}
+		}
+	}
+}
+
 func identityKey() string { return fleet.TokenIdentityKey() }
 
 // enrollSettings is the slice of the settings API the enroll step needs.

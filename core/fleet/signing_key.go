@@ -52,6 +52,75 @@ var fleetSigningPublicKeys string
 // fleetSigningPublicKeys.
 var fleetSigningPublicKeyBytes string
 
+// fleetSigningPublicKeysByEnv pins one key set PER fleet environment, so a
+// single image (the in-VM served harness, baked once for every env) can
+// carry every env's public key while trusting only the set for the env it
+// boots into. Format (fleet-policy push-down contract #4):
+//
+//	-X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeysByEnv=dev=<hex>[,<hex>];stage=<hex>;prod=<hex>
+//
+// Groups are ';'-separated "<env>=<comma-separated pin list>"; each pin list
+// follows the fleetSigningPublicKeys rules. The active env is the one
+// ResolveProfile resolves from KENAZ_HARNESS_ENV (unset → prod; an
+// unrecognised value resolves to prod, exactly as the fleet base URL does,
+// so the pinned key always matches the server being talked to).
+//
+// Precedence: when this var is non-empty it is AUTHORITATIVE — the legacy
+// single-set vars are ignored, and an env with no entry gets NO keys
+// (ErrSigningKeyNotConfigured: fail closed). A malformed value (unknown env
+// name, duplicate env, bad pin) rejects the whole var, also fail closed.
+var fleetSigningPublicKeysByEnv string
+
+// parseSigningKeysByEnv parses fleetSigningPublicKeysByEnv into env → pin
+// list source. Errors wrap ErrSigningKeyNotConfigured.
+func parseSigningKeysByEnv(s string) (map[string][]ed25519.PublicKey, error) {
+	out := map[string][]ed25519.PublicKey{}
+	for i, group := range strings.Split(s, ";") {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		eq := strings.IndexByte(group, '=')
+		if eq <= 0 {
+			return nil, fmt.Errorf("%w: per-env pin group #%d %q is not <env>=<keys> — the whole per-env pin set is rejected",
+				ErrSigningKeyNotConfigured, i+1, group)
+		}
+		env := strings.ToLower(strings.TrimSpace(group[:eq]))
+		switch env {
+		case EnvDev, EnvStage, EnvProd, EnvLocal:
+		default:
+			return nil, fmt.Errorf("%w: per-env pin group #%d names unknown env %q — the whole per-env pin set is rejected",
+				ErrSigningKeyNotConfigured, i+1, env)
+		}
+		if _, dup := out[env]; dup {
+			return nil, fmt.Errorf("%w: per-env pin set names env %q twice — the whole per-env pin set is rejected",
+				ErrSigningKeyNotConfigured, env)
+		}
+		keys, err := parseSigningKeySet(group[eq+1:])
+		if err != nil {
+			return nil, fmt.Errorf("per-env pin group %q: %w", env, err)
+		}
+		out[env] = keys
+	}
+	return out, nil
+}
+
+// activeFleetEnv is the env the per-env pin set is selected by.
+func activeFleetEnv() string { return ResolveProfile().Name }
+
+// resolveSigningKeys returns the accept-set for this process plus the parse
+// error (nil for a well-formed, possibly empty, configuration).
+func resolveSigningKeys() ([]ed25519.PublicKey, error) {
+	if strings.TrimSpace(fleetSigningPublicKeysByEnv) != "" {
+		byEnv, err := parseSigningKeysByEnv(fleetSigningPublicKeysByEnv)
+		if err != nil {
+			return nil, err
+		}
+		return byEnv[activeFleetEnv()], nil
+	}
+	return parseSigningKeySet(signingKeySetSource())
+}
+
 // SigningKeyID returns the bundle key_id for a raw 32-byte ed25519 public key:
 // lowercase hex of the first 8 bytes of SHA-256(rawPublicKey) — 16 chars.
 // This is the cross-repo wire contract shared with kenaz-fleet
@@ -113,7 +182,7 @@ func parseSigningKeySet(s string) ([]ed25519.PublicKey, error) {
 // assertion in main.go so a malformed pin is a loud ERROR, not the quiet
 // "no key" WARN a deliberately unkeyed build gets.
 func FleetSigningKeySetError() error {
-	_, err := parseSigningKeySet(signingKeySetSource())
+	_, err := resolveSigningKeys()
 	return err
 }
 
@@ -131,12 +200,13 @@ func FleetSigningKey() ed25519.PublicKey {
 }
 
 // FleetSigningKeys returns every pinned ed25519 public key (the accept-set
-// used by VerifyWithKeySet). Returns nil when no key has been injected
+// used by VerifyWithKeySet) — from fleetSigningPublicKeysByEnv for the
+// active env when that var is set, else the single-set vars. Returns nil when no key has been injected
 // (dev/CI build) OR when the pin list is malformed — a malformed set is
 // rejected whole (fail-closed: config distribution is disabled), and
 // FleetSigningKeySetError says why.
 func FleetSigningKeys() []ed25519.PublicKey {
-	keys, err := parseSigningKeySet(signingKeySetSource())
+	keys, err := resolveSigningKeys()
 	if err != nil {
 		return nil
 	}
@@ -163,12 +233,14 @@ func SetSigningKeyForTesting(pubs ...ed25519.PublicKey) (restore func()) {
 	for _, pub := range pubs {
 		entries = append(entries, hex.EncodeToString(pub))
 	}
-	savedSet, savedLegacy := fleetSigningPublicKeys, fleetSigningPublicKeyBytes
+	savedSet, savedLegacy, savedByEnv := fleetSigningPublicKeys, fleetSigningPublicKeyBytes, fleetSigningPublicKeysByEnv
 	fleetSigningPublicKeys = strings.Join(entries, ",")
 	fleetSigningPublicKeyBytes = ""
+	fleetSigningPublicKeysByEnv = ""
 	return func() {
 		fleetSigningPublicKeys = savedSet
 		fleetSigningPublicKeyBytes = savedLegacy
+		fleetSigningPublicKeysByEnv = savedByEnv
 	}
 }
 

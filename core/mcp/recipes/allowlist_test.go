@@ -99,33 +99,47 @@ func TestGlobalAllowlist_ApplyFleetAllowlist(t *testing.T) {
 	}
 }
 
-// TestApplyServedAllowlist_SealsAgainstFleetWrites verifies the spec 091
-// FR-004 sole-writer rule: once the served (profile-derived) allow-list is
-// installed, a fleet-poller write must NOT replace it — never a silent
-// last-writer-wins on the process-global security singleton.
-func TestApplyServedAllowlist_SealsAgainstFleetWrites(t *testing.T) {
+// TestApplyServedAllowlist_FleetCanNarrowNeverWiden verifies the two-layer
+// composition (fleet-policy push-down): once the served (profile-derived)
+// allow-list is installed, a fleet write can NARROW it (intersection) but
+// never widen it, and clearing the fleet layer restores exactly the
+// profile whitelist — never a silent last-writer-wins on the singleton.
+func TestApplyServedAllowlist_FleetCanNarrowNeverWiden(t *testing.T) {
 	t.Cleanup(func() { globalAllowlist = AllowlistFilter{} })
 
-	ApplyServedAllowlist([]string{"datadog"})
+	ApplyServedAllowlist([]string{"datadog", "github"})
 	if !AllowlistSealed() {
 		t.Fatal("AllowlistSealed() = false after ApplyServedAllowlist")
 	}
-	if !IsAllowed("datadog") || IsAllowed("slack") {
+	if !IsAllowed("datadog") || !IsAllowed("github") || IsAllowed("slack") {
 		t.Fatal("served allow-list not in force")
 	}
 
-	// A fleet write must be ignored in every direction: widening,
-	// narrowing, and clearing.
-	ApplyFleetAllowlist([]string{"slack"})
+	// Widening attempt: slack is not in the profile.
+	ApplyFleetAllowlist([]string{"slack", "github"})
 	if IsAllowed("slack") {
 		t.Error("fleet write widened a sealed allow-list")
 	}
-	ApplyFleetAllowlist(nil)
-	if IsAllowed("slack") {
-		t.Error("fleet nil write cleared a sealed allow-list")
+	if !IsAllowed("github") {
+		t.Error("id in both layers must be allowed")
 	}
-	if !IsAllowed("datadog") {
-		t.Error("sealed allow-list lost its own entries")
+	if IsAllowed("datadog") {
+		t.Error("fleet layer did not narrow the served list")
+	}
+
+	// Block-all from fleet.
+	ApplyFleetAllowlist([]string{})
+	if IsAllowed("github") || IsAllowed("datadog") {
+		t.Error("fleet [] must block all")
+	}
+
+	// Clearing the fleet layer restores the profile whitelist only.
+	ApplyFleetAllowlist(nil)
+	if !IsAllowed("datadog") || !IsAllowed("github") {
+		t.Error("fleet nil did not remove the fleet restriction")
+	}
+	if IsAllowed("slack") {
+		t.Error("fleet nil write cleared the sealed served allow-list")
 	}
 }
 

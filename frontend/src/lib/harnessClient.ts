@@ -5788,12 +5788,16 @@ export function createServedHarnessClient(opts?: {
         transport.call<PermissionRequest[]>('Permissions_ListPending'),
     },
 
-    // Settings_FleetSession — the only settings method core/serve answers
-    // (fleet-session-truth-01DOGF0A FR-1). Everything else under settings
-    // stays an honest ServedUnsupportedError.
+    // Settings_FleetSession (fleet-session-truth-01DOGF0A FR-1) plus the two
+    // read-only config-poller snapshots (fleet-policy push-down), so the
+    // in-VM FleetHealthChip shows the applied fleet policy. Everything else
+    // under settings stays an honest ServedUnsupportedError.
     settings: {
       ...base.settings,
       fleetSession: () => transport.call<FleetSessionView>('Settings_FleetSession'),
+      fleetConfigPullStatus: () =>
+        transport.call<FleetConfigPullStatusView>('Settings_FleetConfigPullStatus'),
+      fleetHealth: () => transport.call<FleetHealthView>('Settings_FleetHealth'),
     },
 
     // Fleet telemetry consent + status: the workbench is where everyday work

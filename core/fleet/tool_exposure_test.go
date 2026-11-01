@@ -294,10 +294,12 @@ type pinsApplier struct {
 	n    int
 }
 
-func (a *pinsApplier) ApplyBundle(_ context.Context, b *Bundle) []error {
-	a.mu.Lock()
-	a.n++
-	a.mu.Unlock()
+func (a *pinsApplier) ApplyBundle(ctx context.Context, b *Bundle) []error {
+	if !IsCacheRestore(ctx) { // count fetched-bundle applies only
+		a.mu.Lock()
+		a.n++
+		a.mu.Unlock()
+	}
 	if _, err := a.pins.Apply(b.BundleID, b.ToolExposure); err != nil {
 		return []error{err}
 	}

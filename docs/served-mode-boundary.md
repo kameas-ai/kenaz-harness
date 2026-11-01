@@ -313,7 +313,7 @@ harness rendered that button — over a `Catalog_Publish` served mode refuses.
 
 So `lib/featureFlags.ts` now closes `signedIn` and `capability()` outright
 when `isServedMode()` is true. No fleet CAPABILITY method is in the
-`servedMethods` allowlist (55 entries; 39 as of served-mode-is-a-real-mode-01PMZ707
+`servedMethods` allowlist (57 entries; 39 as of served-mode-is-a-real-mode-01PMZ707
 WP08, up from the 33 this line originally cited — this count moves every
 time a method is ported; `TestServedMethodsCountMatchesDoc`,
 `core/serve/wp08_served_count_test.go`, fails and names both citations to
@@ -324,7 +324,12 @@ capability-gated features: without them a workbench could never leave consent
 `none`. `Settings_FleetSession` (fleet-session-truth-01DOGF0A) is a read-only
 snapshot of the fleet session so served surfaces can render the truth instead
 of the "signed out" an unsupported-method error collapses to; it opens no
-capability gate (the fence below still closes `signedIn` / `capability()`). They do not depend on `signedIn` / `capability()`, so no fleet gate can legitimately open in
+capability gate (the fence below still closes `signedIn` / `capability()`).
+`Settings_FleetConfigPullStatus` and `Settings_FleetHealth` (fleet-policy
+push-down, 2026-10-31) are likewise read-only snapshots: which signed bundle
+is applied, when, the last error, and whether fleet Cedar rules / an MCP
+allow-list restriction are in force — so the in-VM fleet chip can show the
+applied org policy. Rule ids only, never rule text. They do not depend on `signedIn` / `capability()`, so no fleet gate can legitimately open in
 served mode, and the fence needs no per-surface knowledge. Its scope is
 also narrower than "everything": it closes exactly `signedIn` and
 `capability()`, both FLEET gates — every finding this doc's own history

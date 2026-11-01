@@ -7919,6 +7919,9 @@ export namespace settings {
 	    source: string;
 	    bundleChecksum: string;
 	    configDistributionEnabled: boolean;
+	    fleetRulesActive: boolean;
+	    fleetCedarRules: string[];
+	    mcpAllowlistActive: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new FleetConfigPullStatusView(source);
@@ -7932,6 +7935,9 @@ export namespace settings {
 	        this.source = source["source"];
 	        this.bundleChecksum = source["bundleChecksum"];
 	        this.configDistributionEnabled = source["configDistributionEnabled"];
+	        this.fleetRulesActive = source["fleetRulesActive"];
+	        this.fleetCedarRules = source["fleetCedarRules"];
+	        this.mcpAllowlistActive = source["mcpAllowlistActive"];
 	    }
 	}
 	export class FleetDeviceKeysView {
@@ -7955,6 +7961,11 @@ export namespace settings {
 	    configSource: string;
 	    configLastError: string;
 	    signedIn: boolean;
+	    lastAppliedId: number;
+	    lastAppliedAt: string;
+	    fleetRulesActive: boolean;
+	    fleetCedarRules: string[];
+	    mcpAllowlistActive: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new FleetHealthView(source);
@@ -7966,6 +7977,11 @@ export namespace settings {
 	        this.configSource = source["configSource"];
 	        this.configLastError = source["configLastError"];
 	        this.signedIn = source["signedIn"];
+	        this.lastAppliedId = source["lastAppliedId"];
+	        this.lastAppliedAt = source["lastAppliedAt"];
+	        this.fleetRulesActive = source["fleetRulesActive"];
+	        this.fleetCedarRules = source["fleetCedarRules"];
+	        this.mcpAllowlistActive = source["mcpAllowlistActive"];
 	    }
 	}
 	export class FleetIdentity {

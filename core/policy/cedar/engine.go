@@ -845,17 +845,25 @@ func populateFamilyContext(
 	return out
 }
 
-// LoadHarnessSnippets ingests the three default harness-self Cedar
-// policy snippets into the engine's active PolicySet. Called at boot so
-// the harness_read_default / harness_write_onboarding /
-// harness_write_forbid policies are active without any on-disk file.
+// LoadHarnessSnippets ingests named Cedar policy snippets (the default
+// harness-self policies, the graph-authoring set, ...) into the engine's
+// active PolicySet. Called at boot so the harness_read_default /
+// harness_write_onboarding / harness_write_forbid policies are active
+// without any on-disk file.
 //
 // snippets is a map of virtual filename → Cedar source. Each snippet is
 // added under a deterministic synthetic PolicyID "harness-self/<filename>#<n>"
 // so later Reload calls can coexist without stomping the harness entries.
 //
-// The function is additive and serialised under reloadMu. Calling it
-// more than once replaces the previously installed harness-self entries.
+// Copy-on-write: the new PolicySet is built from a clone of the active one
+// and swapped in atomically, so a concurrent Evaluate never reads a set
+// that is being mutated. Re-loading a snippet name replaces every policy
+// that name installed before (a shrunk snippet leaves no stale #n entry).
+// Snippets of OTHER names are untouched — for a source that must be
+// replaced as a whole set, use ReplaceHarnessSnippets.
+//
+// On a parse error the snippets applied before the failing one (in map
+// order) stay installed, as before; the error is returned.
 //
 // WP06: harness-self-mcp-onboarding-01KQ8TDU
 func (e *Engine) LoadHarnessSnippets(snippets map[string][]byte) error {
@@ -865,31 +873,160 @@ func (e *Engine) LoadHarnessSnippets(snippets map[string][]byte) error {
 	e.reloadMu.Lock()
 	defer e.reloadMu.Unlock()
 
-	// Start from the currently active PolicySet and extend it.
-	current := e.policies.Load()
-	if current == nil {
-		current = cedar.NewPolicySet()
+	drop := make(map[string]bool, len(snippets))
+	for name := range snippets {
+		drop[name] = true
 	}
-	ps := current
+	ps := clonePolicySetWithout(e.policies.Load(), func(id cedar.PolicyID) bool {
+		name, ok := snippetNameOf(id)
+		return ok && drop[name]
+	})
 
 	e.filesMu.Lock()
 	files, applied, err := applySnippets(ps, e.files, snippets)
 	e.files = files
 	e.filesMu.Unlock()
-	// Retain exactly what was applied (on error, the snippets applied
-	// before the failing one stay installed, as before) so Reload
-	// re-applies the same set — graph-fs-gate-01GFSG01 WP04.
+	// Retain exactly what was applied so Reload re-applies the same set —
+	// graph-fs-gate-01GFSG01 WP04.
 	if e.snippets == nil {
 		e.snippets = make(map[string][]byte, len(snippets))
 	}
 	for _, name := range applied {
 		e.snippets[name] = snippets[name]
 	}
-	if err != nil {
-		return err
+	if len(applied) > 0 {
+		e.policies.Store(ps)
 	}
+	return err
+}
+
+// ReplaceHarnessSnippets atomically replaces EVERY retained snippet whose
+// name starts with prefix by snippets (fleet-policy push-down: the fleet
+// bundle's cedar_delta is a full snapshot, so a rule removed in Fleet must
+// stop being enforced on the next apply, not at the next restart).
+//
+// Every name in snippets must start with prefix. All snippets are parsed
+// before anything changes: on any parse error (or a name outside prefix)
+// nothing is installed and the previously-installed prefix set stays in
+// force. An empty / nil snippets map removes every prefix snippet.
+//
+// The new PolicySet is built from a clone of the active one minus the old
+// prefix policies, plus the new ones, and swapped in with one atomic store.
+func (e *Engine) ReplaceHarnessSnippets(prefix string, snippets map[string][]byte) error {
+	if prefix == "" {
+		return errors.New("cedar: ReplaceHarnessSnippets requires a non-empty prefix")
+	}
+	parsed := make(map[string]*cedar.PolicySet, len(snippets))
+	for name, body := range snippets {
+		if !strings.HasPrefix(name, prefix) {
+			return fmt.Errorf("cedar: ReplaceHarnessSnippets: snippet %q outside prefix %q", name, prefix)
+		}
+		fileSet, err := cedar.NewPolicySetFromBytes(name, body)
+		if err != nil {
+			return fmt.Errorf("cedar: ReplaceHarnessSnippets parse %s: %w", name, err)
+		}
+		parsed[name] = fileSet
+	}
+
+	e.reloadMu.Lock()
+	defer e.reloadMu.Unlock()
+
+	ps := clonePolicySetWithout(e.policies.Load(), func(id cedar.PolicyID) bool {
+		name, ok := snippetNameOf(id)
+		return ok && strings.HasPrefix(name, prefix)
+	})
+	names := make([]string, 0, len(parsed))
+	for name := range parsed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		idx := 0
+		for _, p := range parsed[name].All() {
+			ps.Add(cedar.PolicyID(fmt.Sprintf("harness-self/%s#%d", name, idx)), p)
+			idx++
+		}
+	}
+
+	next := make(map[string][]byte, len(e.snippets)+len(snippets))
+	for name, body := range e.snippets {
+		if !strings.HasPrefix(name, prefix) {
+			next[name] = body
+		}
+	}
+	for name, body := range snippets {
+		next[name] = body
+	}
+	e.snippets = next
+
+	e.filesMu.Lock()
+	kept := make([]PolicyFile, 0, len(e.files)+len(names))
+	for _, f := range e.files {
+		if f.Embedded && strings.HasPrefix(f.Name, prefix) {
+			continue
+		}
+		kept = append(kept, f)
+	}
+	for _, name := range names {
+		kept = listSnippet(kept, name, len(snippets[name]))
+	}
+	e.files = kept
+	e.filesMu.Unlock()
+
 	e.policies.Store(ps)
 	return nil
+}
+
+// HarnessSnippetNames returns the sorted names of the retained snippets
+// starting with prefix (status surfaces: "which fleet rules are active").
+func (e *Engine) HarnessSnippetNames(prefix string) []string {
+	e.reloadMu.Lock()
+	defer e.reloadMu.Unlock()
+	var out []string
+	for name := range e.snippets {
+		if strings.HasPrefix(name, prefix) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// clonePolicySetWithout returns a fresh PolicySet holding every policy of
+// src except those drop reports true for. src is never mutated.
+func clonePolicySetWithout(src *cedar.PolicySet, drop func(cedar.PolicyID) bool) *cedar.PolicySet {
+	ps := cedar.NewPolicySet()
+	if src == nil {
+		return ps
+	}
+	for id, p := range src.All() {
+		if drop(id) {
+			continue
+		}
+		ps.Add(id, p)
+	}
+	return ps
+}
+
+// snippetNameOf extracts <filename> from a "harness-self/<filename>#<n>"
+// PolicyID. The suffix after the LAST '#' must be the decimal index.
+func snippetNameOf(id cedar.PolicyID) (string, bool) {
+	const pfx = "harness-self/"
+	s := string(id)
+	if !strings.HasPrefix(s, pfx) {
+		return "", false
+	}
+	s = s[len(pfx):]
+	i := strings.LastIndexByte(s, '#')
+	if i <= 0 || i == len(s)-1 {
+		return "", false
+	}
+	for _, c := range s[i+1:] {
+		if c < '0' || c > '9' {
+			return "", false
+		}
+	}
+	return s[:i], true
 }
 
 // applySnippets adds each snippet's policies to ps under the
