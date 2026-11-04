@@ -55,6 +55,9 @@ type SyncStore interface {
 	// ApplyRemote applies one pull page in one save.
 	// Only rows scope owns are touched; new rows are stamped scope.Account.
 	ApplyRemote(ctx context.Context, recs []RemoteRecord, at time.Time, scope AccountScope) error
+	// ClaimPendingAccount gives the notes tokenKey wrote while unconfirmed to
+	// the account that token has now been confirmed as. Returns how many.
+	ClaimPendingAccount(ctx context.Context, tokenKey, account string) (int, error)
 	// LatestSyncedAt is the newest SyncedAt in the store — a reset epoch
 	// must sort strictly after it so the post-reset sweep can tell rows the
 	// snapshot touched from rows it did not.
@@ -396,6 +399,27 @@ func (s *chromemStore) ApplyRemote(ctx context.Context, recs []RemoteRecord, at 
 		s.chunks = append(s.chunks, in)
 	}
 	return s.saveLocked()
+}
+
+// ClaimPendingAccount implements SyncStore.
+func (s *chromemStore) ClaimPendingAccount(_ context.Context, tokenKey, account string) (int, error) {
+	if tokenKey == "" || account == "" {
+		return 0, nil
+	}
+	pending := PendingAccount(tokenKey)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for i := range s.chunks {
+		if s.chunks[i].Account == pending {
+			s.chunks[i].Account = account
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	return n, s.saveLocked()
 }
 
 // LatestSyncedAt implements SyncStore.

@@ -113,6 +113,23 @@ func (m *MemorySync) scope() memory.AccountScope {
 // sync off and an empty cursor. The first account ever seen keeps the state it
 // finds and becomes the legacy owner (D164). The caller holds cycleMu.
 func (m *MemorySync) ensureAccount() (memory.AccountScope, error) {
+	scope, err := m.recordAccount()
+	if err != nil {
+		return scope, err
+	}
+	// The token is confirmed, so its pending notes and forgets can say whose
+	// they are. A later token key for the same account (an org move, a new
+	// issuer) must not leave them owned by nobody. Failing here only delays it.
+	if _, err := m.cfg.Store.ClaimPendingAccount(context.Background(), scope.TokenKey, scope.Account); err != nil {
+		logging.L().Warn("fleet.memory_sync.claim_pending_failed", "err", err.Error())
+	}
+	if err := m.cfg.Outbox.ClaimPendingAccount(scope.TokenKey, scope.Account); err != nil {
+		logging.L().Warn("fleet.memory_sync.claim_pending_forgets_failed", "err", err.Error())
+	}
+	return scope, nil
+}
+
+func (m *MemorySync) recordAccount() (memory.AccountScope, error) {
 	id, ok := m.verifiedIdentity()
 	if !ok {
 		return memory.AccountScope{}, errNoAccount
@@ -120,8 +137,8 @@ func (m *MemorySync) ensureAccount() (memory.AccountScope, error) {
 	key := AccountKey(id)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.tokenKey = id.TokenKey
 	if m.st.Account == key {
+		m.tokenKey = id.TokenKey
 		return memory.AccountScope{Account: key, LegacyOwner: m.st.LegacyOwner, TokenKey: id.TokenKey}, nil
 	}
 	prev := m.st
@@ -147,6 +164,7 @@ func (m *MemorySync) ensureAccount() (memory.AccountScope, error) {
 		m.st = prev
 		return memory.AccountScope{}, err
 	}
+	m.tokenKey = id.TokenKey
 	m.settings, m.settingsAt = nil, m.now()
 	m.nextAttempt, m.failures = m.now(), 0
 	m.skipped = map[string]int64{}

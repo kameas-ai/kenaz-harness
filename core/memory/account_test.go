@@ -174,3 +174,39 @@ func TestAccount_OlderAliasFoldsIntoItsOwnersRow(t *testing.T) {
 		t.Fatalf("the owner's older alias must fold: %+v", all)
 	}
 }
+
+func TestAccount_ClaimPendingGivesNotesAndForgetsToTheConfirmedAccount(t *testing.T) {
+	ctx := context.Background()
+	account := PendingAccount("tb")
+	st := accountStore(t, &account)
+	if err := st.Add(ctx, Chunk{ID: "mine", ScopeKind: ScopeKindLongTerm, Content: "x", Embedding: []float32{1}}); err != nil {
+		t.Fatal(err)
+	}
+	account = PendingAccount("tc")
+	if err := st.Add(ctx, Chunk{ID: "theirs", ScopeKind: ScopeKindLongTerm, Content: "y", Embedding: []float32{1}}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.ClaimPendingAccount(ctx, "tb", "b"); err != nil || n != 1 {
+		t.Fatalf("claim: n=%d err=%v", n, err)
+	}
+	if got := get(t, st, "mine").Account; got != "b" {
+		t.Fatalf("mine = %q", got)
+	}
+	if got := get(t, st, "theirs").Account; got != PendingAccount("tc") {
+		t.Fatalf("another token's note = %q", got)
+	}
+	clock, _ := NewHLC("dev", "")
+	ob, err := OpenForgetOutbox("", clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ob.RecordDelete(Chunk{ID: "gone", Account: PendingAccount("tb"), SyncSentAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ob.ClaimPendingAccount("tb", "b"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ob.PendingFor(AccountScope{Account: "b"}); len(got) != 1 {
+		t.Fatalf("forget wasn't claimed: %+v", got)
+	}
+}

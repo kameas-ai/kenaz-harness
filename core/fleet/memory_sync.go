@@ -1450,15 +1450,21 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 		}
 	}
 	countOlder(func(kind string) bool { return slices.Contains(st.Scopes, kind) })
-	// Only once the panel can show them (it's hidden without the capability,
-	// unless the org is paused).
-	if current && (out.Entitled || out.OrgPaused) && (st.InheritedErase || st.InheritedOptOut) {
-		out.InheritedErase, out.InheritedOptOut = st.InheritedErase, st.InheritedOptOut
-		_ = m.update(func(s *memSyncState) {
-			if s.Account == st.Account {
-				s.InheritedErase, s.InheritedOptOut = false, false
-			}
-		})
+	// Only to the account they were recorded for, and only once the panel can
+	// show them: it's hidden without the capability, unless the org is paused.
+	// The opt-out line offers to turn sync back on, which a paused org can't.
+	if current && st.Account == st.LegacyOwner {
+		erase := st.InheritedErase && (out.Entitled || out.OrgPaused)
+		optOut := st.InheritedOptOut && out.Entitled && !out.OrgPaused
+		if erase || optOut {
+			out.InheritedErase, out.InheritedOptOut = erase, optOut
+			_ = m.update(func(s *memSyncState) {
+				if s.Account == st.Account {
+					s.InheritedErase = s.InheritedErase && !erase
+					s.InheritedOptOut = s.InheritedOptOut && !optOut
+				}
+			})
+		}
 	}
 	if !out.Entitled || !current || m.cfg.Client == nil || m.cfg.Client.IsNop() {
 		return out

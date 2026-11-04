@@ -141,6 +141,28 @@ func (o *ForgetOutbox) PendingFor(scope AccountScope) []ForgetOp {
 	return out
 }
 
+// ClaimPendingAccount gives the forgets queued for notes tokenKey wrote while
+// unconfirmed to the account that token has now been confirmed as.
+func (o *ForgetOutbox) ClaimPendingAccount(tokenKey, account string) error {
+	if o == nil || tokenKey == "" || account == "" {
+		return nil
+	}
+	pending := PendingAccount(tokenKey)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	changed := false
+	for i := range o.ops {
+		if o.ops[i].Account == pending {
+			o.ops[i].Account = account
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return o.saveLocked()
+}
+
 // Has reports whether a forget for id is queued — the puller must not
 // resurrect such an id from a pull page that predates the forget.
 func (o *ForgetOutbox) Has(id string) bool {

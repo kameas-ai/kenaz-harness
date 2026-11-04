@@ -633,3 +633,95 @@ func TestUpgrade_V0100_InheritedForgetAllIsNotRunForTheFirstAccount(t *testing.T
 		t.Fatal("running the erase again must reach Fleet")
 	}
 }
+
+// The reviewer's reproduction: A is recorded first, B opens Settings first. The
+// notices are A's. B must not see them, and A must still get them.
+func TestUpgrade_V0100_InheritedNoticesWaitForTheAccountTheyBelongTo(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	w.fleet.enabled = true
+	d := w.deviceAt("node-v0100", copyUpgradeProfile(t), 0)
+	if err := d.ms.update(func(s *memSyncState) {
+		s.Enabled, s.DisablePending, s.ForgetAllPending = false, true, true
+		s.Account, s.LegacyOwner = "", ""
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.signIn(accountA)
+	d.ms.RunOnce(ctx)
+
+	d.signIn(accountB)
+	d.ms.RunOnce(ctx)
+	if st := d.ms.Status(ctx); st.InheritedErase || st.InheritedOptOut {
+		t.Fatalf("B was shown A's notices: %+v", st)
+	}
+
+	d.signIn(accountA)
+	st := d.ms.Status(ctx)
+	if !st.InheritedErase || !st.InheritedOptOut {
+		t.Fatalf("A must still get the notices: %+v", st)
+	}
+}
+
+// The opt-out line offers to turn sync back on, which a paused org can't do. It
+// waits out the pause; the erase, which a paused org can do, doesn't.
+func TestUpgrade_V0100_InheritedOptOutWaitsOutAnOrgPause(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	w.fleet.enabled = true
+	d := w.deviceAt("node-v0100", copyUpgradeProfile(t), 0)
+	if err := d.ms.update(func(s *memSyncState) {
+		s.Enabled, s.DisablePending, s.ForgetAllPending = false, true, true
+		s.Account, s.LegacyOwner = "", ""
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.signIn(accountA)
+	d.ms.RunOnce(ctx)
+
+	entitled := d.caps
+	d.caps = &Capabilities{Paused: true, PausedCategory: "security", FetchedAt: time.Now()}
+	st := d.ms.Status(ctx)
+	if !st.OrgPaused || !st.InheritedErase || st.InheritedOptOut {
+		t.Fatalf("while paused: %+v", st)
+	}
+	d.caps = entitled
+	if st := d.ms.Status(ctx); st.InheritedErase || !st.InheritedOptOut {
+		t.Fatalf("after the pause: %+v", st)
+	}
+}
+
+// A note written before its token was confirmed belongs to that account for good,
+// even if the account's token key later changes, and its queued delete still goes.
+func TestAccountGuard_PendingNoteStaysOwnedAfterTheTokenKeyChanges(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountB)
+	d.enable()
+	d.sync()
+
+	saveTestTokens(t, "user-b-new-subject") // this token isn't confirmed yet
+	d.add("window", memory.ScopeKindLongTerm, "written before confirmation")
+	if got := accountChunk(t, d, "window").Account; got != memory.PendingAccount(TokenIdentityKey()) {
+		t.Fatalf("stamp = %q", got)
+	}
+	d.enrolled(accountB) // confirmed: the same account, under this token
+	d.sync()
+	if got := accountChunk(t, d, "window").Account; got != AccountKey(accountB) {
+		t.Fatalf("after confirmation = %q", got)
+	}
+	if !pushedIDs(w.fleet)["window"] {
+		t.Fatal("the note must upload once confirmed")
+	}
+
+	saveTestTokens(t, "user-b-third-subject") // the key changes again
+	d.enrolled(accountB)
+	if err := memory.RemoveForSync(ctx, d.store, d.outbox, "window"); err != nil {
+		t.Fatal(err)
+	}
+	d.sync()
+	if d.outbox.Has("window") {
+		t.Fatal("the delete must reach Fleet, not stay queued")
+	}
+}
