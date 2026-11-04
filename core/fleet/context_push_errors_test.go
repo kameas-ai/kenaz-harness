@@ -44,6 +44,23 @@ func TestContextPush_NoRejectedField_IsFullSuccess(t *testing.T) {
 	}
 }
 
+// Fleet #433 reports a member's classification change per item on a 200, not
+// as a 403 (docs/contract-context.md).
+func TestContextPush_ClassificationChangeRejected_ExplainsAdminOnly(t *testing.T) {
+	const n1 = "6b2f6f0e-1c1a-4a57-9a51-0d6b1a9e0004"
+	s := pushRig(t, 200, `{"accepted_nodes":0,"accepted_edges":0,"conflicts":[],"rejected":[{"id":"`+n1+`","kind":"node","reason":"classification_change_requires_admin"}]}`)
+	res, err := s.PushEntry(context.Background(), teamEntry(n1), nil)
+	if res != nil || !errors.Is(err, ErrContextPushRejected) {
+		t.Fatalf("res=%+v err=%v, want ErrContextPushRejected", res, err)
+	}
+	if !strings.Contains(err.Error(), "an org admin has changed who can see this entry") {
+		t.Errorf("error copy %q should explain the admin change, not show the raw code", err.Error())
+	}
+	if strings.Contains(err.Error(), "classification_change_requires_admin") {
+		t.Errorf("error copy %q shows the raw code", err.Error())
+	}
+}
+
 func TestContextPush_OwnNodeRejected_IsFailure(t *testing.T) {
 	// Fleet keys rejections by the WIRE id; a UUID local id passes through.
 	const n1 = "6b2f6f0e-1c1a-4a57-9a51-0d6b1a9e0003"
@@ -94,8 +111,9 @@ func TestContextPush_ErrorCodes(t *testing.T) {
 		{"not_team_member", 403, `{"code":"not_team_member","message":"not a member","details":{"node_id":"n1"}}`, ErrNotTeamMember, "not a member of that team", "not_team_member"},
 		{"load_policy_requires_admin", 403, `{"code":"load_policy_requires_admin","message":"admin only"}`, ErrLoadPolicyRequiresAdmin, "org admin or owner", "load_policy_requires_admin"},
 		{"org_shared_requires_admin", 403, `{"code":"org_shared_requires_admin","message":"admin only","details":{"node_id":"n1"}}`, ErrOrgSharedRequiresAdmin, "only an org admin or owner can publish org-wide", "org_shared_requires_admin"},
-		{"classification_change_requires_admin", 403, `{"code":"classification_change_requires_admin","message":"admin only","details":{"node_id":"n1"}}`, ErrClassificationChangeRequiresAdmin, "an org admin has changed who can see this entry", "classification_change_requires_admin"},
-		{"payload_too_large", 413, `{"code":"payload_too_large","message":"too big","details":{"limit_bytes":25165824}}`, ErrContextPushTooLarge, "too large to share", "payload_too_large"},
+		{"payload_too_large", 413, `{"code":"payload_too_large","message":"too big","details":{"limit_bytes":16777216}}`, ErrContextPushTooLarge, "too large to share", "payload_too_large"},
+		{"batch_too_large", 413, `{"code":"batch_too_large","message":"too many","details":{"max_nodes":5000,"max_edges":10000}}`, ErrContextPushTooLarge, "too large to share", "batch_too_large"},
+		{"rate_limited", 429, `{"code":"rate_limited","message":"slow down"}`, ErrContextPushRateLimited, "Try again in a minute", "rate_limited"},
 		{"capability_not_in_tier", 403, `{"code":"capability_not_in_tier","message":"upgrade"}`, ErrCapabilityNotInTier, "not available in current tier", "capability_not_in_tier"},
 		{"bare_403_is_generic", 403, `Forbidden`, ErrContextPushForbidden, "refused", "push status 403"},
 		{"lint_blocked", 422, `{"code":"lint_blocked","message":"secret","details":{"node_id":"n1","findings":[{"rule":"aws_access_key","severity":"block","field":"body"}]}}`, ErrContextLintBlocked, `blocked — a body looks like it contains a secret (aws_access_key in body)`, "lint_blocked"},

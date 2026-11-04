@@ -73,7 +73,7 @@ func (a *API) WithSelfUserID(f func() string) *API {
 
 // WithSelfTeamID wires the enrolled fleet identity's team id source. When
 // set, a "team"-layer Context_Publish with no req.TeamID publishes to this
-// team instead of falling back to the org layer.
+// team; with no team the publish returns ErrNoTeam.
 func (a *API) WithSelfTeamID(f func() string) *API {
 	a.selfTeamID = f
 	return a
@@ -101,8 +101,10 @@ func (a *API) WithSelfIdentityFromDataDir(dataDir string) *API {
 }
 
 // ErrNoTeam is returned by Context_Publish for a team share when the account
-// has no team. The frontend shows it verbatim.
-var ErrNoTeam = errors.New("contexts: your account isn't on a team yet, so this hasn't been shared. Ask an org admin to add you to a team")
+// has no team on record. That can also mean the identity is stale or a
+// lookup failed, so the copy doesn't assert the account has no team. The
+// frontend shows it verbatim.
+var ErrNoTeam = errors.New("contexts: couldn't find a team for your account, so this hasn't been shared. Try again shortly, or ask an org admin to add you to a team")
 
 // ErrInvalidModule is returned by AttachModule when the directory exists
 // but has no root file (context.md / agents.md).

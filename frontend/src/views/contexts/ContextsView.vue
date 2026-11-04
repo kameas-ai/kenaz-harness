@@ -71,7 +71,7 @@
  *     (folderBatch.ts). The interim per-file-only folder sentence is
  *     retired; a folder gets the same `sharingDisabledReason` as a file.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { Plus, FileText } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -180,6 +180,17 @@ const fleetSessionStore = useFleetSession(client);
 const teamCapEnabled = computed(() => fleetSessionStore.capability('team_graph_sharing'));
 /** Org-wide publishing is admin/owner only on Fleet; unknown roles stay enabled. */
 const orgPublishBlocked = computed(() => isKnownNonAdmin(fleetSessionStore.identity.value?.roles));
+// A session refresh can demote an admin while the dialog is open.
+watch(orgPublishBlocked, (blocked) => {
+  if (blocked) publishLayer.value = 'team';
+});
+/** Every node was refused on version: nothing changed on Fleet. */
+const publishNotUpdated = computed(
+  () =>
+    publishResult.value !== null &&
+    publishResult.value.accepted_nodes === 0 &&
+    (publishResult.value.conflicts?.length ?? 0) > 0,
+);
 
 /**
  * sharingDisabledReason — why Share… / Promote are disabled, or null when
@@ -929,17 +940,22 @@ onBeforeUnmount(() => {
       @finished="loadSyncStatus"
     />
 
-    <!-- Publish result / error toast — always states the EFFECTIVE layer
-         (finding #97), never the requested one, so a team→org fallback is
-         never silent. -->
+    <!-- Publish result / error toast — states the EFFECTIVE layer, never the
+         requested one, and never reports a refused update as published. -->
     <div
       v-if="publishResult"
-      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-success"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px]"
+      :class="publishNotUpdated ? 'text-signal-warning' : 'text-signal-success'"
       data-testid="context-publish-result"
     >
-      Published to {{ publishResult.effective_layer === 'org' ? 'your organisation' : 'your team' }}
-      ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
-      <span v-if="publishResult.conflicts && publishResult.conflicts.length > 0" class="text-signal-warning ml-2">
+      <template v-if="publishNotUpdated">
+        Not updated: Fleet has a newer version of this entry.
+      </template>
+      <template v-else>
+        Published to {{ publishResult.effective_layer === 'org' ? 'your organisation' : 'your team' }}
+        ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
+      </template>
+      <span v-if="!publishNotUpdated && publishResult.conflicts && publishResult.conflicts.length > 0" class="text-signal-warning ml-2">
         · {{ publishResult.conflicts.length }} version conflict{{ publishResult.conflicts.length === 1 ? '' : 's' }}
       </span>
     </div>

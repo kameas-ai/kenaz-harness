@@ -1,6 +1,6 @@
 package contexts_test
 
-// context_publish_org_fallback_test.go pins team resolution for a publish:
+// context_publish_team_resolution_test.go pins team resolution for a publish:
 //
 //   - A "team" publish with no team available returns ErrNoTeam and sends
 //     nothing. It never widens to "org" (kenaz-fleet #433 makes org-wide

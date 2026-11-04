@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import ContextsView from '@/views/contexts/ContextsView.vue';
+import FolderShareDialog from '@/views/contexts/FolderShareDialog.vue';
 import { createFakeHarnessClient, fakeFleetSession } from '@/lib/harnessClient';
 import { _resetFleetSessionForTest } from '@/lib/fleetSession';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
@@ -710,7 +711,7 @@ describe('ContextsView', () => {
         kind: 'folder',
         children: [{ name: 'note.md', path: 'note.md', kind: 'file' }],
       };
-      const message = "contexts: your account isn't on a team yet, so this hasn't been shared. Ask an org admin to add you to a team";
+      const message = "contexts: couldn't find a team for your account, so this hasn't been shared. Try again shortly, or ask an org admin to add you to a team";
       const publishSpy = vi.fn(async (_req: ContextPublishRequest): Promise<ContextPublishResult> => {
         throw new Error(message);
       });
@@ -734,6 +735,42 @@ describe('ContextsView', () => {
       expect(publishSpy.mock.calls[0]![0].layer).toBe('team');
       expect(w.find('[data-testid=context-publish-error]').text()).toBe(message);
       expect(w.find('[data-testid=context-publish-result]').exists()).toBe(false);
+    });
+
+    it('says not updated, not published, when the only node hits a version conflict', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'note.md', path: 'note.md', kind: 'file' }],
+      };
+      const publishSpy = vi.fn(async (_req: ContextPublishRequest): Promise<ContextPublishResult> => ({
+        accepted_nodes: 0,
+        accepted_edges: 0,
+        conflicts: [{ node_id: 'n', server_version: 2, client_version: 1 }],
+        effective_layer: _req.layer,
+      }));
+      const { client } = provide({
+        tree,
+        files: { 'note.md': '# note' },
+        syncStatus: { cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: true },
+        publishSpy,
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      await w.find('[data-testid="context-node-note.md"]').trigger('click');
+      await flushPromises();
+      await w.find('[data-testid=context-publish-btn]').trigger('click');
+      await flushPromises();
+      await w.find('[data-testid=context-publish-confirm-ok]').trigger('click');
+      await flushPromises();
+
+      const result = w.find('[data-testid=context-publish-result]');
+      expect(result.text()).toContain('Not updated');
+      expect(result.text()).not.toContain('Published');
+      expect(result.classes()).toContain('text-signal-warning');
     });
 
     it('shows sync pull error in status strip', async () => {
@@ -1414,6 +1451,33 @@ describe('ContextsView folder share/promote batch dialog (knowledge-home-01DOGF0
     await flushPromises();
     return w;
   }
+
+  it('marks a folder entry failed when Fleet has a newer version', async () => {
+    const publishSpy = vi.fn(async (req: ContextPublishRequest): Promise<ContextPublishResult> => ({
+      accepted_nodes: 0,
+      accepted_edges: 0,
+      conflicts: [{ node_id: 'n', server_version: 2, client_version: 1 }],
+      effective_layer: req.layer,
+    }));
+    const { client } = provide({ tree, files, syncStatus: status(true), publishSpy });
+    const w = await openDialog(client, 'context-publish-btn');
+    await w.find('[data-testid=folder-share-confirm]').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid=folder-share-dialog]').text()).toContain('Not updated: Fleet has a newer version');
+    expect(w.find('[data-testid=folder-share-dialog]').text()).not.toContain('Published to');
+  });
+
+  it('moves the folder dialog back to team if the org option becomes blocked', async () => {
+    const { client } = provide({ tree, files, syncStatus: status(true) });
+    const w = mount(FolderShareDialog, {
+      props: { folder: tree, mode: 'share', disabledReason: null, orgPublishBlocked: false },
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await w.find('[data-testid=folder-share-layer-org]').setValue(true);
+    await w.setProps({ orgPublishBlocked: true });
+    expect((w.find('[data-testid=folder-share-layer-team]').element as HTMLInputElement).checked).toBe(true);
+    expect((w.find('[data-testid=folder-share-layer-org]').element as HTMLInputElement).checked).toBe(false);
+  });
 
   it('disables org-wide in the folder dialog for a known member', async () => {
     const { client } = provide({ tree, files, syncStatus: status(true), roles: ['org_member'] });

@@ -17,7 +17,7 @@
  * Cancel while running is cancel-safe: the in-flight entry finishes, the
  * rest are marked "not started". The dialog cannot be dismissed mid-entry.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { ContextNode } from '@/lib/types';
 import {
@@ -56,6 +56,13 @@ const entries = ref<BatchEntry[]>(buildBatchEntries(props.folder, props.mode));
 
 const stopRequested = ref(false);
 const layer = ref<'team' | 'org'>('team');
+// A session refresh can demote an admin while the dialog is open.
+watch(
+  () => props.orgPublishBlocked,
+  (blocked) => {
+    if (blocked) layer.value = 'team';
+  },
+);
 
 const folderName = computed(() => props.folder.path.split('/').pop() || 'library root');
 const verb = computed(() => (props.mode === 'share' ? 'Share' : 'Promote'));
@@ -86,6 +93,9 @@ async function shareOne(e: BatchEntry): Promise<string | { skipped: string }> {
   );
   const where = res.effective_layer === 'org' ? 'your organisation' : 'your team';
   const conflicts = res.conflicts?.length ?? 0;
+  if (res.accepted_nodes === 0 && conflicts > 0) {
+    throw new Error('Not updated: Fleet has a newer version of this entry.');
+  }
   return conflicts > 0
     ? `Published to ${where} · ${conflicts} version conflict${conflicts === 1 ? '' : 's'}`
     : `Published to ${where}`;

@@ -9,8 +9,9 @@ package fleet
 //	403 load_policy_requires_admin node set load_policy "always" without org_admin/org_owner
 //	403 capability_not_in_tier     team_shared needs team_graph_sharing; org_shared needs org_graph_sharing
 //	403 org_shared_requires_admin  a non-admin pushed an org_shared node or edge (kenaz-fleet #433)
-//	403 classification_change_requires_admin  a non-admin re-pushed an existing node or edge at another classification (#433)
 //	413 payload_too_large          body over the server's cap, details {limit_bytes} (#433)
+//	413 batch_too_large            too many nodes or edges, details {max_nodes, max_edges} (#433)
+//	429 rate_limited               too many pushes per minute; Retry-After (#433)
 //	422 lint_blocked               details {node_id, findings:[{rule,severity,field}]}
 //	400 invalid_classification     bad edge classification / team_id combination
 //	400 missing_node_reference     edge endpoint not visible in your org
@@ -18,7 +19,9 @@ package fleet
 //
 // A 200 may additionally carry per-item `rejected: [{id,kind,reason}]`
 // (reason "not_permitted": the id exists but belongs to another user or
-// org). Those are permission failures, distinct from version `conflicts`.
+// org; reason "classification_change_requires_admin": a non-admin re-pushed
+// their own node or edge at a different classification than stored, #433).
+// Those are permission failures, distinct from version `conflicts`.
 //
 // Everything here tolerates the CURRENT server too: no `rejected` field
 // means all-accepted (as before), and a 403 without a recognised code is a
@@ -41,11 +44,10 @@ var (
 	ErrLoadPolicyRequiresAdmin = errors.New("fleet: only an org admin or owner can set an entry to always load")
 	// ErrOrgSharedRequiresAdmin — a member tried to publish org-wide.
 	ErrOrgSharedRequiresAdmin = errors.New("fleet: only an org admin or owner can publish org-wide. Share it with your team instead")
-	// ErrClassificationChangeRequiresAdmin — a member re-shared an entry whose
-	// sharing level differs on the server, typically after an admin promoted it.
-	ErrClassificationChangeRequiresAdmin = errors.New("fleet: an org admin has changed who can see this entry, so only an admin or owner can update it")
 	// ErrContextPushTooLarge — the request body is over the server's cap.
 	ErrContextPushTooLarge = errors.New("fleet: this is too large to share")
+	// ErrContextPushRateLimited — too many pushes in a short time.
+	ErrContextPushRateLimited = errors.New("fleet: too many shares in a short time. Try again in a minute")
 	// ErrContextLintBlocked — fleet's secret lint blocked a body.
 	ErrContextLintBlocked = errors.New("fleet: blocked — a body looks like it contains a secret")
 	// ErrInvalidClassification — the classification / team_id combination is invalid.
@@ -119,10 +121,10 @@ func (e *ContextPushError) sentinel() error {
 		return ErrLoadPolicyRequiresAdmin
 	case "org_shared_requires_admin":
 		return ErrOrgSharedRequiresAdmin
-	case "classification_change_requires_admin":
-		return ErrClassificationChangeRequiresAdmin
-	case "payload_too_large":
+	case "payload_too_large", "batch_too_large":
 		return ErrContextPushTooLarge
+	case "rate_limited":
+		return ErrContextPushRateLimited
 	case "lint_blocked":
 		return ErrContextLintBlocked
 	case "invalid_classification":
@@ -202,7 +204,8 @@ func parseContextPushError(op string, status int, body []byte) *ContextPushError
 }
 
 // ContextPushRejection is one per-item rejection in a 200 push response
-// (kenaz-fleet PR #173). Reason is "not_permitted" today.
+// (kenaz-fleet PR #173). Reason is "not_permitted" or
+// "classification_change_requires_admin" (#433).
 type ContextPushRejection struct {
 	ID     string `json:"id"`
 	Kind   string `json:"kind"` // "node" | "edge"
@@ -217,6 +220,9 @@ type ContextPushRejectedError struct {
 }
 
 func (e *ContextPushRejectedError) Error() string {
+	if e.Reason == "classification_change_requires_admin" {
+		return "fleet: an org admin has changed who can see this entry, so only an admin or owner can update it"
+	}
 	if e.Reason == "not_permitted" {
 		return "fleet: the server rejected this entry — that id belongs to another user or org (not_permitted)"
 	}
