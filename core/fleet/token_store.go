@@ -129,6 +129,23 @@ func LoadTokens() (TokenSet, error) {
 	}, nil
 }
 
+// accessTokenStrict reads the access token, telling "none stored" ("", nil)
+// from a keychain that couldn't answer (an error). LoadTokens reports both as
+// not found.
+func accessTokenStrict() (string, error) {
+	if src, ok := externalTokens(); ok {
+		return src(), nil
+	}
+	tok, err := keychainGet(keyringService, keyAccessToken())
+	if errors.Is(err, keyring.ErrNotFound) {
+		return "", nil
+	}
+	return tok, err
+}
+
+// keychainGet is keyring.Get, replaceable by tests: the seam's mock can't fail.
+var keychainGet = keyring.Get
+
 // ClearTokens deletes all fleet tokens from the OS keychain.
 // All three slots are attempted regardless of individual errors so a partial
 // keychain state is avoided. Individual delete failures are WARN-logged (not

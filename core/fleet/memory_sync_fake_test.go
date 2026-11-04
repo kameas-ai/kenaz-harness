@@ -64,6 +64,7 @@ type fakeMemoryFleet struct {
 	// status429 / status403 force the next N requests to fail.
 	status429, status403 int
 	pushes               []memPushRequest
+	forgetAlls           int
 	// pausedCategory, when set, models a staff org pause (kenaz-fleet
 	// #206): every memory route answers 403 org_paused EXCEPT the
 	// data-rights allowlist (forget-all here).
@@ -112,6 +113,12 @@ func (f *fakeMemoryFleet) requestCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.requests
+}
+
+func (f *fakeMemoryFleet) forgetAllCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.forgetAlls
 }
 
 func (f *fakeMemoryFleet) pushLog() []memPushRequest {
@@ -222,6 +229,7 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.pushes = append(f.pushes, req)
 		f.pushLocked(w, req)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/memory/forget-all":
+		f.forgetAlls++
 		n := 0
 		for _, rec := range f.recs {
 			if rec.state == "live" {

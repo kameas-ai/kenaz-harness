@@ -25,6 +25,7 @@ const scopeGlobal = ref(true);
 const confirmingDisable = ref(false);
 const deleteFromFleet = ref(false);
 const confirmText = ref('');
+const eraseConfirmText = ref('');
 
 async function refresh() {
   try {
@@ -104,6 +105,51 @@ async function enable() {
   }
 }
 
+// Wording from legal D164. The singular form only adjusts the grammar.
+const olderNotesLine = computed<string>(() => {
+  const n = status.value?.olderNotes ?? 0;
+  const account = status.value?.olderNotesAccount ?? 'this account';
+  return n === 1
+    ? `1 older note on this device will sync to ${account}. If it isn't yours, turn off memory sync before continuing.`
+    : `${n} older notes on this device will sync to ${account}. If they aren't yours, turn off memory sync before continuing.`;
+});
+
+async function runInheritedErase() {
+  busy.value = true;
+  errorMsg.value = '';
+  try {
+    status.value = await client.fleet.memorySyncDisable(true, eraseConfirmText.value);
+  } catch (err) {
+    errorMsg.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function dismissNotice(notice: 'inherited_erase' | 'inherited_opt_out') {
+  busy.value = true;
+  errorMsg.value = '';
+  try {
+    status.value = await client.fleet.memorySyncDismissNotice(notice);
+  } catch (err) {
+    errorMsg.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function continueOlderNotes() {
+  busy.value = true;
+  errorMsg.value = '';
+  try {
+    status.value = await client.fleet.memorySyncContinueOlderNotes();
+  } catch (err) {
+    errorMsg.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
 function startDisable() {
   confirmingDisable.value = true;
   deleteFromFleet.value = false;
@@ -135,6 +181,69 @@ async function confirmDisable() {
     </h2>
 
     <OrgPausedBanner v-if="paused" force :category="status.pausedCategory" />
+
+    <!-- Requests an earlier version left unfinished. Wording from legal. -->
+    <div
+      v-if="status.inheritedOptOut"
+      class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+      data-testid="memory-sync-inherited-opt-out"
+    >
+      <p>Memory sync was turned off by an earlier request that hadn't finished. You can turn it back on here.</p>
+      <button
+        type="button"
+        class="px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent"
+        :disabled="busy"
+        data-testid="memory-sync-inherited-opt-out-dismiss"
+        @click="dismissNotice('inherited_opt_out')"
+      >
+        Dismiss
+      </button>
+    </div>
+    <div
+      v-if="status.inheritedErase"
+      class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+      data-testid="memory-sync-inherited-erase"
+    >
+      <p>
+        An earlier request to erase your notes from Kameas Fleet didn't finish. If you still want
+        that, run it again. Notes on this device aren't affected, and can upload again if you turn
+        memory sync back on.
+      </p>
+      <p v-if="status.enabled" data-testid="memory-sync-erase-warning">
+        Turning this off stops syncing on all your devices.
+      </p>
+      <label for="memory-sync-erase-confirm" class="block text-ink-muted">
+        Type <code>forget-all</code> to confirm.
+      </label>
+      <input
+        id="memory-sync-erase-confirm"
+        v-model="eraseConfirmText"
+        type="text"
+        autocomplete="off"
+        class="w-48 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-mono"
+        data-testid="memory-sync-erase-confirm-text"
+      />
+      <div class="flex gap-2">
+        <button
+          type="button"
+          class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+          :disabled="busy || eraseConfirmText !== 'forget-all'"
+          data-testid="memory-sync-erase-run"
+          @click="runInheritedErase"
+        >
+          Delete from Fleet
+        </button>
+        <button
+          type="button"
+          class="px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent"
+          :disabled="busy"
+          data-testid="memory-sync-inherited-erase-dismiss"
+          @click="dismissNotice('inherited_erase')"
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
 
     <!-- Off: disclosure + scope choice + consent. Turning sync ON is a paid
          action, so it is not offered while paused. -->
@@ -203,6 +312,22 @@ async function confirmDisable() {
         on this device only — Fleet refused {{ status.blockedCount === 1 ? 'it' : 'them' }}
         (for example, content that looks like a credential). They are marked in Learned.
       </p>
+      <div
+        v-if="status.olderNotes > 0"
+        class="space-y-2 rounded-sm border border-border-muted p-3"
+        data-testid="memory-sync-older-notes"
+      >
+        <p>{{ olderNotesLine }}</p>
+        <button
+          type="button"
+          class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+          :disabled="busy"
+          data-testid="memory-sync-older-notes-continue"
+          @click="continueOlderNotes"
+        >
+          Continue
+        </button>
+      </div>
       <p v-if="laneLine" class="text-ink-muted" data-testid="memory-sync-lane">{{ laneLine }}</p>
       <p v-if="status.fleetError" class="text-ink-muted" data-testid="memory-sync-fleet-error">
         Could not read Fleet settings: {{ status.fleetError }}
@@ -260,6 +385,17 @@ async function confirmDisable() {
         </div>
       </div>
     </div>
+
+    <p class="text-[12px] text-ink-muted" data-testid="memory-sync-signed-out-note">
+      Notes you make while signed out stay on this device and don't sync.
+    </p>
+    <p
+      v-if="(status.unresolvedNotes ?? 0) > 0"
+      class="text-[12px] text-ink-muted"
+      data-testid="memory-sync-unresolved"
+    >
+      {{ status.unresolvedNotes }} {{ status.unresolvedNotes === 1 ? 'note stays' : 'notes stay' }} on this device only.
+    </p>
 
     <p v-if="errorMsg" class="text-[12px] text-signal-danger" data-testid="memory-sync-error">{{ errorMsg }}</p>
   </section>

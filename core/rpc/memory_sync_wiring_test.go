@@ -56,6 +56,16 @@ func TestMemorySyncWiring_RealBoot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Boot wired the account stamp (legal D164): with no tokens, signed out.
+	stamped, err := api.memStoreRef.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ch := range stamped {
+		if ch.Account != corememory.AccountSignedOut {
+			t.Fatalf("chunk %s account = %q; the store has no account source", ch.ID, ch.Account)
+		}
+	}
 	// The boot clock stamped the real store and persisted its state.
 	if _, err := os.Stat(corememory.HLCStatePath(dataDir)); err != nil {
 		t.Fatalf("hlc state not persisted: %v", err)

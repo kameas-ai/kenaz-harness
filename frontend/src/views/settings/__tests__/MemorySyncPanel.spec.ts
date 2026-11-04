@@ -23,6 +23,8 @@ function status(over: Partial<MemorySyncStatus> = {}): MemorySyncStatus {
     maxBytes: 52428800,
     blockedCount: 0,
     pendingCount: 0,
+    olderNotes: 0,
+    unresolvedNotes: 0,
     lane: { status: 'unknown', consecutiveFailures: 0 },
     ...over,
   };
@@ -34,13 +36,17 @@ function mountWith(initial: MemorySyncStatus) {
     status({ enabled: true, scopes, liveRecords: 3 }),
   );
   const memorySyncDisable = vi.fn(async () => status({ enabled: false }));
+  const memorySyncDismissNotice = vi.fn(async (notice: string) =>
+    status({ inheritedErase: notice !== 'inherited_erase' }),
+  );
+  const memorySyncContinueOlderNotes = vi.fn(async () => status({ enabled: true, olderNotes: 0 }));
   const client = createFakeHarnessClient({
-    fleet: { memorySyncStatus, memorySyncEnable, memorySyncDisable } as any,
+    fleet: { memorySyncStatus, memorySyncEnable, memorySyncDisable, memorySyncContinueOlderNotes, memorySyncDismissNotice } as any,
   });
   const wrapper = mount(MemorySyncPanel, {
     global: { provide: { [HarnessClientKey as symbol]: client } },
   });
-  return { wrapper, memorySyncStatus, memorySyncEnable, memorySyncDisable };
+  return { wrapper, memorySyncStatus, memorySyncEnable, memorySyncDisable, memorySyncContinueOlderNotes, memorySyncDismissNotice };
 }
 
 describe('MemorySyncPanel', () => {
@@ -112,5 +118,84 @@ describe('MemorySyncPanel', () => {
     await confirm.trigger('click');
     await flushPromises();
     expect(memorySyncDisable).toHaveBeenCalledWith(true, 'forget-all');
+  });
+
+  // Legal D164: the exact line, shown before older notes first upload.
+  it('shows the one-time line about older notes and continues on request', async () => {
+    const { wrapper, memorySyncContinueOlderNotes } = mountWith(
+      status({ enabled: true, olderNotes: 3, olderNotesAccount: 'a@example.test' }),
+    );
+    await flushPromises();
+    const box = wrapper.find('[data-testid="memory-sync-older-notes"]');
+    expect(box.text()).toContain(
+      "3 older notes on this device will sync to a@example.test. If they aren't yours, turn off memory sync before continuing.",
+    );
+    await wrapper.find('[data-testid="memory-sync-older-notes-continue"]').trigger('click');
+    await flushPromises();
+    expect(memorySyncContinueOlderNotes).toHaveBeenCalledOnce();
+    expect(wrapper.find('[data-testid="memory-sync-older-notes"]').exists()).toBe(false);
+  });
+
+  it('hides the line when no older notes are waiting', async () => {
+    const { wrapper } = mountWith(status({ enabled: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-older-notes"]').exists()).toBe(false);
+  });
+
+  // Legal ruling on the D164 guard: shown whether sync is on or off.
+  it.each([true, false])('says signed-out notes stay on this device (enabled=%s)', async (enabled) => {
+    const { wrapper } = mountWith(status({ enabled }));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-signed-out-note"]').text()).toBe(
+      "Notes you make while signed out stay on this device and don't sync.",
+    );
+  });
+
+  // Legal: requests an earlier version left unfinished are never dropped silently.
+  it('offers an inherited erase and runs it only after the typed confirmation', async () => {
+    const { wrapper, memorySyncDisable } = mountWith(status({ inheritedErase: true }));
+    await flushPromises();
+    const box = wrapper.find('[data-testid="memory-sync-inherited-erase"]');
+    expect(box.text().replace(/\s+/g, ' ')).toContain(
+      "An earlier request to erase your notes from Kameas Fleet didn't finish. If you still want that, run it again. Notes on this device aren't affected, and can upload again if you turn memory sync back on.",
+    );
+    expect(wrapper.find('[data-testid="memory-sync-erase-warning"]').exists()).toBe(false);
+    const run = wrapper.find('[data-testid="memory-sync-erase-run"]');
+    expect(run.attributes('disabled')).toBeDefined();
+    await wrapper.find('[data-testid="memory-sync-erase-confirm-text"]').setValue('forget-all');
+    await run.trigger('click');
+    await flushPromises();
+    expect(memorySyncDisable).toHaveBeenCalledWith(true, 'forget-all');
+    expect(wrapper.find('[data-testid="memory-sync-inherited-erase"]').exists()).toBe(false);
+  });
+
+  it('warns that the inherited erase stops sync when sync is on', async () => {
+    const { wrapper } = mountWith(status({ enabled: true, inheritedErase: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-erase-warning"]').text()).toBe(
+      'Turning this off stops syncing on all your devices.',
+    );
+  });
+
+  it('keeps each notice until it is dismissed', async () => {
+    const { wrapper, memorySyncDismissNotice } = mountWith(
+      status({ inheritedErase: true, inheritedOptOut: true }),
+    );
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-inherited-opt-out"]').text()).toContain(
+      "Memory sync was turned off by an earlier request that hadn't finished. You can turn it back on here.",
+    );
+    await wrapper.find('[data-testid="memory-sync-inherited-opt-out-dismiss"]').trigger('click');
+    await flushPromises();
+    expect(memorySyncDismissNotice).toHaveBeenCalledWith('inherited_opt_out');
+    await wrapper.find('[data-testid="memory-sync-inherited-erase-dismiss"]').trigger('click');
+    await flushPromises();
+    expect(memorySyncDismissNotice).toHaveBeenCalledWith('inherited_erase');
+  });
+
+  it('shows notes kept on this device', async () => {
+    const { wrapper } = mountWith(status({ unresolvedNotes: 2 }));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-unresolved"]').text()).toBe('2 notes stay on this device only.');
   });
 });

@@ -1456,6 +1456,12 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 			a.handleNodeRemoved()
 			return FleetIdentity{}, err
 		}
+		if errors.Is(err, fleet.ErrEnrollTokenChanged) {
+			// A sign-in replaced the tokens while this ran. Its own enroll
+			// reports the session; this answer says nothing about it.
+			logging.L().Info("fleet.rpc.enroll.superseded")
+			return FleetIdentity{}, err
+		}
 		a.recordEnrollOutcome(nil, err)
 		a.publishFleetSession("enroll_failed")
 		logging.L().Error("fleet.rpc.enroll.failed", "err", err.Error())

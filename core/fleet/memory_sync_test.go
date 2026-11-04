@@ -8,6 +8,7 @@ package fleet
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -47,6 +48,43 @@ type memDevice struct {
 	caps   *Capabilities
 }
 
+// testJWT is an access token asserting subject.
+func testJWT(subject string) string {
+	enc := base64.RawURLEncoding.EncodeToString
+	return enc([]byte(`{"alg":"none"}`)) + "." + enc([]byte(`{"sub":"`+subject+`","iss":"https://issuer.test"}`)) + ".sig"
+}
+
+func saveTestTokens(t *testing.T, subject string) {
+	t.Helper()
+	if err := SaveTokens(TokenSet{AccessToken: testJWT(subject), RefreshToken: "rt-mem", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("SaveTokens: %v", err)
+	}
+}
+
+// signIn is what a real sign-in leaves behind: this account's tokens, and an
+// identity enrolled with them. A zero Identity removes the identity file and
+// leaves the tokens, which is the window before enroll answers.
+func (d *memDevice) signIn(id Identity) {
+	d.t.Helper()
+	if id.UserID == "" {
+		if err := os.Remove(IdentityFilePath(d.dir)); err != nil && !os.IsNotExist(err) {
+			d.t.Fatal(err)
+		}
+		return
+	}
+	saveTestTokens(d.t, id.UserID)
+	d.enrolled(id)
+}
+
+// enrolled writes the identity file as enrolled with the current token.
+func (d *memDevice) enrolled(id Identity) {
+	d.t.Helper()
+	id.TokenKey = TokenIdentityKey()
+	if err := SaveIdentity(d.dir, id); err != nil {
+		d.t.Fatal(err)
+	}
+}
+
 type memWorld struct {
 	t     *testing.T
 	wall  *testWall
@@ -60,9 +98,7 @@ func newMemWorld(t *testing.T) *memWorld {
 	f := newFakeMemoryFleet(wall.now)
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	if err := SaveTokens(TokenSet{AccessToken: "at-mem", RefreshToken: "rt-mem", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
-		t.Fatalf("SaveTokens: %v", err)
-	}
+	saveTestTokens(t, "user-test")
 	return &memWorld{t: t, wall: wall, fleet: f, srv: srv}
 }
 
@@ -101,6 +137,8 @@ func (w *memWorld) deviceAt(node, dir string, skew time.Duration) *memDevice {
 		t.Fatal(err)
 	}
 	d.ms = ms
+	d.enrolled(Identity{OrgID: "org-test", UserID: "user-test"})
+	st.(memory.AccountStamper).SetAccountSource(func() string { return CurrentAccountKey(dir) })
 	return d
 }
 
@@ -746,6 +784,9 @@ func TestMemorySync_V091GobFullSyncCycle(t *testing.T) {
 	b := w.device("devB", 0)
 	a.enable()
 	b.enable()
+	if err := a.ms.ContinueOlderNotes(context.Background()); err != nil { // the one-time line (D164)
+		t.Fatal(err)
+	}
 	a.sync()
 	g := w.fleet.live("mem-v091-global")
 	if g == nil || g.recall["devA"] != 3 || !g.pinned || g.pinnedHLC == "" || g.scopeHLC == "" || g.title != "Build uses make" {

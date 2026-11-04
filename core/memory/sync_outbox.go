@@ -47,6 +47,10 @@ type ForgetOp struct {
 	ID       string    `json:"id"`
 	HLC      string    `json:"hlc,omitempty"`
 	QueuedAt time.Time `json:"queued_at"`
+	// Account is whose Fleet memory this forget is for (D164): the deleted
+	// chunk's owner, not whoever is signed in. Empty on forgets queued before
+	// the field existed, which only the legacy owner may send.
+	Account string `json:"account,omitempty"`
 }
 
 // ForgetOutboxPath is the canonical outbox location under dataDir.
@@ -96,11 +100,11 @@ func (o *ForgetOutbox) RecordDelete(deleted Chunk) error {
 	if o == nil || deleted.ID == "" || !deleted.FleetMayKnow() {
 		return nil
 	}
-	return o.Enqueue(deleted.ID)
+	return o.enqueue(deleted.ID, deleted.Account)
 }
 
-// Enqueue queues a forget for id (idempotent).
-func (o *ForgetOutbox) Enqueue(id string) error {
+// enqueue queues a forget for id (idempotent).
+func (o *ForgetOutbox) enqueue(id, account string) error {
 	if o == nil || id == "" {
 		return nil
 	}
@@ -111,7 +115,7 @@ func (o *ForgetOutbox) Enqueue(id string) error {
 			return nil
 		}
 	}
-	o.ops = append(o.ops, ForgetOp{ID: id, HLC: o.clock.Tick(), QueuedAt: o.now().UTC()})
+	o.ops = append(o.ops, ForgetOp{ID: id, HLC: o.clock.Tick(), QueuedAt: o.now().UTC(), Account: account})
 	return o.saveLocked()
 }
 
@@ -123,6 +127,40 @@ func (o *ForgetOutbox) Pending() []ForgetOp {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return append([]ForgetOp(nil), o.ops...)
+}
+
+// PendingFor returns the queued forgets scope may send, oldest first. The
+// rest stay queued for the account they belong to.
+func (o *ForgetOutbox) PendingFor(scope AccountScope) []ForgetOp {
+	var out []ForgetOp
+	for _, op := range o.Pending() {
+		if scope.OwnsForget(op) {
+			out = append(out, op)
+		}
+	}
+	return out
+}
+
+// ClaimPendingAccount gives the forgets queued for notes tokenKey wrote while
+// unconfirmed to the account that token has now been confirmed as.
+func (o *ForgetOutbox) ClaimPendingAccount(tokenKey, account string) error {
+	if o == nil || tokenKey == "" || account == "" {
+		return nil
+	}
+	pending := PendingAccount(tokenKey)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	changed := false
+	for i := range o.ops {
+		if o.ops[i].Account == pending {
+			o.ops[i].Account = account
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return o.saveLocked()
 }
 
 // Has reports whether a forget for id is queued — the puller must not
@@ -223,6 +261,11 @@ func FreshIdentity(c Chunk, newID string) Chunk {
 	out := c
 	out.ID = newID
 	out.TitleHLC, out.PinnedHLC, out.ScopeHLC, out.CreatedHLC = "", "", "", ""
+	if c.Account == "" {
+		// A rewrite keeps the original's owner. Left empty, Add would stamp
+		// an unknown owner's note as the signed-in account's (D164).
+		out.Account = AccountUnknown
+	}
 	out.SyncDirty, out.SyncSentAt, out.SyncedAt, out.SyncBlocked, out.SyncGen = false, time.Time{}, time.Time{}, "", 0
 	out.RecallFolded = c.RecallFolded + c.RecallOthers
 	out.RecallOthers = 0

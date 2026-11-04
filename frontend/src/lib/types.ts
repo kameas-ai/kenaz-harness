@@ -4917,6 +4917,16 @@ export interface MemorySyncStatus {
   blockedCount: number;
   /** Local sync-scope chunks not yet accepted by Fleet. */
   pendingCount: number;
+  /** Unstamped notes held until the one-time line is answered (legal D164). */
+  olderNotes: number;
+  /** Who those notes would sync to. */
+  olderNotesAccount?: string;
+  /** Notes that stay on this device: the keychain couldn't be read when they were written. */
+  unresolvedNotes: number;
+  /** An earlier version left an erase unfinished (legal). Shown until dismissed. */
+  inheritedErase?: boolean;
+  /** An earlier version left an opt-out unfinished (legal). Shown until dismissed. */
+  inheritedOptOut?: boolean;
   fleetError?: string;
   lane: FleetSyncLaneView;
   /** Staff org pause (kenaz-fleet PR 206): show the paused banner, keep data-rights actions. */
