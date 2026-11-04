@@ -1478,8 +1478,14 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 		_ = m.update(func(s *memSyncState) {
 			if s.Account == st.Account { // the account may have changed during the read
 				s.Enabled, s.Scopes = set.Enabled, set.Scopes
+				// Turned back on from another device: the same as turning it
+				// on here, or the line would return if they turn it off later.
+				s.InheritedOptOut = s.InheritedOptOut && !(set.Enabled && s.Account == s.LegacyOwner)
 			}
 		})
+		if set.Enabled {
+			out.InheritedOptOut = false
+		}
 		out.LocalEnabled = set.Enabled
 	}
 	return out
@@ -1529,7 +1535,9 @@ func (m *MemorySync) Enable(ctx context.Context, scopes []string, consentVersion
 		// lane's retry PUT enabled=false could overwrite this (or another
 		// device's) re-enable, and Status would stop mirroring Fleet.
 		s.DisablePending, s.ForgetAllPending = false, false
-		s.InheritedOptOut = false // sync is back on, so the line is no longer true
+		// Sync is back on, so the line is no longer true. Only the account it
+		// was recorded for can end it: another account's sync says nothing.
+		s.InheritedOptOut = s.InheritedOptOut && s.Account != s.LegacyOwner
 	}); err != nil {
 		return set, err
 	}
@@ -1627,7 +1635,8 @@ func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 	return resp.Erased, m.update(func(s *memSyncState) {
 		s.Cursor, s.ResetPending, s.ErasedBefore, s.ResetEpoch, s.ResetCursor, s.ResetRestarts = "", "", "", time.Time{}, "", 0
 		s.ForgetAllPending = false
-		s.InheritedErase = false // done
+		// Done, if it was this account's erase. Another account's says nothing.
+		s.InheritedErase = s.InheritedErase && s.Account != s.LegacyOwner
 	})
 }
 

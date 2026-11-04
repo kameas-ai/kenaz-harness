@@ -665,13 +665,52 @@ func TestUpgrade_V0100_InheritedNoticesEnd(t *testing.T) {
 	if err := d.ms.DismissNotice(ctx, MemoryNoticeInheritedErase); err != nil {
 		t.Fatal(err)
 	}
+	// B's own actions say nothing about A's requests.
+	d.enable()
+	if _, err := d.ms.Disable(ctx, true, "forget-all"); err != nil {
+		t.Fatal(err)
+	}
 	d.signIn(accountA)
-	if st := d.ms.Status(ctx); !st.InheritedErase {
-		t.Fatalf("B dismissed A's notice: %+v", st)
+	if st := d.ms.Status(ctx); !st.InheritedErase || !st.InheritedOptOut {
+		t.Fatalf("B ended A's notices: %+v", st)
 	}
 	d.enable()
 	if st := d.ms.Status(ctx); st.InheritedOptOut || !st.InheritedErase {
 		t.Fatalf("after turning sync back on: %+v", st)
+	}
+}
+
+// Turned back on from another device: the line ends in that same read, and the
+// person's own turn-off later isn't blamed on the earlier request.
+func TestUpgrade_V0100_OptOutLineEndsWhenSyncReturnsFromAnotherDevice(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	w.fleet.enabled = true
+	d := w.deviceAt("node-v0100", copyUpgradeProfile(t), 0)
+	if err := d.ms.update(func(s *memSyncState) {
+		s.Enabled, s.DisablePending = false, true
+		s.Account, s.LegacyOwner = "", ""
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.signIn(accountA)
+	d.ms.RunOnce(ctx)
+	if st := d.ms.Status(ctx); !st.InheritedOptOut {
+		t.Fatalf("setup: %+v", st)
+	}
+
+	w.fleet.mu.Lock()
+	w.fleet.enabled = true
+	w.fleet.mu.Unlock()
+	st := d.ms.Status(ctx)
+	if !st.LocalEnabled || st.InheritedOptOut {
+		t.Fatalf("the read that picks up the re-enable: %+v", st)
+	}
+	if _, err := d.ms.Disable(ctx, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if st := d.ms.Status(ctx); st.InheritedOptOut {
+		t.Fatalf("the person's own turn-off was blamed on the earlier request: %+v", st)
 	}
 }
 

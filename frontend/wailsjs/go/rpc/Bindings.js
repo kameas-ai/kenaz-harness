@@ -598,12 +598,12 @@ export function Fleet_MemorySyncContinueOlderNotes() {
   return window['go']['rpc']['Bindings']['Fleet_MemorySyncContinueOlderNotes']();
 }
 
-export function Fleet_MemorySyncDismissNotice(arg1) {
-  return window['go']['rpc']['Bindings']['Fleet_MemorySyncDismissNotice'](arg1);
-}
-
 export function Fleet_MemorySyncDisable(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Fleet_MemorySyncDisable'](arg1, arg2);
+}
+
+export function Fleet_MemorySyncDismissNotice(arg1) {
+  return window['go']['rpc']['Bindings']['Fleet_MemorySyncDismissNotice'](arg1);
 }
 
 export function Fleet_MemorySyncEnable(arg1, arg2) {
