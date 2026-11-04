@@ -93,6 +93,9 @@ func TestContextPush_ErrorCodes(t *testing.T) {
 	}{
 		{"not_team_member", 403, `{"code":"not_team_member","message":"not a member","details":{"node_id":"n1"}}`, ErrNotTeamMember, "not a member of that team", "not_team_member"},
 		{"load_policy_requires_admin", 403, `{"code":"load_policy_requires_admin","message":"admin only"}`, ErrLoadPolicyRequiresAdmin, "org admin or owner", "load_policy_requires_admin"},
+		{"org_shared_requires_admin", 403, `{"code":"org_shared_requires_admin","message":"admin only","details":{"node_id":"n1"}}`, ErrOrgSharedRequiresAdmin, "only an org admin or owner can publish org-wide", "org_shared_requires_admin"},
+		{"classification_change_requires_admin", 403, `{"code":"classification_change_requires_admin","message":"admin only","details":{"node_id":"n1"}}`, ErrClassificationChangeRequiresAdmin, "an org admin has changed who can see this entry", "classification_change_requires_admin"},
+		{"payload_too_large", 413, `{"code":"payload_too_large","message":"too big","details":{"limit_bytes":25165824}}`, ErrContextPushTooLarge, "too large to share", "payload_too_large"},
 		{"capability_not_in_tier", 403, `{"code":"capability_not_in_tier","message":"upgrade"}`, ErrCapabilityNotInTier, "not available in current tier", "capability_not_in_tier"},
 		{"bare_403_is_generic", 403, `Forbidden`, ErrContextPushForbidden, "refused", "push status 403"},
 		{"lint_blocked", 422, `{"code":"lint_blocked","message":"secret","details":{"node_id":"n1","findings":[{"rule":"aws_access_key","severity":"block","field":"body"}]}}`, ErrContextLintBlocked, `blocked — a body looks like it contains a secret (aws_access_key in body)`, "lint_blocked"},

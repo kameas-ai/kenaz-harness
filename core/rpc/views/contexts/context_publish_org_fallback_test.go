@@ -1,21 +1,17 @@
 package contexts_test
 
-// context_publish_org_fallback_test.go pins the finding #97 fix:
+// context_publish_org_fallback_test.go pins team resolution for a publish:
 //
-//   - Publishing at "team" layer with no team_id resolves to "org"
-//     instead of failing (the fleet enroll handler can hand back an empty
-//     team_id — see core/rpc/views/contexts/impl.go for the full context).
-//   - Context_Publish reports EffectiveLayer honestly: "org" on fallback,
-//     "team" when a real team_id carries the request through unchanged.
-//
-// Dogfood 2026-10-08: fleet enroll now returns a team_id, and
-// Context_Publish resolves a team-layer publish to the enrolled identity's
-// team (WithSelfTeamID). The fallback pinned here is now reached only for
-// a teamless identity (or an API with no identity source wired).
+//   - A "team" publish with no team available returns ErrNoTeam and sends
+//     nothing. It never widens to "org" (kenaz-fleet #433 makes org-wide
+//     admin-only, and a team share must not become org-wide anyway).
+//   - Context_Publish reports EffectiveLayer: "team" when a team_id carries
+//     the request through, "org" only when org was explicitly requested.
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -105,13 +101,12 @@ func setupPublishTest(t *testing.T) (*contextsview.API, *fakePushServer) {
 	return api, fake
 }
 
-// TestContextPublish_TeamWithNoTeamID_FallsBackToOrg is the core finding
-// #97 regression: a "team" layer publish with no team_id must not fail —
-// it must resolve to "org" and say so.
-func TestContextPublish_TeamWithNoTeamID_FallsBackToOrg(t *testing.T) {
+// A "team" publish with no team_id and no identity source is refused before
+// anything reaches Fleet.
+func TestContextPublish_TeamWithNoTeamID_RefusedNotWidened(t *testing.T) {
 	api, fake := setupPublishTest(t)
 
-	result, err := api.Context_Publish(context.Background(), contextsview.ContextPublishRequest{
+	_, err := api.Context_Publish(context.Background(), contextsview.ContextPublishRequest{
 		NodeID:  "node-1",
 		Layer:   "team",
 		Kind:    "guidance",
@@ -120,29 +115,15 @@ func TestContextPublish_TeamWithNoTeamID_FallsBackToOrg(t *testing.T) {
 		Version: 1,
 		// TeamID intentionally empty.
 	})
-	if err != nil {
-		t.Fatalf("Context_Publish: %v", err)
+	if !errors.Is(err, contextsview.ErrNoTeam) {
+		t.Fatalf("Context_Publish err = %v, want ErrNoTeam", err)
 	}
-	if result.EffectiveLayer != "org" {
-		t.Errorf("EffectiveLayer = %q, want %q", result.EffectiveLayer, "org")
-	}
-
-	sent := fake.snapshot()
-	if len(sent.Nodes) != 1 {
-		t.Fatalf("server saw %d nodes, want 1", len(sent.Nodes))
-	}
-	if sent.Nodes[0].Classification != "org_shared" {
-		t.Errorf("classification sent = %q, want org_shared", sent.Nodes[0].Classification)
-	}
-	if sent.Nodes[0].TeamID != nil {
-		t.Errorf("team_id sent = %v, want nil", *sent.Nodes[0].TeamID)
+	if sent := fake.snapshot(); len(sent.Nodes) != 0 {
+		t.Errorf("server saw %d nodes, want none", len(sent.Nodes))
 	}
 }
 
-// TestContextPublish_TeamWithTeamID_StaysTeam verifies the fallback is
-// conditional on an EMPTY team_id — once fleet hands back a real one
-// (post-#97 fleet fix), a team publish must still resolve to "team",
-// not be forced to "org" by this interim code.
+// TestContextPublish_TeamWithTeamID_StaysTeam: a real team_id resolves to "team".
 func TestContextPublish_TeamWithTeamID_StaysTeam(t *testing.T) {
 	api, fake := setupPublishTest(t)
 
@@ -235,12 +216,12 @@ func TestContextPublish_TeamWithNoRequestTeamID_UsesIdentityTeam(t *testing.T) {
 	}
 }
 
-// A teamless identity keeps the honest finding #97 fallback.
-func TestContextPublish_TeamWithTeamlessIdentity_FallsBackToOrg(t *testing.T) {
+// A teamless identity is refused too, and nothing is sent.
+func TestContextPublish_TeamWithTeamlessIdentity_RefusedNotWidened(t *testing.T) {
 	api, fake := setupPublishTest(t)
 	api.WithSelfTeamID(func() string { return "" })
 
-	result, err := api.Context_Publish(context.Background(), contextsview.ContextPublishRequest{
+	_, err := api.Context_Publish(context.Background(), contextsview.ContextPublishRequest{
 		NodeID:  "node-5",
 		Layer:   "team",
 		Kind:    "guidance",
@@ -248,15 +229,11 @@ func TestContextPublish_TeamWithTeamlessIdentity_FallsBackToOrg(t *testing.T) {
 		Body:    "Prefer table-driven tests.",
 		Version: 1,
 	})
-	if err != nil {
-		t.Fatalf("Context_Publish: %v", err)
+	if !errors.Is(err, contextsview.ErrNoTeam) {
+		t.Fatalf("Context_Publish err = %v, want ErrNoTeam", err)
 	}
-	if result.EffectiveLayer != "org" {
-		t.Errorf("EffectiveLayer = %q, want org", result.EffectiveLayer)
-	}
-	sent := fake.snapshot()
-	if len(sent.Nodes) != 1 || sent.Nodes[0].Classification != "org_shared" || sent.Nodes[0].TeamID != nil {
-		t.Errorf("sent = %+v, want a single org_shared node with no team_id", sent.Nodes)
+	if sent := fake.snapshot(); len(sent.Nodes) != 0 {
+		t.Errorf("sent = %+v, want no nodes", sent.Nodes)
 	}
 }
 
@@ -315,7 +292,9 @@ func TestContextPublish_IdentityFileOnDisk_DrivesTeam(t *testing.T) {
 	if err := corefleet.SaveIdentity(dataDir, corefleet.Identity{UserID: "u-1", OrgID: "o-1"}); err != nil {
 		t.Fatalf("SaveIdentity (teamless): %v", err)
 	}
-	if res := publish("node-8"); res.EffectiveLayer != "org" {
-		t.Errorf("teamless identity: EffectiveLayer = %q, want org", res.EffectiveLayer)
+	if _, err := api.Context_Publish(context.Background(), contextsview.ContextPublishRequest{
+		NodeID: "node-8", Layer: "team", Kind: "guidance", Title: "T", Body: "B", Version: 1,
+	}); !errors.Is(err, contextsview.ErrNoTeam) {
+		t.Errorf("teamless identity: err = %v, want ErrNoTeam", err)
 	}
 }

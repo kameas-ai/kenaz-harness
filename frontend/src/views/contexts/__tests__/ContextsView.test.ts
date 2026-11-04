@@ -21,6 +21,7 @@ function provide(opts: {
   rootPath?: string;
   saveSpy?: (path: string, content: string) => Promise<void>;
   syncStatus?: ContextSyncStatusView;
+  roles?: string[];
   publishSpy?: (req: ContextPublishRequest) => Promise<ContextPublishResult>;
   createFolderSpy?: (path: string) => Promise<void>;
   renameSpy?: (oldPath: string, newPath: string) => Promise<void>;
@@ -54,6 +55,7 @@ function provide(opts: {
       fleetSession: async () =>
         fakeFleetSession({
           state: 'signed_in',
+          ...(opts.roles ? { identity: { userId: 'u1', orgId: 'o1', teamId: 't1', roles: opts.roles } } : {}),
           capabilities: {
             tier: 'enterprise',
             enabled: { team_graph_sharing: syncStatus.team_cap_enabled },
@@ -666,22 +668,52 @@ describe('ContextsView', () => {
       );
     });
 
-    it('honestly reports a team-request-that-fell-back-to-org, not a silent team share', async () => {
+    it('disables org-wide for a known member, and enables it for an admin or unknown roles', async () => {
       const tree: ContextNode = {
         name: '',
         path: '',
         kind: 'folder',
         children: [{ name: 'note.md', path: 'note.md', kind: 'file' }],
       };
-      // Simulates the backend fallback (finding #97): the request asked
-      // for "team" but the server had no team_id to honour it, so it
-      // published at "org" instead and says so via effective_layer.
-      const publishSpy = vi.fn(async (_req: ContextPublishRequest) => ({
-        accepted_nodes: 1,
-        accepted_edges: 0,
-        conflicts: [],
-        effective_layer: 'org' as const,
-      }));
+      for (const [roles, blocked] of [
+        [['org_member'], true],
+        [['org_admin'], false],
+        [['org_owner'], false],
+        [undefined, false],
+      ] as const) {
+        _resetFleetSessionForTest();
+        const { client } = provide({
+          tree,
+          files: { 'note.md': '# note' },
+          syncStatus: { cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: true },
+          roles: roles ? [...roles] : undefined,
+        });
+        const w = mount(ContextsView, {
+          global: { provide: { [HarnessClientKey as symbol]: client } },
+        });
+        await flushPromises();
+        await w.find('[data-testid="context-node-note.md"]').trigger('click');
+        await flushPromises();
+        await w.find('[data-testid=context-publish-btn]').trigger('click');
+        await flushPromises();
+        const org = w.find('[data-testid=context-publish-layer-org]').element as HTMLInputElement;
+        expect(org.disabled).toBe(blocked);
+        expect(w.find('[data-testid=context-publish-org-admin-only]').exists()).toBe(blocked);
+        w.unmount();
+      }
+    });
+
+    it('shows the refusal and no success when a team share is refused', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'note.md', path: 'note.md', kind: 'file' }],
+      };
+      const message = "contexts: your account isn't on a team yet, so this hasn't been shared. Ask an org admin to add you to a team";
+      const publishSpy = vi.fn(async (_req: ContextPublishRequest): Promise<ContextPublishResult> => {
+        throw new Error(message);
+      });
       const { client } = provide({
         tree,
         files: { 'note.md': '# note' },
@@ -696,18 +728,12 @@ describe('ContextsView', () => {
       await flushPromises();
       await w.find('[data-testid=context-publish-btn]').trigger('click');
       await flushPromises();
-      // Leave the default "team" choice selected, then confirm.
       await w.find('[data-testid=context-publish-confirm-ok]').trigger('click');
       await flushPromises();
 
-      const req = publishSpy.mock.calls[0]![0];
-      expect(req.layer).toBe('team');
-      const resultText = w.find('[data-testid=context-publish-result]').text();
-      expect(resultText).toContain('Published org-wide');
-      expect(resultText).toContain("you're not in a team yet");
-      // Must NOT claim it went only to the team — that's the exact lie
-      // this fix exists to prevent.
-      expect(resultText).not.toContain('Published to your team');
+      expect(publishSpy.mock.calls[0]![0].layer).toBe('team');
+      expect(w.find('[data-testid=context-publish-error]').text()).toBe(message);
+      expect(w.find('[data-testid=context-publish-result]').exists()).toBe(false);
     });
 
     it('shows sync pull error in status strip', async () => {
@@ -1388,6 +1414,14 @@ describe('ContextsView folder share/promote batch dialog (knowledge-home-01DOGF0
     await flushPromises();
     return w;
   }
+
+  it('disables org-wide in the folder dialog for a known member', async () => {
+    const { client } = provide({ tree, files, syncStatus: status(true), roles: ['org_member'] });
+    const w = await openDialog(client, 'context-publish-btn');
+    const org = w.find('[data-testid=folder-share-layer-org]').element as HTMLInputElement;
+    expect(org.disabled).toBe(true);
+    expect(w.find('[data-testid=folder-share-org-admin-only]').exists()).toBe(true);
+  });
 
   it('(a) lists the folder entries recursively and batches only the checked ones', async () => {
     const publishSpy = vi.fn(async (req: ContextPublishRequest): Promise<ContextPublishResult> => ({

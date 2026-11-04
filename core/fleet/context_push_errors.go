@@ -8,6 +8,9 @@ package fleet
 //	403 not_team_member            details {node_id} | {edge_id}
 //	403 load_policy_requires_admin node set load_policy "always" without org_admin/org_owner
 //	403 capability_not_in_tier     team_shared needs team_graph_sharing; org_shared needs org_graph_sharing
+//	403 org_shared_requires_admin  a non-admin pushed an org_shared node or edge (kenaz-fleet #433)
+//	403 classification_change_requires_admin  a non-admin re-pushed an existing node or edge at another classification (#433)
+//	413 payload_too_large          body over the server's cap, details {limit_bytes} (#433)
 //	422 lint_blocked               details {node_id, findings:[{rule,severity,field}]}
 //	400 invalid_classification     bad edge classification / team_id combination
 //	400 missing_node_reference     edge endpoint not visible in your org
@@ -36,6 +39,13 @@ var (
 	ErrNotTeamMember = errors.New("fleet: you are not a member of that team")
 	// ErrLoadPolicyRequiresAdmin — load_policy "always" needs org admin/owner.
 	ErrLoadPolicyRequiresAdmin = errors.New("fleet: only an org admin or owner can set an entry to always load")
+	// ErrOrgSharedRequiresAdmin — a member tried to publish org-wide.
+	ErrOrgSharedRequiresAdmin = errors.New("fleet: only an org admin or owner can publish org-wide. Share it with your team instead")
+	// ErrClassificationChangeRequiresAdmin — a member re-shared an entry whose
+	// sharing level differs on the server, typically after an admin promoted it.
+	ErrClassificationChangeRequiresAdmin = errors.New("fleet: an org admin has changed who can see this entry, so only an admin or owner can update it")
+	// ErrContextPushTooLarge — the request body is over the server's cap.
+	ErrContextPushTooLarge = errors.New("fleet: this is too large to share")
 	// ErrContextLintBlocked — fleet's secret lint blocked a body.
 	ErrContextLintBlocked = errors.New("fleet: blocked — a body looks like it contains a secret")
 	// ErrInvalidClassification — the classification / team_id combination is invalid.
@@ -107,6 +117,12 @@ func (e *ContextPushError) sentinel() error {
 		return ErrNotTeamMember
 	case "load_policy_requires_admin":
 		return ErrLoadPolicyRequiresAdmin
+	case "org_shared_requires_admin":
+		return ErrOrgSharedRequiresAdmin
+	case "classification_change_requires_admin":
+		return ErrClassificationChangeRequiresAdmin
+	case "payload_too_large":
+		return ErrContextPushTooLarge
 	case "lint_blocked":
 		return ErrContextLintBlocked
 	case "invalid_classification":

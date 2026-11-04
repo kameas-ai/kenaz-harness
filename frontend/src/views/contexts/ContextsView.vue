@@ -59,12 +59,10 @@
  *     choice (`publishLayer`), and `confirmPublish` never sends a team_id —
  *     there is no team picker. The backend resolves a "team" request to
  *     the enrolled fleet identity's team_id (Context_Publish in
- *     core/rpc/views/contexts/impl.go); only a teamless identity widens
- *     to "org". `publishResult.effective_layer` is the ONLY
- *     source of truth for what actually happened, and
- *     `publishFellBackToOrg` drives an explicit "published org-wide
- *     instead" notice rather than letting a team request quietly become
- *     org-wide visibility.
+ *     core/rpc/views/contexts/impl.go); a teamless identity gets an error
+ *     and nothing is shared. "org" is disabled for a known non-admin because
+ *     Fleet allows it only for admins and owners.
+ *     `publishResult.effective_layer` states where the entry went.
  *
  * knowledge-home-01DOGF0E FR-7 (owner ruled D4 "build", 2026-10-05):
  *   - With a folder selected, Share… / Promote become "Share folder…" /
@@ -77,7 +75,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { Plus, FileText } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import { useFleetSession } from '@/lib/fleetSession';
+import { isKnownNonAdmin, useFleetSession } from '@/lib/fleetSession';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type {
@@ -157,13 +155,9 @@ const syncStatus = ref<ContextSyncStatusView | null>(null);
 const showPublishConfirm = ref(false);
 /**
  * publishLayer is the user's deliberate layer choice in the confirm
- * dialog — "team" (default) or "org". This is the only place "org" is
- * offered as an explicit choice today (finding #97); there is no team
- * picker because there are no fleet teams to pick yet.
+ * dialog — "team" (default) or "org". There is no team picker.
  */
 const publishLayer = ref<'team' | 'org'>('team');
-/** The layer actually requested for the in-flight/most-recent publish call. */
-const publishRequestedLayer = ref<'team' | 'org'>('team');
 /** Result of the most recent publish call (shown inline). */
 const publishResult = ref<ContextPublishResult | null>(null);
 /** Error string from the last publish call. */
@@ -184,6 +178,8 @@ const publishLoading = ref(false);
  */
 const fleetSessionStore = useFleetSession(client);
 const teamCapEnabled = computed(() => fleetSessionStore.capability('team_graph_sharing'));
+/** Org-wide publishing is admin/owner only on Fleet; unknown roles stay enabled. */
+const orgPublishBlocked = computed(() => isKnownNonAdmin(fleetSessionStore.identity.value?.roles));
 
 /**
  * sharingDisabledReason — why Share… / Promote are disabled, or null when
@@ -283,20 +279,6 @@ function onPromoteButton() {
   else void onPromoteClick();
 }
 
-/**
- * publishFellBackToOrg is true when the most recent publish was requested
- * as "team" but actually landed at "org" — the finding #97 fallback,
- * now reached only when the enrolled identity has no team_id. Drives the honest
- * "published org-wide instead" note; never say "shared with your team"
- * when this is true.
- */
-const publishFellBackToOrg = computed(
-  () =>
-    publishResult.value !== null &&
-    publishRequestedLayer.value === 'team' &&
-    publishResult.value.effective_layer === 'org',
-);
-
 /** Local node ID for the selected file (its path; shared with the folder batch). */
 const selectedNodeID = computed(() => (selectedPath.value ? contextNodeID(selectedPath.value) : ''));
 
@@ -329,8 +311,8 @@ function openPublishConfirm() {
  * Calls client.contexts.publish with the selected file's metadata and the
  * user's chosen layer. The nodeID is derived from the path (stable
  * cross-session). No team_id is ever sent — there is no team picker;
- * the backend uses the enrolled identity's team, and resolves a "team"
- * request to "org" only for a teamless identity. `result.effective_layer` is
+ * the backend uses the enrolled identity's team, and refuses a "team"
+ * request for a teamless identity. `result.effective_layer` is
  * always what actually happened and is what gets shown to the user, not
  * the requested layer.
  */
@@ -340,7 +322,6 @@ async function confirmPublish() {
   publishLoading.value = true;
   publishError.value = null;
   publishResult.value = null;
-  publishRequestedLayer.value = publishLayer.value;
   try {
     const result = await client.contexts.publish({
       node_id: selectedNodeID.value,
@@ -883,10 +864,8 @@ onBeforeUnmount(() => {
           Do not share credentials, private keys, or sensitive personal information in shared
           layers.
         </p>
-        <!-- Layer choice — "org" is a deliberate, explicit option (finding #97).
-             There is no team picker: fleet doesn't have teams to pick yet, so a
-             "team" choice may itself resolve to org-wide (surfaced honestly
-             after publish via effective_layer, not hidden here). -->
+        <!-- Layer choice — "org" is an explicit option, disabled for a known
+             non-admin. There is no team picker. -->
         <fieldset class="flex flex-col gap-2 mb-4" data-testid="context-publish-layer-choice">
           <legend class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle mb-1">
             Visibility
@@ -906,9 +885,17 @@ onBeforeUnmount(() => {
               type="radio"
               value="org"
               data-testid="context-publish-layer-org"
+              :disabled="orgPublishBlocked"
             />
             <span>Publish org-wide (visible to everyone in your organisation)</span>
           </label>
+          <p
+            v-if="orgPublishBlocked"
+            class="font-ui text-[11px] text-ink-muted"
+            data-testid="context-publish-org-admin-only"
+          >
+            Only an org admin or owner can publish org-wide.
+          </p>
         </fieldset>
         <div class="flex justify-end gap-3">
           <button
@@ -937,6 +924,7 @@ onBeforeUnmount(() => {
       :folder="folderDialogNode"
       :mode="folderDialogMode"
       :disabled-reason="sharingDisabledReason"
+      :org-publish-blocked="orgPublishBlocked"
       @close="closeFolderDialog"
       @finished="loadSyncStatus"
     />
@@ -949,14 +937,8 @@ onBeforeUnmount(() => {
       class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-success"
       data-testid="context-publish-result"
     >
-      <template v-if="publishFellBackToOrg">
-        Published org-wide ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
-        — you're not in a team yet, so this went to everyone in your organisation.
-      </template>
-      <template v-else>
-        Published to {{ publishResult.effective_layer === 'org' ? 'your organisation' : 'your team' }}
-        ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
-      </template>
+      Published to {{ publishResult.effective_layer === 'org' ? 'your organisation' : 'your team' }}
+      ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
       <span v-if="publishResult.conflicts && publishResult.conflicts.length > 0" class="text-signal-warning ml-2">
         · {{ publishResult.conflicts.length }} version conflict{{ publishResult.conflicts.length === 1 ? '' : 's' }}
       </span>
