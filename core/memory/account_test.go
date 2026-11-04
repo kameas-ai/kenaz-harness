@@ -128,7 +128,7 @@ func TestAccount_ForgetCarriesTheDeletedNotesOwner(t *testing.T) {
 	if err := ob.RecordDelete(Chunk{ID: "a1", Account: "a", SyncSentAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ob.Enqueue("older"); err != nil {
+	if err := ob.RecordDelete(Chunk{ID: "older", SyncSentAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := OpenForgetOutbox(path, clock)
@@ -140,5 +140,33 @@ func TestAccount_ForgetCarriesTheDeletedNotesOwner(t *testing.T) {
 	}
 	if got := reopened.PendingFor(AccountScope{Account: "a", LegacyOwner: "a"}); len(got) != 2 {
 		t.Fatalf("A may send %+v", got)
+	}
+}
+
+func TestAccount_OlderAliasFoldsIntoItsOwnersRow(t *testing.T) {
+	ctx := context.Background()
+	account := "a"
+	st := accountStore(t, &account)
+	scope := AccountScope{Account: "a", LegacyOwner: "a"}
+	if err := st.Add(ctx, Chunk{ID: "alias", Account: AccountUnknown, ScopeKind: ScopeKindLongTerm, Content: "same", Embedding: []float32{1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Add(ctx, Chunk{ID: "canon", ScopeKind: ScopeKindLongTerm, Content: "same too", Embedding: []float32{1}}); err != nil {
+		t.Fatal(err)
+	}
+	out := []SyncOutcome{{ID: "alias", Kind: OutcomeRekey, CanonicalID: "canon"}}
+	if err := st.ApplySyncOutcomes(ctx, out, time.Now(), AccountScope{Account: "b", LegacyOwner: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := st.List(ctx)
+	if len(all) != 2 {
+		t.Fatalf("another account's rekey folded rows: %d left", len(all))
+	}
+	if err := st.ApplySyncOutcomes(ctx, out, time.Now(), scope); err != nil {
+		t.Fatal(err)
+	}
+	all, _ = st.List(ctx)
+	if len(all) != 1 || all[0].ID != "canon" {
+		t.Fatalf("the owner's older alias must fold: %+v", all)
 	}
 }

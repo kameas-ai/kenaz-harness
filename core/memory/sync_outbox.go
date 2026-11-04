@@ -103,11 +103,7 @@ func (o *ForgetOutbox) RecordDelete(deleted Chunk) error {
 	return o.enqueue(deleted.ID, deleted.Account)
 }
 
-// Enqueue queues a forget for id with no recorded account (idempotent).
-func (o *ForgetOutbox) Enqueue(id string) error {
-	return o.enqueue(id, "")
-}
-
+// enqueue queues a forget for id (idempotent).
 func (o *ForgetOutbox) enqueue(id, account string) error {
 	if o == nil || id == "" {
 		return nil

@@ -113,6 +113,10 @@ func (c *Client) doWithContentType(ctx context.Context, method, path, contentTyp
 				cancel()
 				return nil, fmt.Errorf("fleet: build request: %w", err)
 			}
+			if want := requiredTokenKey(ctx); want != "" && tokenKeyOf(ts.AccessToken) != want {
+				cancel()
+				return nil, errNoAccount
+			}
 			req.Header.Set("Authorization", "Bearer "+ts.AccessToken)
 			setUserAgent(req)
 			if contentType != "" {

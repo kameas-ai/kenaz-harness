@@ -137,4 +137,13 @@ describe('MemorySyncPanel', () => {
     await flushPromises();
     expect(wrapper.find('[data-testid="memory-sync-older-notes"]').exists()).toBe(false);
   });
+
+  // Legal ruling on the D164 guard: shown whether sync is on or off.
+  it.each([true, false])('says signed-out notes stay on this device (enabled=%s)', async (enabled) => {
+    const { wrapper } = mountWith(status({ enabled }));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-signed-out-note"]').text()).toBe(
+      "Notes you make while signed out stay on this device and don't sync.",
+    );
+  });
 });

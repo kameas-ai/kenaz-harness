@@ -23,7 +23,6 @@ func newTestMemorySync(t *testing.T, client *fleet.Client) *fleet.MemorySync {
 	}
 	ms, err := fleet.NewMemorySync(fleet.MemorySyncConfig{
 		Client: client, Store: st.(memory.SyncStore), Clock: clock, DataDir: dir, Interval: time.Hour,
-		Identity: func() (fleet.Identity, error) { return fleet.Identity{OrgID: "o", UserID: "u"}, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -61,30 +60,5 @@ func TestMemorySync_SignOutStopsLane_SignInRestartsIt(t *testing.T) {
 	}
 	if !ms.Running() {
 		t.Fatal("sign-in did not restart the memory sync loop")
-	}
-}
-
-// TestSignIn_DropsThePreviousIdentityBeforeTheNewTokens (legal D164): memory
-// sync reads the identity file to decide whose notes it may send, so a failed
-// enroll must not leave the old account's name beside new tokens.
-// Mutation: remove the os.Remove in runSignIn and this fails.
-func TestSignIn_DropsThePreviousIdentityBeforeTheNewTokens(t *testing.T) {
-	r, _ := newRemovalRig(t)
-	ctx := context.Background()
-	if err := fleet.SaveIdentity(r.dataDir, fleet.Identity{OrgID: "org-a", UserID: "user-a"}); err != nil {
-		t.Fatal(err)
-	}
-	r.api.SetFleetClient(fleet.NewClientForTestingWithDataDir("http://127.0.0.1:1", r.dataDir), r.dataDir)
-	var atFlow string
-	r.api.fleet.signInFlow = func(context.Context, fleet.EnvProfile) (fleet.TokenSet, error) {
-		atFlow = fleet.CurrentAccountKey(r.dataDir)
-		return fleet.TokenSet{AccessToken: jwtFor("sub-bob", "zitadel-org-2")}, nil
-	}
-	_, _ = r.api.FleetSignIn(ctx) // enroll can't reach anything
-	if atFlow != "org-a:user-a" {
-		t.Fatalf("setup: identity during the browser flow = %q; a cancelled sign-in must keep it", atFlow)
-	}
-	if got := fleet.CurrentAccountKey(r.dataDir); got != "" {
-		t.Fatalf("identity after a failed enroll = %q, want none", got)
 	}
 }

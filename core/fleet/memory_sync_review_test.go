@@ -221,7 +221,7 @@ func TestMemorySync_InFlightEditStaysDirty(t *testing.T) {
 	}
 	gen := sent["mem-e"].SyncGen
 	_ = a.store.(memory.PruneCapable).SetPinned(ctx, "mem-e", true)
-	if err := a.store.ApplySyncOutcomes(ctx, []memory.SyncOutcome{{ID: "mem-e", Gen: gen, Kind: memory.OutcomeSynced}}, time.Now()); err != nil {
+	if err := a.store.ApplySyncOutcomes(ctx, []memory.SyncOutcome{{ID: "mem-e", Gen: gen, Kind: memory.OutcomeSynced}}, time.Now(), a.ms.scope()); err != nil {
 		t.Fatal(err)
 	}
 	if c := a.chunks()["mem-e"]; !c.SyncDirty {
@@ -403,7 +403,7 @@ func TestMemorySync_F7_SecretBlockedChunkStillDemotes(t *testing.T) {
 	// Fleet while the chunk is durably blocked here.
 	cur := a.chunks()["mem-t"]
 	if err := a.store.ApplySyncOutcomes(context.Background(), []memory.SyncOutcome{{ID: "mem-t", Gen: cur.SyncGen,
-		Kind: memory.OutcomeBlocked, Code: "secret_detected"}}, time.Now()); err != nil {
+		Kind: memory.OutcomeBlocked, Code: "secret_detected"}}, time.Now(), a.ms.scope()); err != nil {
 		t.Fatal(err)
 	}
 	if a.chunks()["mem-t"].SyncBlocked != "secret_detected" {
@@ -609,7 +609,7 @@ func TestMemorySync_R2_FailedDisableRetriesForgetAll(t *testing.T) {
 		t.Fatal("forget-all intent must be persisted and not yet executed")
 	}
 	reopened, err := NewMemorySync(MemorySyncConfig{Client: newTestClient(t, w.srv), Store: a.store, Clock: a.clock,
-		Outbox: a.outbox, DataDir: a.dir, Identity: a.identity, Caps: func() *Capabilities { return a.caps }, Lanes: a.lanes, Now: w.wall.now})
+		Outbox: a.outbox, DataDir: a.dir, Caps: func() *Capabilities { return a.caps }, Lanes: a.lanes, Now: w.wall.now})
 	if err != nil {
 		t.Fatal(err)
 	}

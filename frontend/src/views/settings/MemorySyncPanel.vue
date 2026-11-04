@@ -298,6 +298,10 @@ async function confirmDisable() {
       </div>
     </div>
 
+    <p class="text-[12px] text-ink-muted" data-testid="memory-sync-signed-out-note">
+      Notes you make while signed out stay on this device and don't sync.
+    </p>
+
     <p v-if="errorMsg" class="text-[12px] text-signal-danger" data-testid="memory-sync-error">{{ errorMsg }}</p>
   </section>
 </template>

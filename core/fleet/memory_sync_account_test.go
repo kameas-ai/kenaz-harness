@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/memory"
 )
@@ -197,8 +198,14 @@ func TestAccountGuard_NoAccountMeansNoRequests(t *testing.T) {
 	if n := w.fleet.requestCount(); n != before {
 		t.Fatalf("%d requests with no known account", n-before)
 	}
-	if !d.ms.state().ForgetAllPending || d.ms.state().Account != AccountKey(accountA) {
-		t.Fatal("the forget-all must wait on A's state for A")
+	if d.ms.state().ForgetAllPending {
+		t.Fatal("an erase asked for with no known account must not wait to run on A later")
+	}
+	if _, err := d.ms.Disable(context.Background(), false, ""); err != nil {
+		t.Fatalf("a plain opt-out must still be recorded: %v", err)
+	}
+	if st := d.ms.state(); st.Enabled || !st.DisablePending || st.Account != AccountKey(accountA) {
+		t.Fatalf("the opt-out must wait on A's state for A: %+v", st)
 	}
 }
 
@@ -220,12 +227,105 @@ func TestAccountGuard_RequestFailsClosedWhenAccountChangesMidCycle(t *testing.T)
 	}
 }
 
+// The reviewer's reproduction of the hole: identity and state both say A, the
+// tokens are B's. A stale enroll or a late refresh can leave this behind, and in
+// served mode the host can change the token at any time.
+func TestAccountGuard_TokenForAnotherAccountSendsNothing(t *testing.T) {
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	d.add("a-note", memory.ScopeKindLongTerm, "x")
+	d.sync()
+	d.add("a-later", memory.ScopeKindLongTerm, "y")
+
+	saveTestTokens(t, accountB.UserID) // the identity file still names A
+	before := w.fleet.requestCount()
+	d.ms.RunOnce(context.Background())
+	if n := w.fleet.requestCount(); n != before {
+		t.Fatalf("%d requests with A's identity beside B's token", n-before)
+	}
+	if s := d.lanes.Snapshot(LaneMemorySync); s.Status != LaneOff || s.Reason != "signed_out" {
+		t.Fatalf("lane = %+v", s)
+	}
+	if _, err := d.ms.Disable(context.Background(), true, "forget-all"); !errors.Is(err, errNoAccount) {
+		t.Fatalf("forget-all err = %v", err)
+	}
+	if n := w.fleet.requestCount(); n != before {
+		t.Fatal("forget-all reached Fleet under the wrong token")
+	}
+	if pushedIDs(w.fleet)["a-later"] {
+		t.Fatal("A's note uploaded under B's token")
+	}
+}
+
+// Checked where the token is attached: passing the account check a moment
+// before doesn't help if the token has changed by the time it's sent.
+func TestAccountGuard_ClientRefusesToSendAnotherAccountsToken(t *testing.T) {
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	want := TokenIdentityKey()
+	saveTestTokens(t, accountB.UserID)
+	before := w.fleet.requestCount()
+	_, err := d.ms.cfg.Client.do(requireTokenKey(context.Background(), want), "GET", "/api/v1/memory/settings", nil)
+	if !errors.Is(err, errNoAccount) {
+		t.Fatalf("do err = %v", err)
+	}
+	if n := w.fleet.requestCount(); n != before {
+		t.Fatal("the request reached Fleet")
+	}
+}
+
+// An identity from before TokenKey existed isn't trusted to send until the next
+// enroll records it, and a real enroll response then unblocks sync.
+func TestAccountGuard_IdentityWithoutATokenKeyWaitsForEnroll(t *testing.T) {
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.enable()
+	if err := SaveIdentity(d.dir, Identity{OrgID: "org-test", UserID: "user-test"}); err != nil {
+		t.Fatal(err)
+	}
+	before := w.fleet.requestCount()
+	d.ms.RunOnce(context.Background())
+	if n := w.fleet.requestCount(); n != before {
+		t.Fatal("sent on an identity with no token record")
+	}
+	d.enrolled(Identity{OrgID: "org-test", UserID: "user-test"})
+	d.sync()
+}
+
+func TestAccountGuard_NoteStampFollowsTheTokenAndIdentity(t *testing.T) {
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	if got := CurrentAccountKey(d.dir); got != AccountKey(accountA) {
+		t.Fatalf("signed in: %q", got)
+	}
+	saveTestTokens(t, accountB.UserID) // sign-in before its enroll answers
+	if got := CurrentAccountKey(d.dir); got != memory.AccountUnknown {
+		t.Fatalf("A's identity beside B's token: %q", got)
+	}
+	d.signIn(Identity{})
+	if got := CurrentAccountKey(d.dir); got != memory.AccountUnknown {
+		t.Fatalf("tokens with no identity: %q", got)
+	}
+	if err := ClearTokens(); err != nil {
+		t.Fatal(err)
+	}
+	if got := CurrentAccountKey(d.dir); got != "" {
+		t.Fatalf("no tokens: %q", got)
+	}
+}
+
 func TestAccountGuard_SignedOutNotesStayOnTheDevice(t *testing.T) {
 	w := newMemWorld(t)
 	d := w.device("node-1", 0)
 	d.signIn(accountA)
 	d.enable()
 	d.sync()
+	if err := ClearTokens(); err != nil {
+		t.Fatal(err)
+	}
 	d.signIn(Identity{})
 	d.add("offline", memory.ScopeKindLongTerm, "off")
 	if got := accountChunk(t, d, "offline").Account; got != memory.AccountSignedOut {
@@ -348,5 +448,66 @@ func TestUpgrade_V0100_OlderNotesNeverUploadAfterAnAccountChange(t *testing.T) {
 	d.sync()
 	if !pushedIDs(w.fleet)["v0100-unsynced"] {
 		t.Fatal("older notes must upload when the owner returns and continues")
+	}
+}
+
+// The count in the one-time line must be what really uploads, and leaving sync
+// must never wait on the line.
+func TestUpgrade_V0100_OneTimeLineCountsOnlyWhatWouldUpload(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	w.fleet.enabled = true
+	d := w.deviceAt("node-v0100", copyUpgradeProfile(t), 0)
+	d.signIn(accountA)
+	d.sync()
+
+	// A recall dirties a note already on Fleet. It isn't an older note to upload.
+	if err := d.ms.update(func(s *memSyncState) { s.Scopes = []string{"long_term"} }); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.ms.Status(ctx).OlderNotes; got != 1 {
+		t.Fatalf("OlderNotes = %d, want only the unsynced long-term note", got)
+	}
+	if err := d.ms.update(func(s *memSyncState) { s.Scopes = []string{"global"} }); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.ms.Status(ctx).OlderNotes; got != 0 {
+		t.Fatalf("OlderNotes = %d, but long-term isn't enabled", got)
+	}
+
+	if !mayPush(memory.Chunk{ScopeKind: memory.ScopeKindSession, SyncSentAt: time.Now()}, d.ms.scope(), false) {
+		t.Fatal("the owner's demotion must not wait for the line")
+	}
+	if !mayPush(memory.Chunk{ScopeKind: memory.ScopeKindGlobal, SyncedAt: time.Now()}, d.ms.scope(), false) {
+		t.Fatal("changes to a note already on Fleet must not wait for the line")
+	}
+	if mayPush(memory.Chunk{ScopeKind: memory.ScopeKindLongTerm}, d.ms.scope(), false) {
+		t.Fatal("an older note must wait for the line")
+	}
+	other := memory.AccountScope{Account: AccountKey(accountB), LegacyOwner: AccountKey(accountA)}
+	if mayPush(memory.Chunk{ScopeKind: memory.ScopeKindSession, SyncSentAt: time.Now()}, other, true) {
+		t.Fatal("another account can't demote an older note")
+	}
+}
+
+// An erase left unfinished by v0.100.2 can't be tied to whoever signs in first.
+func TestUpgrade_V0100_InheritedForgetAllIsNotRunForTheFirstAccount(t *testing.T) {
+	w := newMemWorld(t)
+	w.fleet.enabled = true
+	d := w.deviceAt("node-v0100", copyUpgradeProfile(t), 0)
+	d.add("kept-on-fleet", memory.ScopeKindGlobal, "already on Fleet")
+	if err := d.ms.update(func(s *memSyncState) {
+		s.Enabled, s.DisablePending, s.ForgetAllPending = false, true, true
+		s.Account, s.LegacyOwner = "", ""
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.signIn(accountB)
+	d.ms.RunOnce(context.Background())
+	if st := d.ms.state(); st.ForgetAllPending || st.Enabled || st.DisablePending {
+		t.Fatalf("state = %+v, want the opt-out finished and the erase dropped", st)
+	}
+	if w.fleet.forgetAllCount() != 0 {
+		t.Fatal("the inherited erase ran under the first account")
 	}
 }

@@ -51,7 +51,7 @@ type SyncStore interface {
 	// a chunk deleted before this call is never sent.
 	MarkSyncSent(ctx context.Context, ids []string, at time.Time) (map[string]Chunk, error)
 	// ApplySyncOutcomes applies a push response in one save.
-	ApplySyncOutcomes(ctx context.Context, outs []SyncOutcome, at time.Time) error
+	ApplySyncOutcomes(ctx context.Context, outs []SyncOutcome, at time.Time, scope AccountScope) error
 	// ApplyRemote applies one pull page in one save.
 	// Only rows scope owns are touched; new rows are stamped scope.Account.
 	ApplyRemote(ctx context.Context, recs []RemoteRecord, at time.Time, scope AccountScope) error
@@ -197,7 +197,7 @@ func (s *chromemStore) MarkSyncSent(_ context.Context, ids []string, at time.Tim
 }
 
 // ApplySyncOutcomes implements SyncStore.
-func (s *chromemStore) ApplySyncOutcomes(_ context.Context, outs []SyncOutcome, at time.Time) error {
+func (s *chromemStore) ApplySyncOutcomes(_ context.Context, outs []SyncOutcome, at time.Time, scope AccountScope) error {
 	if len(outs) == 0 {
 		return nil
 	}
@@ -237,7 +237,7 @@ func (s *chromemStore) ApplySyncOutcomes(_ context.Context, outs []SyncOutcome, 
 				continue
 			}
 			if j, has := idx[o.CanonicalID]; has && !drop[j] {
-				if s.chunks[j].Account != c.Account {
+				if !scope.Owns(s.chunks[j]) {
 					continue // another account's row: never fold across accounts (D164)
 				}
 				mergeAliasInto(&s.chunks[j], *c)
@@ -330,6 +330,9 @@ func (s *chromemStore) ApplyRemote(ctx context.Context, recs []RemoteRecord, at 
 			if j, ok := idx[a]; ok && a != r.ID && scope.Owns(s.chunks[j]) {
 				alias := s.chunks[j]
 				if k, has := idx[r.ID]; has {
+					if !scope.Owns(s.chunks[k]) {
+						continue // never fold across accounts (D164)
+					}
 					mergeAliasInto(&s.chunks[k], alias)
 					s.removeIdxLocked(map[int]bool{j: true})
 				} else {

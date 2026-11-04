@@ -35,6 +35,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -265,9 +266,6 @@ type MemorySyncConfig struct {
 	Clock   *memory.HLC
 	Outbox  *memory.ForgetOutbox
 	DataDir string
-	// Identity reads the signed-in account. nil = the identity file under
-	// DataDir, which is what production uses (see memory_sync_account.go).
-	Identity func() (Identity, error)
 	// Caps returns the live capability snapshot (nil = deny).
 	Caps  func() *Capabilities
 	Lanes *SyncLanes
@@ -528,10 +526,12 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 	// Before anything else, including the data-rights requests below: every
 	// request from here on must act for the account the state belongs to.
 	if _, err := m.ensureAccount(); err != nil {
-		if !errors.Is(err, errNoAccount) {
+		if errors.Is(err, errNoAccount) {
+			m.lanes().RecordOff(LaneMemorySync, "signed_out")
+		} else {
 			logging.L().Warn("fleet.memory_sync.account_state_failed", "err", err.Error())
+			m.lanes().RecordFailure(LaneMemorySync, "account_state", err, 0, time.Time{})
 		}
-		m.lanes().RecordOff(LaneMemorySync, "signed_out")
 		return
 	}
 	if paused, _ := m.orgPaused(); paused {
@@ -689,9 +689,11 @@ func (m *MemorySync) cycle(ctx context.Context) error {
 func (m *MemorySync) doJSON(ctx context.Context, method, path string, body, out any) error {
 	// Checked per request, not per cycle: a sign-in can change the account
 	// mid-cycle, and everything queued belongs to the old one.
-	if key := m.currentAccount(); key == "" || key != m.state().Account {
+	id, ok := m.verifiedIdentity()
+	if !ok || AccountKey(id) != m.state().Account {
 		return errNoAccount
 	}
+	ctx = requireTokenKey(ctx, id.TokenKey)
 	var rd io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -1081,11 +1083,18 @@ func (m *MemorySync) push(ctx context.Context, set MemorySyncSettings) error {
 	return nil
 }
 
+// olderNoteToUpload: an unstamped note Fleet doesn't hold yet. This is what the
+// one-time line is about. An unstamped note already on Fleet can still send its
+// changes, and a demotion must always go: leaving sync never waits (D164).
+func olderNoteToUpload(c memory.Chunk) bool {
+	return c.AccountUnstamped() && memory.IsSyncScope(c.ScopeKind) && c.SyncedAt.IsZero()
+}
+
 // mayPush is the account half of the push decision (D164): never another
-// account's note, never a note made signed out, and an unstamped note only
-// for the legacy owner once they've continued past the one-time line.
+// account's note, never a note made signed out, and an older note only for
+// the legacy owner once they've continued past the one-time line.
 func mayPush(c memory.Chunk, scope memory.AccountScope, olderOK bool) bool {
-	return scope.Owns(c) && (olderOK || !c.AccountUnstamped())
+	return scope.Owns(c) && (olderOK || !olderNoteToUpload(c))
 }
 
 // pushCandidate: a chunk pushes when it is in an enabled sync scope and is
@@ -1331,7 +1340,7 @@ func (m *MemorySync) applyResults(ctx context.Context, entries []pushEntry, resp
 	if err := m.cfg.Outbox.Ack(acks...); err != nil {
 		return err
 	}
-	if err := m.cfg.Store.ApplySyncOutcomes(ctx, outs, m.now().UTC()); err != nil {
+	if err := m.cfg.Store.ApplySyncOutcomes(ctx, outs, m.now().UTC(), m.scope()); err != nil {
 		return err
 	}
 	if clockFuture {
@@ -1393,13 +1402,15 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 			if !current || !scope.Owns(c) {
 				continue
 			}
-			held := c.AccountUnstamped() && !st.OlderNotesAck
 			switch {
 			case c.SyncBlocked != "":
 				out.BlockedCount++
 			case !memory.IsSyncScope(c.ScopeKind) || !(c.SyncDirty || c.SyncedAt.IsZero()):
-			case held:
-				out.OlderNotes++
+			case !st.OlderNotesAck && olderNoteToUpload(c):
+				// N must be what would really upload: the enabled scopes only.
+				if slices.Contains(st.Scopes, c.ScopeKind) {
+					out.OlderNotes++
+				}
 			default:
 				out.PendingPush++
 			}
@@ -1424,7 +1435,11 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 	// never starts uploading again without its user looking (F11, blessed).
 	// An unconfirmed local opt-out (DisablePending) is never undone here.
 	if set.Enabled != out.LocalEnabled && !m.state().DisablePending {
-		_ = m.update(func(s *memSyncState) { s.Enabled = set.Enabled; s.Scopes = set.Scopes })
+		_ = m.update(func(s *memSyncState) {
+			if s.Account == st.Account { // the account may have changed during the read
+				s.Enabled, s.Scopes = set.Enabled, set.Scopes
+			}
+		})
 		out.LocalEnabled = set.Enabled
 	}
 	return out
@@ -1508,10 +1523,14 @@ func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm 
 	}
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
-	// With no account known the opt-out is only recorded, on the state it
-	// belongs to, and finishes when that account is next signed in. Nothing
-	// is sent: the tokens could be anyone's.
+	// With no account known nothing is sent, because the tokens could be
+	// anyone's. An opt-out is recorded on the state it belongs to and finishes
+	// when that account returns. An erase is refused: it can't be undone, and
+	// whoever is at the device may not be that account.
 	_, acctErr := m.ensureAccount()
+	if acctErr != nil && deleteFromFleet {
+		return 0, acctErr
+	}
 	if err := m.update(func(s *memSyncState) {
 		s.Enabled, s.DisablePending = false, true
 		s.ForgetAllPending = s.ForgetAllPending || deleteFromFleet
@@ -1527,9 +1546,6 @@ func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm 
 		return 0, nil
 	}
 	if acctErr != nil {
-		if deleteFromFleet {
-			return 0, acctErr
-		}
 		return 0, nil
 	}
 	m.flushForgets(ctx)

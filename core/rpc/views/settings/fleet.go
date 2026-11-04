@@ -1059,36 +1059,8 @@ func (a *API) runSignIn(ctx context.Context) (FleetIdentity, error) {
 		logging.L().Error("fleet.rpc.sign_in.device_code_flow_failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}
-	// These tokens may be a different account's, and the identity file still
-	// names the previous one until enroll answers. Memory sync reads that file
-	// to decide whose notes it may send, so it must never see the new tokens
-	// beside the old name (legal D164): stop the lane, which waits out a
-	// running cycle, and drop the file first. A failed save restarts the lane
-	// under the old tokens; the session supervisor's next enroll restores the
-	// file.
-	ms := a.memorySync.Load()
-	laneWasRunning := ms != nil && ms.Running()
-	if ms != nil {
-		ms.Stop()
-	}
-	if dir := a.fleetDataDir(); dir != "" {
-		if err := os.Remove(fleet.IdentityFilePath(dir)); err != nil && !os.IsNotExist(err) {
-			logging.L().Error("fleet.rpc.sign_in.clear_identity_failed", "err", err.Error())
-			if laneWasRunning {
-				a.fleet.mu.Lock()
-				a.startFleetBackgroundLocked()
-				a.fleet.mu.Unlock()
-			}
-			return FleetIdentity{}, fmt.Errorf("fleet: clear previous identity: %w", err)
-		}
-	}
 	if err := fleet.SaveTokens(ts); err != nil {
 		logging.L().Error("fleet.rpc.sign_in.save_tokens_failed", "err", err.Error())
-		if laneWasRunning {
-			a.fleet.mu.Lock()
-			a.startFleetBackgroundLocked()
-			a.fleet.mu.Unlock()
-		}
 		return FleetIdentity{}, err
 	}
 	logging.L().Info("fleet.rpc.sign_in.tokens_saved")

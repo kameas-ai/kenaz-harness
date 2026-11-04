@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,6 +36,11 @@ type Identity struct {
 	TeamName    string    `json:"team_name,omitempty"`
 	Roles       []string  `json:"roles,omitempty"`
 	FetchedAt   time.Time `json:"fetched_at"`
+	// TokenKey is the TokenIdentityKey of the token that enrolled this
+	// identity. This file can outlive the tokens or be written late by an
+	// enroll that was already running, so anything acting on "who is signed
+	// in" must compare it with the token it is about to send (legal D164).
+	TokenKey string `json:"token_key,omitempty"`
 }
 
 // identityFilePath returns the cache file path for the identity.
@@ -90,6 +96,10 @@ func SaveIdentity(dataDir string, id Identity) error {
 func clearIdentityFile(dataDir string) error {
 	return os.Remove(identityFilePath(dataDir))
 }
+
+// errEnrollTokenChanged: the tokens changed during an enroll, so its answer
+// belongs to a previous session.
+var errEnrollTokenChanged = errors.New("fleet: tokens changed during enroll; try again")
 
 // enrollRequest is the JSON body for POST /api/v1/enroll. The two key
 // fields are optional (fleet contract §10.1): registered in the same
@@ -324,8 +334,17 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		DisplayName: er.displayName(),
 		Tier:        er.Tier,
 		FetchedAt:   time.Now(),
+		// ts is the token this response answered: a 401 retry updates it.
+		TokenKey: tokenKeyOf(ts.AccessToken),
 	}
 	id.Roles = mergeRoles(er.Role, er.Roles)
+
+	// A sign-in replaced the tokens while this ran, so the answer is the
+	// previous account's. It must not overwrite the current identity.
+	if TokenIdentityKey() != id.TokenKey {
+		logging.L().Info("fleet.enroll.token_changed_discarding_response")
+		return Identity{}, errEnrollTokenChanged
+	}
 
 	// Cache to disk.
 	if c.dataDir != "" {

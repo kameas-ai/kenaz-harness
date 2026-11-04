@@ -4608,6 +4608,9 @@ func New(c *core.Core, opts ...Option) *API {
 		a.memorySync = buildMemorySync(a, flCl, flDataDir)
 		if a.settingsImpl != nil && a.memorySync != nil {
 			a.settingsImpl.SetMemorySync(a.memorySync)
+			// Sync waits for the enroll that names the account; don't leave
+			// it waiting for the next tick after that.
+			a.settingsImpl.OnFleetEnrolled(a.memorySync.Kick)
 		}
 
 		// fleet-skills-sync-01NDFSEX18 WP02: wire fleet skill dependencies onto

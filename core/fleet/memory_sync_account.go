@@ -3,12 +3,11 @@ package fleet
 // memory_sync_account.go: whose memory the lane is syncing (legal D164).
 //
 // The sync state, the note store and the forget queue all live per device
-// profile, and a profile can be used by more than one account. Everything the
-// lane sends is scoped to the account the identity file names, and that file
-// is the single answer to "who is signed in": sign-in removes it before saving
-// new tokens (settings runSignIn) and enroll writes it back, so "no identity"
-// is what the window between two accounts looks like, and the lane sends
-// nothing during it.
+// profile, and a profile can be used by more than one account. An account is
+// only trusted when the identity file and the token agree: enroll records which
+// token it enrolled with, and each request checks the token it is about to send
+// against that record at the moment it is attached. Desktop and served mode go
+// through the same check, so a mismatch or an unreadable token sends nothing.
 
 import (
 	"context"
@@ -32,36 +31,62 @@ func AccountKey(id Identity) string {
 	return id.OrgID + ":" + id.UserID
 }
 
-// CurrentAccountKey is the signed-in account for the profile at dataDir, ""
-// when there is none. The memory store stamps new notes with it.
+// CurrentAccountKey is who a new note belongs to for the profile at dataDir:
+// the signed-in account, "" with no usable token (signed out), or
+// memory.AccountUnknown while tokens exist but can't be tied to an account, as
+// during the seconds before a sign-in's enroll answers. An unknown note is
+// handled like an older one, so it can't reach the wrong account, and it isn't
+// stranded as signed out either. An identity from before TokenKey existed is
+// accepted here: this only labels a note, and sending is checked strictly.
 func CurrentAccountKey(dataDir string) string {
-	id, err := LoadIdentity(dataDir)
-	if err != nil {
+	tok := TokenIdentityKey()
+	if tok == "" {
 		return ""
+	}
+	id, err := LoadIdentity(dataDir)
+	if err != nil || AccountKey(id) == "" || (id.TokenKey != "" && id.TokenKey != tok) {
+		return memory.AccountUnknown
 	}
 	return AccountKey(id)
 }
 
-func (m *MemorySync) identity() (Identity, error) {
-	if m.cfg.Identity != nil {
-		return m.cfg.Identity()
+// verifiedIdentity is the signed-in account, only if the identity was enrolled
+// with the current token.
+func (m *MemorySync) verifiedIdentity() (Identity, bool) {
+	id, err := LoadIdentity(m.cfg.DataDir)
+	if err != nil || AccountKey(id) == "" || id.TokenKey == "" || id.TokenKey != TokenIdentityKey() {
+		return Identity{}, false
 	}
-	return LoadIdentity(m.cfg.DataDir)
+	return id, true
 }
 
 func (m *MemorySync) currentAccount() string {
-	id, err := m.identity()
-	if err != nil {
+	id, ok := m.verifiedIdentity()
+	if !ok {
 		return ""
 	}
 	return AccountKey(id)
+}
+
+type requiredTokenKeyCtx struct{}
+
+// requireTokenKey makes Client refuse to send under any other account's token.
+// Checked where the token is attached, so a sign-in landing between this
+// request's account check and its send can't slip through.
+func requireTokenKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, requiredTokenKeyCtx{}, key)
+}
+
+func requiredTokenKey(ctx context.Context) string {
+	key, _ := ctx.Value(requiredTokenKeyCtx{}).(string)
+	return key
 }
 
 // accountLabel names the signed-in account for the one-time line.
 func (m *MemorySync) accountLabel() string {
-	id, err := m.identity()
+	id, ok := m.verifiedIdentity()
 	switch {
-	case err != nil:
+	case !ok:
 		return "this account"
 	case id.Email != "":
 		return id.Email
@@ -94,6 +119,10 @@ func (m *MemorySync) ensureAccount() (memory.AccountScope, error) {
 	prev := m.st
 	if m.st.Account == "" {
 		m.st.Account, m.st.LegacyOwner = key, key
+		// An erase left unfinished by an earlier version can't be tied to this
+		// account, and it can't be undone, so it isn't run on its behalf. The
+		// opt-out half stays.
+		m.st.ForgetAllPending = false
 	} else {
 		parked := make(map[string]memSyncAccountState, len(prev.Parked)+1)
 		for k, v := range prev.Parked {
