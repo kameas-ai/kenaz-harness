@@ -206,6 +206,98 @@ func TestDeleteMovesToTrash(t *testing.T) {
 	}
 }
 
+// A file last edited long ago keeps its 30 days in the trash: the clock starts
+// at deletion, and moving a file to the trash keeps its modification time.
+func TestSweepTrashKeepsJustDeletedOldFile(t *testing.T) {
+	t.Parallel()
+	lib, root := newLib(t)
+	p := filepath.Join(root, "old.md")
+	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	past := time.Now().Add(-60 * 24 * time.Hour)
+	if err := os.Chtimes(p, past, past); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	if err := lib.Delete("old.md"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := lib.SweepTrash(); err != nil {
+		t.Fatalf("SweepTrash: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, ".trash"))
+	if err != nil {
+		t.Fatalf("read trash: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("trash has %d entries after sweep; want the just-deleted file kept", len(entries))
+	}
+}
+
+// The name's deletion time wins over a recent modification time, including
+// the collision form of the name.
+func TestSweepTrashUsesDeletionStamp(t *testing.T) {
+	t.Parallel()
+	lib, root := newLib(t)
+	trashRoot := filepath.Join(root, ".trash")
+	if err := os.MkdirAll(trashRoot, 0o700); err != nil {
+		t.Fatalf("mkdir trash: %v", err)
+	}
+	const layout = "20060102T150405.000000000"
+	expired := time.Now().UTC().Add(-31 * 24 * time.Hour).Format(layout)
+	kept := time.Now().UTC().Add(-29 * 24 * time.Hour).Format(layout)
+	for _, name := range []string{expired + "-a.md", expired + "-1-b.md", kept + "-c.md"} {
+		if err := os.WriteFile(filepath.Join(trashRoot, name), []byte("x"), 0o600); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	if err := lib.SweepTrash(); err != nil {
+		t.Fatalf("SweepTrash: %v", err)
+	}
+	entries, err := os.ReadDir(trashRoot)
+	if err != nil {
+		t.Fatalf("read trash: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != kept+"-c.md" {
+		t.Fatalf("trash after sweep = %v; want only %s-c.md", entries, kept)
+	}
+}
+
+// A symlink to a sibling whose name starts with the root's name is outside
+// the library, even though the path shares the root's string prefix.
+func TestSymlinkToPrefixSiblingRejected(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows; covered by darwin/linux runs")
+	}
+	base := t.TempDir()
+	root := filepath.Join(base, "contexts")
+	sibling := root + "-other"
+	if err := os.MkdirAll(sibling, 0o700); err != nil {
+		t.Fatalf("mkdir sibling: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sibling, "secret.md"), []byte("secret"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	lib, err := contexts.Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// Open resolves the root, so link to the sibling through the same form.
+	if err := os.Symlink(lib.Root()+"-other", filepath.Join(lib.Root(), "leak")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if _, err := lib.Get("leak/secret.md"); !errors.Is(err, contexts.ErrSymlinkEscape) {
+		t.Fatalf("Get through sibling symlink = %v; want ErrSymlinkEscape", err)
+	}
+	if err := lib.Save("leak/leaked.md", "x"); !errors.Is(err, contexts.ErrSymlinkEscape) {
+		t.Fatalf("Save through sibling symlink = %v; want ErrSymlinkEscape", err)
+	}
+	if _, err := os.Stat(filepath.Join(sibling, "leaked.md")); !os.IsNotExist(err) {
+		t.Fatalf("Save wrote into the sibling: stat err = %v", err)
+	}
+}
+
 func TestSweepTrashRetention(t *testing.T) {
 	t.Parallel()
 	lib, root := newLib(t)
