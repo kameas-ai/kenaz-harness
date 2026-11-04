@@ -594,6 +594,10 @@ export function Fleet_MLStatus() {
   return window['go']['rpc']['Bindings']['Fleet_MLStatus']();
 }
 
+export function Fleet_MemorySyncContinueOlderNotes() {
+  return window['go']['rpc']['Bindings']['Fleet_MemorySyncContinueOlderNotes']();
+}
+
 export function Fleet_MemorySyncDisable(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Fleet_MemorySyncDisable'](arg1, arg2);
 }

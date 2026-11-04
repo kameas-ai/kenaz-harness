@@ -122,14 +122,15 @@ func TestDeleteCreatedBefore_SparesPostEraseSnapshotRows(t *testing.T) {
 	ctx := context.Background()
 	epoch := time.Now().UTC()
 	erasedBefore := FormatHLC(epoch.UnixMilli(), 0, "fleet")
-	if err := st.(SyncStore).ApplyRemote(ctx, []RemoteRecord{{ID: "pulled-post", Chunk: Chunk{ScopeKind: ScopeKindGlobal, Content: "p"}}}, epoch); err != nil {
+	ownerScope := AccountScope{Account: "a", LegacyOwner: "a"}
+	if err := st.(SyncStore).ApplyRemote(ctx, []RemoteRecord{{ID: "pulled-post", Chunk: Chunk{ScopeKind: ScopeKindGlobal, Content: "p"}}}, epoch, ownerScope); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Add(ctx, Chunk{ID: "local-pre", ScopeKind: ScopeKindGlobal, Content: "l", Embedding: []float32{1},
 		CreatedHLC: FormatHLC(epoch.Add(-time.Minute).UnixMilli(), 0, "dev"), CreatedAt: epoch}); err != nil {
 		t.Fatal(err)
 	}
-	n, err := st.(SyncStore).DeleteCreatedBefore(ctx, erasedBefore, epoch)
+	n, err := st.(SyncStore).DeleteCreatedBefore(ctx, erasedBefore, epoch, ownerScope)
 	if err != nil || n != 1 {
 		t.Fatalf("DeleteCreatedBefore = %d, %v", n, err)
 	}

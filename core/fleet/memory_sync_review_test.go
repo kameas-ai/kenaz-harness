@@ -609,7 +609,7 @@ func TestMemorySync_R2_FailedDisableRetriesForgetAll(t *testing.T) {
 		t.Fatal("forget-all intent must be persisted and not yet executed")
 	}
 	reopened, err := NewMemorySync(MemorySyncConfig{Client: newTestClient(t, w.srv), Store: a.store, Clock: a.clock,
-		Outbox: a.outbox, DataDir: a.dir, Caps: func() *Capabilities { return a.caps }, Lanes: a.lanes, Now: w.wall.now})
+		Outbox: a.outbox, DataDir: a.dir, Identity: a.identity, Caps: func() *Capabilities { return a.caps }, Lanes: a.lanes, Now: w.wall.now})
 	if err != nil {
 		t.Fatal(err)
 	}

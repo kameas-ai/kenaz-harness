@@ -104,6 +104,27 @@ async function enable() {
   }
 }
 
+// Wording from legal D164. The singular form only adjusts the grammar.
+const olderNotesLine = computed<string>(() => {
+  const n = status.value?.olderNotes ?? 0;
+  const account = status.value?.olderNotesAccount ?? 'this account';
+  return n === 1
+    ? `1 older note on this device will sync to ${account}. If it isn't yours, turn off memory sync before continuing.`
+    : `${n} older notes on this device will sync to ${account}. If they aren't yours, turn off memory sync before continuing.`;
+});
+
+async function continueOlderNotes() {
+  busy.value = true;
+  errorMsg.value = '';
+  try {
+    status.value = await client.fleet.memorySyncContinueOlderNotes();
+  } catch (err) {
+    errorMsg.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
 function startDisable() {
   confirmingDisable.value = true;
   deleteFromFleet.value = false;
@@ -203,6 +224,22 @@ async function confirmDisable() {
         on this device only — Fleet refused {{ status.blockedCount === 1 ? 'it' : 'them' }}
         (for example, content that looks like a credential). They are marked in Learned.
       </p>
+      <div
+        v-if="status.olderNotes > 0"
+        class="space-y-2 rounded-sm border border-border-muted p-3"
+        data-testid="memory-sync-older-notes"
+      >
+        <p>{{ olderNotesLine }}</p>
+        <button
+          type="button"
+          class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+          :disabled="busy"
+          data-testid="memory-sync-older-notes-continue"
+          @click="continueOlderNotes"
+        >
+          Continue
+        </button>
+      </div>
       <p v-if="laneLine" class="text-ink-muted" data-testid="memory-sync-lane">{{ laneLine }}</p>
       <p v-if="status.fleetError" class="text-ink-muted" data-testid="memory-sync-fleet-error">
         Could not read Fleet settings: {{ status.fleetError }}

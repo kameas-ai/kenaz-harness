@@ -362,6 +362,8 @@ export function Fleet_MLAckNotice(arg1:number,arg2:string):Promise<settings.MLSt
 
 export function Fleet_MLStatus():Promise<settings.MLStatusView>;
 
+export function Fleet_MemorySyncContinueOlderNotes():Promise<settings.MemorySyncStatusView>;
+
 export function Fleet_MemorySyncDisable(arg1:boolean,arg2:string):Promise<settings.MemorySyncStatusView>;
 
 export function Fleet_MemorySyncEnable(arg1:Array<string>,arg2:string):Promise<settings.MemorySyncStatusView>;

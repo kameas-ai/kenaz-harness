@@ -4917,6 +4917,10 @@ export interface MemorySyncStatus {
   blockedCount: number;
   /** Local sync-scope chunks not yet accepted by Fleet. */
   pendingCount: number;
+  /** Unstamped notes held until the one-time line is answered (legal D164). */
+  olderNotes: number;
+  /** Who those notes would sync to. */
+  olderNotesAccount?: string;
   fleetError?: string;
   lane: FleetSyncLaneView;
   /** Staff org pause (kenaz-fleet PR 206): show the paused banner, keep data-rights actions. */

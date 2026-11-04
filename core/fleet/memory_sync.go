@@ -208,6 +208,24 @@ func (e *MemorySyncError) Error() string {
 // ── persisted state ─────────────────────────────────────────────────────────
 
 type memSyncState struct {
+	// Account is who the embedded sync state belongs to: "<org>:<user>", ""
+	// until an account is first seen on this device (legal D164).
+	Account string `json:"account,omitempty"`
+	// LegacyOwner is the first account seen on this device: the only one
+	// that may upload unstamped notes. Set once.
+	LegacyOwner string `json:"legacy_owner,omitempty"`
+	// OlderNotesAck: the legacy owner continued past the one-time line, so
+	// unstamped notes may upload.
+	OlderNotesAck bool `json:"older_notes_ack,omitempty"`
+	// Parked holds other accounts' sync state, so an account that returns
+	// resumes its own opt-in, cursor and pending erase or forget-all.
+	Parked map[string]memSyncAccountState `json:"parked,omitempty"`
+
+	memSyncAccountState
+}
+
+// memSyncAccountState is the sync state of one account on this device.
+type memSyncAccountState struct {
 	Enabled        bool     `json:"enabled"`
 	Scopes         []string `json:"scopes,omitempty"`
 	ConsentVersion string   `json:"consent_version,omitempty"`
@@ -247,6 +265,9 @@ type MemorySyncConfig struct {
 	Clock   *memory.HLC
 	Outbox  *memory.ForgetOutbox
 	DataDir string
+	// Identity reads the signed-in account. nil = the identity file under
+	// DataDir, which is what production uses (see memory_sync_account.go).
+	Identity func() (Identity, error)
 	// Caps returns the live capability snapshot (nil = deny).
 	Caps  func() *Capabilities
 	Lanes *SyncLanes
@@ -504,6 +525,15 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 		m.lanes().RecordOff(LaneMemorySync, "fleet_disabled")
 		return
 	}
+	// Before anything else, including the data-rights requests below: every
+	// request from here on must act for the account the state belongs to.
+	if _, err := m.ensureAccount(); err != nil {
+		if !errors.Is(err, errNoAccount) {
+			logging.L().Warn("fleet.memory_sync.account_state_failed", "err", err.Error())
+		}
+		m.lanes().RecordOff(LaneMemorySync, "signed_out")
+		return
+	}
 	if paused, _ := m.orgPaused(); paused {
 		// A reversible staff hold, not a tier answer. Fleet keeps the
 		// data-rights half of the lane open while paused (kenaz-fleet
@@ -592,7 +622,7 @@ func (m *MemorySync) fail(err error) {
 		_ = m.update(func(s *memSyncState) { s.Enabled = false })
 		m.lanes().RecordOff(LaneMemorySync, "disabled_on_fleet")
 		return
-	case errors.Is(err, ErrNotSignedIn), errors.Is(err, ErrTokenExpired):
+	case errors.Is(err, ErrNotSignedIn), errors.Is(err, ErrTokenExpired), errors.Is(err, errNoAccount):
 		m.mu.Unlock()
 		m.lanes().RecordOff(LaneMemorySync, "signed_out")
 		return
@@ -657,6 +687,11 @@ func (m *MemorySync) cycle(ctx context.Context) error {
 // ── HTTP helpers ────────────────────────────────────────────────────────────
 
 func (m *MemorySync) doJSON(ctx context.Context, method, path string, body, out any) error {
+	// Checked per request, not per cycle: a sign-in can change the account
+	// mid-cycle, and everything queued belongs to the old one.
+	if key := m.currentAccount(); key == "" || key != m.state().Account {
+		return errNoAccount
+	}
 	var rd io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -878,13 +913,13 @@ func (m *MemorySync) beginReset(ctx context.Context, reason, erasedBefore string
 // cursor (Fleet guarantees it is >= the floor, #191).
 func (m *MemorySync) finishReset(ctx context.Context, cursor string) error {
 	st := m.state()
-	n, err := m.cfg.Store.DeleteSyncedBefore(ctx, st.ResetEpoch)
+	n, err := m.cfg.Store.DeleteSyncedBefore(ctx, st.ResetEpoch, m.scope())
 	if err != nil {
 		return err
 	}
 	erased := 0
 	if st.ResetPending == "erased" && st.ErasedBefore != "" {
-		if erased, err = m.cfg.Store.DeleteCreatedBefore(ctx, st.ErasedBefore, st.ResetEpoch); err != nil {
+		if erased, err = m.cfg.Store.DeleteCreatedBefore(ctx, st.ErasedBefore, st.ResetEpoch, m.scope()); err != nil {
 			return err
 		}
 	}
@@ -933,7 +968,7 @@ func (m *MemorySync) applyPage(ctx context.Context, recs []memPullRecord, at tim
 			Aliases:   r.Aliases,
 		})
 	}
-	if err := m.cfg.Store.ApplyRemote(ctx, out, at); err != nil {
+	if err := m.cfg.Store.ApplyRemote(ctx, out, at, m.scope()); err != nil {
 		return 0, err
 	}
 	if err := m.cfg.Outbox.Ack(acks...); err != nil {
@@ -988,7 +1023,8 @@ type pushEntry struct {
 
 func (m *MemorySync) push(ctx context.Context, set MemorySyncSettings) error {
 	scopes := enabledScopes(set)
-	forgets := m.cfg.Outbox.Pending()
+	scope, olderOK := m.scope(), m.state().OlderNotesAck
+	forgets := m.cfg.Outbox.PendingFor(scope)
 	all, err := m.cfg.Store.List(ctx)
 	if err != nil {
 		return err
@@ -996,6 +1032,9 @@ func (m *MemorySync) push(ctx context.Context, set MemorySyncSettings) error {
 	var ids []string
 	m.mu.Lock()
 	for _, c := range all {
+		if !mayPush(c, scope, olderOK) {
+			continue
+		}
 		if gen, skip := m.skipped[c.ID]; skip && gen == c.SyncGen {
 			continue
 		}
@@ -1040,6 +1079,13 @@ func (m *MemorySync) push(ctx context.Context, set MemorySyncSettings) error {
 		start = end
 	}
 	return nil
+}
+
+// mayPush is the account half of the push decision (D164): never another
+// account's note, never a note made signed out, and an unstamped note only
+// for the legacy owner once they've continued past the one-time line.
+func mayPush(c memory.Chunk, scope memory.AccountScope, olderOK bool) bool {
+	return scope.Owns(c) && (olderOK || !c.AccountUnstamped())
 }
 
 // pushCandidate: a chunk pushes when it is in an enabled sync scope and is
@@ -1315,13 +1361,24 @@ type MemorySyncStatus struct {
 	FleetError     string
 	BlockedCount   int
 	PendingPush    int
-	Lane           LaneSnapshot
+	// OlderNotes: unstamped notes held back until the legacy owner continues
+	// past the one-time line (D164). OlderNotesAccount names that account.
+	OlderNotes        int
+	OlderNotesAccount string
+	Lane              LaneSnapshot
 }
 
 // Status reads the local state, the lane, and (when entitled) Fleet's
 // settings — a user-initiated request, never made by the idle lane.
 func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
-	out := MemorySyncStatus{Entitled: m.entitled(), LocalEnabled: m.state().Enabled, Lane: m.lanes().Snapshot(LaneMemorySync)}
+	// A running cycle does this itself; don't wait for it to finish.
+	if m.cycleMu.TryLock() {
+		_, _ = m.ensureAccount()
+		m.cycleMu.Unlock()
+	}
+	st := m.state()
+	scope, current := m.scope(), m.currentAccount() != "" && m.currentAccount() == st.Account
+	out := MemorySyncStatus{Entitled: m.entitled(), LocalEnabled: st.Enabled, Lane: m.lanes().Snapshot(LaneMemorySync)}
 	out.OrgPaused, out.PausedCategory = m.orgPaused()
 	if m.isStopped() {
 		// A lane stopped by sign-out (or node_removed) records nothing; the
@@ -1331,14 +1388,27 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 	}
 	if all, err := m.cfg.Store.List(ctx); err == nil {
 		for _, c := range all {
-			if c.SyncBlocked != "" {
+			// Only this account's notes: the panel must not count another
+			// account's, or say they're waiting to sync here.
+			if !current || !scope.Owns(c) {
+				continue
+			}
+			held := c.AccountUnstamped() && !st.OlderNotesAck
+			switch {
+			case c.SyncBlocked != "":
 				out.BlockedCount++
-			} else if memory.IsSyncScope(c.ScopeKind) && (c.SyncDirty || c.SyncedAt.IsZero()) {
+			case !memory.IsSyncScope(c.ScopeKind) || !(c.SyncDirty || c.SyncedAt.IsZero()):
+			case held:
+				out.OlderNotes++
+			default:
 				out.PendingPush++
 			}
 		}
+		if out.OlderNotes > 0 {
+			out.OlderNotesAccount = m.accountLabel()
+		}
 	}
-	if !out.Entitled || m.cfg.Client == nil || m.cfg.Client.IsNop() {
+	if !out.Entitled || !current || m.cfg.Client == nil || m.cfg.Client.IsNop() {
 		return out
 	}
 	set, err := m.currentSettings(ctx, true)
@@ -1363,6 +1433,11 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 // Enable opts this user in on Fleet (PUT settings with consent) and this
 // device locally, then kicks a cycle. scopes must be ⊆ {long_term, global}.
 func (m *MemorySync) Enable(ctx context.Context, scopes []string, consentVersion string) (MemorySyncSettings, error) {
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+	if _, err := m.ensureAccount(); err != nil {
+		return MemorySyncSettings{}, err
+	}
 	if paused, cat := m.orgPaused(); paused {
 		// Enabling / widening is refused while paused; say so, not "tier".
 		return MemorySyncSettings{}, &OrgPausedError{PausedCategory: NormalizePausedCategory(cat)}
@@ -1433,6 +1508,10 @@ func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm 
 	}
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
+	// With no account known the opt-out is only recorded, on the state it
+	// belongs to, and finishes when that account is next signed in. Nothing
+	// is sent: the tokens could be anyone's.
+	_, acctErr := m.ensureAccount()
 	if err := m.update(func(s *memSyncState) {
 		s.Enabled, s.DisablePending = false, true
 		s.ForgetAllPending = s.ForgetAllPending || deleteFromFleet
@@ -1444,6 +1523,12 @@ func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm 
 	if m.cfg.Client == nil || m.cfg.Client.IsNop() {
 		if deleteFromFleet {
 			return 0, ErrFleetDisabled
+		}
+		return 0, nil
+	}
+	if acctErr != nil {
+		if deleteFromFleet {
+			return 0, acctErr
 		}
 		return 0, nil
 	}
@@ -1471,7 +1556,7 @@ func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 	if err := m.doJSON(ctx, http.MethodPost, "/api/v1/memory/forget-all", map[string]string{"confirm": "forget-all"}, &resp); err != nil {
 		return 0, err
 	}
-	pend := m.cfg.Outbox.Pending()
+	pend := m.cfg.Outbox.PendingFor(m.scope())
 	ids := make([]string, 0, len(pend))
 	for _, p := range pend {
 		ids = append(ids, p.ID)
@@ -1479,7 +1564,7 @@ func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 	if err := m.cfg.Outbox.Ack(ids...); err != nil {
 		return resp.Erased, err
 	}
-	if err := m.cfg.Store.ClearSyncMarkers(ctx); err != nil {
+	if err := m.cfg.Store.ClearSyncMarkers(ctx, m.scope()); err != nil {
 		return resp.Erased, err
 	}
 	return resp.Erased, m.update(func(s *memSyncState) {
@@ -1490,7 +1575,7 @@ func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 
 // flushForgets sends every queued forget (best effort; failures stay queued).
 func (m *MemorySync) flushForgets(ctx context.Context) {
-	pend := m.cfg.Outbox.Pending()
+	pend := m.cfg.Outbox.PendingFor(m.scope())
 	if len(pend) == 0 {
 		return
 	}

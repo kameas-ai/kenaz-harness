@@ -77,6 +77,10 @@ type PruneCapable interface {
 // generic so a future chromem-go-backed implementation can replace it
 // without touching callers.
 type chromemStore struct {
+	// account returns the signed-in account's key (see account.go). Called
+	// under mu; nil until wired.
+	account func() string
+
 	mu     sync.RWMutex
 	path   string
 	chunks []Chunk
@@ -105,6 +109,14 @@ type chromemStore struct {
 // node id so core/memory never imports core/fleet.
 type ClockSetter interface {
 	SetClock(c *HLC)
+}
+
+// SetAccountSource installs the signed-in account's key ("" = signed out).
+// nil disables account stamping.
+func (s *chromemStore) SetAccountSource(fn func() string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.account = fn
 }
 
 // SetClock installs (or replaces) the HLC. nil disables stamping.
@@ -310,6 +322,11 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 // a new Fleet record must carry fields.scope_kind. Caller-supplied stamps
 // are kept (the sync path inserts pulled chunks with their own HLCs).
 func (s *chromemStore) stampCreateLocked(c *Chunk) {
+	if c.Account == "" && s.account != nil {
+		if c.Account = s.account(); c.Account == "" {
+			c.Account = AccountSignedOut
+		}
+	}
 	if c.CreatedHLC == "" {
 		c.CreatedHLC = s.tickLocked()
 	}
@@ -331,6 +348,7 @@ func (s *chromemStore) stampCreateLocked(c *Chunk) {
 // LWW field whose value changed is re-stamped so the edit wins on Fleet.
 func (s *chromemStore) replaceLocked(old, in Chunk) Chunk {
 	out := in
+	out.Account = old.Account // ownership is fixed at creation (D164)
 	out.CreatedHLC = old.CreatedHLC
 	if out.CreatedHLC == "" {
 		out.CreatedHLC = in.CreatedHLC

@@ -23,6 +23,7 @@ function status(over: Partial<MemorySyncStatus> = {}): MemorySyncStatus {
     maxBytes: 52428800,
     blockedCount: 0,
     pendingCount: 0,
+    olderNotes: 0,
     lane: { status: 'unknown', consecutiveFailures: 0 },
     ...over,
   };
@@ -34,13 +35,14 @@ function mountWith(initial: MemorySyncStatus) {
     status({ enabled: true, scopes, liveRecords: 3 }),
   );
   const memorySyncDisable = vi.fn(async () => status({ enabled: false }));
+  const memorySyncContinueOlderNotes = vi.fn(async () => status({ enabled: true, olderNotes: 0 }));
   const client = createFakeHarnessClient({
-    fleet: { memorySyncStatus, memorySyncEnable, memorySyncDisable } as any,
+    fleet: { memorySyncStatus, memorySyncEnable, memorySyncDisable, memorySyncContinueOlderNotes } as any,
   });
   const wrapper = mount(MemorySyncPanel, {
     global: { provide: { [HarnessClientKey as symbol]: client } },
   });
-  return { wrapper, memorySyncStatus, memorySyncEnable, memorySyncDisable };
+  return { wrapper, memorySyncStatus, memorySyncEnable, memorySyncDisable, memorySyncContinueOlderNotes };
 }
 
 describe('MemorySyncPanel', () => {
@@ -112,5 +114,27 @@ describe('MemorySyncPanel', () => {
     await confirm.trigger('click');
     await flushPromises();
     expect(memorySyncDisable).toHaveBeenCalledWith(true, 'forget-all');
+  });
+
+  // Legal D164: the exact line, shown before older notes first upload.
+  it('shows the one-time line about older notes and continues on request', async () => {
+    const { wrapper, memorySyncContinueOlderNotes } = mountWith(
+      status({ enabled: true, olderNotes: 3, olderNotesAccount: 'a@example.test' }),
+    );
+    await flushPromises();
+    const box = wrapper.find('[data-testid="memory-sync-older-notes"]');
+    expect(box.text()).toContain(
+      "3 older notes on this device will sync to a@example.test. If they aren't yours, turn off memory sync before continuing.",
+    );
+    await wrapper.find('[data-testid="memory-sync-older-notes-continue"]').trigger('click');
+    await flushPromises();
+    expect(memorySyncContinueOlderNotes).toHaveBeenCalledOnce();
+    expect(wrapper.find('[data-testid="memory-sync-older-notes"]').exists()).toBe(false);
+  });
+
+  it('hides the line when no older notes are waiting', async () => {
+    const { wrapper } = mountWith(status({ enabled: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-older-notes"]').exists()).toBe(false);
   });
 });

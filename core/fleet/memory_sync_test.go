@@ -45,6 +45,23 @@ type memDevice struct {
 	ms     *MemorySync
 	lanes  *SyncLanes
 	caps   *Capabilities
+
+	idMu sync.Mutex
+	id   Identity
+}
+
+// signIn changes who the device's identity says is signed in. A zero Identity
+// reads as nobody.
+func (d *memDevice) signIn(id Identity) {
+	d.idMu.Lock()
+	defer d.idMu.Unlock()
+	d.id = id
+}
+
+func (d *memDevice) identity() (Identity, error) {
+	d.idMu.Lock()
+	defer d.idMu.Unlock()
+	return d.id, nil
 }
 
 type memWorld struct {
@@ -92,15 +109,20 @@ func (w *memWorld) deviceAt(node, dir string, skew time.Duration) *memDevice {
 		t.Fatal(err)
 	}
 	d := &memDevice{t: t, dir: dir, store: st.(memory.SyncStore), clock: clock, outbox: ob, lanes: NewSyncLanes(),
+		id:   Identity{OrgID: "org-test", UserID: "user-test"},
 		caps: &Capabilities{Enabled: map[Capability]bool{CapMemorySync: true}, FetchedAt: time.Now()}}
 	ms, err := NewMemorySync(MemorySyncConfig{
-		Client: newTestClient(t, w.srv), Store: d.store, Clock: clock, Outbox: ob, DataDir: dir,
+		Client: newTestClient(t, w.srv), Store: d.store, Clock: clock, Outbox: ob, DataDir: dir, Identity: d.identity,
 		Caps: func() *Capabilities { return d.caps }, Lanes: d.lanes, Now: w.wall.now, HomeDir: "/Users/test",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.ms = ms
+	st.(memory.AccountStamper).SetAccountSource(func() string {
+		id, _ := d.identity()
+		return AccountKey(id)
+	})
 	return d
 }
 
@@ -746,6 +768,9 @@ func TestMemorySync_V091GobFullSyncCycle(t *testing.T) {
 	b := w.device("devB", 0)
 	a.enable()
 	b.enable()
+	if err := a.ms.ContinueOlderNotes(context.Background()); err != nil { // the one-time line (D164)
+		t.Fatal(err)
+	}
 	a.sync()
 	g := w.fleet.live("mem-v091-global")
 	if g == nil || g.recall["devA"] != 3 || !g.pinned || g.pinnedHLC == "" || g.scopeHLC == "" || g.title != "Build uses make" {

@@ -53,7 +53,8 @@ type SyncStore interface {
 	// ApplySyncOutcomes applies a push response in one save.
 	ApplySyncOutcomes(ctx context.Context, outs []SyncOutcome, at time.Time) error
 	// ApplyRemote applies one pull page in one save.
-	ApplyRemote(ctx context.Context, recs []RemoteRecord, at time.Time) error
+	// Only rows scope owns are touched; new rows are stamped scope.Account.
+	ApplyRemote(ctx context.Context, recs []RemoteRecord, at time.Time, scope AccountScope) error
 	// LatestSyncedAt is the newest SyncedAt in the store — a reset epoch
 	// must sort strictly after it so the post-reset sweep can tell rows the
 	// snapshot touched from rows it did not.
@@ -62,17 +63,20 @@ type SyncStore interface {
 	// to us (SyncedAt set) that the reset snapshot did not touch
 	// (SyncedAt before epoch) — the reset snapshot rule, persisted across
 	// cycles via the epoch instead of an in-memory keep set.
-	DeleteSyncedBefore(ctx context.Context, epoch time.Time) (int, error)
+	// Only rows scope owns are candidates: one account's reset must not
+	// sweep another account's notes off the device (D164).
+	DeleteSyncedBefore(ctx context.Context, epoch time.Time, scope AccountScope) (int, error)
 	// DeleteCreatedBefore deletes every sync-scope chunk created before
 	// the erased_before HLC (forget-all replay), synced or not — EXCEPT
 	// rows the post-erase snapshot touched (SyncedAt >= epoch): anything
 	// Fleet still holds after the erase is post-erase by definition, and a
 	// pulled chunk's CreatedHLC is "" (Fleet does not carry it), which
 	// would otherwise sort below every erased_before.
-	DeleteCreatedBefore(ctx context.Context, hlc string, epoch time.Time) (int, error)
+	// Only rows scope owns are candidates (D164).
+	DeleteCreatedBefore(ctx context.Context, hlc string, epoch time.Time, scope AccountScope) (int, error)
 	// ClearSyncMarkers makes every chunk read as never-synced (this
 	// device ran forget-all: nothing it pushed exists on Fleet anymore).
-	ClearSyncMarkers(ctx context.Context) error
+	ClearSyncMarkers(ctx context.Context, scope AccountScope) error
 }
 
 // SyncOutcomeKind is the local consequence of one push result.
@@ -233,6 +237,9 @@ func (s *chromemStore) ApplySyncOutcomes(_ context.Context, outs []SyncOutcome, 
 				continue
 			}
 			if j, has := idx[o.CanonicalID]; has && !drop[j] {
+				if s.chunks[j].Account != c.Account {
+					continue // another account's row: never fold across accounts (D164)
+				}
 				mergeAliasInto(&s.chunks[j], *c)
 				drop[i] = true
 				continue
@@ -276,7 +283,7 @@ func mergeAliasInto(canon *Chunk, alias Chunk) {
 // ApplyRemote implements SyncStore. Gate denials (a local Cedar
 // memory_write policy refusing the scope) skip the record: pulled memory
 // is a local write like any other.
-func (s *chromemStore) ApplyRemote(ctx context.Context, recs []RemoteRecord, at time.Time) error {
+func (s *chromemStore) ApplyRemote(ctx context.Context, recs []RemoteRecord, at time.Time, scope AccountScope) error {
 	if len(recs) == 0 {
 		return nil
 	}
@@ -297,6 +304,9 @@ func (s *chromemStore) ApplyRemote(ctx context.Context, recs []RemoteRecord, at 
 				continue
 			}
 			c := &s.chunks[i]
+			if !scope.Owns(*c) {
+				continue // same id, another account's note (D164)
+			}
 			if r.Reason == TombstoneLeftSyncScope && (!IsSyncScope(c.ScopeKind) || !c.FleetMayKnow()) {
 				// The demoting device keeps its chunk (ruling OQ-B). It is
 				// recognisable two ways: its local scope is outside the
@@ -317,7 +327,7 @@ func (s *chromemStore) ApplyRemote(ctx context.Context, recs []RemoteRecord, at 
 		}
 		// Aliases: local rows under an alias id fold into the canonical.
 		for _, a := range r.Aliases {
-			if j, ok := idx[a]; ok && a != r.ID {
+			if j, ok := idx[a]; ok && a != r.ID && scope.Owns(s.chunks[j]) {
 				alias := s.chunks[j]
 				if k, has := idx[r.ID]; has {
 					mergeAliasInto(&s.chunks[k], alias)
@@ -331,6 +341,9 @@ func (s *chromemStore) ApplyRemote(ctx context.Context, recs []RemoteRecord, at 
 		in := r.Chunk
 		if i, ok := idx[r.ID]; ok {
 			c := &s.chunks[i]
+			if !scope.Owns(*c) {
+				continue // same id, another account's note (D164)
+			}
 			// Content is immutable on Fleet; only the LWW fields, the
 			// counters and last_accessed merge.
 			if HLCAfter(in.TitleHLC, c.TitleHLC) {
@@ -358,6 +371,7 @@ func (s *chromemStore) ApplyRemote(ctx context.Context, recs []RemoteRecord, at 
 			continue
 		}
 		in.ID = r.ID
+		in.Account = scope.Account
 		in.ScopeID = ""
 		in.Embedding, in.EmbedPending = nil, true
 		in.RecallOwn = r.OwnRecall
@@ -395,12 +409,12 @@ func (s *chromemStore) LatestSyncedAt(_ context.Context) time.Time {
 }
 
 // DeleteSyncedBefore implements SyncStore.
-func (s *chromemStore) DeleteSyncedBefore(_ context.Context, epoch time.Time) (int, error) {
+func (s *chromemStore) DeleteSyncedBefore(_ context.Context, epoch time.Time, scope AccountScope) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	drop := map[int]bool{}
 	for i, c := range s.chunks {
-		if !c.SyncedAt.IsZero() && c.SyncedAt.Before(epoch) {
+		if scope.Owns(c) && !c.SyncedAt.IsZero() && c.SyncedAt.Before(epoch) {
 			drop[i] = true
 		}
 	}
@@ -416,7 +430,7 @@ func (s *chromemStore) DeleteSyncedBefore(_ context.Context, epoch time.Time) (i
 // Fleet, so a Fleet erase has nothing to say about it. An unstamped legacy
 // chunk ("" sorts first) predates every erase — unless the post-erase
 // snapshot touched it.
-func (s *chromemStore) DeleteCreatedBefore(_ context.Context, hlc string, epoch time.Time) (int, error) {
+func (s *chromemStore) DeleteCreatedBefore(_ context.Context, hlc string, epoch time.Time, scope AccountScope) (int, error) {
 	if hlc == "" {
 		return 0, nil
 	}
@@ -427,7 +441,7 @@ func (s *chromemStore) DeleteCreatedBefore(_ context.Context, hlc string, epoch 
 		if !c.SyncedAt.IsZero() && !c.SyncedAt.Before(epoch) {
 			continue // in the post-erase snapshot ⇒ post-erase
 		}
-		if IsSyncScope(c.ScopeKind) && c.CreatedHLC < hlc {
+		if scope.Owns(c) && IsSyncScope(c.ScopeKind) && c.CreatedHLC < hlc {
 			drop[i] = true
 		}
 	}
@@ -439,11 +453,13 @@ func (s *chromemStore) DeleteCreatedBefore(_ context.Context, hlc string, epoch 
 }
 
 // ClearSyncMarkers implements SyncStore.
-func (s *chromemStore) ClearSyncMarkers(_ context.Context) error {
+func (s *chromemStore) ClearSyncMarkers(_ context.Context, scope AccountScope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.chunks {
-		s.chunks[i].SyncedAt, s.chunks[i].SyncSentAt = time.Time{}, time.Time{}
+		if scope.Owns(s.chunks[i]) {
+			s.chunks[i].SyncedAt, s.chunks[i].SyncSentAt = time.Time{}, time.Time{}
+		}
 	}
 	return s.saveLocked()
 }

@@ -42,6 +42,10 @@ type MemorySyncStatusView struct {
 	BlockedCount int `json:"blockedCount"`
 	// PendingCount is local sync-scope chunks not yet accepted by Fleet.
 	PendingCount int `json:"pendingCount"`
+	// OlderNotes is unstamped notes held back until the one-time line is
+	// answered (legal D164); OlderNotesAccount is who they would sync to.
+	OlderNotes        int    `json:"olderNotes"`
+	OlderNotesAccount string `json:"olderNotesAccount,omitempty"`
 	// FleetError is the last settings-fetch error ("" on success).
 	FleetError string `json:"fleetError,omitempty"`
 	// Lane is the memory_sync lane health.
@@ -71,6 +75,8 @@ func memorySyncView(s fleet.MemorySyncStatus) MemorySyncStatusView {
 		CurrentConsentVersion: fleet.MemoryConsentVersion,
 		BlockedCount:          s.BlockedCount,
 		PendingCount:          s.PendingPush,
+		OlderNotes:            s.OlderNotes,
+		OlderNotesAccount:     s.OlderNotesAccount,
 		FleetError:            s.FleetError,
 		Lane:                  laneToView(s.Lane),
 		OrgPaused:             s.OrgPaused,
@@ -103,6 +109,18 @@ func (a *API) FleetMemorySyncEnable(ctx context.Context, scopes []string, consen
 		return MemorySyncStatusView{}, ErrMemorySyncNotWired
 	}
 	if _, err := ms.Enable(ctx, scopes, consentVersion); err != nil {
+		return MemorySyncStatusView{}, err
+	}
+	return memorySyncView(ms.Status(ctx)), nil
+}
+
+// FleetMemorySyncContinueOlderNotes implements SettingsAPI.
+func (a *API) FleetMemorySyncContinueOlderNotes(ctx context.Context) (MemorySyncStatusView, error) {
+	ms := a.memorySync.Load()
+	if ms == nil {
+		return MemorySyncStatusView{}, ErrMemorySyncNotWired
+	}
+	if err := ms.ContinueOlderNotes(ctx); err != nil {
 		return MemorySyncStatusView{}, err
 	}
 	return memorySyncView(ms.Status(ctx)), nil

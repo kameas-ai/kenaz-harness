@@ -2344,6 +2344,12 @@ func New(c *core.Core, opts ...Option) *API {
 		gs.SetGate(&memoryGateAdapter{gate: a.cedarGate()})
 	}
 	a.memClock = openMemoryClock(c, memStore)
+	// Every new note records whose it is (legal D164). A store that can't
+	// carry the stamp can't sync either.
+	if as, ok := memStore.(corememory.AccountStamper); ok && c != nil && c.DataDir() != "" {
+		accountDir := c.DataDir()
+		as.SetAccountSource(func() string { return corefleet.CurrentAccountKey(accountDir) })
+	}
 	a.memForgets = openMemoryForgetOutbox(c, memStore, a.memClock)
 	personalForLLM := newPersonalStore(c)
 	a.personalStore = personalForLLM
