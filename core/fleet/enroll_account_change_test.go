@@ -66,7 +66,7 @@ func TestEnroll_SignInDuringARunningEnrollGetsItsOwnAnswer(t *testing.T) {
 	}
 
 	close(aRelease)
-	if err := <-aErr; !errors.Is(err, errEnrollTokenChanged) {
+	if err := <-aErr; !errors.Is(err, ErrEnrollTokenChanged) {
 		t.Fatalf("A's late enroll err = %v", err)
 	}
 	saved, err := LoadIdentity(dir)

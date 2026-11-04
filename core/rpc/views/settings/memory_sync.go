@@ -46,6 +46,13 @@ type MemorySyncStatusView struct {
 	// answered (legal D164); OlderNotesAccount is who they would sync to.
 	OlderNotes        int    `json:"olderNotes"`
 	OlderNotesAccount string `json:"olderNotesAccount,omitempty"`
+	// UnresolvedNotes stay on this device: the keychain couldn't be read when
+	// they were written.
+	UnresolvedNotes int `json:"unresolvedNotes"`
+	// InheritedErase, InheritedOptOut: an earlier version left that request
+	// unfinished. Each is reported once.
+	InheritedErase  bool `json:"inheritedErase,omitempty"`
+	InheritedOptOut bool `json:"inheritedOptOut,omitempty"`
 	// FleetError is the last settings-fetch error ("" on success).
 	FleetError string `json:"fleetError,omitempty"`
 	// Lane is the memory_sync lane health.
@@ -77,6 +84,9 @@ func memorySyncView(s fleet.MemorySyncStatus) MemorySyncStatusView {
 		PendingCount:          s.PendingPush,
 		OlderNotes:            s.OlderNotes,
 		OlderNotesAccount:     s.OlderNotesAccount,
+		UnresolvedNotes:       s.UnresolvedNotes,
+		InheritedErase:        s.InheritedErase,
+		InheritedOptOut:       s.InheritedOptOut,
 		FleetError:            s.FleetError,
 		Lane:                  laneToView(s.Lane),
 		OrgPaused:             s.OrgPaused,

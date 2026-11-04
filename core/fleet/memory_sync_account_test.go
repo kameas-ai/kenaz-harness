@@ -3,11 +3,15 @@ package fleet
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/keyring"
 	"github.com/kameas-ai/kenaz-harness/core/memory"
 )
 
@@ -302,18 +306,122 @@ func TestAccountGuard_NoteStampFollowsTheTokenAndIdentity(t *testing.T) {
 		t.Fatalf("signed in: %q", got)
 	}
 	saveTestTokens(t, accountB.UserID) // sign-in before its enroll answers
-	if got := CurrentAccountKey(d.dir); got != memory.AccountUnknown {
+	pendingB := memory.PendingAccount(TokenIdentityKey())
+	if got := CurrentAccountKey(d.dir); got != pendingB {
 		t.Fatalf("A's identity beside B's token: %q", got)
 	}
 	d.signIn(Identity{})
-	if got := CurrentAccountKey(d.dir); got != memory.AccountUnknown {
+	if got := CurrentAccountKey(d.dir); got != pendingB {
 		t.Fatalf("tokens with no identity: %q", got)
+	}
+	if err := SaveIdentity(d.dir, Identity{OrgID: "org-b", UserID: "user-b"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := CurrentAccountKey(d.dir); got != pendingB {
+		t.Fatalf("an identity with no token record: %q", got)
 	}
 	if err := ClearTokens(); err != nil {
 		t.Fatal(err)
 	}
 	if got := CurrentAccountKey(d.dir); got != "" {
 		t.Fatalf("no tokens: %q", got)
+	}
+}
+
+// The reviewer's reproduction: A owns the older notes and has continued past the
+// line. B's note, written before B's enroll answers, must go to B and never to A.
+func TestAccountGuard_NoteWrittenBeforeEnrollAnswersGoesToItsTokensAccount(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	if err := d.ms.ContinueOlderNotes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d.sync()
+
+	saveTestTokens(t, accountB.UserID) // identity still names A
+	d.add("b-window", memory.ScopeKindLongTerm, "written before B's enroll answered")
+
+	d.signIn(accountA)
+	d.sync()
+	d.sync()
+	if pushedIDs(w.fleet)["b-window"] {
+		t.Fatal("B's note uploaded to A")
+	}
+	if st := d.ms.Status(ctx); st.OlderNotes != 0 || st.PendingPush != 0 {
+		t.Fatalf("A's panel counts B's note: %+v", st)
+	}
+
+	d.signIn(accountB)
+	d.enable()
+	if got := d.ms.Status(ctx).PendingPush; got != 1 {
+		t.Fatalf("B's panel: PendingPush = %d", got)
+	}
+	d.sync()
+	if !pushedIDs(w.fleet)["b-window"] {
+		t.Fatal("B's own note must upload once B is confirmed")
+	}
+}
+
+// A keychain that can't answer proves nothing about who is signed in: the note
+// isn't called signed out, nobody can upload it, and Settings shows it.
+func TestAccountGuard_FailedKeychainReadKeepsTheNoteOnTheDevice(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	d.sync()
+
+	keychainGet = func(string, string) (string, error) { return "", errors.New("keychain locked") }
+	d.add("locked", memory.ScopeKindLongTerm, "written while the keychain was locked")
+	keychainGet = keyring.Get
+	if got := accountChunk(t, d, "locked").Account; got != memory.AccountUnresolved {
+		t.Fatalf("account = %q", got)
+	}
+	d.signIn(accountA)
+	d.sync()
+	d.sync()
+	if pushedIDs(w.fleet)["locked"] {
+		t.Fatal("an unresolved note must not upload")
+	}
+	if got := d.ms.Status(ctx).UnresolvedNotes; got != 1 {
+		t.Fatalf("UnresolvedNotes = %d", got)
+	}
+}
+
+// Every send goes through the check, including the retry after a 401: a host
+// that hands over another account's token gets nothing sent with it.
+func TestAccountGuard_BrokeredTokenChangeOn401SendsNothing(t *testing.T) {
+	saveTestTokens(t, accountA.UserID)
+	want := TokenIdentityKey()
+	token := testJWT(accountA.UserID)
+	var mu sync.Mutex
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		token = testJWT(accountB.UserID) // the host moves on while this is answered
+		mu.Unlock()
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	SetExternalTokenSource(func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return token
+	})
+	defer SetExternalTokenSource(nil)
+	c := newTestClient(t, srv)
+	if _, err := c.do(requireTokenKey(context.Background(), want), "GET", "/api/v1/memory/settings", nil); !errors.Is(err, errNoAccount) {
+		t.Fatalf("do err = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 1 {
+		t.Fatalf("%d requests; the retry must not go out under B's token", requests)
 	}
 }
 
@@ -462,13 +570,14 @@ func TestUpgrade_V0100_OneTimeLineCountsOnlyWhatWouldUpload(t *testing.T) {
 	d.sync()
 
 	// A recall dirties a note already on Fleet. It isn't an older note to upload.
-	if err := d.ms.update(func(s *memSyncState) { s.Scopes = []string{"long_term"} }); err != nil {
+	// Local scopes can be stale; the count follows what Fleet says push will use.
+	if err := d.ms.update(func(s *memSyncState) { s.Scopes = []string{"global"} }); err != nil {
 		t.Fatal(err)
 	}
 	if got := d.ms.Status(ctx).OlderNotes; got != 1 {
 		t.Fatalf("OlderNotes = %d, want only the unsynced long-term note", got)
 	}
-	if err := d.ms.update(func(s *memSyncState) { s.Scopes = []string{"global"} }); err != nil {
+	if _, err := d.ms.Enable(ctx, []string{"global"}, MemoryConsentVersion); err != nil {
 		t.Fatal(err)
 	}
 	if got := d.ms.Status(ctx).OlderNotes; got != 0 {
@@ -509,5 +618,18 @@ func TestUpgrade_V0100_InheritedForgetAllIsNotRunForTheFirstAccount(t *testing.T
 	}
 	if w.fleet.forgetAllCount() != 0 {
 		t.Fatal("the inherited erase ran under the first account")
+	}
+	st := d.ms.Status(context.Background())
+	if !st.InheritedErase || !st.InheritedOptOut {
+		t.Fatalf("both unfinished requests must be reported: %+v", st)
+	}
+	if again := d.ms.Status(context.Background()); again.InheritedErase || again.InheritedOptOut {
+		t.Fatalf("reported more than once: %+v", again)
+	}
+	if _, err := d.ms.Disable(context.Background(), true, "forget-all"); err != nil {
+		t.Fatalf("running it again: %v", err)
+	}
+	if w.fleet.forgetAllCount() != 1 {
+		t.Fatal("running the erase again must reach Fleet")
 	}
 }

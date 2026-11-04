@@ -9,7 +9,7 @@
  * disclosure. Disabling keeps Fleet's copy unless the user also asks to
  * delete it, which needs the literal confirmation "forget-all".
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MemorySyncStatus } from '@/lib/types';
 import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
@@ -25,6 +25,10 @@ const scopeGlobal = ref(true);
 const confirmingDisable = ref(false);
 const deleteFromFleet = ref(false);
 const confirmText = ref('');
+// Reported once by the backend, so held here until the panel goes away.
+const inheritedEraseNotice = ref(false);
+const inheritedOptOutNotice = ref(false);
+const eraseConfirmText = ref('');
 
 async function refresh() {
   try {
@@ -35,6 +39,12 @@ async function refresh() {
 }
 
 onMounted(refresh);
+
+watch(status, (s) => {
+  if (s?.inheritedErase) inheritedEraseNotice.value = true;
+  if (s?.inheritedOptOut) inheritedOptOutNotice.value = true;
+  if (s?.enabled) inheritedOptOutNotice.value = false;
+});
 
 // A staff org pause (kenaz-fleet PR 206) withholds memory_sync, but the panel
 // stays visible: it shows the paused state and keeps the data-rights
@@ -113,6 +123,19 @@ const olderNotesLine = computed<string>(() => {
     : `${n} older notes on this device will sync to ${account}. If they aren't yours, turn off memory sync before continuing.`;
 });
 
+async function runInheritedErase() {
+  busy.value = true;
+  errorMsg.value = '';
+  try {
+    status.value = await client.fleet.memorySyncDisable(true, eraseConfirmText.value);
+    inheritedEraseNotice.value = false;
+  } catch (err) {
+    errorMsg.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function continueOlderNotes() {
   busy.value = true;
   errorMsg.value = '';
@@ -156,6 +179,38 @@ async function confirmDisable() {
     </h2>
 
     <OrgPausedBanner v-if="paused" force :category="status.pausedCategory" />
+
+    <!-- Requests an earlier version left unfinished. Wording from legal. -->
+    <p v-if="inheritedOptOutNotice" class="text-[12px] text-signal-warn" data-testid="memory-sync-inherited-opt-out">
+      Memory sync was turned off by an earlier request that hadn't finished. You can turn it back on here.
+    </p>
+    <div
+      v-if="inheritedEraseNotice"
+      class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+      data-testid="memory-sync-inherited-erase"
+    >
+      <p>An earlier request to erase all your notes didn't finish. If you still want that, run it again.</p>
+      <label for="memory-sync-erase-confirm" class="block text-ink-muted">
+        Type <code>forget-all</code> to confirm.
+      </label>
+      <input
+        id="memory-sync-erase-confirm"
+        v-model="eraseConfirmText"
+        type="text"
+        autocomplete="off"
+        class="w-48 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-mono"
+        data-testid="memory-sync-erase-confirm-text"
+      />
+      <button
+        type="button"
+        class="block px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+        :disabled="busy || eraseConfirmText !== 'forget-all'"
+        data-testid="memory-sync-erase-run"
+        @click="runInheritedErase"
+      >
+        Delete from Fleet
+      </button>
+    </div>
 
     <!-- Off: disclosure + scope choice + consent. Turning sync ON is a paid
          action, so it is not offered while paused. -->
@@ -300,6 +355,13 @@ async function confirmDisable() {
 
     <p class="text-[12px] text-ink-muted" data-testid="memory-sync-signed-out-note">
       Notes you make while signed out stay on this device and don't sync.
+    </p>
+    <p
+      v-if="(status.unresolvedNotes ?? 0) > 0"
+      class="text-[12px] text-ink-muted"
+      data-testid="memory-sync-unresolved"
+    >
+      {{ status.unresolvedNotes }} {{ status.unresolvedNotes === 1 ? 'note stays' : 'notes stay' }} on this device only.
     </p>
 
     <p v-if="errorMsg" class="text-[12px] text-signal-danger" data-testid="memory-sync-error">{{ errorMsg }}</p>

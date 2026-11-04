@@ -24,6 +24,7 @@ function status(over: Partial<MemorySyncStatus> = {}): MemorySyncStatus {
     blockedCount: 0,
     pendingCount: 0,
     olderNotes: 0,
+    unresolvedNotes: 0,
     lane: { status: 'unknown', consecutiveFailures: 0 },
     ...over,
   };
@@ -145,5 +146,35 @@ describe('MemorySyncPanel', () => {
     expect(wrapper.find('[data-testid="memory-sync-signed-out-note"]').text()).toBe(
       "Notes you make while signed out stay on this device and don't sync.",
     );
+  });
+
+  // Legal: requests an earlier version left unfinished are never dropped silently.
+  it('offers an inherited erase once and runs it only after the typed confirmation', async () => {
+    const { wrapper, memorySyncDisable } = mountWith(status({ inheritedErase: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-inherited-erase"]').text()).toContain(
+      "An earlier request to erase all your notes didn't finish. If you still want that, run it again.",
+    );
+    const run = wrapper.find('[data-testid="memory-sync-erase-run"]');
+    expect(run.attributes('disabled')).toBeDefined();
+    await wrapper.find('[data-testid="memory-sync-erase-confirm-text"]').setValue('forget-all');
+    await run.trigger('click');
+    await flushPromises();
+    expect(memorySyncDisable).toHaveBeenCalledWith(true, 'forget-all');
+    expect(wrapper.find('[data-testid="memory-sync-inherited-erase"]').exists()).toBe(false);
+  });
+
+  it('says when an inherited opt-out turned sync off', async () => {
+    const { wrapper } = mountWith(status({ inheritedOptOut: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-inherited-opt-out"]').text()).toBe(
+      "Memory sync was turned off by an earlier request that hadn't finished. You can turn it back on here.",
+    );
+  });
+
+  it('shows notes kept on this device', async () => {
+    const { wrapper } = mountWith(status({ unresolvedNotes: 2 }));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-unresolved"]').text()).toBe('2 notes stay on this device only.');
   });
 });

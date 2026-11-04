@@ -34,6 +34,10 @@ func TestAccountScope_Owns(t *testing.T) {
 		{"rewritten unstamped, other account", other, Chunk{Account: AccountUnknown}, false},
 		{"signed out", owner, Chunk{Account: AccountSignedOut}, false},
 		{"zero scope owns nothing", AccountScope{}, Chunk{}, false},
+		{"unresolved, nobody", owner, Chunk{Account: AccountUnresolved}, false},
+		{"pending, its token", AccountScope{Account: "b", LegacyOwner: "a", TokenKey: "tb"}, Chunk{Account: PendingAccount("tb")}, true},
+		{"pending, another token", AccountScope{Account: "a", LegacyOwner: "a", TokenKey: "ta"}, Chunk{Account: PendingAccount("tb")}, false},
+		{"pending, not the legacy owner's", owner, Chunk{Account: PendingAccount("tb")}, false},
 	}
 	for _, tc := range cases {
 		if got := tc.scope.Owns(tc.c); got != tc.want {

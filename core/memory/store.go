@@ -77,8 +77,8 @@ type PruneCapable interface {
 // generic so a future chromem-go-backed implementation can replace it
 // without touching callers.
 type chromemStore struct {
-	// account returns the signed-in account's key (see account.go). Called
-	// under mu; nil until wired.
+	// account returns who a new note belongs to (see account.go). Read under
+	// mu, called outside it; nil until wired.
 	account func() string
 
 	mu     sync.RWMutex
@@ -288,6 +288,16 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 			return err
 		}
 	}
+	// Before taking the lock: the source reads the OS keychain, which can block
+	// on a prompt, and recall must not wait on that.
+	s.mu.RLock()
+	accountSource := s.account
+	s.mu.RUnlock()
+	if chunk.Account == "" && accountSource != nil {
+		if chunk.Account = accountSource(); chunk.Account == "" {
+			chunk.Account = AccountSignedOut
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cutoff := s.now().Add(-DedupWindow)
@@ -322,11 +332,6 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 // a new Fleet record must carry fields.scope_kind. Caller-supplied stamps
 // are kept (the sync path inserts pulled chunks with their own HLCs).
 func (s *chromemStore) stampCreateLocked(c *Chunk) {
-	if c.Account == "" && s.account != nil {
-		if c.Account = s.account(); c.Account == "" {
-			c.Account = AccountSignedOut
-		}
-	}
 	if c.CreatedHLC == "" {
 		c.CreatedHLC = s.tickLocked()
 	}

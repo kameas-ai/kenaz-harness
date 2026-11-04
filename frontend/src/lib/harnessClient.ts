@@ -7392,6 +7392,7 @@ function fakeMemorySyncStatus(): MemorySyncStatus {
     blockedCount: 0,
     pendingCount: 0,
     olderNotes: 0,
+    unresolvedNotes: 0,
     lane: { status: 'unknown', consecutiveFailures: 0 },
   };
 }
