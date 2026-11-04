@@ -219,8 +219,8 @@ type memSyncState struct {
 	// unstamped notes may upload.
 	OlderNotesAck bool `json:"older_notes_ack,omitempty"`
 	// InheritedErase, InheritedOptOut: an earlier version left this request
-	// unfinished when the first account was recorded. Each is shown once in
-	// Settings, in legal's wording, then cleared.
+	// unfinished when the first account was recorded. Settings shows each, in
+	// legal's wording, until it's dismissed or no longer true.
 	InheritedErase  bool `json:"inherited_erase,omitempty"`
 	InheritedOptOut bool `json:"inherited_opt_out,omitempty"`
 	// Parked holds other accounts' sync state, so an account that returns
@@ -1387,7 +1387,7 @@ type MemorySyncStatus struct {
 	// UnresolvedNotes: notes written while the keychain couldn't be read. They
 	// stay on this device.
 	UnresolvedNotes int
-	// InheritedErase, InheritedOptOut: see memSyncState. Reported once.
+	// InheritedErase, InheritedOptOut: see memSyncState.
 	InheritedErase  bool
 	InheritedOptOut bool
 	Lane            LaneSnapshot
@@ -1454,17 +1454,8 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 	// show them: it's hidden without the capability, unless the org is paused.
 	// The opt-out line offers to turn sync back on, which a paused org can't.
 	if current && st.Account == st.LegacyOwner {
-		erase := st.InheritedErase && (out.Entitled || out.OrgPaused)
-		optOut := st.InheritedOptOut && out.Entitled && !out.OrgPaused
-		if erase || optOut {
-			out.InheritedErase, out.InheritedOptOut = erase, optOut
-			_ = m.update(func(s *memSyncState) {
-				if s.Account == st.Account {
-					s.InheritedErase = s.InheritedErase && !erase
-					s.InheritedOptOut = s.InheritedOptOut && !optOut
-				}
-			})
-		}
+		out.InheritedErase = st.InheritedErase && (out.Entitled || out.OrgPaused)
+		out.InheritedOptOut = st.InheritedOptOut && !st.Enabled && out.Entitled && !out.OrgPaused
 	}
 	if !out.Entitled || !current || m.cfg.Client == nil || m.cfg.Client.IsNop() {
 		return out
@@ -1538,6 +1529,7 @@ func (m *MemorySync) Enable(ctx context.Context, scopes []string, consentVersion
 		// lane's retry PUT enabled=false could overwrite this (or another
 		// device's) re-enable, and Status would stop mirroring Fleet.
 		s.DisablePending, s.ForgetAllPending = false, false
+		s.InheritedOptOut = false // sync is back on, so the line is no longer true
 	}); err != nil {
 		return set, err
 	}
@@ -1635,6 +1627,7 @@ func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 	return resp.Erased, m.update(func(s *memSyncState) {
 		s.Cursor, s.ResetPending, s.ErasedBefore, s.ResetEpoch, s.ResetCursor, s.ResetRestarts = "", "", "", time.Time{}, "", 0
 		s.ForgetAllPending = false
+		s.InheritedErase = false // done
 	})
 }
 

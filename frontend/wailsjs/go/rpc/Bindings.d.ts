@@ -364,6 +364,8 @@ export function Fleet_MLStatus():Promise<settings.MLStatusView>;
 
 export function Fleet_MemorySyncContinueOlderNotes():Promise<settings.MemorySyncStatusView>;
 
+export function Fleet_MemorySyncDismissNotice(arg1:string):Promise<settings.MemorySyncStatusView>;
+
 export function Fleet_MemorySyncDisable(arg1:boolean,arg2:string):Promise<settings.MemorySyncStatusView>;
 
 export function Fleet_MemorySyncEnable(arg1:Array<string>,arg2:string):Promise<settings.MemorySyncStatusView>;

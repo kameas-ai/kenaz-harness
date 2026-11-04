@@ -1875,6 +1875,9 @@ type SettingsAPI interface {
 	// FleetMemorySyncContinueOlderNotes answers the one-time line about older
 	// notes (legal D164): they may now sync to the signed-in account.
 	FleetMemorySyncContinueOlderNotes(ctx context.Context) (MemorySyncStatusView, error)
+	// FleetMemorySyncDismissNotice clears a notice about a request an earlier
+	// version left unfinished (legal).
+	FleetMemorySyncDismissNotice(ctx context.Context, notice string) (MemorySyncStatusView, error)
 	// FleetMemorySyncDisable opts out (Fleet keeps the data). With
 	// deleteFromFleet it first erases everything on Fleet (forget-all);
 	// confirm must then be exactly "forget-all".

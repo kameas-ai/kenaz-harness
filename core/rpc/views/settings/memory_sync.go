@@ -50,7 +50,7 @@ type MemorySyncStatusView struct {
 	// they were written.
 	UnresolvedNotes int `json:"unresolvedNotes"`
 	// InheritedErase, InheritedOptOut: an earlier version left that request
-	// unfinished. Each is reported once.
+	// unfinished. Shown until dismissed.
 	InheritedErase  bool `json:"inheritedErase,omitempty"`
 	InheritedOptOut bool `json:"inheritedOptOut,omitempty"`
 	// FleetError is the last settings-fetch error ("" on success).
@@ -131,6 +131,18 @@ func (a *API) FleetMemorySyncContinueOlderNotes(ctx context.Context) (MemorySync
 		return MemorySyncStatusView{}, ErrMemorySyncNotWired
 	}
 	if err := ms.ContinueOlderNotes(ctx); err != nil {
+		return MemorySyncStatusView{}, err
+	}
+	return memorySyncView(ms.Status(ctx)), nil
+}
+
+// FleetMemorySyncDismissNotice implements SettingsAPI.
+func (a *API) FleetMemorySyncDismissNotice(ctx context.Context, notice string) (MemorySyncStatusView, error) {
+	ms := a.memorySync.Load()
+	if ms == nil {
+		return MemorySyncStatusView{}, ErrMemorySyncNotWired
+	}
+	if err := ms.DismissNotice(ctx, notice); err != nil {
 		return MemorySyncStatusView{}, err
 	}
 	return memorySyncView(ms.Status(ctx)), nil

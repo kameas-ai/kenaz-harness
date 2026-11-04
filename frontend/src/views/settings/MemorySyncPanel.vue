@@ -9,7 +9,7 @@
  * disclosure. Disabling keeps Fleet's copy unless the user also asks to
  * delete it, which needs the literal confirmation "forget-all".
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MemorySyncStatus } from '@/lib/types';
 import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
@@ -25,9 +25,6 @@ const scopeGlobal = ref(true);
 const confirmingDisable = ref(false);
 const deleteFromFleet = ref(false);
 const confirmText = ref('');
-// Reported once by the backend, so held here until the panel goes away.
-const inheritedEraseNotice = ref(false);
-const inheritedOptOutNotice = ref(false);
 const eraseConfirmText = ref('');
 
 async function refresh() {
@@ -39,12 +36,6 @@ async function refresh() {
 }
 
 onMounted(refresh);
-
-watch(status, (s) => {
-  if (s?.inheritedErase) inheritedEraseNotice.value = true;
-  if (s?.inheritedOptOut) inheritedOptOutNotice.value = true;
-  if (s?.enabled) inheritedOptOutNotice.value = false;
-});
 
 // A staff org pause (kenaz-fleet PR 206) withholds memory_sync, but the panel
 // stays visible: it shows the paused state and keeps the data-rights
@@ -128,7 +119,18 @@ async function runInheritedErase() {
   errorMsg.value = '';
   try {
     status.value = await client.fleet.memorySyncDisable(true, eraseConfirmText.value);
-    inheritedEraseNotice.value = false;
+  } catch (err) {
+    errorMsg.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function dismissNotice(notice: 'inherited_erase' | 'inherited_opt_out') {
+  busy.value = true;
+  errorMsg.value = '';
+  try {
+    status.value = await client.fleet.memorySyncDismissNotice(notice);
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -181,15 +183,35 @@ async function confirmDisable() {
     <OrgPausedBanner v-if="paused" force :category="status.pausedCategory" />
 
     <!-- Requests an earlier version left unfinished. Wording from legal. -->
-    <p v-if="inheritedOptOutNotice" class="text-[12px] text-signal-warn" data-testid="memory-sync-inherited-opt-out">
-      Memory sync was turned off by an earlier request that hadn't finished. You can turn it back on here.
-    </p>
     <div
-      v-if="inheritedEraseNotice"
+      v-if="status.inheritedOptOut"
+      class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+      data-testid="memory-sync-inherited-opt-out"
+    >
+      <p>Memory sync was turned off by an earlier request that hadn't finished. You can turn it back on here.</p>
+      <button
+        type="button"
+        class="px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent"
+        :disabled="busy"
+        data-testid="memory-sync-inherited-opt-out-dismiss"
+        @click="dismissNotice('inherited_opt_out')"
+      >
+        Dismiss
+      </button>
+    </div>
+    <div
+      v-if="status.inheritedErase"
       class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
       data-testid="memory-sync-inherited-erase"
     >
-      <p>An earlier request to erase all your notes didn't finish. If you still want that, run it again.</p>
+      <p>
+        An earlier request to erase your notes from Kameas Fleet didn't finish. If you still want
+        that, run it again. Notes on this device aren't affected, and can upload again if you turn
+        memory sync back on.
+      </p>
+      <p v-if="status.enabled" data-testid="memory-sync-erase-warning">
+        Turning this off stops syncing on all your devices.
+      </p>
       <label for="memory-sync-erase-confirm" class="block text-ink-muted">
         Type <code>forget-all</code> to confirm.
       </label>
@@ -201,15 +223,26 @@ async function confirmDisable() {
         class="w-48 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-mono"
         data-testid="memory-sync-erase-confirm-text"
       />
-      <button
-        type="button"
-        class="block px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
-        :disabled="busy || eraseConfirmText !== 'forget-all'"
-        data-testid="memory-sync-erase-run"
-        @click="runInheritedErase"
-      >
-        Delete from Fleet
-      </button>
+      <div class="flex gap-2">
+        <button
+          type="button"
+          class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+          :disabled="busy || eraseConfirmText !== 'forget-all'"
+          data-testid="memory-sync-erase-run"
+          @click="runInheritedErase"
+        >
+          Delete from Fleet
+        </button>
+        <button
+          type="button"
+          class="px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent"
+          :disabled="busy"
+          data-testid="memory-sync-inherited-erase-dismiss"
+          @click="dismissNotice('inherited_erase')"
+        >
+          Dismiss
+        </button>
+      </div>
     </div>
 
     <!-- Off: disclosure + scope choice + consent. Turning sync ON is a paid

@@ -36,14 +36,17 @@ function mountWith(initial: MemorySyncStatus) {
     status({ enabled: true, scopes, liveRecords: 3 }),
   );
   const memorySyncDisable = vi.fn(async () => status({ enabled: false }));
+  const memorySyncDismissNotice = vi.fn(async (notice: string) =>
+    status({ inheritedErase: notice !== 'inherited_erase' }),
+  );
   const memorySyncContinueOlderNotes = vi.fn(async () => status({ enabled: true, olderNotes: 0 }));
   const client = createFakeHarnessClient({
-    fleet: { memorySyncStatus, memorySyncEnable, memorySyncDisable, memorySyncContinueOlderNotes } as any,
+    fleet: { memorySyncStatus, memorySyncEnable, memorySyncDisable, memorySyncContinueOlderNotes, memorySyncDismissNotice } as any,
   });
   const wrapper = mount(MemorySyncPanel, {
     global: { provide: { [HarnessClientKey as symbol]: client } },
   });
-  return { wrapper, memorySyncStatus, memorySyncEnable, memorySyncDisable, memorySyncContinueOlderNotes };
+  return { wrapper, memorySyncStatus, memorySyncEnable, memorySyncDisable, memorySyncContinueOlderNotes, memorySyncDismissNotice };
 }
 
 describe('MemorySyncPanel', () => {
@@ -149,12 +152,14 @@ describe('MemorySyncPanel', () => {
   });
 
   // Legal: requests an earlier version left unfinished are never dropped silently.
-  it('offers an inherited erase once and runs it only after the typed confirmation', async () => {
+  it('offers an inherited erase and runs it only after the typed confirmation', async () => {
     const { wrapper, memorySyncDisable } = mountWith(status({ inheritedErase: true }));
     await flushPromises();
-    expect(wrapper.find('[data-testid="memory-sync-inherited-erase"]').text()).toContain(
-      "An earlier request to erase all your notes didn't finish. If you still want that, run it again.",
+    const box = wrapper.find('[data-testid="memory-sync-inherited-erase"]');
+    expect(box.text().replace(/\s+/g, ' ')).toContain(
+      "An earlier request to erase your notes from Kameas Fleet didn't finish. If you still want that, run it again. Notes on this device aren't affected, and can upload again if you turn memory sync back on.",
     );
+    expect(wrapper.find('[data-testid="memory-sync-erase-warning"]').exists()).toBe(false);
     const run = wrapper.find('[data-testid="memory-sync-erase-run"]');
     expect(run.attributes('disabled')).toBeDefined();
     await wrapper.find('[data-testid="memory-sync-erase-confirm-text"]').setValue('forget-all');
@@ -164,12 +169,28 @@ describe('MemorySyncPanel', () => {
     expect(wrapper.find('[data-testid="memory-sync-inherited-erase"]').exists()).toBe(false);
   });
 
-  it('says when an inherited opt-out turned sync off', async () => {
-    const { wrapper } = mountWith(status({ inheritedOptOut: true }));
+  it('warns that the inherited erase stops sync when sync is on', async () => {
+    const { wrapper } = mountWith(status({ enabled: true, inheritedErase: true }));
     await flushPromises();
-    expect(wrapper.find('[data-testid="memory-sync-inherited-opt-out"]').text()).toBe(
+    expect(wrapper.find('[data-testid="memory-sync-erase-warning"]').text()).toBe(
+      'Turning this off stops syncing on all your devices.',
+    );
+  });
+
+  it('keeps each notice until it is dismissed', async () => {
+    const { wrapper, memorySyncDismissNotice } = mountWith(
+      status({ inheritedErase: true, inheritedOptOut: true }),
+    );
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-inherited-opt-out"]').text()).toContain(
       "Memory sync was turned off by an earlier request that hadn't finished. You can turn it back on here.",
     );
+    await wrapper.find('[data-testid="memory-sync-inherited-opt-out-dismiss"]').trigger('click');
+    await flushPromises();
+    expect(memorySyncDismissNotice).toHaveBeenCalledWith('inherited_opt_out');
+    await wrapper.find('[data-testid="memory-sync-inherited-erase-dismiss"]').trigger('click');
+    await flushPromises();
+    expect(memorySyncDismissNotice).toHaveBeenCalledWith('inherited_erase');
   });
 
   it('shows notes kept on this device', async () => {

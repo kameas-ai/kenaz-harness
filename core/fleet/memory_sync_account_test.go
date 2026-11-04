@@ -619,18 +619,59 @@ func TestUpgrade_V0100_InheritedForgetAllIsNotRunForTheFirstAccount(t *testing.T
 	if w.fleet.forgetAllCount() != 0 {
 		t.Fatal("the inherited erase ran under the first account")
 	}
-	st := d.ms.Status(context.Background())
-	if !st.InheritedErase || !st.InheritedOptOut {
-		t.Fatalf("both unfinished requests must be reported: %+v", st)
+	ctx := context.Background()
+	for i := 0; i < 2; i++ { // still there on a second read: they stay until dismissed
+		if st := d.ms.Status(ctx); !st.InheritedErase || !st.InheritedOptOut {
+			t.Fatalf("read %d: both unfinished requests must be reported: %+v", i, st)
+		}
 	}
-	if again := d.ms.Status(context.Background()); again.InheritedErase || again.InheritedOptOut {
-		t.Fatalf("reported more than once: %+v", again)
+	if err := d.ms.DismissNotice(ctx, MemoryNoticeInheritedOptOut); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := d.ms.Disable(context.Background(), true, "forget-all"); err != nil {
+	if st := d.ms.Status(ctx); !st.InheritedErase || st.InheritedOptOut {
+		t.Fatalf("after dismissing the opt-out: %+v", st)
+	}
+	if err := d.ms.DismissNotice(ctx, "nonsense"); err == nil {
+		t.Fatal("an unknown notice must be refused")
+	}
+	if _, err := d.ms.Disable(ctx, true, "forget-all"); err != nil {
 		t.Fatalf("running it again: %v", err)
 	}
 	if w.fleet.forgetAllCount() != 1 {
 		t.Fatal("running the erase again must reach Fleet")
+	}
+	if st := d.ms.Status(ctx); st.InheritedErase {
+		t.Fatalf("the erase is done, so the notice must go: %+v", st)
+	}
+}
+
+// Turning sync back on makes the opt-out line untrue, and a dismissal by another
+// account changes nothing for the account the notices belong to.
+func TestUpgrade_V0100_InheritedNoticesEnd(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	w.fleet.enabled = true
+	d := w.deviceAt("node-v0100", copyUpgradeProfile(t), 0)
+	if err := d.ms.update(func(s *memSyncState) {
+		s.Enabled, s.DisablePending, s.ForgetAllPending = false, true, true
+		s.Account, s.LegacyOwner = "", ""
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.signIn(accountA)
+	d.ms.RunOnce(ctx)
+
+	d.signIn(accountB)
+	if err := d.ms.DismissNotice(ctx, MemoryNoticeInheritedErase); err != nil {
+		t.Fatal(err)
+	}
+	d.signIn(accountA)
+	if st := d.ms.Status(ctx); !st.InheritedErase {
+		t.Fatalf("B dismissed A's notice: %+v", st)
+	}
+	d.enable()
+	if st := d.ms.Status(ctx); st.InheritedOptOut || !st.InheritedErase {
+		t.Fatalf("after turning sync back on: %+v", st)
 	}
 }
 
@@ -686,7 +727,7 @@ func TestUpgrade_V0100_InheritedOptOutWaitsOutAnOrgPause(t *testing.T) {
 		t.Fatalf("while paused: %+v", st)
 	}
 	d.caps = entitled
-	if st := d.ms.Status(ctx); st.InheritedErase || !st.InheritedOptOut {
+	if st := d.ms.Status(ctx); !st.InheritedErase || !st.InheritedOptOut {
 		t.Fatalf("after the pause: %+v", st)
 	}
 }

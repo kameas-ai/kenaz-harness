@@ -1039,6 +1039,7 @@ interface WailsBindingsLike {
   Fleet_MemorySyncStatus(): Promise<MemorySyncStatus>;
   Fleet_MemorySyncEnable(scopes: string[], consentVersion: string): Promise<MemorySyncStatus>;
   Fleet_MemorySyncContinueOlderNotes(): Promise<MemorySyncStatus>;
+  Fleet_MemorySyncDismissNotice(notice: string): Promise<MemorySyncStatus>;
   Fleet_MemorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
   // ── Fleet Cloud ML consent (ml-producer-01MLPRD01 WP01) ───────────────
   Fleet_MLStatus(): Promise<MLStatus>;
@@ -4016,6 +4017,7 @@ export interface FleetClient {
    * Fleet first; confirm must then be exactly "forget-all".
    */
   memorySyncContinueOlderNotes(): Promise<MemorySyncStatus>;
+  memorySyncDismissNotice(notice: 'inherited_erase' | 'inherited_opt_out'): Promise<MemorySyncStatus>;
   memorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
   /** Cloud ML consent panel state: a fresh GET /me/ml read (ml-producer-01MLPRD01 WP01). */
   mlStatus(): Promise<MLStatus>;
@@ -5148,6 +5150,7 @@ export function createHarnessClient(): HarnessClient {
       memorySyncStatus: () => b().Fleet_MemorySyncStatus(),
       memorySyncEnable: (scopes, consentVersion) => b().Fleet_MemorySyncEnable(scopes, consentVersion),
       memorySyncContinueOlderNotes: () => b().Fleet_MemorySyncContinueOlderNotes(),
+      memorySyncDismissNotice: (notice) => b().Fleet_MemorySyncDismissNotice(notice),
       memorySyncDisable: (deleteFromFleet, confirm) => b().Fleet_MemorySyncDisable(deleteFromFleet, confirm),
       mlStatus: () => b().Fleet_MLStatus(),
       mlAckNotice: (noticeVersion, button) => b().Fleet_MLAckNotice(noticeVersion, button),
@@ -7134,6 +7137,7 @@ export function createFakeHarnessClient(
       memorySyncStatus: async () => fakeMemorySyncStatus(),
       memorySyncEnable: async () => fakeMemorySyncStatus(),
       memorySyncContinueOlderNotes: async () => fakeMemorySyncStatus(),
+      memorySyncDismissNotice: async () => fakeMemorySyncStatus(),
       memorySyncDisable: async () => fakeMemorySyncStatus(),
       mlStatus: async () => fakeMLStatus(),
       mlAckNotice: async () => fakeMLStatus(),

@@ -12,6 +12,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/memory"
@@ -189,4 +190,34 @@ func (m *MemorySync) ContinueOlderNotes(_ context.Context) error {
 	}
 	m.Kick()
 	return nil
+}
+
+// Notices the panel can dismiss (see memSyncState).
+const (
+	MemoryNoticeInheritedErase  = "inherited_erase"
+	MemoryNoticeInheritedOptOut = "inherited_opt_out"
+)
+
+// DismissNotice clears a notice for the account it belongs to.
+func (m *MemorySync) DismissNotice(_ context.Context, notice string) error {
+	if notice != MemoryNoticeInheritedErase && notice != MemoryNoticeInheritedOptOut {
+		return fmt.Errorf("fleet: memory sync: unknown notice %q", notice)
+	}
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+	scope, err := m.ensureAccount()
+	if err != nil {
+		return err
+	}
+	if scope.Account != scope.LegacyOwner {
+		return nil // not this account's to dismiss
+	}
+	return m.update(func(s *memSyncState) {
+		switch notice {
+		case MemoryNoticeInheritedErase:
+			s.InheritedErase = false
+		case MemoryNoticeInheritedOptOut:
+			s.InheritedOptOut = false
+		}
+	})
 }

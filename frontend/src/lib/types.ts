@@ -4923,9 +4923,9 @@ export interface MemorySyncStatus {
   olderNotesAccount?: string;
   /** Notes that stay on this device: the keychain couldn't be read when they were written. */
   unresolvedNotes: number;
-  /** An earlier version left an erase unfinished (legal). Reported once. */
+  /** An earlier version left an erase unfinished (legal). Shown until dismissed. */
   inheritedErase?: boolean;
-  /** An earlier version left an opt-out unfinished (legal). Reported once. */
+  /** An earlier version left an opt-out unfinished (legal). Shown until dismissed. */
   inheritedOptOut?: boolean;
   fleetError?: string;
   lane: FleetSyncLaneView;
