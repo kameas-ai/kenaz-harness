@@ -68,3 +68,9 @@ v0.85.1   # notarization 403 agreement expired (team K54JDRHBA7); superseded by 
 v0.85.2   # same; superseded by v0.88.0+
 v0.86.0   # same; superseded by v0.88.0+
 v0.87.0   # same; superseded by v0.88.0+
+
+# ── Failed release builds, October 2026 ───────────────────────────────────────
+# Each failed before publishing and left an empty draft. Later tags carry the
+# same code, so a re-run adds nothing.
+v0.97.0   # Windows artifacts signed with the TEST ONLY profile, signature check failed; superseded by v0.98.0
+v0.100.1  # wails build failed on every platform (toolchain internal error); superseded by v0.100.2
