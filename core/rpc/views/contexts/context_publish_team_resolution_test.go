@@ -156,7 +156,7 @@ func TestContextPublish_TeamWithTeamID_StaysTeam(t *testing.T) {
 }
 
 // TestContextPublish_OrgLayer_NeverFallsBack verifies an explicit "org"
-// request is untouched by the fallback (it never had a team_id to check).
+// request is not changed by team resolution (it never had a team_id to check).
 func TestContextPublish_OrgLayer_NeverFallsBack(t *testing.T) {
 	api, fake := setupPublishTest(t)
 

@@ -9,9 +9,10 @@ package fleet
 //	403 load_policy_requires_admin node set load_policy "always" without org_admin/org_owner
 //	403 capability_not_in_tier     team_shared needs team_graph_sharing; org_shared needs org_graph_sharing
 //	403 org_shared_requires_admin  a non-admin pushed an org_shared node or edge (kenaz-fleet #433)
-//	413 payload_too_large          body over the server's cap, details {limit_bytes} (#433)
-//	413 batch_too_large            too many nodes or edges, details {max_nodes, max_edges} (#433)
-//	429 rate_limited               too many pushes per minute; Retry-After (#433)
+//	413 payload_too_large, batch_too_large, node_too_large, metadata_too_large  over a server limit (#433)
+//	408 request_timeout            nothing written; retryable (#433)
+//	503 push_timeout               never parsed here: Client.do retries any 5xx, then returns its own error
+//	429 rate_limited               over the push rate or in-flight limit; Retry-After (#433)
 //	422 lint_blocked               details {node_id, findings:[{rule,severity,field}]}
 //	400 invalid_classification     bad edge classification / team_id combination
 //	400 missing_node_reference     edge endpoint not visible in your org
@@ -20,7 +21,8 @@ package fleet
 // A 200 may additionally carry per-item `rejected: [{id,kind,reason}]`
 // (reason "not_permitted": the id exists but belongs to another user or
 // org; reason "classification_change_requires_admin": a non-admin re-pushed
-// their own node or edge at a different classification than stored, #433).
+// their own node or edge at a different classification than stored, #433;
+// reason "version_out_of_range": a version over 2^30, #433).
 // Those are permission failures, distinct from version `conflicts`.
 //
 // Everything here tolerates the CURRENT server too: no `rejected` field
@@ -46,6 +48,8 @@ var (
 	ErrOrgSharedRequiresAdmin = errors.New("fleet: only an org admin or owner can publish org-wide. Share it with your team instead")
 	// ErrContextPushTooLarge — the request body is over the server's cap.
 	ErrContextPushTooLarge = errors.New("fleet: this is too large to share")
+	// ErrContextPushTimeout — Fleet timed out and wrote nothing.
+	ErrContextPushTimeout = errors.New("fleet: this timed out and wasn't shared. Try again")
 	// ErrContextPushRateLimited — too many pushes in a short time.
 	ErrContextPushRateLimited = errors.New("fleet: too many shares in a short time. Try again in a minute")
 	// ErrContextLintBlocked — fleet's secret lint blocked a body.
@@ -121,8 +125,10 @@ func (e *ContextPushError) sentinel() error {
 		return ErrLoadPolicyRequiresAdmin
 	case "org_shared_requires_admin":
 		return ErrOrgSharedRequiresAdmin
-	case "payload_too_large", "batch_too_large":
+	case "payload_too_large", "batch_too_large", "node_too_large", "metadata_too_large":
 		return ErrContextPushTooLarge
+	case "request_timeout":
+		return ErrContextPushTimeout
 	case "rate_limited":
 		return ErrContextPushRateLimited
 	case "lint_blocked":
@@ -204,8 +210,8 @@ func parseContextPushError(op string, status int, body []byte) *ContextPushError
 }
 
 // ContextPushRejection is one per-item rejection in a 200 push response
-// (kenaz-fleet PR #173). Reason is "not_permitted" or
-// "classification_change_requires_admin" (#433).
+// (kenaz-fleet PR #173). Reason is "not_permitted",
+// "classification_change_requires_admin" or "version_out_of_range" (#433).
 type ContextPushRejection struct {
 	ID     string `json:"id"`
 	Kind   string `json:"kind"` // "node" | "edge"
