@@ -1199,6 +1199,7 @@ func TestUpgrade_ForgetAllFromAnEarlierVersionKeepsThisDevice(t *testing.T) {
 	d.signIn(accountA)
 	d.enable()
 	d.add("note", memory.ScopeKindSession, "made under the old promise")
+	d.add("was-synced", memory.ScopeKindLongTerm, "on Fleet before the erase")
 	d.sync()
 	if err := d.ms.update(func(s *memSyncState) {
 		s.Enabled, s.DisablePending, s.ForgetAllPending, s.EraseCutoff = false, true, true, ""
@@ -1214,6 +1215,12 @@ func TestUpgrade_ForgetAllFromAnEarlierVersionKeepsThisDevice(t *testing.T) {
 		t.Fatal("Fleet's erase must still finish")
 	}
 	accountChunk(t, d, "note")
+	if st.AppliedErase == "" {
+		t.Fatal("Fleet offering this erase back must not erase the device later")
+	}
+	if c := accountChunk(t, d, "was-synced"); !c.SyncedAt.IsZero() {
+		t.Fatal("as promised, it must be able to upload again if sync returns")
+	}
 }
 
 // A device with a fast clock stamps notes later than Fleet's time. They still came
