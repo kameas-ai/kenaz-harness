@@ -78,6 +78,7 @@ func externalTokens() (func() string, bool) {
 // refresh token, and expiry are stored separately so they can be
 // individually rotated.
 func SaveTokens(ts TokenSet) error {
+	defer dropAccessKeyCache()
 	if _, ok := externalTokens(); ok {
 		// Renewal is externally owned and there is no keychain where an
 		// external source runs; nothing to persist.
@@ -129,22 +130,66 @@ func LoadTokens() (TokenSet, error) {
 	}, nil
 }
 
-// accessTokenStrict reads the access token, telling "none stored" ("", nil)
-// from a keychain that couldn't answer (an error). LoadTokens reports both as
-// not found.
-func accessTokenStrict() (string, error) {
+// accessTokenKeyStrict is the current token's key (see tokenKeyOf). present tells
+// "none stored" (false, nil) from a keychain that couldn't answer (an error);
+// LoadTokens reports both as not found.
+//
+// Memory reads this on every recall, and the keychain tool runs a subprocess with
+// no timeout, so an answer is kept briefly: the key, never the token. This
+// process's own saves and clears drop it at once. Sending never uses it:
+// LoadTokens reads the keychain.
+func accessTokenKeyStrict() (key string, present bool, err error) {
 	if src, ok := externalTokens(); ok {
-		return src(), nil
+		tok := src()
+		return tokenKeyOf(tok), tok != "", nil
 	}
+	accessKeyCache.Lock()
+	if time.Now().Before(accessKeyCache.until) {
+		defer accessKeyCache.Unlock()
+		return accessKeyCache.key, accessKeyCache.present, nil
+	}
+	gen := accessKeyCache.gen
+	accessKeyCache.Unlock()
+
+	// Outside the lock: a hung keychain tool must not hold up the saves that
+	// drop this cache.
 	tok, err := keychainGet(keyringService, keyAccessToken())
 	if errors.Is(err, keyring.ErrNotFound) {
-		return "", nil
+		tok, err = "", nil
 	}
-	return tok, err
+	if err != nil {
+		return "", false, err
+	}
+	key, present = tokenKeyOf(tok), tok != ""
+
+	accessKeyCache.Lock()
+	defer accessKeyCache.Unlock()
+	if accessKeyCache.gen == gen { // no save or clear landed during the read
+		accessKeyCache.key, accessKeyCache.present = key, present
+		accessKeyCache.until = time.Now().Add(accessKeyCacheTTL)
+	}
+	return key, present, nil
 }
+
+const accessKeyCacheTTL = 5 * time.Second
 
 // keychainGet is keyring.Get, replaceable by tests: the seam's mock can't fail.
 var keychainGet = keyring.Get
+
+var accessKeyCache struct {
+	sync.Mutex
+	key     string
+	present bool
+	until   time.Time
+	gen     uint64
+}
+
+func dropAccessKeyCache() {
+	accessKeyCache.Lock()
+	defer accessKeyCache.Unlock()
+	accessKeyCache.key, accessKeyCache.present, accessKeyCache.until = "", false, time.Time{}
+	accessKeyCache.gen++
+}
 
 // ClearTokens deletes all fleet tokens from the OS keychain.
 // All three slots are attempted regardless of individual errors so a partial
@@ -156,6 +201,7 @@ var keychainGet = keyring.Get
 // access token is the gate; a token that failed to delete is unusable anyway
 // because Sign-In refuses to load an incomplete set).
 func ClearTokens() error {
+	defer dropAccessKeyCache()
 	if _, ok := externalTokens(); ok {
 		// Nothing persisted locally; sign-out is the host's transition.
 		return nil

@@ -33,7 +33,7 @@ func pushedIDs(f *fakeMemoryFleet) map[string]bool {
 
 func accountChunk(t *testing.T, d *memDevice, id string) memory.Chunk {
 	t.Helper()
-	all, err := d.store.List(context.Background())
+	all, err := d.store.ListAll(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,28 +302,28 @@ func TestAccountGuard_NoteStampFollowsTheTokenAndIdentity(t *testing.T) {
 	w := newMemWorld(t)
 	d := w.device("node-1", 0)
 	d.signIn(accountA)
-	if got := CurrentAccountKey(d.dir); got != AccountKey(accountA) {
+	if got := CurrentAccountView(d.dir).Stamp; got != AccountKey(accountA) {
 		t.Fatalf("signed in: %q", got)
 	}
 	saveTestTokens(t, accountB.UserID) // sign-in before its enroll answers
 	pendingB := memory.PendingAccount(TokenIdentityKey())
-	if got := CurrentAccountKey(d.dir); got != pendingB {
+	if got := CurrentAccountView(d.dir).Stamp; got != pendingB {
 		t.Fatalf("A's identity beside B's token: %q", got)
 	}
 	d.signIn(Identity{})
-	if got := CurrentAccountKey(d.dir); got != pendingB {
+	if got := CurrentAccountView(d.dir).Stamp; got != pendingB {
 		t.Fatalf("tokens with no identity: %q", got)
 	}
 	if err := SaveIdentity(d.dir, Identity{OrgID: "org-b", UserID: "user-b"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := CurrentAccountKey(d.dir); got != pendingB {
+	if got := CurrentAccountView(d.dir).Stamp; got != pendingB {
 		t.Fatalf("an identity with no token record: %q", got)
 	}
 	if err := ClearTokens(); err != nil {
 		t.Fatal(err)
 	}
-	if got := CurrentAccountKey(d.dir); got != "" {
+	if got := CurrentAccountView(d.dir).Stamp; got != "" {
 		t.Fatalf("no tokens: %q", got)
 	}
 }
@@ -375,9 +375,11 @@ func TestAccountGuard_FailedKeychainReadKeepsTheNoteOnTheDevice(t *testing.T) {
 	d.enable()
 	d.sync()
 
+	dropAccessKeyCache()
 	keychainGet = func(string, string) (string, error) { return "", errors.New("keychain locked") }
 	d.add("locked", memory.ScopeKindLongTerm, "written while the keychain was locked")
 	keychainGet = keyring.Get
+	dropAccessKeyCache()
 	if got := accountChunk(t, d, "locked").Account; got != memory.AccountUnresolved {
 		t.Fatalf("account = %q", got)
 	}
@@ -804,4 +806,481 @@ func TestAccountGuard_PendingNoteStaysOwnedAfterTheTokenKeyChanges(t *testing.T)
 	if d.outbox.Has("window") {
 		t.Fatal("the delete must reach Fleet, not stay queued")
 	}
+}
+
+// ── Option A: forget-all ────────────────────────────────────────────────────
+
+// The device that runs forget-all erases its own copy, every scope, and nothing
+// it erased can upload again when sync returns (legal D157).
+func TestForgetAll_ErasesThisDeviceAndNothingUploadsAgain(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	d.add("synced", memory.ScopeKindLongTerm, "on Fleet")
+	d.sync()
+	d.add("session", memory.ScopeKindSession, "session note")
+	d.add("unsynced", memory.ScopeKindLongTerm, "never uploaded")
+	w.wall.advance(time.Second)
+	mark := len(w.fleet.pushLog())
+
+	if _, err := d.ms.Disable(ctx, true, "forget-all"); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := d.store.ListAll(ctx)
+	if len(all) != 0 {
+		t.Fatalf("left on the device: %+v", all)
+	}
+	if st := d.ms.state(); st.LocalErasePending != "" || st.AppliedErase == "" {
+		t.Fatalf("state = %+v", st)
+	}
+	d.enable()
+	d.sync()
+	d.sync()
+	for _, req := range w.fleet.pushLog()[mark:] {
+		for _, it := range req.Items {
+			if it.Op != "forget" {
+				t.Fatalf("%s uploaded again", it.ID)
+			}
+		}
+	}
+}
+
+// Notes made signed out, and another account's, survive.
+func TestForgetAll_KeepsSignedOutAndOtherAccountsNotes(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountB)
+	d.enable()
+	d.add("b-note", memory.ScopeKindLongTerm, "B's")
+	d.sync()
+	if err := ClearTokens(); err != nil {
+		t.Fatal(err)
+	}
+	d.signIn(Identity{})
+	d.add("offline", memory.ScopeKindLongTerm, "made signed out")
+	d.signIn(accountA)
+	d.enable()
+	d.add("a-note", memory.ScopeKindLongTerm, "A's")
+	d.sync()
+	w.wall.advance(time.Second)
+
+	if _, err := d.ms.Disable(ctx, true, "forget-all"); err != nil {
+		t.Fatal(err)
+	}
+	accountChunk(t, d, "b-note")
+	accountChunk(t, d, "offline")
+	all, _ := d.store.ListAll(ctx)
+	if len(all) != 2 {
+		t.Fatalf("left = %+v", all)
+	}
+}
+
+// Older notes go whichever account runs the erase (legal, Option A).
+func TestUpgrade_V0100_ForgetAllErasesOlderNotesWhicheverAccountRunsIt(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	w.fleet.enabled = true
+	d := w.deviceAt("node-v0100", copyUpgradeProfile(t), 0)
+	d.signIn(accountA)
+	d.sync()
+	d.signIn(accountB)
+	d.enable()
+	d.sync()
+	w.wall.advance(time.Second)
+	if _, err := d.ms.Disable(ctx, true, "forget-all"); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := d.store.ListAll(ctx)
+	if len(all) != 0 {
+		t.Fatalf("older notes left: %+v", all)
+	}
+}
+
+// Fleet's erase succeeded but the process died before this device finished: it
+// finishes on the next cycle, and nothing uploads first.
+func TestForgetAll_LocalEraseSurvivesACrash(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	d.add("kept-by-crash", memory.ScopeKindLongTerm, "x")
+	w.wall.advance(time.Second)
+	hlc := d.clock.Tick()
+	if err := d.ms.update(func(s *memSyncState) { s.LocalErasePending = hlc }); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewMemorySync(MemorySyncConfig{Client: d.ms.cfg.Client, Store: d.store, Clock: d.clock,
+		Outbox: d.outbox, DataDir: d.dir, Caps: func() *Capabilities { return d.caps }, Lanes: d.lanes, Now: w.wall.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.RunOnce(ctx)
+	if all, _ := d.store.ListAll(ctx); len(all) != 0 {
+		t.Fatalf("left: %+v", all)
+	}
+	if pushedIDs(w.fleet)["kept-by-crash"] {
+		t.Fatal("uploaded before the erase finished")
+	}
+	if st := reopened.state(); st.LocalErasePending != "" || st.AppliedErase != hlc {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
+// Fleet's D157 signal: a device with an empty cursor learns of the erase from
+// erased_before on a pull that isn't a reset, applies it once, and doesn't upload
+// what it erased.
+func TestEmptyCursorPull_AppliesAnEraseOnce(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.add("older-than-erase", memory.ScopeKindLongTerm, "never synced")
+	w.wall.advance(time.Second)
+	hlc := d.clock.Tick()
+	w.wall.advance(time.Second)
+	w.fleet.mu.Lock()
+	w.fleet.offerErasedBefore = hlc
+	w.fleet.mu.Unlock()
+
+	d.enable()
+	d.sync()
+	if all, _ := d.store.ListAll(ctx); len(all) != 0 {
+		t.Fatalf("left: %+v", all)
+	}
+	if pushedIDs(w.fleet)["older-than-erase"] {
+		t.Fatal("an erased note uploaded")
+	}
+	if got := d.ms.state().AppliedErase; got != hlc {
+		t.Fatalf("AppliedErase = %q", got)
+	}
+
+	// Offered again on a later empty-cursor pull: the newer note survives.
+	d.add("newer", memory.ScopeKindLongTerm, "after the erase")
+	if err := d.ms.update(func(s *memSyncState) { s.Cursor = "" }); err != nil {
+		t.Fatal(err)
+	}
+	d.sync()
+	accountChunk(t, d, "newer")
+}
+
+// ── Review of Option A: what would let erased notes back ────────────────────
+
+// failingEraseStore fails DeleteCreatedBefore until told otherwise.
+type failingEraseStore struct {
+	memory.SyncStore
+	failures int
+}
+
+func (f *failingEraseStore) DeleteCreatedBefore(ctx context.Context, hlc string, epoch time.Time, scope memory.AccountScope) (int, error) {
+	if f.failures > 0 {
+		f.failures--
+		return 0, errors.New("disk full")
+	}
+	return f.SyncStore.DeleteCreatedBefore(ctx, hlc, epoch, scope)
+}
+
+// A failed local erase says so, keeps its markers, and nothing syncs until done.
+func TestForgetAll_FailedLocalEraseIsReportedAndNothingUploads(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	d.add("synced", memory.ScopeKindLongTerm, "on Fleet")
+	d.sync()
+	store := &failingEraseStore{SyncStore: d.store, failures: 2}
+	ms, err := NewMemorySync(MemorySyncConfig{Client: d.ms.cfg.Client, Store: store, Clock: d.clock, Outbox: d.outbox,
+		DataDir: d.dir, Caps: func() *Capabilities { return d.caps }, Lanes: d.lanes, Now: w.wall.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mark := len(w.fleet.pushLog())
+	if _, err := ms.Disable(ctx, true, "forget-all"); err == nil {
+		t.Fatal("a failed local erase must be reported")
+	}
+	if st := ms.Status(ctx); !st.LocalErasePending {
+		t.Fatalf("Settings must show the unfinished erase: %+v", st)
+	}
+	if c := accountChunk(t, d, "synced"); c.SyncedAt.IsZero() {
+		t.Fatal("markers cleared before the erase finished")
+	}
+	w.fleet.mu.Lock()
+	w.fleet.enabled = true
+	w.fleet.mu.Unlock()
+	ms.mu.Lock()
+	ms.st.Enabled = true
+	ms.mu.Unlock()
+	requests := w.fleet.requestCount()
+	ms.RunOnce(ctx) // still failing
+	if n := w.fleet.requestCount(); n != requests {
+		t.Fatalf("%d requests while the erase is unfinished", n-requests)
+	}
+	if s := d.lanes.Snapshot(LaneMemorySync); s.Reason != "local_erase" {
+		t.Fatalf("lane = %+v", s)
+	}
+	ms.RunOnce(ctx) // recovers
+	if all, _ := d.store.ListAll(ctx); len(all) != 0 {
+		t.Fatalf("left: %+v", all)
+	}
+	for _, req := range w.fleet.pushLog()[mark:] {
+		for _, it := range req.Items {
+			if it.Op != "forget" {
+				t.Fatalf("%s uploaded again", it.ID)
+			}
+		}
+	}
+}
+
+// This device's clock can be ahead of Fleet's. Its notes are still older than the
+// request, so they go, and none uploads again.
+func TestForgetAll_ClockAheadOfFleetStillErases(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-fast", 2*time.Minute)
+	d.signIn(accountA)
+	d.enable()
+	d.add("synced", memory.ScopeKindLongTerm, "on Fleet")
+	d.add("session", memory.ScopeKindSession, "local")
+	d.sync()
+	mark := len(w.fleet.pushLog())
+	if _, err := d.ms.Disable(ctx, true, "forget-all"); err != nil {
+		t.Fatal(err)
+	}
+	if all, _ := d.store.ListAll(ctx); len(all) != 0 {
+		t.Fatalf("left inside the skew: %+v", all)
+	}
+	d.enable()
+	d.sync()
+	for _, req := range w.fleet.pushLog()[mark:] {
+		for _, it := range req.Items {
+			if it.Op != "forget" {
+				t.Fatalf("%s uploaded again", it.ID)
+			}
+		}
+	}
+}
+
+// The retry of a failed forget-all can come long after the request. Notes made in
+// between aren't part of it.
+func TestForgetAll_DelayedRetryKeepsNotesMadeAfterTheRequest(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	d.add("before", memory.ScopeKindLongTerm, "before the request")
+	d.sync()
+	w.fleet.mu.Lock()
+	w.fleet.failPut = 3
+	w.fleet.mu.Unlock()
+	if _, err := d.ms.Disable(ctx, true, "forget-all"); err == nil {
+		t.Fatal("setup: the first attempt must fail")
+	}
+	w.wall.advance(72 * time.Hour)
+	d.add("after", memory.ScopeKindSession, "made after the request")
+	d.ms.RunOnce(ctx)
+	if d.ms.state().ForgetAllPending {
+		t.Fatalf("setup: the retry must finish: %+v", d.ms.state())
+	}
+	accountChunk(t, d, "after")
+	all, _ := d.store.ListAll(ctx)
+	if len(all) != 1 {
+		t.Fatalf("left: %+v", all)
+	}
+}
+
+// A push can start another reset just as an erase races it. The signal on the next
+// empty-cursor pull must still apply, and nothing uploads first.
+func TestEmptyCursorPull_ErasesEvenDuringAnotherReset(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	d.add("old", memory.ScopeKindLongTerm, "older than the erase")
+	d.add("old-session", memory.ScopeKindSession, "older too")
+	w.wall.advance(time.Second)
+	hlc := d.clock.Tick()
+	w.wall.advance(time.Second)
+	if err := d.ms.beginReset(ctx, "cursor_expired", ""); err != nil {
+		t.Fatal(err)
+	}
+	w.fleet.mu.Lock()
+	w.fleet.offerErasedBefore = hlc
+	w.fleet.mu.Unlock()
+	d.sync()
+	if all, _ := d.store.ListAll(ctx); len(all) != 0 {
+		t.Fatalf("left: %+v", all)
+	}
+	if pushedIDs(w.fleet)["old"] {
+		t.Fatal("an erased note uploaded")
+	}
+	if got := d.ms.state().AppliedErase; got != hlc {
+		t.Fatalf("AppliedErase = %q", got)
+	}
+}
+
+// Fleet offering back an erase this device already finished can't take newer notes.
+func TestForgetAll_OwnEraseOfferedBackDoesNothingMore(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-slow", -2*time.Minute)
+	d.signIn(accountA)
+	d.enable()
+	d.sync()
+	w.wall.advance(time.Second)
+	if _, err := d.ms.Disable(ctx, true, "forget-all"); err != nil {
+		t.Fatal(err)
+	}
+	applied := laterErasedBefore(d.ms.state().AppliedErase)
+	if err := d.ms.update(func(s *memSyncState) { s.AppliedErase = applied }); err != nil {
+		t.Fatal(err)
+	}
+	d.add("newer", memory.ScopeKindSession, "made after the erase, on a slow clock")
+	w.fleet.mu.Lock()
+	w.fleet.offerErasedBefore = applied
+	w.fleet.offerErasedReset = applied
+	w.fleet.mu.Unlock()
+	d.enable()
+	w.wall.advance(5 * time.Minute) // Fleet's clock passes the note's on this slow device
+	d.sync()
+	accountChunk(t, d, "newer")
+}
+
+// An identity with no token record proves nothing about this token.
+func TestAccount_IdentityWithNoTokenRecordIsntTrusted(t *testing.T) {
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	if err := SaveIdentity(d.dir, accountA); err != nil { // no TokenKey
+		t.Fatal(err)
+	}
+	view := CurrentAccountView(d.dir)
+	if view.Account != "" || view.Stamp != memory.PendingAccount(TokenIdentityKey()) {
+		t.Fatalf("view = %+v", view)
+	}
+}
+
+// A sync turned back on elsewhere doesn't undo an unfinished erase: a later plain
+// "Turn off" must not run it, or erase this device, unasked.
+func TestForgetAll_UnfinishedEraseKeepsSyncOffAgainstAReEnable(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	d.add("note", memory.ScopeKindLongTerm, "keep unless asked")
+	d.sync()
+	if err := d.ms.update(func(s *memSyncState) {
+		s.Enabled, s.DisablePending, s.ForgetAllPending, s.EraseCutoff = false, false, true, d.clock.Tick()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.fleet.mu.Lock()
+	w.fleet.enabled = true
+	w.fleet.mu.Unlock()
+	if st := d.ms.Status(ctx); st.LocalEnabled {
+		t.Fatal("the re-enable elsewhere switched sync back on over an unfinished erase")
+	}
+	if st := d.ms.state(); !st.ForgetAllPending {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
+// A request from v0.100.3 promised only Fleet's copy would go. It finishes as
+// promised, across the upgrade, with no erase of this device.
+func TestUpgrade_ForgetAllFromAnEarlierVersionKeepsThisDevice(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	d.add("note", memory.ScopeKindSession, "made under the old promise")
+	d.add("was-synced", memory.ScopeKindLongTerm, "on Fleet before the erase")
+	d.sync()
+	if err := d.ms.update(func(s *memSyncState) {
+		s.Enabled, s.DisablePending, s.ForgetAllPending, s.EraseCutoff = false, true, true, ""
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.ms.RunOnce(ctx)
+	st := d.ms.state()
+	if st.ForgetAllPending || st.LocalErasePending != "" {
+		t.Fatalf("state = %+v", st)
+	}
+	if w.fleet.forgetAllCount() != 1 {
+		t.Fatal("Fleet's erase must still finish")
+	}
+	accountChunk(t, d, "note")
+	if st.AppliedErase == "" {
+		t.Fatal("Fleet offering this erase back must not erase the device later")
+	}
+	if c := accountChunk(t, d, "was-synced"); !c.SyncedAt.IsZero() {
+		t.Fatal("as promised, it must be able to upload again if sync returns")
+	}
+}
+
+// A device with a fast clock stamps notes later than Fleet's time. They still came
+// before the erase, so they go, and none uploads.
+func TestEmptyCursorPull_FastClockErasesNotesMadeBeforeTheErase(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-fast", 2*time.Minute)
+	d.signIn(accountA)
+	d.add("older", memory.ScopeKindLongTerm, "30s before the erase")
+	w.wall.advance(30 * time.Second)
+	erased := memory.FormatHLC(w.wall.now().UnixMilli(), 0, "fleet")
+	w.wall.advance(time.Second)
+	w.fleet.mu.Lock()
+	w.fleet.offerErasedBefore = erased
+	w.fleet.mu.Unlock()
+	d.enable()
+	d.sync()
+	if all, _ := d.store.ListAll(ctx); len(all) != 0 {
+		t.Fatalf("left: %+v", all)
+	}
+	if pushedIDs(w.fleet)["older"] {
+		t.Fatal("an erased note uploaded")
+	}
+}
+
+func TestEnable_AbandonsAnUnfinishedEraseAndItsCutoff(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	if err := d.ms.update(func(s *memSyncState) { s.ForgetAllPending, s.EraseCutoff = true, "1" }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ms.Enable(ctx, []string{"long_term"}, MemoryConsentVersion); err != nil {
+		t.Fatal(err)
+	}
+	if st := d.ms.state(); st.ForgetAllPending || st.EraseCutoff != "" {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
+// Fleet's time reaches this device's clock, so notes made after an erase sort after it.
+func TestPull_ObservesErasedBefore(t *testing.T) {
+	w := newMemWorld(t)
+	d := w.device("node-slow", 0)
+	d.signIn(accountA)
+	ahead := memory.FormatHLC(w.wall.now().Add(time.Minute).UnixMilli(), 0, "fleet")
+	w.fleet.mu.Lock()
+	w.fleet.offerErasedBefore = ahead
+	w.fleet.mu.Unlock()
+	d.enable()
+	d.sync()
+	if got := d.clock.Tick(); got <= ahead {
+		t.Fatalf("clock %q didn't pass erased_before %q", got, ahead)
+	}
+}
+
+// laterErasedBefore is an erased_before that sorts after every stamp this test's
+// clocks make, the way Fleet's clock can sit ahead of a slow device's.
+func laterErasedBefore(string) string {
+	return memory.FormatHLC(time.Now().Add(24*time.Hour).UnixMilli(), 0, "fleet")
 }

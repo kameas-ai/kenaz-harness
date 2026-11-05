@@ -138,7 +138,7 @@ func (w *memWorld) deviceAt(node, dir string, skew time.Duration) *memDevice {
 	}
 	d.ms = ms
 	d.enrolled(Identity{OrgID: "org-test", UserID: "user-test"})
-	st.(memory.AccountStamper).SetAccountSource(func() string { return CurrentAccountKey(dir) })
+	st.(memory.AccountStamper).SetAccountSource(func() memory.AccountView { return CurrentAccountView(dir) })
 	return d
 }
 
@@ -486,7 +486,7 @@ func TestMemorySync_ForgetForgetAllAndPrune(t *testing.T) {
 	// forget-all from A while B is offline; B also holds an UNSYNCED
 	// global chunk created before the erase — it must go too.
 	b.add("mem-b-local", "global", "created before the erase, never pushed")
-	b.add("mem-b-session", "session", "local session memory is not Fleet's to erase")
+	b.add("mem-b-session", "session", "session notes go too (legal D157)")
 	w.wall.advance(time.Second)
 	if _, err := a.ms.Disable(context.Background(), true, "nope"); err == nil {
 		t.Fatal("forget-all must require the confirmation string")
@@ -502,8 +502,8 @@ func TestMemorySync_ForgetForgetAllAndPrune(t *testing.T) {
 	w.wall.advance(time.Second)
 	b.sync()
 	bc = b.chunks()
-	if len(bc) != 1 || bc["mem-b-session"].ID == "" {
-		t.Fatalf("B after erased replay = %v; want only its session chunk", keys(bc))
+	if len(bc) != 0 {
+		t.Fatalf("B after erased replay = %v; want nothing left", keys(bc))
 	}
 }
 
@@ -799,7 +799,8 @@ func TestMemorySync_V091GobFullSyncCycle(t *testing.T) {
 		t.Fatal("a legacy session chunk was synced")
 	}
 	ac := a.chunks()["mem-v091-global"]
-	if ac.CreatedHLC == "" || ac.SyncedAt.IsZero() || ac.SyncDirty {
+	// CreatedHLC stays empty: a legacy row is older than any erase.
+	if ac.CreatedHLC != "" || ac.SyncedAt.IsZero() || ac.SyncDirty {
 		t.Fatalf("A after first cycle = %+v", ac)
 	}
 	b.sync()

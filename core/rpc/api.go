@@ -2348,7 +2348,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// carry the stamp can't sync either.
 	if as, ok := memStore.(corememory.AccountStamper); ok && c != nil && c.DataDir() != "" {
 		accountDir := c.DataDir()
-		as.SetAccountSource(func() string { return corefleet.CurrentAccountKey(accountDir) })
+		as.SetAccountSource(func() corememory.AccountView { return corefleet.CurrentAccountView(accountDir) })
 	}
 	a.memForgets = openMemoryForgetOutbox(c, memStore, a.memClock)
 	personalForLLM := newPersonalStore(c)

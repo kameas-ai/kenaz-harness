@@ -8447,6 +8447,7 @@ export namespace settings {
 	    pendingCount: number;
 	    olderNotes: number;
 	    olderNotesAccount?: string;
+	    localErasePending?: boolean;
 	    unresolvedNotes: number;
 	    inheritedErase?: boolean;
 	    inheritedOptOut?: boolean;
@@ -8476,6 +8477,7 @@ export namespace settings {
 	        this.pendingCount = source["pendingCount"];
 	        this.olderNotes = source["olderNotes"];
 	        this.olderNotesAccount = source["olderNotesAccount"];
+	        this.localErasePending = source["localErasePending"];
 	        this.unresolvedNotes = source["unresolvedNotes"];
 	        this.inheritedErase = source["inheritedErase"];
 	        this.inheritedOptOut = source["inheritedOptOut"];

@@ -55,6 +55,9 @@ type SyncStore interface {
 	// ApplyRemote applies one pull page in one save.
 	// Only rows scope owns are touched; new rows are stamped scope.Account.
 	ApplyRemote(ctx context.Context, recs []RemoteRecord, at time.Time, scope AccountScope) error
+	// ListAll is List for every account's notes. Only sync bookkeeping may use
+	// it: it decides what each account may do with them.
+	ListAll(ctx context.Context) ([]Chunk, error)
 	// ClaimPendingAccount gives the notes tokenKey wrote while unconfirmed to
 	// the account that token has now been confirmed as. Returns how many.
 	ClaimPendingAccount(ctx context.Context, tokenKey, account string) (int, error)
@@ -69,13 +72,12 @@ type SyncStore interface {
 	// Only rows scope owns are candidates: one account's reset must not
 	// sweep another account's notes off the device (D164).
 	DeleteSyncedBefore(ctx context.Context, epoch time.Time, scope AccountScope) (int, error)
-	// DeleteCreatedBefore deletes every sync-scope chunk created before
-	// the erased_before HLC (forget-all replay), synced or not — EXCEPT
+	// DeleteCreatedBefore deletes every chunk the account's erase covers
+	// created before the erased_before HLC (forget-all), synced or not — EXCEPT
 	// rows the post-erase snapshot touched (SyncedAt >= epoch): anything
 	// Fleet still holds after the erase is post-erase by definition, and a
 	// pulled chunk's CreatedHLC is "" (Fleet does not carry it), which
 	// would otherwise sort below every erased_before.
-	// Only rows scope owns are candidates (D164).
 	DeleteCreatedBefore(ctx context.Context, hlc string, epoch time.Time, scope AccountScope) (int, error)
 	// ClearSyncMarkers makes every chunk read as never-synced (this
 	// device ran forget-all: nothing it pushed exists on Fleet anymore).
@@ -169,10 +171,8 @@ func (s *chromemStore) MarkSyncSent(_ context.Context, ids []string, at time.Tim
 			continue
 		}
 		c := &s.chunks[i]
-		if c.CreatedHLC == "" {
-			c.CreatedHLC = s.tickLocked()
-			changed = true
-		}
+		// CreatedHLC stays empty on a legacy row: it's older than any erase, and a
+		// fresh stamp here would let it survive one.
 		if c.ScopeHLC == "" {
 			c.ScopeHLC = s.tickLocked()
 			changed = true
@@ -448,15 +448,20 @@ func (s *chromemStore) DeleteSyncedBefore(_ context.Context, epoch time.Time, sc
 	if len(drop) == 0 {
 		return 0, nil
 	}
+	prev := append([]Chunk(nil), s.chunks...)
 	s.removeIdxLocked(drop)
-	return len(drop), s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.chunks = prev // not gone until it's on disk: the caller retries
+		return 0, err
+	}
+	return len(drop), nil
 }
 
-// DeleteCreatedBefore implements SyncStore. Only sync-scope chunks are
-// considered: session (and, while disabled, project) memory never reached
-// Fleet, so a Fleet erase has nothing to say about it. An unstamped legacy
-// chunk ("" sorts first) predates every erase — unless the post-erase
-// snapshot touched it.
+// DeleteCreatedBefore implements SyncStore. Every scope is considered, session
+// memory included (legal D157, Option A): an erase is of the account's notes, not
+// of what reached Fleet. See AccountScope.Erases for whose. An unstamped legacy
+// chunk ("" sorts first) predates every erase — unless the post-erase snapshot
+// touched it.
 func (s *chromemStore) DeleteCreatedBefore(_ context.Context, hlc string, epoch time.Time, scope AccountScope) (int, error) {
 	if hlc == "" {
 		return 0, nil
@@ -468,15 +473,20 @@ func (s *chromemStore) DeleteCreatedBefore(_ context.Context, hlc string, epoch 
 		if !c.SyncedAt.IsZero() && !c.SyncedAt.Before(epoch) {
 			continue // in the post-erase snapshot ⇒ post-erase
 		}
-		if scope.Owns(c) && IsSyncScope(c.ScopeKind) && c.CreatedHLC < hlc {
+		if scope.Erases(c) && c.CreatedHLC < hlc {
 			drop[i] = true
 		}
 	}
 	if len(drop) == 0 {
 		return 0, nil
 	}
+	prev := append([]Chunk(nil), s.chunks...)
 	s.removeIdxLocked(drop)
-	return len(drop), s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.chunks = prev // not gone until it's on disk: the caller retries
+		return 0, err
+	}
+	return len(drop), nil
 }
 
 // ClearSyncMarkers implements SyncStore.
