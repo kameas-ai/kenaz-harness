@@ -11,8 +11,10 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/memory"
@@ -32,28 +34,57 @@ func AccountKey(id Identity) string {
 	return id.OrgID + ":" + id.UserID
 }
 
-// CurrentAccountKey is who a new note belongs to for the profile at dataDir: the
-// confirmed account; "" with no tokens (signed out); the token's pending stamp
-// while it can't be tied to an account yet, as before a sign-in's enroll answers
-// or while enroll keeps failing; or memory.AccountUnresolved if the token can't
-// be read. Nobody can upload an unresolved note, which is the safe way to fail.
-func CurrentAccountKey(dataDir string) string {
+// CurrentAccountView is who is using the profile at dataDir. Stamp is who a new
+// note belongs to: the confirmed account; "" with no tokens (signed out); the
+// token's pending stamp while it can't be tied to an account yet, as before a
+// sign-in's enroll answers or while enroll keeps failing; or
+// memory.AccountUnresolved if the token can't be read. Nobody can upload an
+// unresolved note, which is the safe way to fail.
+func CurrentAccountView(dataDir string) memory.AccountView {
+	view := memory.AccountView{LegacyOwner: readLegacyOwner(dataDir)}
 	tok, err := accessTokenStrict()
 	if err != nil {
-		return memory.AccountUnresolved
+		view.Stamp = memory.AccountUnresolved
+		return view
 	}
 	if tok == "" {
-		return ""
+		return view
 	}
 	key := tokenKeyOf(tok)
 	if key == "" {
-		return memory.AccountUnresolved
+		view.Stamp = memory.AccountUnresolved
+		return view
 	}
+	view.TokenKey = key
 	id, err := LoadIdentity(dataDir)
 	if err != nil || AccountKey(id) == "" || id.TokenKey != key {
-		return memory.PendingAccount(key)
+		view.Stamp = memory.PendingAccount(key)
+		return view
 	}
-	return AccountKey(id)
+	view.Account = AccountKey(id)
+	view.Stamp = view.Account
+	return view
+}
+
+// legacyOwnerUnreadable matches no account, so unstamped notes are hidden from
+// everyone when the state file can't be read.
+const legacyOwnerUnreadable = "unreadable"
+
+func readLegacyOwner(dataDir string) string {
+	raw, err := os.ReadFile(MemorySyncStatePath(dataDir))
+	if errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	if err != nil {
+		return legacyOwnerUnreadable
+	}
+	var st struct {
+		LegacyOwner string `json:"legacy_owner"`
+	}
+	if json.Unmarshal(raw, &st) != nil {
+		return legacyOwnerUnreadable
+	}
+	return st.LegacyOwner
 }
 
 // verifiedIdentity is the signed-in account, only if the identity was enrolled

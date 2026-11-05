@@ -291,7 +291,12 @@ func StampedHLCs(ctx context.Context, store Store) []string {
 	if store == nil {
 		return nil
 	}
-	all, err := store.List(ctx)
+	// Every account's: the floor must clear every stamp this install handed out.
+	list := store.List
+	if ss, ok := store.(SyncStore); ok {
+		list = func(ctx context.Context, _ ...ScopeFilter) ([]Chunk, error) { return ss.ListAll(ctx) }
+	}
+	all, err := list(ctx)
 	if err != nil {
 		return nil
 	}

@@ -205,9 +205,8 @@ async function confirmDisable() {
       data-testid="memory-sync-inherited-erase"
     >
       <p>
-        An earlier request to erase your notes from Kameas Fleet didn't finish. If you still want
-        that, run it again. Notes on this device aren't affected, and can upload again if you turn
-        memory sync back on.
+        An earlier request to erase your notes didn't finish. If you still want that, run it again.
+        It erases your notes from Kameas Fleet and this device.
       </p>
       <p v-if="status.enabled" data-testid="memory-sync-erase-warning">
         Turning this off stops syncing on all your devices.
@@ -231,7 +230,7 @@ async function confirmDisable() {
           data-testid="memory-sync-erase-run"
           @click="runInheritedErase"
         >
-          Delete from Fleet
+          Erase
         </button>
         <button
           type="button"
@@ -349,7 +348,8 @@ async function confirmDisable() {
         </p>
         <label class="flex items-center gap-2">
           <input v-model="deleteFromFleet" type="checkbox" data-testid="memory-sync-delete-fleet" />
-          Also delete all my memory from Fleet (other devices delete their synced copies too)
+          Also erase all my memory notes, from Kameas Fleet, this device and my other devices when
+          they next sync. Notes you made while signed out stay.
         </label>
         <div v-if="deleteFromFleet" class="space-y-1">
           <label for="memory-sync-confirm" class="block text-ink-muted">
@@ -372,7 +372,7 @@ async function confirmDisable() {
             data-testid="memory-sync-disable-confirm-button"
             @click="confirmDisable"
           >
-            {{ deleteFromFleet ? 'Turn off and delete from Fleet' : 'Turn off' }}
+            {{ deleteFromFleet ? 'Turn off and erase' : 'Turn off' }}
           </button>
           <button
             type="button"

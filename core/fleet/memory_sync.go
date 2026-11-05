@@ -255,6 +255,13 @@ type memSyncAccountState struct {
 	// everything from Fleet. The lane's retry finishes BOTH the PUT and the
 	// forget-all; Enable abandons both (the user changed their mind).
 	ForgetAllPending bool `json:"forget_all_pending,omitempty"`
+	// LocalErasePending: Fleet has erased, this device hasn't finished. Holds
+	// erased_before. Persisted first, so a crash can't leave the notes behind
+	// to upload again.
+	LocalErasePending string `json:"local_erase_pending,omitempty"`
+	// AppliedErase: the erased_before this device last finished, so an erase
+	// offered on every empty-cursor pull runs once.
+	AppliedErase string `json:"applied_erase,omitempty"`
 }
 
 // MemorySyncStatePath is the canonical state-file location under dataDir.
@@ -526,6 +533,7 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
 	if m.cfg.Client == nil || m.cfg.Client.IsNop() {
+		m.finishLocalErase(ctx)
 		m.lanes().RecordOff(LaneMemorySync, "fleet_disabled")
 		return
 	}
@@ -540,6 +548,7 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 		}
 		return
 	}
+	m.finishLocalErase(ctx)
 	if paused, _ := m.orgPaused(); paused {
 		// A reversible staff hold, not a tier answer. Fleet keeps the
 		// data-rights half of the lane open while paused (kenaz-fleet
@@ -845,6 +854,12 @@ func (m *MemorySync) pull(ctx context.Context) (applied, complete bool, err erro
 		if !resp.Enabled {
 			return applied, false, errDisabledOnFleet
 		}
+		// An erase this device hasn't applied yet, on a pull that didn't call it
+		// a reset: a device that has never pulled can't be told any other way.
+		// It runs as a reset, so the snapshot's rows are told from older ones.
+		if !resp.Reset && cursor == "" && !resetting && resp.ErasedBefore != "" && resp.ErasedBefore != st.AppliedErase {
+			resp.Reset, resp.ResetReason = true, "erased"
+		}
 		if resp.Reset {
 			logging.L().Info("fleet.memory_sync.reset", "reason", resp.ResetReason, "restart", resetting)
 			if err := m.beginReset(ctx, orDefault(resp.ResetReason, "cursor_expired"), resp.ErasedBefore); err != nil {
@@ -937,6 +952,9 @@ func (m *MemorySync) finishReset(ctx context.Context, cursor string) error {
 	}
 	logging.L().Info("fleet.memory_sync.reset_done", "reason", st.ResetPending, "deleted_absent", n, "deleted_erased", erased)
 	return m.update(func(s *memSyncState) {
+		if s.ResetPending == "erased" && s.ErasedBefore != "" {
+			s.AppliedErase = s.ErasedBefore
+		}
 		s.ResetPending, s.ErasedBefore, s.ResetEpoch, s.ResetCursor, s.ResetRestarts, s.Cursor = "", "", time.Time{}, "", 0, cursor
 	})
 }
@@ -1037,7 +1055,7 @@ func (m *MemorySync) push(ctx context.Context, set MemorySyncSettings) error {
 	scopes := enabledScopes(set)
 	scope, olderOK := m.scope(), m.state().OlderNotesAck
 	forgets := m.cfg.Outbox.PendingFor(scope)
-	all, err := m.cfg.Store.List(ctx)
+	all, err := m.cfg.Store.ListAll(ctx)
 	if err != nil {
 		return err
 	}
@@ -1412,7 +1430,7 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 		// capability answer (not_entitled) the signed-out client gives.
 		out.Lane = LaneSnapshot{Status: LaneOff, Reason: "signed_out", LastSuccessAt: out.Lane.LastSuccessAt}
 	}
-	if all, err := m.cfg.Store.List(ctx); err == nil {
+	if all, err := m.cfg.Store.ListAll(ctx); err == nil {
 		for _, c := range all {
 			if c.Account == memory.AccountUnresolved && memory.IsSyncScope(c.ScopeKind) {
 				out.UnresolvedNotes++
@@ -1629,6 +1647,14 @@ func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 	if err := m.cfg.Outbox.Ack(ids...); err != nil {
 		return resp.Erased, err
 	}
+	erasedBefore := resp.ErasedBefore
+	if erasedBefore == "" {
+		erasedBefore = m.cfg.Clock.Tick() // a Fleet that didn't say: everything until now
+	}
+	if err := m.update(func(s *memSyncState) { s.LocalErasePending = erasedBefore }); err != nil {
+		return resp.Erased, err
+	}
+	m.finishLocalErase(ctx)
 	if err := m.cfg.Store.ClearSyncMarkers(ctx, m.scope()); err != nil {
 		return resp.Erased, err
 	}
@@ -1638,6 +1664,28 @@ func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 		// Done, if it was this account's erase. Another account's says nothing.
 		s.InheritedErase = s.InheritedErase && s.Account != s.LegacyOwner
 	})
+}
+
+// finishLocalErase erases this device's copy of what Fleet has erased, once it's
+// sure of the account the erase was for. A failure stays pending and retries.
+func (m *MemorySync) finishLocalErase(ctx context.Context) {
+	st := m.state()
+	if st.LocalErasePending == "" || st.Account == "" {
+		return
+	}
+	scope := m.scope()
+	// Every row the erase covers is older than this epoch, snapshot or not.
+	n, err := m.cfg.Store.DeleteCreatedBefore(ctx, st.LocalErasePending, m.now().Add(24*time.Hour), scope)
+	if err != nil {
+		logging.L().Warn("fleet.memory_sync.local_erase_failed", "err", err.Error())
+		return
+	}
+	logging.L().Info("fleet.memory_sync.local_erase_done", "deleted", n)
+	if err := m.update(func(s *memSyncState) {
+		s.AppliedErase, s.LocalErasePending = s.LocalErasePending, ""
+	}); err != nil {
+		logging.L().Warn("fleet.memory_sync.local_erase_state_failed", "err", err.Error())
+	}
 }
 
 // flushForgets sends every queued forget (best effort; failures stay queued).

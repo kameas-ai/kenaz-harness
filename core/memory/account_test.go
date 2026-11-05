@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/memory/narrative"
 )
 
 func accountStore(t *testing.T, account *string) SyncStore {
@@ -13,7 +15,7 @@ func accountStore(t *testing.T, account *string) SyncStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.(AccountStamper).SetAccountSource(func() string { return *account })
+	st.(AccountStamper).SetAccountSource(func() AccountView { return AccountView{Stamp: *account, Account: *account} })
 	return st.(SyncStore)
 }
 
@@ -53,8 +55,7 @@ func TestAccount_StampedOnceAtCreation(t *testing.T) {
 	if err := st.Add(ctx, Chunk{ID: "x", ScopeKind: ScopeKindSession, ScopeID: "s", Content: "one", Embedding: []float32{1}}); err != nil {
 		t.Fatal(err)
 	}
-	account = "b"
-	if err := st.Add(ctx, Chunk{ID: "x", ScopeKind: ScopeKindSession, ScopeID: "s", Content: "two", Embedding: []float32{1}}); err != nil {
+	if err := st.Add(ctx, Chunk{ID: "x", ScopeKind: ScopeKindSession, ScopeID: "s", Content: "two", Account: "z", Embedding: []float32{1}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := get(t, st, "x").Account; got != "a" {
@@ -162,14 +163,14 @@ func TestAccount_OlderAliasFoldsIntoItsOwnersRow(t *testing.T) {
 	if err := st.ApplySyncOutcomes(ctx, out, time.Now(), AccountScope{Account: "b", LegacyOwner: "a"}); err != nil {
 		t.Fatal(err)
 	}
-	all, _ := st.List(ctx)
+	all, _ := st.ListAll(ctx)
 	if len(all) != 2 {
 		t.Fatalf("another account's rekey folded rows: %d left", len(all))
 	}
 	if err := st.ApplySyncOutcomes(ctx, out, time.Now(), scope); err != nil {
 		t.Fatal(err)
 	}
-	all, _ = st.List(ctx)
+	all, _ = st.ListAll(ctx)
 	if len(all) != 1 || all[0].ID != "canon" {
 		t.Fatalf("the owner's older alias must fold: %+v", all)
 	}
@@ -208,5 +209,155 @@ func TestAccount_ClaimPendingGivesNotesAndForgetsToTheConfirmedAccount(t *testin
 	}
 	if got := ob.PendingFor(AccountScope{Account: "b"}); len(got) != 1 {
 		t.Fatalf("forget wasn't claimed: %+v", got)
+	}
+}
+
+func TestAccountView_Sees(t *testing.T) {
+	owner := AccountView{Account: "a", TokenKey: "ta", LegacyOwner: "a"}
+	other := AccountView{Account: "b", TokenKey: "tb", LegacyOwner: "a"}
+	out := AccountView{LegacyOwner: "a"}
+	none := AccountView{}
+	cases := []struct {
+		name string
+		v    AccountView
+		c    Chunk
+		want bool
+	}{
+		{"own note", other, Chunk{Account: "b"}, true},
+		{"another account's note", other, Chunk{Account: "a"}, false},
+		{"another account's note, signed out", out, Chunk{Account: "a"}, false},
+		{"older note, recorded owner", owner, Chunk{}, true},
+		{"older note, other account", other, Chunk{}, false},
+		{"older note, signed out with an owner recorded", out, Chunk{}, false},
+		{"older note, no owner recorded", none, Chunk{}, true},
+		{"rewritten older note, other account", other, Chunk{Account: AccountUnknown}, false},
+		{"signed-out note, any account", other, Chunk{Account: AccountSignedOut}, true},
+		{"signed-out note, signed out", out, Chunk{Account: AccountSignedOut}, true},
+		{"unresolved, recorded owner", owner, Chunk{Account: AccountUnresolved}, true},
+		{"unresolved, other account", other, Chunk{Account: AccountUnresolved}, false},
+		{"pending, its token", AccountView{TokenKey: "tb", LegacyOwner: "a"}, Chunk{Account: PendingAccount("tb")}, true},
+		{"pending, another token", owner, Chunk{Account: PendingAccount("tb")}, false},
+	}
+	for _, tc := range cases {
+		if got := tc.v.Sees(tc.c); got != tc.want {
+			t.Errorf("%s: Sees = %v", tc.name, got)
+		}
+	}
+}
+
+// B can't read or touch A's notes: recalls, pins and deletes would carry over
+// to what A later pushes (legal, Option A).
+func TestAccount_AnotherAccountCantReadOrTouchANote(t *testing.T) {
+	ctx := context.Background()
+	view := AccountView{Stamp: "a", Account: "a", LegacyOwner: "a"}
+	st0, err := NewChromemStore(filepath.Join(t.TempDir(), "memory.gob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st0.(AccountStamper).SetAccountSource(func() AccountView { return view })
+	st := st0.(SyncStore)
+	vec := []float32{1, 0}
+	if err := st.Add(ctx, Chunk{ID: "a1", ScopeKind: ScopeKindLongTerm, Content: "A's", Embedding: vec}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Add(ctx, Chunk{ID: "s1", ScopeKind: ScopeKindSession, ScopeID: "s", Content: "A's session", Embedding: vec}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := st.ListAll(ctx)
+	hlcBefore := before[0].SyncGen
+
+	view = AccountView{Stamp: "b", Account: "b", LegacyOwner: "a"}
+	if got, _ := st.List(ctx); len(got) != 0 {
+		t.Fatalf("B can list A's notes: %+v", got)
+	}
+	if got, _ := st.Query(ctx, vec, 5); len(got) != 0 {
+		t.Fatalf("B can recall A's notes: %+v", got)
+	}
+	if err := st.(PruneCapable).SetPinned(ctx, "a1", true); err == nil {
+		t.Fatal("B pinned A's note")
+	}
+	if _, err := st.Remove(ctx, "a1"); err == nil {
+		t.Fatal("B removed A's note")
+	}
+	if err := st.Delete(ctx, "a1"); err == nil {
+		t.Fatal("B deleted A's note")
+	}
+	if err := st.(PruneCapable).MarkAccessed(ctx, []string{"a1"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	gone, err := st.(ScopeDeleter).DeleteScope(ctx, ScopeFilter{Kind: ScopeKindSession, ID: "s"})
+	if err != nil || len(gone) != 0 {
+		t.Fatalf("B's session delete took A's note: %+v, %v", gone, err)
+	}
+	// B's identical text isn't a duplicate of a note B can't see.
+	if err := st.Add(ctx, Chunk{ID: "b1", ScopeKind: ScopeKindLongTerm, Content: "A's", Embedding: vec}); err != nil {
+		t.Fatalf("B's own note: %v", err)
+	}
+	if err := st.Add(ctx, Chunk{ID: "a1", ScopeKind: ScopeKindLongTerm, Content: "overwrite", Embedding: vec}); err == nil {
+		t.Fatal("B overwrote A's note by id")
+	}
+
+	view = AccountView{Stamp: "a", Account: "a", LegacyOwner: "a"}
+	c := get(t, st, "a1")
+	if c.Pinned || c.RecallOwn != 0 || c.Content != "A's" || c.SyncGen != hlcBefore {
+		t.Fatalf("A's note was changed: %+v", c)
+	}
+	get(t, st, "s1")
+}
+
+func TestAccount_ForgetAllErasesTheAccountsNotesAndOlderOnes(t *testing.T) {
+	ctx := context.Background()
+	view := AccountView{Stamp: "a", Account: "a", LegacyOwner: "x"}
+	st0, err := NewChromemStore(filepath.Join(t.TempDir(), "memory.gob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st0.(AccountStamper).SetAccountSource(func() AccountView { return view })
+	st := st0.(SyncStore)
+	vec := []float32{1}
+	for _, c := range []Chunk{
+		{ID: "own-long", ScopeKind: ScopeKindLongTerm},
+		{ID: "own-session", ScopeKind: ScopeKindSession, ScopeID: "s"},
+		{ID: "pending", Account: PendingAccount("ta"), ScopeKind: ScopeKindLongTerm},
+		{ID: "other", Account: "b", ScopeKind: ScopeKindLongTerm},
+		{ID: "older", Account: AccountUnknown, ScopeKind: ScopeKindSession, ScopeID: "s"},
+		{ID: "offline", Account: AccountSignedOut, ScopeKind: ScopeKindLongTerm},
+		{ID: "unresolved", Account: AccountUnresolved, ScopeKind: ScopeKindLongTerm},
+	} {
+		c.Content, c.Embedding, c.CreatedHLC = c.ID, vec, "1"
+		if err := st.Add(ctx, c); err != nil {
+			t.Fatalf("%s: %v", c.ID, err)
+		}
+	}
+	scope := AccountScope{Account: "a", LegacyOwner: "x", TokenKey: "ta"}
+	n, err := st.DeleteCreatedBefore(ctx, "9", time.Now().Add(time.Hour), scope)
+	if err != nil || n != 4 {
+		t.Fatalf("erased %d, err %v; want own-long, own-session, pending, older", n, err)
+	}
+	all, _ := st.ListAll(ctx)
+	left := map[string]bool{}
+	for _, c := range all {
+		left[c.ID] = true
+	}
+	if !left["other"] || !left["offline"] || !left["unresolved"] || len(left) != 3 {
+		t.Fatalf("left = %v", left)
+	}
+}
+
+func TestNarrative_NoteKeepsTheAccountItsJobWasQueuedUnder(t *testing.T) {
+	ctx := context.Background()
+	account := "b" // signed in by the time the job runs
+	st := accountStore(t, &account)
+	w := NewNarrativeStoreWriter(st, nil, nil)
+	id, err := w.WriteNarrative(ctx, narrative.NarrativeWriteReq{SessionID: "s", TurnID: "t", Account: "a",
+		Content: "from A's turn", Kind: narrative.ChunkKindNarrativeExtractiveFallback, RetrievalWeight: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, _ := st.ListAll(ctx)
+	for _, c := range all {
+		if c.ID == id && c.Account != "a" {
+			t.Fatalf("stamped %q", c.Account)
+		}
 	}
 }

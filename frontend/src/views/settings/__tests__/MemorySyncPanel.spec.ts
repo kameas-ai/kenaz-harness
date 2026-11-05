@@ -157,7 +157,7 @@ describe('MemorySyncPanel', () => {
     await flushPromises();
     const box = wrapper.find('[data-testid="memory-sync-inherited-erase"]');
     expect(box.text().replace(/\s+/g, ' ')).toContain(
-      "An earlier request to erase your notes from Kameas Fleet didn't finish. If you still want that, run it again. Notes on this device aren't affected, and can upload again if you turn memory sync back on.",
+      "An earlier request to erase your notes didn't finish. If you still want that, run it again. It erases your notes from Kameas Fleet and this device.",
     );
     expect(wrapper.find('[data-testid="memory-sync-erase-warning"]').exists()).toBe(false);
     const run = wrapper.find('[data-testid="memory-sync-erase-run"]');
