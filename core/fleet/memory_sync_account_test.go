@@ -375,11 +375,11 @@ func TestAccountGuard_FailedKeychainReadKeepsTheNoteOnTheDevice(t *testing.T) {
 	d.enable()
 	d.sync()
 
-	dropAccessTokenCache()
+	dropAccessKeyCache()
 	keychainGet = func(string, string) (string, error) { return "", errors.New("keychain locked") }
 	d.add("locked", memory.ScopeKindLongTerm, "written while the keychain was locked")
 	keychainGet = keyring.Get
-	dropAccessTokenCache()
+	dropAccessKeyCache()
 	if got := accountChunk(t, d, "locked").Account; got != memory.AccountUnresolved {
 		t.Fatalf("account = %q", got)
 	}
@@ -1002,6 +1002,9 @@ func TestForgetAll_FailedLocalEraseIsReportedAndNothingUploads(t *testing.T) {
 	if _, err := ms.Disable(ctx, true, "forget-all"); err == nil {
 		t.Fatal("a failed local erase must be reported")
 	}
+	if st := ms.Status(ctx); !st.LocalErasePending {
+		t.Fatalf("Settings must show the unfinished erase: %+v", st)
+	}
 	if c := accountChunk(t, d, "synced"); c.SyncedAt.IsZero() {
 		t.Fatal("markers cleared before the erase finished")
 	}
@@ -1148,20 +1151,129 @@ func TestForgetAll_OwnEraseOfferedBackDoesNothingMore(t *testing.T) {
 	accountChunk(t, d, "newer")
 }
 
-func TestAccount_LegacyIdentityCanReadButDoesntStamp(t *testing.T) {
+// An identity with no token record proves nothing about this token.
+func TestAccount_IdentityWithNoTokenRecordIsntTrusted(t *testing.T) {
 	w := newMemWorld(t)
 	d := w.device("node-1", 0)
 	if err := SaveIdentity(d.dir, accountA); err != nil { // no TokenKey
 		t.Fatal(err)
 	}
 	view := CurrentAccountView(d.dir)
-	if view.Account != AccountKey(accountA) || view.Stamp != memory.PendingAccount(TokenIdentityKey()) {
+	if view.Account != "" || view.Stamp != memory.PendingAccount(TokenIdentityKey()) {
 		t.Fatalf("view = %+v", view)
 	}
 }
 
-// laterErasedBefore is an erased_before that sorts after every stamp this test's clocks
-// make, the way Fleet's clock can sit ahead of a slow device's.
+// A sync turned back on elsewhere doesn't undo an unfinished erase: a later plain
+// "Turn off" must not run it, or erase this device, unasked.
+func TestForgetAll_UnfinishedEraseKeepsSyncOffAgainstAReEnable(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	d.add("note", memory.ScopeKindLongTerm, "keep unless asked")
+	d.sync()
+	if err := d.ms.update(func(s *memSyncState) {
+		s.Enabled, s.DisablePending, s.ForgetAllPending, s.EraseCutoff = false, false, true, d.clock.Tick()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.fleet.mu.Lock()
+	w.fleet.enabled = true
+	w.fleet.mu.Unlock()
+	if st := d.ms.Status(ctx); st.LocalEnabled {
+		t.Fatal("the re-enable elsewhere switched sync back on over an unfinished erase")
+	}
+	if st := d.ms.state(); !st.ForgetAllPending {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
+// A request from v0.100.3 promised only Fleet's copy would go. It finishes as
+// promised, across the upgrade, with no erase of this device.
+func TestUpgrade_ForgetAllFromAnEarlierVersionKeepsThisDevice(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	d.enable()
+	d.add("note", memory.ScopeKindSession, "made under the old promise")
+	d.sync()
+	if err := d.ms.update(func(s *memSyncState) {
+		s.Enabled, s.DisablePending, s.ForgetAllPending, s.EraseCutoff = false, true, true, ""
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.ms.RunOnce(ctx)
+	st := d.ms.state()
+	if st.ForgetAllPending || st.LocalErasePending != "" {
+		t.Fatalf("state = %+v", st)
+	}
+	if w.fleet.forgetAllCount() != 1 {
+		t.Fatal("Fleet's erase must still finish")
+	}
+	accountChunk(t, d, "note")
+}
+
+// A device with a fast clock stamps notes later than Fleet's time. They still came
+// before the erase, so they go, and none uploads.
+func TestEmptyCursorPull_FastClockErasesNotesMadeBeforeTheErase(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-fast", 2*time.Minute)
+	d.signIn(accountA)
+	d.add("older", memory.ScopeKindLongTerm, "30s before the erase")
+	w.wall.advance(30 * time.Second)
+	erased := memory.FormatHLC(w.wall.now().UnixMilli(), 0, "fleet")
+	w.wall.advance(time.Second)
+	w.fleet.mu.Lock()
+	w.fleet.offerErasedBefore = erased
+	w.fleet.mu.Unlock()
+	d.enable()
+	d.sync()
+	if all, _ := d.store.ListAll(ctx); len(all) != 0 {
+		t.Fatalf("left: %+v", all)
+	}
+	if pushedIDs(w.fleet)["older"] {
+		t.Fatal("an erased note uploaded")
+	}
+}
+
+func TestEnable_AbandonsAnUnfinishedEraseAndItsCutoff(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	if err := d.ms.update(func(s *memSyncState) { s.ForgetAllPending, s.EraseCutoff = true, "1" }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ms.Enable(ctx, []string{"long_term"}, MemoryConsentVersion); err != nil {
+		t.Fatal(err)
+	}
+	if st := d.ms.state(); st.ForgetAllPending || st.EraseCutoff != "" {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
+// Fleet's time reaches this device's clock, so notes made after an erase sort after it.
+func TestPull_ObservesErasedBefore(t *testing.T) {
+	w := newMemWorld(t)
+	d := w.device("node-slow", 0)
+	d.signIn(accountA)
+	ahead := memory.FormatHLC(w.wall.now().Add(time.Minute).UnixMilli(), 0, "fleet")
+	w.fleet.mu.Lock()
+	w.fleet.offerErasedBefore = ahead
+	w.fleet.mu.Unlock()
+	d.enable()
+	d.sync()
+	if got := d.clock.Tick(); got <= ahead {
+		t.Fatalf("clock %q didn't pass erased_before %q", got, ahead)
+	}
+}
+
+// laterErasedBefore is an erased_before that sorts after every stamp this test's
+// clocks make, the way Fleet's clock can sit ahead of a slow device's.
 func laterErasedBefore(string) string {
 	return memory.FormatHLC(time.Now().Add(24*time.Hour).UnixMilli(), 0, "fleet")
 }

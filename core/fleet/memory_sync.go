@@ -319,7 +319,9 @@ type MemorySync struct {
 	// serverDate is Fleet's last Date header — the reference for naming
 	// how far ahead a fast OS clock is (clock_in_future).
 	serverDate time.Time
-	kick       chan struct{}
+	// serverOffset: how far this device's clock was from Fleet's at that answer.
+	serverOffset time.Duration
+	kick         chan struct{}
 	// skipped holds chunks Fleet refused for a reason other than a
 	// credential (or that rode a dropped 400/413 batch), keyed to the
 	// SyncGen they were refused at: they are not resent until they change
@@ -759,6 +761,7 @@ func (m *MemorySync) noteServerDate(resp *http.Response) {
 		if t, err := http.ParseTime(d); err == nil {
 			m.mu.Lock()
 			m.serverDate = t
+			m.serverOffset = m.cfg.Clock.OffsetFrom(t)
 			m.mu.Unlock()
 		}
 	}
@@ -967,7 +970,7 @@ func (m *MemorySync) finishReset(ctx context.Context, cursor string) error {
 	}
 	erased := 0
 	if st.ResetPending == "erased" && st.ErasedBefore != "" {
-		if erased, err = m.cfg.Store.DeleteCreatedBefore(ctx, st.ErasedBefore, st.ResetEpoch, m.scope()); err != nil {
+		if erased, err = m.cfg.Store.DeleteCreatedBefore(ctx, m.localCutoff(st.ErasedBefore), st.ResetEpoch, m.scope()); err != nil {
 			return err
 		}
 	}
@@ -1423,6 +1426,8 @@ type MemorySyncStatus struct {
 	// past the one-time line (D164). OlderNotesAccount names that account.
 	OlderNotes        int
 	OlderNotesAccount string
+	// LocalErasePending: erased from Fleet, not yet from this device.
+	LocalErasePending bool
 	// UnresolvedNotes: notes written while the keychain couldn't be read. They
 	// stay on this device.
 	UnresolvedNotes int
@@ -1444,6 +1449,7 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 	scope, current := m.scope(), m.currentAccount() != "" && m.currentAccount() == st.Account
 	var older []string // scope kinds of the older notes waiting on the line
 	out := MemorySyncStatus{Entitled: m.entitled(), LocalEnabled: st.Enabled, Lane: m.lanes().Snapshot(LaneMemorySync)}
+	out.LocalErasePending = st.LocalErasePending != ""
 	out.OrgPaused, out.PausedCategory = m.orgPaused()
 	if m.isStopped() {
 		// A lane stopped by sign-out (or node_removed) records nothing; the
@@ -1513,7 +1519,9 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 	// user opens this panel — intended: consent is per device, so a device
 	// never starts uploading again without its user looking (F11, blessed).
 	// An unconfirmed local opt-out (DisablePending) is never undone here.
-	if set.Enabled != out.LocalEnabled && !m.state().DisablePending {
+	// Nor an unfinished erase: sync must stay off until it has run, or a later
+	// plain "Turn off" would run it, and erase this device, unasked.
+	if cur := m.state(); set.Enabled != out.LocalEnabled && !cur.DisablePending && !cur.ForgetAllPending {
 		_ = m.update(func(s *memSyncState) {
 			if s.Account == st.Account { // the account may have changed during the read
 				s.Enabled, s.Scopes = set.Enabled, set.Scopes
@@ -1677,11 +1685,22 @@ func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 	if resp.ErasedBefore != "" {
 		m.cfg.Clock.Observe(resp.ErasedBefore)
 	}
+	// A request with no cutoff was made on a version that promised only Fleet's
+	// copy would go. It finishes as promised: this device keeps its notes, and
+	// they can upload again if sync returns.
+	if m.state().EraseCutoff == "" {
+		if err := m.cfg.Store.ClearSyncMarkers(ctx, m.scope()); err != nil {
+			return resp.Erased, err
+		}
+		return resp.Erased, m.update(func(s *memSyncState) {
+			s.AppliedErase = resp.ErasedBefore
+			s.Cursor, s.ResetPending, s.ErasedBefore, s.ResetEpoch, s.ResetCursor, s.ResetRestarts = "", "", "", time.Time{}, "", 0
+			s.ForgetAllPending = false
+			s.InheritedErase = s.InheritedErase && s.Account != s.LegacyOwner
+		})
+	}
 	if err := m.update(func(s *memSyncState) {
 		s.LocalErasePending, s.LocalEraseFleet = s.EraseCutoff, resp.ErasedBefore
-		if s.LocalErasePending == "" {
-			s.LocalErasePending = m.cfg.Clock.Tick()
-		}
 		s.Cursor, s.ResetPending, s.ErasedBefore, s.ResetEpoch, s.ResetCursor, s.ResetRestarts = "", "", "", time.Time{}, "", 0
 		s.ForgetAllPending, s.EraseCutoff = false, ""
 		// Done, if it was this account's erase. Another account's says nothing.
@@ -1690,6 +1709,17 @@ func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 		return resp.Erased, err
 	}
 	return resp.Erased, m.finishLocalErase(ctx)
+}
+
+// localCutoff turns Fleet's erased_before into this device's clock. A clock ahead
+// of Fleet's stamps notes later than Fleet's time, so they'd look newer than an
+// erase they came before, and upload; a clock behind would take notes made after
+// it. Good to about a second: Fleet's Date header has no finer grain.
+func (m *MemorySync) localCutoff(erasedBefore string) string {
+	m.mu.Lock()
+	offset := m.serverOffset
+	m.mu.Unlock()
+	return memory.ShiftHLC(erasedBefore, offset)
 }
 
 // finishLocalErase erases this device's copy of what Fleet has erased. Sync is off

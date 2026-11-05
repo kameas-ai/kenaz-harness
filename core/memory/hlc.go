@@ -348,3 +348,24 @@ func writeFileAtomic(path string, data []byte) error {
 	}
 	return nil
 }
+
+// ShiftHLC moves stamp's wall-clock part by d. A stamp it can't read, or no shift,
+// comes back unchanged.
+func ShiftHLC(stamp string, d time.Duration) string {
+	wall, counter, node, ok := ParseHLC(stamp)
+	if !ok || d == 0 {
+		return stamp
+	}
+	return FormatHLC(wall+d.Milliseconds(), counter, node)
+}
+
+// OffsetFrom is how far this clock's time source is from ref right now: positive
+// when it's ahead.
+func (h *HLC) OffsetFrom(ref time.Time) time.Duration {
+	if h == nil {
+		return 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.now().Sub(ref)
+}

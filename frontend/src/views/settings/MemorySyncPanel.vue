@@ -121,6 +121,7 @@ async function runInheritedErase() {
     status.value = await client.fleet.memorySyncDisable(true, eraseConfirmText.value);
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : String(err);
+    await refresh(); // the backend may have moved on: sync can be off by now
   } finally {
     busy.value = false;
   }
@@ -181,6 +182,10 @@ async function confirmDisable() {
     </h2>
 
     <OrgPausedBanner v-if="paused" force :category="status.pausedCategory" />
+
+    <p v-if="status.localErasePending" class="text-[12px] text-signal-warn" data-testid="memory-sync-local-erase-pending">
+      Your notes were erased from Kameas Fleet but not yet from this device. It will keep trying.
+    </p>
 
     <!-- Requests an earlier version left unfinished. Wording from legal. -->
     <div

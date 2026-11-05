@@ -198,4 +198,12 @@ describe('MemorySyncPanel', () => {
     await flushPromises();
     expect(wrapper.find('[data-testid="memory-sync-unresolved"]').text()).toBe('2 notes stay on this device only.');
   });
+
+  it('says when notes are erased from Fleet but not yet this device', async () => {
+    const { wrapper } = mountWith(status({ localErasePending: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="memory-sync-local-erase-pending"]').text()).toBe(
+      'Your notes were erased from Kameas Fleet but not yet from this device. It will keep trying.',
+    );
+  });
 });

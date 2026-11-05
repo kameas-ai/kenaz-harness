@@ -42,29 +42,21 @@ func AccountKey(id Identity) string {
 // unresolved note, which is the safe way to fail.
 func CurrentAccountView(dataDir string) memory.AccountView {
 	view := memory.AccountView{LegacyOwner: readLegacyOwner(dataDir)}
-	tok, err := accessTokenStrict()
+	key, present, err := accessTokenKeyStrict()
 	if err != nil {
 		view.Stamp = memory.AccountUnresolved
 		return view
 	}
-	if tok == "" {
+	if !present {
 		return view
 	}
-	key := tokenKeyOf(tok)
 	if key == "" {
 		view.Stamp = memory.AccountUnresolved
 		return view
 	}
 	view.TokenKey = key
 	id, err := LoadIdentity(dataDir)
-	if err != nil || AccountKey(id) == "" || (id.TokenKey != "" && id.TokenKey != key) {
-		view.Stamp = memory.PendingAccount(key)
-		return view
-	}
-	if id.TokenKey == "" {
-		// An identity from before TokenKey existed, until the next enroll: enough
-		// to read your own notes while offline, not to say whose a new one is.
-		view.Account = AccountKey(id)
+	if err != nil || AccountKey(id) == "" || id.TokenKey != key {
 		view.Stamp = memory.PendingAccount(key)
 		return view
 	}
