@@ -378,6 +378,13 @@ func TestAccount_FailedEraseSaveKeepsTheRows(t *testing.T) {
 	if err := st.Add(ctx, Chunk{ID: "x", ScopeKind: ScopeKindLongTerm, Content: "x", Embedding: []float32{1}, CreatedHLC: "1"}); err != nil {
 		t.Fatal(err)
 	}
+	sent, err := st.MarkSyncSent(ctx, []string{"x"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ApplySyncOutcomes(ctx, []SyncOutcome{{ID: "x", Gen: sent["x"].SyncGen, Kind: OutcomeSynced}}, time.Now(), AccountScope{Account: "a", LegacyOwner: "a"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
@@ -387,6 +394,12 @@ func TestAccount_FailedEraseSaveKeepsTheRows(t *testing.T) {
 		t.Skip("this filesystem lets the save through")
 	}
 	if all, _ := st.ListAll(ctx); len(all) != 1 {
-		t.Fatalf("rows dropped in memory: %+v", all)
+		t.Fatalf("erase dropped rows in memory: %+v", all)
+	}
+	if _, err := st.DeleteSyncedBefore(ctx, time.Now().Add(time.Hour), scope); err == nil {
+		t.Fatal("the reset sweep's failed save must be reported")
+	}
+	if all, _ := st.ListAll(ctx); len(all) != 1 {
+		t.Fatalf("sweep dropped rows in memory: %+v", all)
 	}
 }
