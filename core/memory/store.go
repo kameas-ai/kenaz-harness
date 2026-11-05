@@ -291,9 +291,10 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	}
 	// Before taking the lock: the source reads the OS keychain, which can block
 	// on a prompt, and recall must not wait on that.
-	sees := s.viewer()
-	if chunk.Account == "" {
-		if view, ok := s.view(); ok {
+	sees := func(Chunk) bool { return true }
+	if view, ok := s.view(); ok {
+		sees = view.Sees
+		if chunk.Account == "" {
 			if chunk.Account = view.Stamp; chunk.Account == "" {
 				chunk.Account = AccountSignedOut
 			}

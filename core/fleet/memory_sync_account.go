@@ -57,7 +57,14 @@ func CurrentAccountView(dataDir string) memory.AccountView {
 	}
 	view.TokenKey = key
 	id, err := LoadIdentity(dataDir)
-	if err != nil || AccountKey(id) == "" || id.TokenKey != key {
+	if err != nil || AccountKey(id) == "" || (id.TokenKey != "" && id.TokenKey != key) {
+		view.Stamp = memory.PendingAccount(key)
+		return view
+	}
+	if id.TokenKey == "" {
+		// An identity from before TokenKey existed, until the next enroll: enough
+		// to read your own notes while offline, not to say whose a new one is.
+		view.Account = AccountKey(id)
 		view.Stamp = memory.PendingAccount(key)
 		return view
 	}

@@ -78,6 +78,7 @@ func externalTokens() (func() string, bool) {
 // refresh token, and expiry are stored separately so they can be
 // individually rotated.
 func SaveTokens(ts TokenSet) error {
+	defer dropAccessTokenCache()
 	if _, ok := externalTokens(); ok {
 		// Renewal is externally owned and there is no keychain where an
 		// external source runs; nothing to persist.
@@ -132,15 +133,42 @@ func LoadTokens() (TokenSet, error) {
 // accessTokenStrict reads the access token, telling "none stored" ("", nil)
 // from a keychain that couldn't answer (an error). LoadTokens reports both as
 // not found.
+//
+// Memory reads this on every recall, and the keychain tool runs a subprocess with
+// no timeout, so an answer is kept briefly. This process's own saves and clears
+// drop it at once. Sending never uses it: LoadTokens reads the keychain.
 func accessTokenStrict() (string, error) {
 	if src, ok := externalTokens(); ok {
 		return src(), nil
 	}
+	accessTokenCache.Lock()
+	defer accessTokenCache.Unlock()
+	if time.Now().Before(accessTokenCache.until) {
+		return accessTokenCache.token, nil
+	}
 	tok, err := keychainGet(keyringService, keyAccessToken())
 	if errors.Is(err, keyring.ErrNotFound) {
-		return "", nil
+		tok, err = "", nil
 	}
-	return tok, err
+	if err != nil {
+		return "", err
+	}
+	accessTokenCache.token, accessTokenCache.until = tok, time.Now().Add(accessTokenCacheTTL)
+	return tok, nil
+}
+
+const accessTokenCacheTTL = 5 * time.Second
+
+var accessTokenCache struct {
+	sync.Mutex
+	token string
+	until time.Time
+}
+
+func dropAccessTokenCache() {
+	accessTokenCache.Lock()
+	defer accessTokenCache.Unlock()
+	accessTokenCache.token, accessTokenCache.until = "", time.Time{}
 }
 
 // keychainGet is keyring.Get, replaceable by tests: the seam's mock can't fail.
@@ -156,6 +184,7 @@ var keychainGet = keyring.Get
 // access token is the gate; a token that failed to delete is unusable anyway
 // because Sign-In refuses to load an incomplete set).
 func ClearTokens() error {
+	defer dropAccessTokenCache()
 	if _, ok := externalTokens(); ok {
 		// Nothing persisted locally; sign-out is the host's transition.
 		return nil

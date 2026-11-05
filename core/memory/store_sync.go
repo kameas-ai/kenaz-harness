@@ -171,10 +171,8 @@ func (s *chromemStore) MarkSyncSent(_ context.Context, ids []string, at time.Tim
 			continue
 		}
 		c := &s.chunks[i]
-		if c.CreatedHLC == "" {
-			c.CreatedHLC = s.tickLocked()
-			changed = true
-		}
+		// CreatedHLC stays empty on a legacy row: it's older than any erase, and a
+		// fresh stamp here would let it survive one.
 		if c.ScopeHLC == "" {
 			c.ScopeHLC = s.tickLocked()
 			changed = true
@@ -450,8 +448,13 @@ func (s *chromemStore) DeleteSyncedBefore(_ context.Context, epoch time.Time, sc
 	if len(drop) == 0 {
 		return 0, nil
 	}
+	prev := append([]Chunk(nil), s.chunks...)
 	s.removeIdxLocked(drop)
-	return len(drop), s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.chunks = prev // not gone until it's on disk: the caller retries
+		return 0, err
+	}
+	return len(drop), nil
 }
 
 // DeleteCreatedBefore implements SyncStore. Every scope is considered, session
@@ -477,8 +480,13 @@ func (s *chromemStore) DeleteCreatedBefore(_ context.Context, hlc string, epoch 
 	if len(drop) == 0 {
 		return 0, nil
 	}
+	prev := append([]Chunk(nil), s.chunks...)
 	s.removeIdxLocked(drop)
-	return len(drop), s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.chunks = prev // not gone until it's on disk: the caller retries
+		return 0, err
+	}
+	return len(drop), nil
 }
 
 // ClearSyncMarkers implements SyncStore.

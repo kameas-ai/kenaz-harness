@@ -140,9 +140,14 @@ func SnapshotHealth(chunks []Chunk, embedder Embedder, now time.Time) HealthSnap
 // copy phase — not the computation.
 func (s *chromemStore) SnapshotHealth(ctx context.Context) (HealthSnapshot, error) {
 	_ = ctx
+	sees := s.viewer() // another account's notes aren't this person's to count
 	s.mu.RLock()
-	chunks := make([]Chunk, len(s.chunks))
-	copy(chunks, s.chunks)
+	chunks := make([]Chunk, 0, len(s.chunks))
+	for _, c := range s.chunks {
+		if sees(c) {
+			chunks = append(chunks, c)
+		}
+	}
 	s.mu.RUnlock()
 
 	return SnapshotHealth(chunks, nil, time.Now().UTC()), nil

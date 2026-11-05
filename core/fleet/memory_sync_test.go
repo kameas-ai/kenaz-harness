@@ -799,7 +799,8 @@ func TestMemorySync_V091GobFullSyncCycle(t *testing.T) {
 		t.Fatal("a legacy session chunk was synced")
 	}
 	ac := a.chunks()["mem-v091-global"]
-	if ac.CreatedHLC == "" || ac.SyncedAt.IsZero() || ac.SyncDirty {
+	// CreatedHLC stays empty: a legacy row is older than any erase.
+	if ac.CreatedHLC != "" || ac.SyncedAt.IsZero() || ac.SyncDirty {
 		t.Fatalf("A after first cycle = %+v", ac)
 	}
 	b.sync()

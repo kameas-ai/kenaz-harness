@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -273,6 +274,11 @@ func TestAccount_AnotherAccountCantReadOrTouchANote(t *testing.T) {
 	if got, _ := st.Query(ctx, vec, 5); len(got) != 0 {
 		t.Fatalf("B can recall A's notes: %+v", got)
 	}
+	if h, err := st0.(interface {
+		SnapshotHealth(context.Context) (HealthSnapshot, error)
+	}).SnapshotHealth(ctx); err != nil || h.Counts != (ChunkCounts{}) {
+		t.Fatalf("B's health counts A's notes: %+v, %v", h, err)
+	}
 	if err := st.(PruneCapable).SetPinned(ctx, "a1", true); err == nil {
 		t.Fatal("B pinned A's note")
 	}
@@ -354,10 +360,33 @@ func TestNarrative_NoteKeepsTheAccountItsJobWasQueuedUnder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, _ := st.ListAll(ctx)
-	for _, c := range all {
-		if c.ID == id && c.Account != "a" {
-			t.Fatalf("stamped %q", c.Account)
-		}
+	if got := get(t, st, id).Account; got != "a" {
+		t.Fatalf("stamped %q", got)
+	}
+}
+
+// Not gone until it's on disk: a failed save leaves the rows, so the retry can't
+// report success with nothing done.
+func TestAccount_FailedEraseSaveKeepsTheRows(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st0, err := NewChromemStore(filepath.Join(dir, "memory.gob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := st0.(SyncStore)
+	if err := st.Add(ctx, Chunk{ID: "x", ScopeKind: ScopeKindLongTerm, Content: "x", Embedding: []float32{1}, CreatedHLC: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(dir, 0o700) }()
+	scope := AccountScope{Account: "a", LegacyOwner: "a"}
+	if _, err := st.DeleteCreatedBefore(ctx, "9", time.Now().Add(time.Hour), scope); err == nil {
+		t.Skip("this filesystem lets the save through")
+	}
+	if all, _ := st.ListAll(ctx); len(all) != 1 {
+		t.Fatalf("rows dropped in memory: %+v", all)
 	}
 }

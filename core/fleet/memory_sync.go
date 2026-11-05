@@ -255,10 +255,16 @@ type memSyncAccountState struct {
 	// everything from Fleet. The lane's retry finishes BOTH the PUT and the
 	// forget-all; Enable abandons both (the user changed their mind).
 	ForgetAllPending bool `json:"forget_all_pending,omitempty"`
+	// EraseCutoff: this device's clock when the person asked for forget-all. A
+	// local cutoff, because Fleet's clock can sit behind notes made here, and a
+	// late retry must not take notes made after the request.
+	EraseCutoff string `json:"erase_cutoff,omitempty"`
 	// LocalErasePending: Fleet has erased, this device hasn't finished. Holds
-	// erased_before. Persisted first, so a crash can't leave the notes behind
-	// to upload again.
+	// the cutoff. Persisted first, and nothing syncs while it's set, so erased
+	// notes can't upload again. LocalEraseFleet is Fleet's erased_before for
+	// the same erase, to recognise it when Fleet offers it back.
 	LocalErasePending string `json:"local_erase_pending,omitempty"`
+	LocalEraseFleet   string `json:"local_erase_fleet,omitempty"`
 	// AppliedErase: the erased_before this device last finished, so an erase
 	// offered on every empty-cursor pull runs once.
 	AppliedErase string `json:"applied_erase,omitempty"`
@@ -533,7 +539,6 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
 	if m.cfg.Client == nil || m.cfg.Client.IsNop() {
-		m.finishLocalErase(ctx)
 		m.lanes().RecordOff(LaneMemorySync, "fleet_disabled")
 		return
 	}
@@ -548,7 +553,12 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 		}
 		return
 	}
-	m.finishLocalErase(ctx)
+	if err := m.finishLocalErase(ctx); err != nil {
+		// Nothing syncs until it's done: a pull would bring back what's being
+		// erased, and a push would upload it.
+		m.lanes().RecordFailure(LaneMemorySync, "local_erase", err, 0, time.Time{})
+		return
+	}
 	if paused, _ := m.orgPaused(); paused {
 		// A reversible staff hold, not a tier answer. Fleet keeps the
 		// data-rights half of the lane open while paused (kenaz-fleet
@@ -826,8 +836,8 @@ var errResetChurn = errors.New("fleet: memory reset snapshot restarted too many 
 // epoch. Every row a reset page touches is stamped SyncedAt >= epoch; the
 // mid-reset cursor is persisted after each applied page, so a snapshot of
 // any size completes across cycles. After the final page, synced rows the
-// snapshot never touched are swept (and, for erased, sync-scope rows
-// created before erased_before). The only reset DURING a snapshot is an
+// snapshot never touched are swept (and, for erased, the rows the account's
+// erase covers, created before erased_before). The only reset DURING a snapshot is an
 // epoch change; it restarts the snapshot from "" (bounded).
 func (m *MemorySync) pull(ctx context.Context) (applied, complete bool, err error) {
 	device := m.cfg.Clock.NodeID()
@@ -854,11 +864,22 @@ func (m *MemorySync) pull(ctx context.Context) (applied, complete bool, err erro
 		if !resp.Enabled {
 			return applied, false, errDisabledOnFleet
 		}
+		if resp.ErasedBefore != "" {
+			m.cfg.Clock.Observe(resp.ErasedBefore)
+		}
+		cur := m.state()
 		// An erase this device hasn't applied yet, on a pull that didn't call it
 		// a reset: a device that has never pulled can't be told any other way.
-		// It runs as a reset, so the snapshot's rows are told from older ones.
-		if !resp.Reset && cursor == "" && !resetting && resp.ErasedBefore != "" && resp.ErasedBefore != st.AppliedErase {
+		// It runs as a reset, so the snapshot's rows are told from older ones,
+		// and it upgrades any other reset already running.
+		if !resp.Reset && cursor == "" && resp.ErasedBefore != "" && resp.ErasedBefore != cur.AppliedErase &&
+			!(cur.ResetPending == "erased" && resp.ErasedBefore == cur.ErasedBefore) {
 			resp.Reset, resp.ResetReason = true, "erased"
+		}
+		// This device already finished that erase. Fleet can still offer it, and
+		// its cutoff is Fleet's clock, so running it again could take newer notes.
+		if resp.Reset && resp.ResetReason == "erased" && resp.ErasedBefore != "" && resp.ErasedBefore == cur.AppliedErase {
+			resp.ResetReason, resp.ErasedBefore = "cursor_expired", ""
 		}
 		if resp.Reset {
 			logging.L().Info("fleet.memory_sync.reset", "reason", resp.ResetReason, "restart", resetting)
@@ -1552,7 +1573,7 @@ func (m *MemorySync) Enable(ctx context.Context, scopes []string, consentVersion
 		// A re-enable supersedes any unconfirmed opt-out: without this the
 		// lane's retry PUT enabled=false could overwrite this (or another
 		// device's) re-enable, and Status would stop mirroring Fleet.
-		s.DisablePending, s.ForgetAllPending = false, false
+		s.DisablePending, s.ForgetAllPending, s.EraseCutoff = false, false, ""
 		// Sync is back on, so the line is no longer true. Only the account it
 		// was recorded for can end it: another account's sync says nothing.
 		s.InheritedOptOut = s.InheritedOptOut && s.Account != s.LegacyOwner
@@ -1577,10 +1598,9 @@ func (m *MemorySync) Enable(ctx context.Context, scopes []string, consentVersion
 //     left queued while off would never be sent);
 //  3. PUT enabled=false — a failure returns the error and leaves
 //     DisablePending set; the lane retries the PUT (never re-enables);
-//  4. POST forget-all. Fleet's data is gone; THIS device's memory is not
-//     ("delete from Fleet" is not "delete here"): its synced markers are
-//     cleared so a later re-opt-in uploads it afresh, and its cursor
-//     restarts so its own next pull is not an erase replay.
+//  4. POST forget-all, then erase this device's copy (legal D157), persisted
+//     first and pausing sync until it's done, so nothing erased can upload
+//     again.
 //
 // forget-all is allowed even after a tier lapse (Fleet gates it on
 // permission only), so this needs no capability. Returns the erased count.
@@ -1598,9 +1618,16 @@ func (m *MemorySync) Disable(ctx context.Context, deleteFromFleet bool, confirm 
 	if acctErr != nil && deleteFromFleet {
 		return 0, acctErr
 	}
+	var cutoff string
+	if deleteFromFleet {
+		cutoff = m.cfg.Clock.Tick()
+	}
 	if err := m.update(func(s *memSyncState) {
 		s.Enabled, s.DisablePending = false, true
 		s.ForgetAllPending = s.ForgetAllPending || deleteFromFleet
+		if deleteFromFleet {
+			s.EraseCutoff = cutoff
+		}
 	}); err != nil {
 		return 0, err
 	}
@@ -1647,45 +1674,50 @@ func (m *MemorySync) finishDisable(ctx context.Context) (int, error) {
 	if err := m.cfg.Outbox.Ack(ids...); err != nil {
 		return resp.Erased, err
 	}
-	erasedBefore := resp.ErasedBefore
-	if erasedBefore == "" {
-		erasedBefore = m.cfg.Clock.Tick() // a Fleet that didn't say: everything until now
+	if resp.ErasedBefore != "" {
+		m.cfg.Clock.Observe(resp.ErasedBefore)
 	}
-	if err := m.update(func(s *memSyncState) { s.LocalErasePending = erasedBefore }); err != nil {
-		return resp.Erased, err
-	}
-	m.finishLocalErase(ctx)
-	if err := m.cfg.Store.ClearSyncMarkers(ctx, m.scope()); err != nil {
-		return resp.Erased, err
-	}
-	return resp.Erased, m.update(func(s *memSyncState) {
+	if err := m.update(func(s *memSyncState) {
+		s.LocalErasePending, s.LocalEraseFleet = s.EraseCutoff, resp.ErasedBefore
+		if s.LocalErasePending == "" {
+			s.LocalErasePending = m.cfg.Clock.Tick()
+		}
 		s.Cursor, s.ResetPending, s.ErasedBefore, s.ResetEpoch, s.ResetCursor, s.ResetRestarts = "", "", "", time.Time{}, "", 0
-		s.ForgetAllPending = false
+		s.ForgetAllPending, s.EraseCutoff = false, ""
 		// Done, if it was this account's erase. Another account's says nothing.
 		s.InheritedErase = s.InheritedErase && s.Account != s.LegacyOwner
-	})
+	}); err != nil {
+		return resp.Erased, err
+	}
+	return resp.Erased, m.finishLocalErase(ctx)
 }
 
-// finishLocalErase erases this device's copy of what Fleet has erased, once it's
-// sure of the account the erase was for. A failure stays pending and retries.
-func (m *MemorySync) finishLocalErase(ctx context.Context) {
+// finishLocalErase erases this device's copy of what Fleet has erased. Sync is off
+// and paused until it's done, so every row it covers is older than the cutoff by
+// this device's clock, and no snapshot needs telling apart.
+func (m *MemorySync) finishLocalErase(ctx context.Context) error {
 	st := m.state()
-	if st.LocalErasePending == "" || st.Account == "" {
-		return
+	if st.LocalErasePending == "" {
+		return nil
 	}
 	scope := m.scope()
-	// Every row the erase covers is older than this epoch, snapshot or not.
 	n, err := m.cfg.Store.DeleteCreatedBefore(ctx, st.LocalErasePending, m.now().Add(24*time.Hour), scope)
 	if err != nil {
 		logging.L().Warn("fleet.memory_sync.local_erase_failed", "err", err.Error())
-		return
+		return fmt.Errorf("fleet: memory sync: erased from Fleet, but not yet from this device: %w", err)
+	}
+	// What's left is newer than the erase, so it uploads like any new note.
+	if err := m.cfg.Store.ClearSyncMarkers(ctx, scope); err != nil {
+		return err
 	}
 	logging.L().Info("fleet.memory_sync.local_erase_done", "deleted", n)
-	if err := m.update(func(s *memSyncState) {
-		s.AppliedErase, s.LocalErasePending = s.LocalErasePending, ""
-	}); err != nil {
-		logging.L().Warn("fleet.memory_sync.local_erase_state_failed", "err", err.Error())
-	}
+	return m.update(func(s *memSyncState) {
+		s.AppliedErase = s.LocalEraseFleet
+		if s.AppliedErase == "" {
+			s.AppliedErase = s.LocalErasePending
+		}
+		s.LocalErasePending, s.LocalEraseFleet = "", ""
+	})
 }
 
 // flushForgets sends every queued forget (best effort; failures stay queued).

@@ -260,8 +260,8 @@ async function confirmDisable() {
             builds its own). Anything that looks like a credential is refused and stays local.
           </li>
           <li>
-            Turning this off keeps Fleet's copy; you can also delete everything from Fleet at any
-            time.
+            Turning this off keeps Fleet's copy; you can also erase your notes from Fleet and this
+            device at any time.
           </li>
         </ul>
       </div>
@@ -344,7 +344,7 @@ async function confirmDisable() {
       <div v-else class="space-y-2 rounded-sm border border-border-muted p-3" data-testid="memory-sync-disable-confirm">
         <p>
           Turning this off stops syncing on all your devices. Fleet keeps its copy unless you also
-          delete it.
+          erase your notes.
         </p>
         <label class="flex items-center gap-2">
           <input v-model="deleteFromFleet" type="checkbox" data-testid="memory-sync-delete-fleet" />

@@ -67,6 +67,9 @@ type fakeMemoryFleet struct {
 	forgetAlls           int
 	// offerErasedBefore is Fleet's D157 signal on an empty-cursor pull.
 	offerErasedBefore string
+	// offerErasedReset answers the next empty-cursor pull with reset:true for
+	// this erased_before, once.
+	offerErasedReset string
 	// pausedCategory, when set, models a staff org pause (kenaz-fleet
 	// #206): every memory route answers 403 org_paused EXCEPT the
 	// data-rights allowlist (forget-all here).
@@ -329,6 +332,12 @@ func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
 			erased = f.erasedBefore
 		}
 		writeJSON(w, 200, memPullResponse{Enabled: true, Reset: true, ResetReason: reason, ErasedBefore: erased, Records: []memPullRecord{}})
+		return
+	}
+	if raw == "" && f.offerErasedReset != "" {
+		erased := f.offerErasedReset
+		f.offerErasedReset = ""
+		writeJSON(w, 200, memPullResponse{Enabled: true, Reset: true, ResetReason: "erased", ErasedBefore: erased, Records: []memPullRecord{}})
 		return
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
