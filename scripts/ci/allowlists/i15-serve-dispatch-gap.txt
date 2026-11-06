@@ -202,7 +202,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 186 entries.
+# 185 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -263,7 +263,6 @@
 # Caller(s) CedarEditor.vue only reachable from a view that renders
 # NotAvailableInServedMode.
 "Cedar_PublishToTeam"
-"Settings_FleetConfigPullStatus"
 
 # Caller(s) CompactionStrategyPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -852,7 +851,7 @@
 # genuine escalation. This class must shrink release over release (spec
 # AC-717); the next sweep should re-walk these against the tree it finds,
 # not assume this list still holds.
-# 80 entries.
+# 79 entries.
 
 # Reachable from the LIVE routed chat surface (MarkdownBlock.vue /
 # CodeBlock.vue's "save as artifact" + artifact-chip flow, and SessionsView.vue
@@ -925,7 +924,6 @@
 "SaveTheme"
 "Sessions_SetAutonomy"
 "Settings_FleetCapabilities"
-"Settings_FleetHealth"
 "Settings_FleetLockdownStatus"
 "Settings_FleetProfile"
 "Settings_FleetRefreshCapabilities"

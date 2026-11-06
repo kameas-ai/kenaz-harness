@@ -46,6 +46,14 @@ type fleetState struct {
 	lockdownWatcher *fleet.Watcher
 	lockdownBroker  fleet.BrokerSink
 
+	// mcpEnforcer stops already-running MCP servers a narrowed fleet
+	// allow-list no longer permits (SetMCPAllowlistEnforcer). nil = not
+	// wired (tests / no tools view): the allow-list still gates install and
+	// boot load, only live enforcement is skipped.
+	mcpEnforcer func(context.Context) []MCPAllowlistStop
+	// mcpBlocked is the sorted ids of enabled recipes the last apply found
+	// blocked by the allow-list (status surfaces).
+	mcpBlocked []string
 	// cedarEngine is the Cedar policy engine wired at SetCedarEngine time.
 	// Used by the composite ConfigApplier to apply team policy bundles.
 	cedarEngine *cedarpolicy.Engine
@@ -389,6 +397,26 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 	if a.fleet.client != nil {
 		a.fleet.client.SetSessionBroker(sessionExpiredTap{api: a, inner: sink})
 	}
+}
+
+// MCPAllowlistStop is one enabled MCP recipe the fleet allow-list blocks:
+// Stopped when a running server was shut down, Err when that failed.
+type MCPAllowlistStop struct {
+	RecipeID string
+	Stopped  bool
+	Err      error
+}
+
+// SetMCPAllowlistEnforcer wires live enforcement of the fleet MCP
+// allow-list onto running servers (fleet-policy push-down). Called from
+// rpc.New once the tools view exists, before MarkConfigConsumersWired.
+func (a *API) SetMCPAllowlistEnforcer(fn func(context.Context) []MCPAllowlistStop) {
+	if a.fleet == nil {
+		a.fleet = newFleetState()
+	}
+	a.fleet.mu.Lock()
+	a.fleet.mcpEnforcer = fn
+	a.fleet.mu.Unlock()
 }
 
 // SetCedarEngine wires the Cedar policy engine into the fleet state so that
@@ -1788,11 +1816,16 @@ func (a *API) fleetConfigPoller() *fleet.ConfigPoller {
 // Returns a zero-value view when fleet is disabled or the poller is not yet wired.
 func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusView, error) {
 	enabled := fleet.ConfigDistributionEnabled()
+	rules, mcpActive := a.activeFleetRules()
 	p := a.fleetConfigPoller()
 	if p == nil {
 		return FleetConfigPullStatusView{
 			Source:                    "default-deny",
 			ConfigDistributionEnabled: enabled,
+			FleetRulesActive:          len(rules) > 0 || mcpActive,
+			FleetCedarRules:           rules,
+			MCPAllowlistActive:        mcpActive,
+			MCPRecipesBlocked:         a.blockedMCPRecipes(),
 		}, nil
 	}
 	st := p.Status()
@@ -1803,7 +1836,40 @@ func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusVie
 		Source:                    st.Source,
 		BundleChecksum:            st.BundleChecksum,
 		ConfigDistributionEnabled: enabled,
+		FleetRulesActive:          len(rules) > 0 || mcpActive,
+		FleetCedarRules:           rules,
+		MCPAllowlistActive:        mcpActive,
+		MCPRecipesBlocked:         a.blockedMCPRecipes(),
 	}, nil
+}
+
+// activeFleetRules reports the fleet Cedar rules in force (team_rule_ids,
+// never rule text) and whether a fleet MCP allow-list restriction is active.
+func (a *API) activeFleetRules() ([]string, bool) {
+	var engine *cedarpolicy.Engine
+	if a.fleet != nil {
+		a.fleet.mu.RLock()
+		engine = a.fleet.cedarEngine
+		a.fleet.mu.RUnlock()
+	}
+	rules := fleet.ActiveFleetCedarRules(engine)
+	if rules == nil {
+		rules = []string{}
+	}
+	mcpActive, _ := recipes.FleetAllowlistActive()
+	return rules, mcpActive
+}
+
+// blockedMCPRecipes is the last apply's list of enabled recipes the
+// allow-list blocks (and whose servers were stopped).
+func (a *API) blockedMCPRecipes() []string {
+	out := []string{}
+	if a.fleet == nil {
+		return out
+	}
+	a.fleet.mu.RLock()
+	defer a.fleet.mu.RUnlock()
+	return append(out, a.fleet.mcpBlocked...)
 }
 
 // FleetHealth returns a compact fleet-health summary for the global health
@@ -1819,7 +1885,8 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 	enabled := fleet.ConfigDistributionEnabled()
 
 	// Config source + last error.
-	var configSource, configLastError string
+	var configSource, configLastError, lastAppliedAt string
+	var lastAppliedID int64
 	if !enabled {
 		configSource = "no-key"
 	} else {
@@ -1830,6 +1897,7 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 			st := p.Status()
 			configSource = st.Source
 			configLastError = st.LastError
+			lastAppliedID, lastAppliedAt = st.LastAppliedID, st.LastAppliedAt
 			switch {
 			case st.SigningKeyUnknown:
 				// Parallel to "no-key" (ErrSigningKeyNotConfigured): the
@@ -1850,11 +1918,18 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 	// handling) as the account UI, rather than a divergent inline check.
 	signedIn, _ := a.FleetSignedIn(ctx)
 
+	rules, mcpActive := a.activeFleetRules()
 	return FleetHealthView{
 		ConfigDistributionEnabled: enabled,
 		ConfigSource:              configSource,
 		ConfigLastError:           configLastError,
 		SignedIn:                  signedIn,
+		LastAppliedID:             lastAppliedID,
+		LastAppliedAt:             lastAppliedAt,
+		FleetRulesActive:          len(rules) > 0 || mcpActive,
+		FleetCedarRules:           rules,
+		MCPAllowlistActive:        mcpActive,
+		MCPRecipesBlocked:         a.blockedMCPRecipes(),
 	}, nil
 }
 
@@ -1906,22 +1981,52 @@ func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.
 	// config_pull.go's "len(applyErrs) == 0" success check goes false,
 	// lastAppliedID does not advance, and the bundle is re-attempted on
 	// the next poll instead of being reported as enforced.
-	if len(b.CedarDelta) > 0 {
+	//
+	// fleet-policy push-down (2026-10-31, contract #1): cedar_delta is the
+	// org's FULL rule snapshot and is applied on EVERY bundle — an absent /
+	// null section clears every fleet-installed rule (ApplyCedarDelta →
+	// Engine.ReplaceHarnessSnippets). A bundle with no cedar_delta and no
+	// engine wired has nothing to clear and is not an error.
+	{
 		a.state.mu.RLock()
 		engine := a.state.cedarEngine
 		a.state.mu.RUnlock()
-		if engine != nil {
+		switch {
+		case engine != nil:
 			if err := fleet.ApplyCedarDelta(ctx, engine, b.CedarDelta); err != nil {
 				errs = append(errs, err)
 			}
-		} else {
+		case len(b.CedarDelta) > 0:
 			errs = append(errs, fmt.Errorf("fleet/config: cedar_delta present but no Cedar engine wired (SetCedarEngine never called)"))
 		}
 	}
 
-	// MCP allow-list.
-	if b.MCPAllowlist != nil {
-		recipes.ApplyFleetAllowlist(b.MCPAllowlist)
+	// MCP allow-list — replace semantics on every bundle: null/absent
+	// removes the fleet restriction, [] blocks all, a list replaces. In
+	// served mode it intersects the sealed profile whitelist (it can narrow,
+	// never widen — core/mcp/recipes/allowlist.go).
+	recipes.ApplyFleetAllowlist(b.MCPAllowlist)
+	// Live enforcement: stop running servers the (possibly narrowed)
+	// allow-list no longer permits. A failed stop is an apply error so the
+	// bundle is retried and the ACK says which recipe (errors[]; Fleet's
+	// items[] accepts only catalog UUIDs, so recipes cannot ride there).
+	{
+		a.state.mu.RLock()
+		enforce := a.state.mcpEnforcer
+		a.state.mu.RUnlock()
+		if enforce != nil {
+			blocked := []string{}
+			for _, r := range enforce(ctx) {
+				blocked = append(blocked, r.RecipeID)
+				if r.Err != nil {
+					logging.L().Warn("fleet.config.mcp_allowlist.stop_failed", "recipe_id", r.RecipeID)
+					errs = append(errs, fmt.Errorf("fleet/config: mcp_allowlist: stop blocked recipe %q failed", r.RecipeID))
+				}
+			}
+			a.state.mu.Lock()
+			a.state.mcpBlocked = blocked
+			a.state.mu.Unlock()
+		}
 	}
 
 	// Model prefs.

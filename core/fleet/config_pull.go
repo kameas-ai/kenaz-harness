@@ -9,7 +9,16 @@
 //   - 200 → verify signature → apply each section → ACK → persist
 //   - Signature failure → hard-reject; previous applied bundle is kept
 //   - Backoff on error: 5 / 15 / 60 min ceiling
-//   - Disk cache: <DataDir>/fleet/bundle.json + bundle_checksum.txt
+//   - Disk cache: <DataDir>/fleet/bundle.json (the last fully-applied
+//     bundle, raw signed body, 0600) + bundle_id.txt + bundle_checksum.txt.
+//     On Start the cached bundle is re-verified (signature + this build's
+//     pinned key set) and re-applied BEFORE the first poll, so a restart
+//     enforces the last fleet policy even when the server answers 304. A
+//     cached bundle that no longer verifies is discarded and the checksum
+//     cleared, so the next poll re-fetches.
+//   - Sign-in wake: a poll that finds no session parks; a token arriving
+//     (NotifyTokensAvailable — sign-in, served-mode token source) wakes it
+//     for an immediate round instead of waiting out the 5-minute tick.
 //
 // (fleet-config-pull-01NDFSEX10 WP02)
 package fleet
@@ -116,6 +125,9 @@ type ConfigPoller struct {
 	// wake asks the loop for an immediate round with a reset backoff
 	// (buffered 1; the OnOrgUnpaused fan-out never blocks).
 	wake chan struct{}
+	// awaitingSignIn: the last poll found no session (ErrNotSignedIn); a
+	// NotifyTokensAvailable then wakes the loop.
+	awaitingSignIn bool
 
 	// buildVersion is this binary's version (SetBuildVersion). With
 	// reapplyID it implements review F1's re-apply rule: when the build
@@ -244,9 +256,12 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 	p.cancel = cancel
 	p.mu.Unlock()
 
+	registerTokenWaker(p)
+
 	go func() {
 		defer close(p.done)
 		defer cancel()
+		defer unregisterTokenWaker(p)
 		// Recover panics from the polling loop (FR-003). The goroutine logs
 		// the panic and exits cleanly rather than crashing the process.
 		defer func() {
@@ -258,6 +273,9 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 				)
 			}
 		}()
+
+		// Re-enforce the last applied bundle before the first fetch.
+		p.restoreCachedBundle(innerCtx)
 
 		// Immediate first poll.
 		if err := p.round(innerCtx); err != nil {
@@ -359,13 +377,27 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	p.mu.RUnlock()
 
 	urlPath := fmt.Sprintf("/api/v1/configs?machine=%s&checksum=%s", url.QueryEscape(nodeID), url.QueryEscape(cs))
+	gen := tokenGeneration()
 
 	// We need to inspect the status code before letting the fleet http.Client
 	// discard non-2xx bodies, so we call Get directly.
 	resp, err := p.client.Get(ctx, urlPath)
+	if err == nil || !errors.Is(err, ErrNotSignedIn) {
+		p.mu.Lock()
+		p.awaitingSignIn = false
+		p.mu.Unlock()
+	}
 	if err != nil {
 		if errors.Is(err, ErrNotSignedIn) {
-			// Not signed in — skip silently; don't backoff.
+			// Not signed in — skip silently; don't backoff. Park for a
+			// NotifyTokensAvailable wake; if a token arrived while this
+			// request was failing, wake ourselves (no lost notification).
+			p.mu.Lock()
+			p.awaitingSignIn = true
+			p.mu.Unlock()
+			if tokenGeneration() != gen {
+				p.wakeNow()
+			}
 			return nil
 		}
 		if IsOrgPaused(err) {
@@ -508,8 +540,13 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	p.source = "fleet"
 	p.mu.Unlock()
 
-	// Persist state to disk only on full success.
+	// Persist state to disk only on full success. bundle.json first, so a
+	// crash between the writes leaves an id/checksum that never names a
+	// bundle newer than the cached one.
 	if len(applyErrs) == 0 {
+		if saveErr := saveBundleBody(p.dataDir, body); saveErr != nil {
+			log.Printf("fleet: save bundle body: %v", saveErr)
+		}
 		if saveErr := saveBundleState(p.dataDir, b.BundleID, newChecksum); saveErr != nil {
 			log.Printf("fleet: save bundle state: %v", saveErr)
 		}
@@ -560,6 +597,11 @@ func (p *ConfigPoller) ResumeAfterOrgUnpause() {
 		p.lastError = ""
 	}
 	p.mu.Unlock()
+	p.wakeNow()
+}
+
+// wakeNow asks the loop for an immediate round (non-blocking; coalesces).
+func (p *ConfigPoller) wakeNow() {
 	select {
 	case p.wake <- struct{}{}:
 	default:

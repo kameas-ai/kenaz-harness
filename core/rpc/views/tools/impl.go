@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -670,6 +671,59 @@ func (a *API) UninstallRecipe(ctx context.Context, id string) error {
 		"recipe_id": id,
 	})
 	return nil
+}
+
+// AllowlistStopResult is one enabled recipe the active MCP allow-list no
+// longer permits. Stopped is true when a running server was shut down by
+// this call; Err is non-nil when the shutdown failed.
+type AllowlistStopResult struct {
+	RecipeID string
+	Stopped  bool
+	Err      error
+}
+
+// StopDisallowedRecipes enforces the active allow-list on servers that are
+// ALREADY running (fleet-policy push-down): IsAllowed is otherwise only
+// consulted at install / boot-load time, so a narrowed fleet allow-list
+// would leave a now-forbidden server serving tools until restart.
+//
+// Every enabled recipe the allow-list refuses is closed through the same
+// Pool.CloseOne lifecycle UninstallRecipe uses. The enabled-list entry is
+// KEPT (this is a policy block, not an uninstall): the boot path skips it
+// while blocked, and a later widening + restart brings it back. Returns one
+// result per blocked enabled recipe, sorted by id.
+func (a *API) StopDisallowedRecipes(ctx context.Context) []AllowlistStopResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cfg.Enabled == nil {
+		return nil
+	}
+	var out []AllowlistStopResult
+	for _, entry := range a.cfg.Enabled.List() {
+		if recipes.IsAllowed(entry.ID) {
+			continue
+		}
+		res := AllowlistStopResult{RecipeID: entry.ID}
+		if a.cfg.Pool != nil {
+			err := a.cfg.Pool.CloseOne(ctx, entry.ID)
+			switch {
+			case err == nil:
+				res.Stopped = true
+			case errors.Is(err, stdio.ErrServerNotFound):
+				// Not running — nothing to stop.
+			default:
+				res.Err = err
+			}
+		}
+		if res.Stopped {
+			a.emit(ctx, "mcp.recipe.stopped_by_allowlist", map[string]any{
+				"recipe_id": entry.ID,
+			})
+		}
+		out = append(out, res)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].RecipeID < out[j].RecipeID })
+	return out
 }
 
 // ForgetRecipeKey removes one keychain entry. The recipe stays

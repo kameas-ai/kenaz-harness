@@ -110,3 +110,29 @@ func TestEnrollFunc_SupervisorLiftsNodeRemovedOnNewHostIdentity(t *testing.T) {
 		t.Fatalf("presented identities = %v", presented)
 	}
 }
+
+// wakeOnToken notifies only for changes that leave a token, and stops with ctx.
+func TestWakeOnToken(t *testing.T) {
+	var mu sync.Mutex
+	tok := ""
+	token := func() string { mu.Lock(); defer mu.Unlock(); return tok }
+	ch := make(chan struct{}, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { wakeOnToken(ctx, ch, token); close(done) }()
+
+	ch <- struct{}{} // signed out: no token → no notification (must not block)
+	mu.Lock()
+	tok = "at"
+	mu.Unlock()
+	ch <- struct{}{}
+	// The notification itself is exercised by core/fleet's
+	// TestConfigPoller_WakesWhenTokenSourceInstalled; here we only prove the
+	// loop drains and exits.
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("wakeOnToken did not exit on ctx cancel")
+	}
+}

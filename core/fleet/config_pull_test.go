@@ -21,11 +21,17 @@ type fakeApplier struct {
 	mu      sync.Mutex
 	applied []*Bundle
 	errFn   func(*Bundle) error
+	// fetchedOnly: do not record start-up cache re-applies (tests that
+	// count server-driven applies).
+	fetchedOnly bool
 }
 
-func (f *fakeApplier) ApplyBundle(_ context.Context, b *Bundle) []error {
+func (f *fakeApplier) ApplyBundle(ctx context.Context, b *Bundle) []error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fetchedOnly && IsCacheRestore(ctx) {
+		return nil
+	}
 	cp := *b
 	f.applied = append(f.applied, &cp)
 	if f.errFn != nil {
@@ -336,14 +342,20 @@ func TestConfigPoller_304AfterRelaunch_SourceBecomesFleet(t *testing.T) {
 	if err := saveBundleApplyMeta(dataDir, bundleApplyMeta{BuildVersion: "v1"}); err != nil {
 		t.Fatalf("saveBundleApplyMeta: %v", err)
 	}
+	if err := saveBundleBody(dataDir, body); err != nil {
+		t.Fatalf("saveBundleBody: %v", err)
+	}
 
-	// Before any revalidation: restored from disk → "cache".
+	// Before any revalidation: restored from disk (and re-applied) → "cache".
 	applier := &fakeApplier{}
 	p := newPollerForTest(t, srv, applier, dataDir)
 	p.SetBuildVersion("v1")
 	p.client = nil // Start's first poll returns ErrFleetDisabled: no revalidation yet
 	ctx0, cancel0 := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	p.Start(ctx0)
+	if !waitUntil(t, 300*time.Millisecond, func() bool { return len(applier.snapshot()) == 1 }) {
+		t.Fatal("cached bundle not re-applied at start")
+	}
 	if got := p.Status().Source; got != "cache" {
 		t.Errorf("source before revalidation = %q, want cache", got)
 	}
@@ -360,8 +372,9 @@ func TestConfigPoller_304AfterRelaunch_SourceBecomesFleet(t *testing.T) {
 	if !waitUntil(t, 300*time.Millisecond, func() bool { return p2.Status().Source == "fleet" }) {
 		t.Fatalf("source after 304 = %q, want fleet", p2.Status().Source)
 	}
-	if n := len(applier.snapshot()); n != 0 {
-		t.Errorf("a 304 must not re-apply; applied %d times", n)
+	// One apply per start (the cache restore); the 304 itself applies nothing.
+	if n := len(applier.snapshot()); n != 2 {
+		t.Errorf("want exactly the two start-up cache re-applies; applied %d times", n)
 	}
 	if st := p2.Status(); st.LastAppliedID != 1 || st.LastError != "" {
 		t.Errorf("status = %+v, want LastAppliedID 1 and no error", st)
@@ -434,16 +447,18 @@ func TestConfigPoller_ReapplyAfterBuildChangeOrRefusal(t *testing.T) {
 		}
 	}
 
+	// Counters record fetched-bundle applies only; every start also
+	// re-applies the cached bundle (fleet-policy push-down), not counted.
 	// v1 applies bundle 1 with a refused pack.
-	a1 := &refusingApplier{}
+	a1 := &refusingApplier{fakeApplier{fetchedOnly: true}}
 	run("v1", a1, func() int { return len(a1.snapshot()) }, 1)
 	// Same build, but the last apply had refusals → re-applied once.
-	a2 := &fakeApplier{}
+	a2 := &fakeApplier{fetchedOnly: true}
 	run("v1", a2, func() int { return len(a2.snapshot()) }, 1)
 	// Same build, no refusals → 304, no re-apply.
-	a3 := &fakeApplier{}
+	a3 := &fakeApplier{fetchedOnly: true}
 	run("v1", a3, func() int { return len(a3.snapshot()) }, 0)
 	// Upgrade → re-applied once.
-	a4 := &fakeApplier{}
+	a4 := &fakeApplier{fetchedOnly: true}
 	run("v2", a4, func() int { return len(a4.snapshot()) }, 1)
 }
