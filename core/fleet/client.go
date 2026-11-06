@@ -239,7 +239,9 @@ func (c *Client) RefreshIdentity(ctx context.Context, nodeID, platform, version 
 	if !c.profile.Configured() {
 		return Identity{}, ErrProfileNotConfigured
 	}
-	v, err, _ := c.enrollSF.Do("enroll", func() (any, error) {
+	// Keyed by account: a sign-in must never join an enroll still running
+	// under the previous account's token and take its answer (legal D164).
+	v, err, _ := c.enrollSF.Do("enroll:"+TokenIdentityKey(), func() (any, error) {
 		return c.enrollIdentity(ctx, nodeID, platform, version)
 	})
 	if err != nil {

@@ -2,6 +2,9 @@ package settings
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -60,5 +63,32 @@ func TestMemorySync_SignOutStopsLane_SignInRestartsIt(t *testing.T) {
 	}
 	if !ms.Running() {
 		t.Fatal("sign-in did not restart the memory sync loop")
+	}
+}
+
+// A late enroll answer from before a sign-in says nothing about the new session:
+// it must not show a good sign-in as degraded (review of the D164 guard).
+func TestEnroll_SupersededByASignInIsNotASessionFailure(t *testing.T) {
+	r, _ := newRemovalRig(t)
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if req.URL.Path == "/config.json" {
+			_, _ = w.Write([]byte(`{"api_base_url":"` + srv.URL + `"}`))
+			return
+		}
+		r.setToken(jwtFor("sub-bob", "zitadel-org-2")) // the sign-in lands mid-enroll
+		_, _ = w.Write([]byte(`{"user_id":"user-alice","org_id":"org-1","role":"org_member"}`))
+	}))
+	defer srv.Close()
+	r.api.SetFleetClient(fleet.NewClientForTestingWithDataDir(srv.URL, r.dataDir), r.dataDir)
+
+	if _, err := r.api.fleetEnroll(context.Background()); !errors.Is(err, fleet.ErrEnrollTokenChanged) {
+		t.Fatalf("fleetEnroll err = %v", err)
+	}
+	r.api.fleet.mu.RLock()
+	defer r.api.fleet.mu.RUnlock()
+	if got := r.api.fleet.sess.lastErr; got != "" {
+		t.Fatalf("session recorded a failure: %q", got)
 	}
 }

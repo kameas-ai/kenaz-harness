@@ -104,6 +104,11 @@ type Chunk struct {
 	ScopeHLC   string `json:"scope_hlc,omitempty"`
 	CreatedHLC string `json:"created_hlc,omitempty"`
 
+	// Account is who this chunk belongs to (legal D164; see account.go). Set
+	// once at creation, never changed. Empty on a chunk from before the field
+	// existed, which is what makes it "unstamped".
+	Account string `json:"account,omitempty"`
+
 	// Recall G-counter split (WP05, H4). RecallOwn is this device's
 	// monotone counter (the value pushed as `recall_own`); RecallOthers is
 	// pulled `recall_count_others`; RecallFolded is display/score-only

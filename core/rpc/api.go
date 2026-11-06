@@ -2344,6 +2344,12 @@ func New(c *core.Core, opts ...Option) *API {
 		gs.SetGate(&memoryGateAdapter{gate: a.cedarGate()})
 	}
 	a.memClock = openMemoryClock(c, memStore)
+	// Every new note records whose it is (legal D164). A store that can't
+	// carry the stamp can't sync either.
+	if as, ok := memStore.(corememory.AccountStamper); ok && c != nil && c.DataDir() != "" {
+		accountDir := c.DataDir()
+		as.SetAccountSource(func() string { return corefleet.CurrentAccountKey(accountDir) })
+	}
 	a.memForgets = openMemoryForgetOutbox(c, memStore, a.memClock)
 	personalForLLM := newPersonalStore(c)
 	a.personalStore = personalForLLM
@@ -4617,6 +4623,9 @@ func New(c *core.Core, opts ...Option) *API {
 		a.memorySync = buildMemorySync(a, flCl, flDataDir)
 		if a.settingsImpl != nil && a.memorySync != nil {
 			a.settingsImpl.SetMemorySync(a.memorySync)
+			// Sync waits for the enroll that names the account; don't leave
+			// it waiting for the next tick after that.
+			a.settingsImpl.OnFleetEnrolled(a.memorySync.Kick)
 		}
 
 		// fleet-skills-sync-01NDFSEX18 WP02: wire fleet skill dependencies onto

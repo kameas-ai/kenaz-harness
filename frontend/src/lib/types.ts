@@ -883,12 +883,9 @@ export interface ContextPublishResult {
   accepted_edges: number;
   conflicts: ContextPushConflict[];
   /**
-   * The layer the entry actually published to — "team" or "org". Can
-   * differ from the request's `layer`: a "team" request with no team_id
-   * falls back to "org" (finding #97 — THROWAWAY until fleet's default
-   * "everyone" team ships, see core/rpc/views/contexts/impl.go). Always
-   * use this, never the request layer, when telling the user where the
-   * entry went.
+   * The layer the entry actually published to — "team" or "org". A "team"
+   * request with no team is refused, never widened (see
+   * core/rpc/views/contexts/impl.go).
    */
   effective_layer: 'team' | 'org';
 }
@@ -4920,6 +4917,16 @@ export interface MemorySyncStatus {
   blockedCount: number;
   /** Local sync-scope chunks not yet accepted by Fleet. */
   pendingCount: number;
+  /** Unstamped notes held until the one-time line is answered (legal D164). */
+  olderNotes: number;
+  /** Who those notes would sync to. */
+  olderNotesAccount?: string;
+  /** Notes that stay on this device: the keychain couldn't be read when they were written. */
+  unresolvedNotes: number;
+  /** An earlier version left an erase unfinished (legal). Shown until dismissed. */
+  inheritedErase?: boolean;
+  /** An earlier version left an opt-out unfinished (legal). Shown until dismissed. */
+  inheritedOptOut?: boolean;
   fleetError?: string;
   lane: FleetSyncLaneView;
   /** Staff org pause (kenaz-fleet PR 206): show the paused banner, keep data-rights actions. */

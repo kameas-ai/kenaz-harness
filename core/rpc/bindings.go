@@ -3762,6 +3762,20 @@ func (b *Bindings) Fleet_MemorySyncEnable(scopes []string, consentVersion string
 	return b.api.Settings().FleetMemorySyncEnable(b.ctx(), scopes, consentVersion)
 }
 
+// Fleet_MemorySyncContinueOlderNotes answers the one-time line about older
+// notes on this device (legal D164): they may now sync to this account.
+func (b *Bindings) Fleet_MemorySyncContinueOlderNotes() (settings.MemorySyncStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MemorySyncContinueOlderNotes")()
+	return b.api.Settings().FleetMemorySyncContinueOlderNotes(b.ctx())
+}
+
+// Fleet_MemorySyncDismissNotice clears a notice about a request an earlier
+// version left unfinished.
+func (b *Bindings) Fleet_MemorySyncDismissNotice(notice string) (settings.MemorySyncStatusView, error) {
+	defer sentry.WrapBinding("Fleet_MemorySyncDismissNotice")()
+	return b.api.Settings().FleetMemorySyncDismissNotice(b.ctx(), notice)
+}
+
 // Fleet_MemorySyncDisable opts out (Fleet keeps the data); with
 // deleteFromFleet it first erases everything on Fleet — confirm must be
 // "forget-all".

@@ -1280,7 +1280,7 @@
 "Advice_Respond"
 
 # CLASS: desktop-only-by-nature -- memory-sync-01MEMSY01 WP08, 2026-10-07.
-# 3 entries.
+# 5 entries.
 #
 # The learned-memory sync panel (MemorySyncPanel.vue) is mounted only in
 # SettingsView's Sync sub-tab, and SettingsView is boundary-panelled
@@ -1292,6 +1292,8 @@
 #
 # Blocker: a served settings surface (none exists for any Settings_Fleet*
 # panel). Dated 2026-10-07. Owner: alec.
+"Fleet_MemorySyncContinueOlderNotes"
+"Fleet_MemorySyncDismissNotice"
 "Fleet_MemorySyncDisable"
 "Fleet_MemorySyncEnable"
 "Fleet_MemorySyncStatus"

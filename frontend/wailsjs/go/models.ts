@@ -8465,6 +8465,11 @@ export namespace settings {
 	    maxBytes: number;
 	    blockedCount: number;
 	    pendingCount: number;
+	    olderNotes: number;
+	    olderNotesAccount?: string;
+	    unresolvedNotes: number;
+	    inheritedErase?: boolean;
+	    inheritedOptOut?: boolean;
 	    fleetError?: string;
 	    lane: FleetSyncLaneView;
 	    orgPaused: boolean;
@@ -8489,6 +8494,11 @@ export namespace settings {
 	        this.maxBytes = source["maxBytes"];
 	        this.blockedCount = source["blockedCount"];
 	        this.pendingCount = source["pendingCount"];
+	        this.olderNotes = source["olderNotes"];
+	        this.olderNotesAccount = source["olderNotesAccount"];
+	        this.unresolvedNotes = source["unresolvedNotes"];
+	        this.inheritedErase = source["inheritedErase"];
+	        this.inheritedOptOut = source["inheritedOptOut"];
 	        this.fleetError = source["fleetError"];
 	        this.lane = this.convertValues(source["lane"], FleetSyncLaneView);
 	        this.orgPaused = source["orgPaused"];

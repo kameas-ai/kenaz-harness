@@ -17,7 +17,7 @@
  * Cancel while running is cancel-safe: the in-flight entry finishes, the
  * rest are marked "not started". The dialog cannot be dismissed mid-entry.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { ContextNode } from '@/lib/types';
 import {
@@ -36,6 +36,8 @@ const props = defineProps<{
   mode: FolderBatchMode;
   /** FleetSession-derived reason from ContextsView; non-null disables everything. */
   disabledReason: string | null;
+  /** Known non-admin: Fleet refuses org-wide publishing, so don't offer it. */
+  orgPublishBlocked?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -54,6 +56,13 @@ const entries = ref<BatchEntry[]>(buildBatchEntries(props.folder, props.mode));
 
 const stopRequested = ref(false);
 const layer = ref<'team' | 'org'>('team');
+// A session refresh can demote an admin while the dialog is open.
+watch(
+  () => props.orgPublishBlocked,
+  (blocked) => {
+    if (blocked) layer.value = 'team';
+  },
+);
 
 const folderName = computed(() => props.folder.path.split('/').pop() || 'library root');
 const verb = computed(() => (props.mode === 'share' ? 'Share' : 'Promote'));
@@ -82,12 +91,11 @@ async function shareOne(e: BatchEntry): Promise<string | { skipped: string }> {
       version: 1,
     }),
   );
-  // effective_layer is the only truth about where it landed (finding #97).
-  if (layer.value === 'team' && res.effective_layer === 'org') {
-    return 'Published org-wide — team sync is not available yet, so this went to your whole organisation.';
-  }
   const where = res.effective_layer === 'org' ? 'your organisation' : 'your team';
   const conflicts = res.conflicts?.length ?? 0;
+  if (res.accepted_nodes === 0 && conflicts > 0) {
+    throw new Error('Not updated: Fleet has a newer version of this entry.');
+  }
   return conflicts > 0
     ? `Published to ${where} · ${conflicts} version conflict${conflicts === 1 ? '' : 's'}`
     : `Published to ${where}`;
@@ -209,9 +217,22 @@ const statusClass: Record<BatchEntry['status'], string> = {
           <span>Share to team</span>
         </label>
         <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
-          <input v-model="layer" type="radio" value="org" data-testid="folder-share-layer-org" />
+          <input
+            v-model="layer"
+            type="radio"
+            value="org"
+            data-testid="folder-share-layer-org"
+            :disabled="orgPublishBlocked"
+          />
           <span>Publish org-wide (visible to everyone in your organisation)</span>
         </label>
+        <p
+          v-if="orgPublishBlocked"
+          class="font-ui text-[11px] text-ink-muted"
+          data-testid="folder-share-org-admin-only"
+        >
+          Only an org admin or owner can publish org-wide.
+        </p>
       </fieldset>
 
       <div class="flex items-center gap-3 mb-1 font-ui text-[11px] text-ink-muted">

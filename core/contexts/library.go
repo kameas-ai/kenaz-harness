@@ -13,8 +13,8 @@
 //   - Save enforces a 1 MiB ceiling per file. The limit isn't a privacy
 //     control — it's a sanity check so a stray paste doesn't wedge the
 //     UI's preview pane. WP05 may surface the cap as a setting.
-//   - Delete moves into <root>/.trash/<RFC3339>-<basename>; 30-day
-//     retention is policy, swept by SweepTrash. The trash directory is
+//   - Delete moves into <root>/.trash/<stamp>-<basename>; 30-day
+//     retention from deletion is policy, swept by SweepTrash. The trash directory is
 //     hidden from Tree() so the user's library view stays clean.
 //   - RecentlyApplied is a JSON file at <root>/.recent.json. WP01
 //     ships the data structure; the LLM send pipeline will start
@@ -119,6 +119,10 @@ const (
 	trashDirName  = ".trash"
 	recentJSONRel = ".recent.json"
 	trashTTL      = 30 * 24 * time.Hour
+	// trashStampLayout prefixes every trash entry's name. It is the only
+	// record of when the entry was deleted: moving a file to the trash
+	// keeps its modification time.
+	trashStampLayout = "20060102T150405.000000000"
 )
 
 // Open returns a Library rooted at rootPath. The directory is created
@@ -418,8 +422,8 @@ func (l *Library) Rename(oldPath, newPath string) error {
 	return nil
 }
 
-// Delete moves path to <root>/.trash/<RFC3339>-<basename>. Trash is
-// swept by SweepTrash on a 30-day TTL. A trashed file can be
+// Delete moves path to <root>/.trash/<stamp>-<basename>. Trash is
+// swept by SweepTrash 30 days after deletion. A trashed file can be
 // recovered manually for the retention window.
 func (l *Library) Delete(path string) error {
 	if l == nil {
@@ -434,7 +438,7 @@ func (l *Library) Delete(path string) error {
 		return fmt.Errorf("contexts: mkdir trash: %w", err)
 	}
 	base := filepath.Base(abs)
-	stamp := time.Now().UTC().Format("20060102T150405.000000000")
+	stamp := time.Now().UTC().Format(trashStampLayout)
 	dst := filepath.Join(trashRoot, stamp+"-"+base)
 	// Disambiguate on the unlikely tick collision.
 	for i := 1; i < 10; i++ {
@@ -451,7 +455,7 @@ func (l *Library) Delete(path string) error {
 	return nil
 }
 
-// SweepTrash removes trash entries older than 30 days. Safe to call
+// SweepTrash removes trash entries deleted more than 30 days ago. Safe to call
 // on every boot — a missing trash directory is a no-op.
 func (l *Library) SweepTrash() error {
 	if l == nil {
@@ -467,15 +471,33 @@ func (l *Library) SweepTrash() error {
 	}
 	cutoff := time.Now().UTC().Add(-trashTTL)
 	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil {
-			continue
+		deletedAt, ok := trashEntryDeletedAt(e.Name())
+		if !ok {
+			// Not named by Delete: its modification time is the only clue.
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			deletedAt = info.ModTime().UTC()
 		}
-		if info.ModTime().UTC().Before(cutoff) {
+		if deletedAt.Before(cutoff) {
 			_ = os.RemoveAll(filepath.Join(trashRoot, e.Name()))
 		}
 	}
 	return nil
+}
+
+// trashEntryDeletedAt reads the deletion time from a trash entry's name
+// (<stamp>-<basename>, or <stamp>-<n>-<basename> on a collision).
+func trashEntryDeletedAt(name string) (time.Time, bool) {
+	if len(name) <= len(trashStampLayout) || name[len(trashStampLayout)] != '-' {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(trashStampLayout, name[:len(trashStampLayout)])
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // RecentlyApplied returns up to limit most-recently-applied paths.
@@ -630,14 +652,14 @@ func (l *Library) resolveExisting(path string, allowDir bool) (string, error) {
 // doesn't exist; Save / CreateFolder call it before creating the
 // target so we walk upwards to the nearest existing ancestor.
 func (l *Library) assertWithinRoot(abs string) error {
-	if !strings.HasPrefix(abs, l.root) {
+	if !l.isWithinRoot(abs) {
 		return fmt.Errorf("%w: %s", ErrSymlinkEscape, abs)
 	}
 	probe := abs
 	for {
 		resolved, err := filepath.EvalSymlinks(probe)
 		if err == nil {
-			if !strings.HasPrefix(resolved, l.root) {
+			if !l.isWithinRoot(resolved) {
 				return fmt.Errorf("%w: %s -> %s", ErrSymlinkEscape, abs, resolved)
 			}
 			return nil
@@ -651,6 +673,16 @@ func (l *Library) assertWithinRoot(abs string) error {
 		}
 		probe = parent
 	}
+}
+
+// isWithinRoot reports whether p is l.root or below it. It compares whole
+// path segments: a sibling such as <root>-other shares the string prefix but
+// is outside the library.
+func (l *Library) isWithinRoot(p string) bool {
+	if p == l.root {
+		return true
+	}
+	return strings.HasPrefix(p, strings.TrimSuffix(l.root, string(filepath.Separator))+string(filepath.Separator))
 }
 
 // hasAllowedExt returns true if path's extension is in the allowlist.

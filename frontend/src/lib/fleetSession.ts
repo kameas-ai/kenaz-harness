@@ -368,6 +368,16 @@ export function describeFleetReason(reason: string | undefined): string {
 }
 
 /**
+ * isKnownNonAdmin is true only when roles are known and none is org admin or
+ * owner. Absent roles (an older enrollment) are "unknown", not "member", so
+ * the control stays available and Fleet decides.
+ */
+export function isKnownNonAdmin(roles: string[] | undefined | null): boolean {
+  if (!roles || roles.length === 0) return false;
+  return !roles.some((r) => r === 'org_admin' || r === 'org_owner');
+}
+
+/**
  * formatRoles renders FleetIdentity.roles for the identity header and the
  * Account panel (FR-9 / dogfood F8b — the payload carried roles and no
  * surface showed them): "org_owner" → "Org owner", joined with ", ".

@@ -125,7 +125,16 @@ type TokenIdentity struct {
 // changes it. Used by the served enroll supervisor (cmd/servedfleet) and
 // recorded in the node_removed marker.
 func TokenIdentityKey() string {
-	id, err := TokenIdentityFromAccessToken()
+	ts, err := LoadTokens()
+	if err != nil {
+		return ""
+	}
+	return tokenKeyOf(ts.AccessToken)
+}
+
+// tokenKeyOf is TokenIdentityKey for a token already in hand.
+func tokenKeyOf(token string) string {
+	id, err := tokenIdentityFromJWT(token)
 	if err != nil || id.Subject == "" {
 		return ""
 	}

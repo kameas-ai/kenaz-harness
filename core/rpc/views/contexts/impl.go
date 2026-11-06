@@ -73,7 +73,7 @@ func (a *API) WithSelfUserID(f func() string) *API {
 
 // WithSelfTeamID wires the enrolled fleet identity's team id source. When
 // set, a "team"-layer Context_Publish with no req.TeamID publishes to this
-// team instead of falling back to the org layer.
+// team; with no team the publish returns ErrNoTeam.
 func (a *API) WithSelfTeamID(f func() string) *API {
 	a.selfTeamID = f
 	return a
@@ -99,6 +99,12 @@ func (a *API) WithSelfIdentityFromDataDir(dataDir string) *API {
 		WithSelfUserID(func() string { return load().UserID }).
 		WithSelfTeamID(func() string { return load().TeamID })
 }
+
+// ErrNoTeam is returned by Context_Publish for a team share when the account
+// has no team on record. That can also mean the identity is stale or a
+// lookup failed, so the copy doesn't assert the account has no team. The
+// frontend shows it verbatim.
+var ErrNoTeam = errors.New("contexts: couldn't find a team for your account, so this hasn't been shared. Try again shortly, or ask an org admin to add you to a team")
 
 // ErrInvalidModule is returned by AttachModule when the directory exists
 // but has no root file (context.md / agents.md).
@@ -368,9 +374,9 @@ func toWire(in corecontexts.Node) Node {
 //
 // Team resolution for a "team"-layer request, in order: req.TeamID; else
 // the enrolled fleet identity's team_id (selfTeamID — the UI has no team
-// picker); else no team, and the publish widens to the "org" layer.
-// EffectiveLayer always reports the layer actually published, and the
-// frontend surfaces a team→org widening (ContextsView.vue).
+// picker); else ErrNoTeam and nothing is sent. A team request never widens
+// to "org": org-wide is the member's explicit choice, and Fleet allows it
+// only for admins and owners.
 func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (ContextPublishResult, error) {
 	if a == nil || a.syncer == nil {
 		return ContextPublishResult{}, fleet.ErrFleetDisabled
@@ -388,19 +394,17 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 			teamIDSource = "identity"
 		}
 	}
-	fellBackToOrg := false
-	if layer == contextpack.LayerTeam && teamID == "" {
-		layer = contextpack.LayerOrg
-		fellBackToOrg = true
-	}
 
 	// Log the wire id, never the local id (a library path is user content).
 	wireID := a.syncer.WireNodeID(req.NodeID)
+	if layer == contextpack.LayerTeam && teamID == "" {
+		logging.L().Warn("contexts.publish.no_team", "node_id", wireID)
+		return ContextPublishResult{}, ErrNoTeam
+	}
 	logging.L().Info("contexts.publish.start",
 		"node_id", wireID,
 		"requested_layer", req.Layer,
 		"effective_layer", string(layer),
-		"team_fallback_to_org", fellBackToOrg,
 		"team_id_present", teamID != "",
 		"team_id_source", teamIDSource,
 	)
