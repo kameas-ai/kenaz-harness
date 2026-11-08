@@ -84,6 +84,14 @@ type fakeFleetConfigServer struct {
 	response []byte
 	status   int // 0 means derive from presence of response
 	ackIDs   []int64
+	// checkin: set X-Fleet-Checkin-Requested: 1 on every GET (A8).
+	checkin bool
+}
+
+func (f *fakeFleetConfigServer) setCheckinRequested(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checkin = on
 }
 
 func (f *fakeFleetConfigServer) setResponse(data []byte) {
@@ -104,7 +112,11 @@ func (f *fakeFleetConfigServer) ServeHTTP(w http.ResponseWriter, r *http.Request
 	f.mu.Lock()
 	resp := f.response
 	status := f.status
+	checkin := f.checkin
 	f.mu.Unlock()
+	if checkin && r.Method == http.MethodGet {
+		w.Header().Set(CheckinRequestedHeader, "1")
+	}
 
 	// ACK endpoint.
 	if r.Method == http.MethodPost {
@@ -461,4 +473,78 @@ func TestConfigPoller_ReapplyAfterBuildChangeOrRefusal(t *testing.T) {
 	// Upgrade → re-applied once.
 	a4 := &fakeApplier{fetchedOnly: true}
 	run("v2", a4, func() int { return len(a4.snapshot()) }, 1)
+}
+
+// A8: when Fleet flags a check-in request on a 304, the poller re-ACKs the
+// bundle it is already running so the node's last_report moves; without
+// the flag a 304 ACKs nothing; with nothing applied there is nothing to ACK.
+func TestConfigPoller_CheckinRequestedOn304ReACKs(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	setTestSigningKey(t, pub)
+	b1 := buildAndSignBundle(t, priv, 1)
+	fake := &fakeFleetConfigServer{response: bundleToJSON(t, b1)}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	applier := &fakeApplier{}
+	p := newPollerForTest(t, srv, applier, t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	p.Start(ctx)
+	defer p.Stop()
+
+	// First poll: 200 → apply → the normal ACK for bundle 1.
+	if !waitUntil(t, 500*time.Millisecond, func() bool { return len(fake.snapshotACKs()) == 1 }) {
+		t.Fatalf("acks after apply = %v, want [1]", fake.snapshotACKs())
+	}
+	// Several plain 304s: no further ACK.
+	time.Sleep(5 * p.interval)
+	if got := fake.snapshotACKs(); len(got) != 1 {
+		t.Fatalf("plain 304s produced ACKs: %v", got)
+	}
+
+	// Admin requests a check-in: the next 304 re-ACKs bundle 1.
+	fake.setCheckinRequested(true)
+	if !waitUntil(t, 500*time.Millisecond, func() bool { return len(fake.snapshotACKs()) >= 2 }) {
+		t.Fatalf("no re-ACK after check-in request: %v", fake.snapshotACKs())
+	}
+	for _, id := range fake.snapshotACKs() {
+		if id != 1 {
+			t.Fatalf("re-ACK named bundle %d, want 1", id)
+		}
+	}
+	// Nothing was re-applied: a 304 still carries nothing to apply.
+	if n := len(applier.snapshot()); n != 1 {
+		t.Fatalf("applies = %d, want 1", n)
+	}
+}
+
+func TestConfigPoller_CheckinRequestedWithNoBundle_NoACK(t *testing.T) {
+	fake := &fakeFleetConfigServer{checkin: true} // nil response → 304 always
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	p := newPollerForTest(t, srv, &fakeApplier{}, t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	p.Start(ctx)
+	defer p.Stop()
+	time.Sleep(200 * time.Millisecond)
+	if got := fake.snapshotACKs(); len(got) != 0 {
+		t.Fatalf("ACKed with nothing applied: %v", got)
+	}
+}
+
+func TestCheckinRequested(t *testing.T) {
+	h := http.Header{}
+	if checkinRequested(h) {
+		t.Fatal("empty header")
+	}
+	h.Set(CheckinRequestedHeader, "1")
+	if !checkinRequested(h) {
+		t.Fatal("1")
+	}
+	h.Set(CheckinRequestedHeader, "0")
+	if checkinRequested(h) {
+		t.Fatal("0")
+	}
 }

@@ -114,12 +114,41 @@ var ErrEnrollTokenChanged = errors.New("fleet: tokens changed during enroll; try
 // enrollRequest is the JSON body for POST /api/v1/enroll. The two key
 // fields are optional (fleet contract §10.1): registered in the same
 // transaction as the node upsert; omitted = left untouched.
+//
+// The node-fact fields (contract §16) are all optional and omitted when
+// unknown: an older Fleet ignores the ones it does not declare, and the
+// pre-existing body (node_id, platform, version, keys) is unchanged. There
+// is deliberately NO `hostname` field: Fleet shows it to admins as the device
+// name, and the harness never collects one.
 type enrollRequest struct {
 	NodeID           string `json:"node_id"`
 	Platform         string `json:"platform"`
 	Version          string `json:"version"`
 	HandoffPublicKey string `json:"handoff_public_key,omitempty"`
 	SigningPublicKey string `json:"signing_public_key,omitempty"`
+
+	// Arch: amd64 | arm64 (Fleet's enum; anything else is omitted).
+	Arch string `json:"arch,omitempty"`
+	// OSVersion: short, hostname-free ("macOS 14.5", "NixOS 26.05").
+	OSVersion string `json:"os_version,omitempty"`
+	// ClientKind: always "kenaz-harness" (Fleet's default when omitted, so
+	// existing nodes keep their sticky kind).
+	ClientKind string `json:"client_kind,omitempty"`
+	// InVM / VMID / HostNodeID: set only when the served harness runs inside
+	// a Kenaz workbench VM (KENAZ_WORKBENCH_ID / KENAZ_HOST_NODE_ID at boot).
+	InVM       bool   `json:"in_vm,omitempty"`
+	VMID       string `json:"vm_id,omitempty"`
+	HostNodeID string `json:"host_node_id,omitempty"`
+}
+
+// withNodeFacts copies the current node facts onto the body.
+func (r *enrollRequest) withNodeFacts(f NodeFacts) {
+	r.Arch = f.Arch
+	r.OSVersion = f.OSVersion
+	r.ClientKind = f.ClientKind
+	r.InVM = f.InVM
+	r.VMID = f.VMID
+	r.HostNodeID = f.HostNodeID
 }
 
 // enrollResponse is the JSON shape returned by the fleet enroll endpoint.
@@ -226,6 +255,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		Platform: platform,
 		Version:  version,
 	}
+	reqBody.withNodeFacts(CurrentNodeFacts())
 	km, kerr := c.localDeviceKeys(nodeID)
 	if kerr != nil {
 		logging.L().Warn("fleet.enroll.handoff_key_unavailable", "err", kerr.Error())
@@ -378,6 +408,7 @@ func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, re
 		"body_bytes", len(bodyBytes),
 		"access_token_len", len(ts.AccessToken),
 		"with_keys", reqBody.HandoffPublicKey != "" || reqBody.SigningPublicKey != "",
+		"in_vm", reqBody.InVM,
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 	if err != nil {
