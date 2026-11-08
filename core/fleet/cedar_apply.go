@@ -30,8 +30,14 @@ import (
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
-// fleetTeamSnippetPrefix namespaces every fleet-installed Cedar snippet.
-const fleetTeamSnippetPrefix = "fleet-team/"
+// TeamSnippetPrefix namespaces every fleet-installed Cedar snippet. It is
+// exported so consumers can ask whether a decision was granted by a FLEET
+// rule specifically (cedar.Engine.PermittedBySnippet) — e.g. served-mode
+// bash availability, which only an explicit fleet permit turns on.
+const TeamSnippetPrefix = "fleet-team/"
+
+// fleetTeamSnippetPrefix is the package-internal spelling of TeamSnippetPrefix.
+const fleetTeamSnippetPrefix = TeamSnippetPrefix
 
 // legacyRuleTextID is the team_rule_id given to a cedar_delta that carries
 // only the pre-2026-10-31 Fleet shape {"rule_text": "..."} with no "rules"

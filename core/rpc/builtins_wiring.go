@@ -13,6 +13,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
@@ -24,6 +25,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	"github.com/kameas-ai/kenaz-harness/core/conversation"
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	coredocs "github.com/kameas-ai/kenaz-harness/core/docs"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -1034,6 +1036,88 @@ func mcpRootsDir(c *core.Core, dataDir string) string {
 // A nil settings impl returns "all enabled" so the test harness path
 // (rpc.New(nil)) doesn't accidentally hide tools.
 func builtinEnabledPredicate(s *settings.API) func(string) bool {
+	return builtinEnabledPredicateFor(s, nil)
+}
+
+// builtinEnabledPredicateFor is builtinEnabledPredicate with the source of
+// kenaz__bash availability made explicit. When bash reports that it is
+// fleet-managed (served/workbench mode — see bashAvailability), the bash
+// case consults the fleet Cedar policy instead of Settings.BashEnabled,
+// and that answer wins over every other branch, including the nil-store
+// "all enabled" test fallback: in a workbench nothing but an explicit
+// fleet permit may put bash in front of the model. A nil bash (or one
+// never switched to fleet policy) is the desktop path, unchanged.
+func builtinEnabledPredicateFor(s *settings.API, bash *bashAvailability) func(string) bool {
+	inner := settingsBuiltinPredicate(s)
+	return func(name string) bool {
+		if name == corebash.Name {
+			if v, managed := bash.fleetDecision(); managed {
+				return v
+			}
+		}
+		return inner(name)
+	}
+}
+
+// bashAvailability decides where kenaz__bash's on/off comes from.
+//
+// Zero value (desktop): Settings.BashEnabled, the local toggle.
+// After useFleetPolicy (served/workbench mode, rpc.WithFleetGatedBash):
+// bash is offered iff the shared Cedar engine ALLOWS
+// use_tool on Tool::"kenaz__bash" AND a fleet-installed permit
+// ("fleet-team/..." snippet, the org policy Fleet pushes) is among the
+// policies that granted it. The embedded default tool policy permits every
+// kenaz tool, so a plain Allow would turn bash on with no admin opt-in;
+// a fleet forbid (or a forbid that fails to evaluate) turns it off even
+// alongside a permit. Evaluated on every listing/dispatch, so a Fleet
+// change applied by the poller takes effect on the next turn.
+type bashAvailability struct {
+	fleetEngine atomic.Pointer[cedar.Engine]
+	fleetGated  atomic.Bool
+}
+
+// useFleetPolicy switches bash to fleet-policy control. A nil engine keeps
+// it fleet-managed and therefore OFF (fail closed: no engine, no permit).
+func (b *bashAvailability) useFleetPolicy(engine *cedar.Engine) {
+	if b == nil {
+		return
+	}
+	if engine != nil {
+		b.fleetEngine.Store(engine)
+	}
+	b.fleetGated.Store(true)
+}
+
+// fleetDecision returns (enabled, managed). managed=false means the caller
+// falls back to the desktop Settings toggle.
+func (b *bashAvailability) fleetDecision() (enabled, managed bool) {
+	if b == nil || !b.fleetGated.Load() {
+		return false, false
+	}
+	return fleetPermitsBash(b.fleetEngine.Load()), true
+}
+
+// fleetPermitsBash is the served-mode bash availability probe. The
+// resource is built by useToolResource — the constructor the chat
+// use_tool gate uses for the same call — from the bash tool's dispatched
+// (server, tool) split: ("kenaz", "bash") -> Tool::"kenaz__bash".
+func fleetPermitsBash(engine *cedar.Engine) bool {
+	if engine == nil {
+		return false
+	}
+	tool := strings.TrimPrefix(corebash.Name, toolloop.BuiltinServerName+"__")
+	return engine.PermittedBySnippet(
+		cedar.UserUID(),
+		cedar.ActionUseTool,
+		useToolResource(toolloop.BuiltinServerName, tool),
+		nil,
+		corefleet.TeamSnippetPrefix,
+	)
+}
+
+// settingsBuiltinPredicate maps the in-binary tool names onto the Settings
+// store toggles (the desktop source of truth for every builtin).
+func settingsBuiltinPredicate(s *settings.API) func(string) bool {
 	if s == nil || s.Store() == nil {
 		logging.L().Info("rpc.builtins.predicate.no_store")
 		return func(string) bool { return true }

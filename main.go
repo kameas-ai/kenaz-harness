@@ -503,7 +503,12 @@ func runServeMode(listenAddr string) {
 	api := rpc.New(c,
 		rpc.WithHostProviders(serve.ProbeHostProviders(context.Background(), credref.New(secrets.NewMemoryBackend()), serve.HostProviders(os.Getenv, serveLog), serveLog)),
 		rpc.WithServedConnectors(connSup),
-		rpc.WithConnectorTokens(connTokens))
+		rpc.WithConnectorTokens(connTokens),
+		// Bash in workbenches is an org fleet Cedar policy decision
+		// (explicit permit use_tool on Tool::"kenaz__bash"), not the
+		// desktop Settings toggle the served UI cannot reach. Both served
+		// entry points must agree (Spec 078 precedent).
+		rpc.WithFleetGatedBash())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
