@@ -194,6 +194,18 @@ Fleet change takes effect on the next bundle poll + next chat turn,
 without a restart. The embedded default tool policy (which permits every
 `kenaz` tool) and the local Settings value do not count.
 
+Two consequences admins should know:
+
+- **Any fleet permit that covers the bash tool turns it on**, not only the
+  exact rule above: a broad `permit(principal, action == Action::"use_tool",
+  resource);` (or one keyed on the `kenaz` server) also enables bash. Pair a
+  broad permit with `forbid(principal, action == Action::"use_tool",
+  resource == Tool::"kenaz__bash");` if bash should stay off.
+- **The availability probe has no session context.** A fleet rule on the
+  bash tool whose `when` clause reads `context` (e.g. `context.session_kind`)
+  errors in the probe, and an erroring permit/forbid fails closed: bash is
+  off in every session. Keep tool-availability rules context-free.
+
 Which commands run is still Cedar `run_bash_command` (resource
 `BashCommand::"<pattern>"`, `context.pattern` from `DerivePattern`: the
 argv[0] basename, plus argv[1] when it is subcommand-shaped, e.g. `git

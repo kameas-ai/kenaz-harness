@@ -281,7 +281,7 @@ func (r *cedarSessionKindResolver) Resolve(ctx context.Context, sessionID, serve
 // useToolResource is the ONE constructor of the Tool resource the
 // `use_tool` gate evaluates for a dispatched call (server "kenaz" + tool
 // "bash" -> Tool::"kenaz__bash"). The served-mode bash availability probe
-// (fleetBashPolicy) uses it too, so the rule an admin writes against the
+// (fleetPermitsBash) uses it too, so the rule an admin writes against the
 // chat gate is the same rule that decides whether bash is offered at all.
 func useToolResource(server, tool string) cedarlib.EntityUID {
 	return cedar.PermissionToolUID(server + "__" + tool)
