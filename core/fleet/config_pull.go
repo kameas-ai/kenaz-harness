@@ -38,6 +38,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -434,7 +435,16 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		if p.lastAppliedID > 0 {
 			p.source = "fleet"
 		}
+		current := p.lastAppliedID
 		p.mu.Unlock()
+		if checkinRequested(resp.Header) {
+			// An admin pressed "Request check-in" on Fleet's Hosts page.
+			// A 304 carries nothing to apply, so re-ACK the bundle we are
+			// already running: that is what moves the node's last_report.
+			// With nothing applied there is no bundle to ACK; the GET
+			// itself was the check-in.
+			p.ackCurrentBundle(current)
+		}
 		return nil
 	}
 
@@ -569,6 +579,37 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return applyErrs[0] // triggers backoff; all errors already in lastError
 	}
 	return nil
+}
+
+// CheckinRequestedHeader is set by Fleet on a GET /api/v1/configs response
+// (200 or 304) when an org admin asked this node to check in
+// (POST /orgs/{org}/nodes/{node}/checkin; plan WS-A A8). The value is "1".
+// On a 200 the normal apply → ACK path already answers it; on a 304 the
+// poller re-ACKs the bundle it is running (ackCurrentBundle).
+const CheckinRequestedHeader = "X-Fleet-Checkin-Requested"
+
+// checkinRequested reports whether h carries the check-in request flag.
+func checkinRequested(h http.Header) bool {
+	v := strings.TrimSpace(h.Get(CheckinRequestedHeader))
+	return v == "1" || strings.EqualFold(v, "true")
+}
+
+// ackCurrentBundle re-ACKs bundleID as applied with no errors — the bundle
+// is the one this device already applied cleanly (lastAppliedID only
+// advances on a clean apply). bundleID 0 (nothing applied) is a no-op.
+// Best-effort, like every ACK.
+func (p *ConfigPoller) ackCurrentBundle(bundleID int64) {
+	if bundleID <= 0 || p.client == nil || p.client.isNop {
+		return
+	}
+	ackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	machineID, _ := NodeID(p.dataDir)
+	if err := PostConfigACK(ackCtx, p.client, bundleID, nil, ConfigACKReport{MachineID: machineID}); err != nil {
+		log.Printf("fleet: check-in ack: %v", err)
+		return
+	}
+	logging.L().Info("fleet.config_poller.checkin_acked", "bundle_id", bundleID)
 }
 
 // setError records a TRANSIENT failure (fetch, non-200 status, body read).
