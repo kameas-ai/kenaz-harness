@@ -170,6 +170,58 @@ title-clear, bash `!command`, user slash-command execution, memory
 `untriaged` class in `scripts/ci/allowlists/i15-serve-dispatch-gap.txt`,
 not repeated here.
 
+## Bash in workbenches: fleet policy, not a Settings toggle
+
+Settled 2026-11-07 (product decision: bash in workbenches is managed by
+Fleet policy via Cedar, no new wire field). The desktop gate for the
+bash built-in is `Settings.BashEnabled`, which the served SPA has no
+toggle for — so in every workbench bash was permanently off. In served
+mode (`rpc.WithFleetGatedBash`, passed by both `main.go --serve` and
+`cmd/harness-served`) the `builtinEnabledPredicate` bash case instead
+asks the shared Cedar engine whether a **fleet-installed** permit
+(`fleet-team/<team_rule_id>` snippet, applied from the signed config
+bundle) grants `use_tool` on `Tool::"kenaz__bash"` with no forbid
+matching:
+
+```cedar
+permit(principal, action == Action::"use_tool", resource == Tool::"kenaz__bash");
+```
+
+No such permit (or any matching / erroring forbid) ⇒ bash is neither
+listed to the model nor dispatchable — not advertised-and-failing. The
+probe runs on every listing/dispatch and records no Cedar decision, so a
+Fleet change takes effect on the next bundle poll + next chat turn,
+without a restart. The embedded default tool policy (which permits every
+`kenaz` tool) and the local Settings value do not count.
+
+Two consequences admins should know:
+
+- **Any fleet permit that covers the bash tool turns it on**, not only the
+  exact rule above: a broad `permit(principal, action == Action::"use_tool",
+  resource);` (or one keyed on the `kenaz` server) also enables bash. Pair a
+  broad permit with `forbid(principal, action == Action::"use_tool",
+  resource == Tool::"kenaz__bash");` if bash should stay off.
+- **The availability probe has no session context.** A fleet rule on the
+  bash tool whose `when` clause reads `context` (e.g. `context.session_kind`)
+  errors in the probe, and an erroring permit/forbid fails closed: bash is
+  off in every session. Keep tool-availability rules context-free.
+
+Which commands run is still Cedar `run_bash_command` (resource
+`BashCommand::"<pattern>"`, `context.pattern` from `DerivePattern`: the
+argv[0] basename, plus argv[1] when it is subcommand-shaped, e.g. `git
+status`): a fleet permit runs without asking, a forbid blocks, unmatched
+raises `bash:permission-pending`, which the WS pump forwards to the
+session's socket and `Permissions_Resolve` answers
+(`core/serve/bash_prompt_roundtrip_test.go`). **Limit, do not overstate
+it:** `run_bash_command` is evaluated on the FIRST segment of the command
+line only (`FirstSegmentArgv`); the whole string then runs under
+`bash -lc`. A per-command forbid stops `uname -a` but not `ls; uname`,
+`env uname` or `bash -c uname` — it is a guard rail, not a containment
+boundary. Turning bash off entirely (no permit, or a `use_tool` forbid) is
+the enforceable control. The sandbox root is the
+resolved agent workspace (`KENAZ_HARNESS_WORKSPACE`, normally
+`/workspace`).
+
 ## Self-update: desktop-only
 
 Settled 2026-08-18 by `self-update-repair-01PMUP01` §5, following the

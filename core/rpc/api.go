@@ -508,6 +508,12 @@ type API struct {
 	// going through the toolloop. Populated at boot from the same
 	// registry the LLM tool catalog reads.
 	builtins *toolloop.BuiltinRegistry
+	// builtinFilter is the EnabledFilter every model-facing tool listing
+	// and builtin dispatch reads (the predicate deciding which registered
+	// builtins are on). Held so wiring tests assert against the production
+	// instance — e.g. served-mode bash following fleet policy — rather than
+	// a reconstructed predicate. nil on the stub path.
+	builtinFilter *toolloop.EnabledFilter
 
 	// Stable view-accessor instances (plan §4.2).
 	llmAPI llm.LLMConnectorAPI
@@ -1697,6 +1703,10 @@ type options struct {
 	// connectors. See WithConnectorTokens.
 	connectorTokens tools.ConnectorTokenSource
 
+	// fleetGatedBash makes kenaz__bash availability a fleet Cedar policy
+	// decision. See WithFleetGatedBash.
+	fleetGatedBash bool
+
 	// settingsStore overrides the settings store New would otherwise
 	// build via settings.NewFileStoreFromEnv(). See WithSettingsStore.
 	settingsStore settings.SettingsStore
@@ -1750,6 +1760,29 @@ func WithHostProviders(profiles []corellm.ProviderProfile) Option {
 // The DESKTOP path never passes this option; host behaviour is unchanged.
 func WithServedConnectors(sup *connectors.Supervisor) Option {
 	return func(o *options) { o.servedConnectors = sup }
+}
+
+// WithFleetGatedBash makes the bash built-in's availability an org fleet
+// policy decision instead of the local Settings.BashEnabled toggle.
+//
+// Served/workbench mode passes this (both served entry points: main.go's
+// runServeMode and cmd/harness-served). There, kenaz__bash is offered to
+// the model — and callable — iff the org's fleet Cedar policy (pushed in
+// the signed config bundle, installed as "fleet-team/..." snippets)
+// explicitly permits `use_tool` on Tool::"kenaz__bash" and no forbid
+// matches. With no such permit it is not advertised at all: the served
+// UI has no Settings toggle, so a Settings-gated bash was permanently off
+// in every workbench, and a tool that is advertised but always fails
+// would be a lie. Re-evaluated on every listing/dispatch, so a Fleet
+// change takes effect on the next poll + next turn, no restart.
+//
+// Which commands run is unchanged: Cedar run_bash_command (fleet permit
+// runs, forbid blocks, unmatched prompts the workbench user).
+//
+// The DESKTOP path never passes this option; Settings.BashEnabled stays
+// the source of truth there.
+func WithFleetGatedBash() Option {
+	return func(o *options) { o.fleetGatedBash = true }
 }
 
 // WithConnectorTokens installs the broker-backed token source the tools
@@ -2654,6 +2687,12 @@ func New(c *core.Core, opts ...Option) *API {
 		func(ctx context.Context) { a.publishPendingBlockedRequests(ctx) })
 
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, &acpAuditBridge{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions, blockedSink, a.scheduledRunOrigins.Resolve, a.mlProducer)
+	// Served/workbench mode: bash availability follows the org fleet Cedar
+	// policy (WithFleetGatedBash). Set before any turn can list tools.
+	if opt.fleetGatedBash {
+		stack.bashAvail.useFleetPolicy(a.cedarEngine)
+		logging.L().Info("rpc.builtins.bash_availability", "source", "fleet_policy", "cedar_engine", a.cedarEngine != nil)
+	}
 	// model-harness-toolset-01MHTS001 WP02 (H-1): the scheduled-run tool
 	// allowlist arm. Bound into the SAME session arm every tool call's
 	// permission resolution already goes through (the merged resolver
@@ -2834,6 +2873,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// shutdown-race analysis.
 	hookMCPInvoker.setPool(stack.dispatchPool)
 	a.builtins = stack.builtins
+	a.builtinFilter = stack.builtinFilter
 	// Spec 092: document tools + knowledge-site builder. Needs a.unitsMgr
 	// (built above, not passed to newLLMStack) and the fs gate the stack
 	// built — see registerDocumentTools.
@@ -6146,6 +6186,13 @@ type llmStack struct {
 	// on the stack so the chassis-level wiring path can register and
 	// unregister tools as the user toggles them in Settings.
 	builtins *toolloop.BuiltinRegistry
+	// builtinFilter is the predicate-gated view of builtins the catalog
+	// and dispatch read. See API.builtinFilter.
+	builtinFilter *toolloop.EnabledFilter
+	// bashAvail is where the builtin predicate reads kenaz__bash's on/off
+	// from: Settings on desktop, the fleet Cedar policy once New() calls
+	// useFleetPolicy (rpc.WithFleetGatedBash). nil on the stub path.
+	bashAvail *bashAvailability
 	// fsGate is the Cedar filesystem gate registerFSBuiltinTools built.
 	// Held so tools registered after newLLMStack returns (the spec-092
 	// knowledge-site builder) are bound by the same write policy as
@@ -6708,7 +6755,11 @@ func newLLMStack(
 		}
 		registerReadContextFileTool(builtinRegistry, contextsLib, modSrc)
 	}
-	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
+	// bashAvail starts on the desktop source (Settings.BashEnabled); New()
+	// switches it to fleet Cedar policy when rpc.WithFleetGatedBash is set
+	// (the served/workbench entry points).
+	bashAvail := &bashAvailability{}
+	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicateFor(settingsImpl, bashAvail))
 	// wrappedPool merges the dispatch pool (all transports) with the
 	// builtin tool registry. The dispatch pool routes Call/Tools across
 	// stdio, http, and sse sub-pools transparently.
@@ -7298,6 +7349,8 @@ func newLLMStack(
 		secrets:             secretsBackend,
 		reg:                 reg,
 		builtins:            builtinRegistry,
+		bashAvail:           bashAvail,
+		builtinFilter:       builtinFilter,
 		fsGate:              fsGate,
 		bashStore:           bashStore,
 		compactionScheduler: sweepScheduler,

@@ -570,6 +570,63 @@ func (e *Engine) Evaluate(
 	return out
 }
 
+// PermittedBySnippet reports whether (principal, action, resource,
+// contextAttrs) is ALLOWED and at least one of the permits that
+// determined that Allow was installed by a harness snippet whose name
+// starts with snippetPrefix (e.g. the fleet push-down's "fleet-team/").
+//
+// It answers "did THIS policy source explicitly grant it", which
+// Evaluate cannot: an Allow can come from any embedded permit (the
+// default tool policy permits every server_name=="kenaz" tool), so
+// Outcome == Allow alone does not mean an admin opted in. A matching
+// forbid — or a forbid that fails to evaluate (fail-closed, as in
+// Evaluate) — makes the result false regardless of any permit.
+//
+// Unlike Evaluate it records NO Decision: it is a capability probe
+// ("may this tool be offered to the model?") consulted on every tool
+// listing, not the authorization of an action. The action itself is
+// still authorized by Evaluate at dispatch time. Evaluation errors ARE
+// recorded in the eval-error tracker, so a broken rule stays visible.
+func (e *Engine) PermittedBySnippet(
+	principal cedar.EntityUID,
+	action string,
+	resource cedar.EntityUID,
+	contextAttrs map[cedar.String]cedar.Value,
+	snippetPrefix string,
+) bool {
+	if e == nil || snippetPrefix == "" {
+		return false
+	}
+	if principal.IsZero() {
+		principal = UserUID()
+	}
+	ps := e.policies.Load()
+	if ps == nil {
+		return false
+	}
+	contextAttrs = populateFamilyContext(action, resource, contextAttrs)
+	contextAttrs = withDeviceKind(contextAttrs, e.opts.DeviceKind)
+	req := cedar.Request{
+		Principal: principal,
+		Action:    ActionUID(action),
+		Resource:  resource,
+		Context:   cedar.NewRecord(contextAttrs),
+	}
+	dec, diag := cedar.Authorize(ps, cedar.EntityMap{}, req)
+	if len(diag.Errors) > 0 {
+		e.evalErrors.record(ps, diag.Errors)
+	}
+	if fromCedar(action, principal, resource, dec, diag, ps, e.opts.DefaultDeny).Outcome != Allow {
+		return false
+	}
+	for _, r := range diag.Reasons {
+		if name, ok := snippetNameOf(r.PolicyID); ok && strings.HasPrefix(name, snippetPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // PolicyDeniedError is the typed error returned by gate-hook helpers
 // when Evaluate produces a Deny outcome. Go callers pattern-match on it
 // via IsPolicyDenied / errors.As (below) — this type never crosses the
