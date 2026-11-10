@@ -5669,6 +5669,11 @@ export interface ComplianceStatus {
   retentionDays: number;
   /** True when CapAuditLogImmuDB capability is active for this org tier. */
   enabled: boolean;
+  /**
+   * True when the org's plan includes the archive but Fleet has turned it
+   * off for the org (legal D173). Show "not available yet", never "upgrade".
+   */
+  archiveWithheld?: boolean;
   /** True when the background archiver goroutine is running. */
   archiverRunning: boolean;
   /**

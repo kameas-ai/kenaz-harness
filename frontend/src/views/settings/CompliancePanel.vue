@@ -55,6 +55,10 @@ onMounted(() => {
 
 const enabled = computed(() => status.value?.enabled ?? false);
 
+// Legal D173: the plan includes the archive but Fleet has it off for this
+// org. Never show plan or upgrade copy then.
+const withheld = computed(() => !enabled.value && (status.value?.archiveWithheld ?? false));
+
 const chainBreak = computed(() => status.value?.chainBreak ?? false);
 
 const lastArchivedDisplay = computed<string>(() => {
@@ -139,7 +143,9 @@ async function setRetention(days: number) {
     <!-- Header -->
     <div>
       <h2 class="text-sm font-semibold text-ink mb-1">Audit Archival</h2>
-      <p class="text-xs text-ink-muted">
+      <!-- Hidden while withheld: it says events are archived, which isn't
+           true for that org (legal D173). -->
+      <p v-if="!withheld" class="text-xs text-ink-muted">
         Audit events are signed with your device key and archived to an
         immutable immudb ledger.
         <template v-if="!fleetOrgPaused">
@@ -153,6 +159,16 @@ async function setRetention(days: number) {
     <!-- A staff org pause (kenaz-fleet PR 206) withholds audit_log_immudb
          too: show the paused state, never the upgrade copy below. -->
     <OrgPausedBanner v-if="status !== null && !enabled && fleetOrgPaused" />
+
+    <!-- Archive withheld for this org (legal D173): legal's text, no
+         upgrade prompt. -->
+    <div
+      v-else-if="status !== null && withheld"
+      class="rounded border border-border-muted p-4 text-center"
+      data-testid="compliance-withheld-notice"
+    >
+      <p class="text-sm text-ink">The audit archive isn't available for your organization yet.</p>
+    </div>
 
     <!-- Not-enabled gate -->
     <div

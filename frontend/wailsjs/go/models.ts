@@ -1810,6 +1810,7 @@ export namespace compliance {
 	    chainBreak: boolean;
 	    retentionDays: number;
 	    enabled: boolean;
+	    archiveWithheld?: boolean;
 	    archiverRunning: boolean;
 	    stoppedReason?: string;
 	    pausedReason?: string;
@@ -1826,6 +1827,7 @@ export namespace compliance {
 	        this.chainBreak = source["chainBreak"];
 	        this.retentionDays = source["retentionDays"];
 	        this.enabled = source["enabled"];
+	        this.archiveWithheld = source["archiveWithheld"];
 	        this.archiverRunning = source["archiverRunning"];
 	        this.stoppedReason = source["stoppedReason"];
 	        this.pausedReason = source["pausedReason"];

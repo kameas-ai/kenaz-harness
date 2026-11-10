@@ -21,7 +21,10 @@ import (
 
 // ErrComplianceNotEnabled is returned by ArchiveNow / SetRetention when
 // the CapAuditLogImmuDB capability is not active.
-var ErrComplianceNotEnabled = errors.New("compliance: audit_log_immudb capability not enabled; upgrade to Team tier")
+//
+// The text names no plan: the same error reaches orgs whose plan includes
+// the archive but whose archive Fleet has turned off (legal D173).
+var ErrComplianceNotEnabled = errors.New("compliance: the audit archive isn't available for your organization")
 
 // API is the concrete ComplianceAPI implementation.
 //
@@ -31,6 +34,9 @@ type API struct {
 	archiver *fleet.AuditArchiver
 	sweeper  *fleet.AuditRetentionSweeper
 	capCheck func() bool
+	// withheldCheck reports that the plan includes the archive but Fleet
+	// has turned it off for this org. Nil means never withheld.
+	withheldCheck func() bool
 }
 
 // NewAPI constructs the compliance view. Both archiver and sweeper may
@@ -44,12 +50,22 @@ func NewAPI(archiver *fleet.AuditArchiver, sweeper *fleet.AuditRetentionSweeper,
 	}
 }
 
+// WithWithheldCheck sets the check behind ComplianceStatus.ArchiveWithheld
+// and returns a for chaining.
+func (a *API) WithWithheldCheck(f func() bool) *API {
+	a.withheldCheck = f
+	return a
+}
+
 // Status implements ComplianceAPI.
 func (a *API) Status(ctx context.Context) (ComplianceStatus, error) {
 	enabled := a.capCheck != nil && a.capCheck()
 	status := ComplianceStatus{
 		Enabled:       enabled,
 		RetentionDays: fleet.DefaultAuditRetentionDays,
+	}
+	if !enabled && a.withheldCheck != nil {
+		status.ArchiveWithheld = a.withheldCheck()
 	}
 	if a.archiver != nil {
 		lat := a.archiver.LastArchivedAt()

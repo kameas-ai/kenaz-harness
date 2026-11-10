@@ -70,6 +70,30 @@ describe('CompliancePanel', () => {
     expect(wrapper.find('[data-testid="compliance-archive-now-btn"]').exists()).toBe(false);
   });
 
+  it('legal D173: archive withheld shows legal text and no upgrade or plan copy', async () => {
+    const { client } = buildClient({ enabled: false, archiveWithheld: true });
+    const wrapper = mount(CompliancePanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const notice = wrapper.find('[data-testid="compliance-withheld-notice"]');
+    expect(notice.exists()).toBe(true);
+    expect(notice.text()).toBe("The audit archive isn't available for your organization yet.");
+    expect(wrapper.find('[data-testid="compliance-disabled-notice"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toMatch(/upgrade|Team\+|plan|archived to/i);
+    expect(wrapper.find('[data-testid="compliance-archive-now-btn"]').exists()).toBe(false);
+  });
+
+  it('plan without the archive keeps the upgrade copy', async () => {
+    const { client } = buildClient({ enabled: false, archiveWithheld: false });
+    const wrapper = mount(CompliancePanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="compliance-withheld-notice"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="compliance-disabled-notice"]').text()).toMatch(/Upgrade to Team\+/);
+  });
+
   it('shows status grid and pending count when enabled', async () => {
     const { client } = buildClient({ pendingCount: 7 });
     const wrapper = mount(CompliancePanel, {
