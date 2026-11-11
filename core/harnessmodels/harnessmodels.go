@@ -85,6 +85,9 @@ const (
 	SourceSettings Source = "settings"
 	SourceHost     Source = "host"
 	SourceDerived  Source = "derived"
+	// SourceProfile: a sub-agent profile's own declared model, offered
+	// verbatim by the provider (MapModel's exact-match case).
+	SourceProfile Source = "profile"
 	// SourceNone: nothing resolved (no provider to derive from).
 	SourceNone Source = "none"
 )
