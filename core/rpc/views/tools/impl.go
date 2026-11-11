@@ -22,6 +22,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	corefs "github.com/kameas-ai/kenaz-harness/core/tools/fs"
 )
 
 // AuditEmitter is the narrow seam the tools view calls when emitting
@@ -865,6 +866,23 @@ func (a *API) RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, r
 		canonical = path // best-effort fallback; validation already passed
 	}
 
+	// E2E-3: the harness's own state directory is never handed to the
+	// filesystem MCP server — it holds the session databases, credential
+	// metadata and the Cedar policy directory, so a grant there would let
+	// the server rewrite the harness's permissions. A directory that
+	// CONTAINS the state (on a workbench, HOME=/var/lib/kenaz-harness is
+	// exactly that) still prompts, but the prompt says so.
+	inside, contains, stateRoot := corefs.StateRelation(canonical, corefs.HarnessStateDirs(a.cfg.DataDir), a.cfg.WorkspaceDir)
+	if inside {
+		return false, canonical, fmt.Errorf("%w: %q is inside the harness state directory %q", ErrPrivilegedDir, canonical, stateRoot)
+	}
+	var privileged string
+	if contains {
+		privileged = "This directory contains the harness's own state (" + stateRoot + "): session " +
+			"databases, credential metadata and permission policies. Allowing it lets the " +
+			"filesystem server read and change them."
+	}
+
 	if a.cfg.PromptRegistry == nil {
 		return false, canonical, errors.New("tools: prompt registry not configured")
 	}
@@ -875,6 +893,7 @@ func (a *API) RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, r
 			Op:            "recipe_dir_add",
 			CanonicalPath: canonical,
 			Dangerous:     false,
+			Privileged:    privileged,
 		},
 		Reason: reason,
 	}
@@ -1091,6 +1110,11 @@ func (a *API) restartRecipe(ctx context.Context, recipe recipes.Recipe, updatedC
 	}
 	return nil
 }
+
+// ErrPrivilegedDir is returned by RequestAdditionalAllowedDir for a path
+// inside the harness's own state directory (E2E-3). It is refused before
+// any prompt, like a deny-list path.
+var ErrPrivilegedDir = errors.New("tools: path is harness state and cannot be granted")
 
 // writeAllowAlwaysSnippet writes a Cedar policy file that permanently
 // permits recipe_dir_add for the canonical path. Best-effort: failure is

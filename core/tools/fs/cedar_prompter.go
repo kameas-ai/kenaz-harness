@@ -48,6 +48,8 @@ func (p *CedarPrompter) Prompt(ctx context.Context, s PromptSurface) (PromptResp
 			Op:            string(s.Op),
 			CanonicalPath: s.CanonicalPath,
 			Dangerous:     s.IsDangerous,
+			ParentMissing: s.ParentMissing,
+			Privileged:    s.Privileged,
 		},
 		// E-008: fs.PromptSurface additionally carries DangerCopy and
 		// IsInsideRecipeDir; cedar.FSPromptSurface has no home for
@@ -77,11 +79,11 @@ func (p *CedarPrompter) Prompt(ctx context.Context, s PromptSurface) (PromptResp
 	case cedar.DecisionAllowOnce:
 		return PromptAllowOnce, nil
 	case cedar.DecisionAllowAlways:
-		// E-007: fs.PromptResponse has no directory-scope discriminator
-		// and cedar.Resolution carries no scope signal at all. Default
-		// to the narrower grant — a single exact-path persistent
-		// policy, not a whole directory — per the WP's explicit ruling.
-		return PromptAllowExact, nil
+		// The modal's "This exact path" / "This directory and below"
+		// radio travels as resolution.Scope (E2E-1). Before it did, every
+		// Allow-always persisted an exact-path grant whatever the radio
+		// said. An empty or unknown scope stays the narrower exact grant.
+		return responseForScope(resolution.Scope), nil
 	default:
 		return PromptDeny, nil
 	}

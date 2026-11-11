@@ -69,6 +69,12 @@ const props = withDefaults(
     allowAlwaysEnabled?: boolean;
     allowAlwaysLabel?: string;
     allowAlwaysDisabledTitle?: string;
+    /**
+     * Grant scope sent with an Allow-always, as `allow_always:<scope>`
+     * (the filesystem modal's radio: 'directory' | 'directory_rw').
+     * Empty / 'exact' sends the bare decision — the exact-resource grant.
+     */
+    allowAlwaysScope?: string;
   }>(),
   {
     familyIcon: '🔒',
@@ -76,6 +82,7 @@ const props = withDefaults(
     allowAlwaysEnabled: true,
     allowAlwaysLabel: 'Allow always',
     allowAlwaysDisabledTitle: 'Disabled for dangerous ops. Enable in Settings → Permissions.',
+    allowAlwaysScope: '',
   },
 );
 
@@ -145,7 +152,12 @@ async function decide(decision: string) {
   lastError.value = null;
   clearTimer();
   try {
-    await client.permissions.resolve(req.request_id, decision);
+    const scope = props.allowAlwaysScope;
+    const wire =
+      decision === 'allow_always' && scope && scope !== 'exact'
+        ? `${decision}:${scope}`
+        : decision;
+    await client.permissions.resolve(req.request_id, wire);
     emit('resolved', req.request_id, decision);
   } catch (err) {
     if (isUnknownRequest(err)) {
