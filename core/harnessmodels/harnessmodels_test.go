@@ -157,7 +157,7 @@ func TestMapModel_DeclaredProfileModelsOntoHostProvider(t *testing.T) {
 	r := NewResolver(Overrides{}, nil)
 	p := *hostProfile()
 	cases := map[string]string{
-		"anthropic/claude-haiku-4.5":  "claude-haiku-4-5", // explore / summarizer
+		"anthropic/claude-haiku-4.5":  "claude-haiku-4-5",  // explore / summarizer
 		"anthropic/claude-sonnet-4.5": "claude-sonnet-4-5", // implementer / reviewers
 		"claude-opus-4-5":             "claude-opus-4-5",   // exact
 	}
