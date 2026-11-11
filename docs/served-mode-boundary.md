@@ -222,6 +222,98 @@ the enforceable control. The sandbox root is the
 resolved agent workspace (`KENAZ_HARNESS_WORKSPACE`, normally
 `/workspace`).
 
+## Sub-agents in workbenches: model slots, worktrees, cleanup
+
+fleet-workbench-next-plan-2026-11-10 B11. A served workbench has exactly one
+provider — the host-supplied `kenaz-host` profile — and read-only settings
+(HR-4), so every model slot used to be empty and the first
+`kenaz__subagent_dispatch` failed with `no default LLM profile configured`.
+
+### Model slots and precedence
+
+Slots: `subagent_default`, and the roles `advisor`, `compaction`,
+`branch_advisor`, `risk_rater`. Each resolves through four layers, highest
+first (`core/harnessmodels`):
+
+| Layer | Source | Notes |
+|---|---|---|
+| `org` | signed bundle `org_config.harness_models` | validated against the session provider's model list; an unknown id is refused **and reported in the bundle ack** (the valid entries still apply) |
+| `settings` | the user's explicit Settings value (`advisorModel`, `compactionModel`, `branchAdvisorDefaultModel`, `riskRaterModel`) | `subagent_default` has no Settings field |
+| `host` | `KENAZ_HARNESS_SUBAGENT_MODEL`, `KENAZ_HARNESS_ROLE_MODELS` (JSON role → model id) on `kenaz-meta.env` | an id the provider does not offer is ignored (logged at boot when malformed) |
+| `derived` | the session provider's models, classified by the provider-owned size tiers in `core/llm/capabilities` | `subagent_default`/`branch_advisor` → first `medium` (else `small`); `compaction` → cheapest (`small`, else `medium`); `advisor`/`risk_rater` → the session model. Logged once per slot (`harness.models.derived`) |
+
+A sub-agent profile's declared model (`explore: anthropic/claude-haiku-4.5`)
+is used verbatim when the provider offers it; otherwise an `org`/`host`
+`subagent_default` wins; otherwise the declared model's tier picks a provider
+model of the same tier (explore → the host's haiku-class model, implementer →
+sonnet-class); otherwise the derived default. Derivation happens only in
+served mode (a session provider exists); desktop keeps its configured
+personal profile and its per-consumer fallbacks.
+
+The served Settings page shows every slot, its model and its source,
+read-only (`Settings_ModelSlots`, served-only — see
+`i15-serve-dispatch-reverse.txt`).
+
+### `org_config.harness_models` (wire shape for the Fleet side)
+
+An additive key in the bundle's existing `org_config` map, signed and acked
+exactly like `org_config.workbench`. Every field is optional; absent or
+empty means "no org opinion".
+
+```json
+"org_config": {
+  "harness_models": {
+    "subagent_default": "claude-sonnet-4-5",
+    "roles": {
+      "advisor":        "claude-opus-5-5",
+      "compaction":     "claude-haiku-4-5",
+      "branch_advisor": "claude-sonnet-4-5",
+      "risk_rater":     "claude-haiku-4-5"
+    }
+  }
+}
+```
+
+Values are bare model ids on the workbench's provider (the ids Kenaz delivers
+in `KENAZ_HARNESS_MODELS`). Harness behaviour: unknown top-level or role keys,
+non-string values and ids the provider does not offer are each one ack error
+(`fleet/config: org_config kind "harness_models": …`); the remaining entries
+apply. A later bundle without the key clears the org layer. On a desktop
+harness (no session provider) the section is shape-checked but not applied.
+Fleet authoring UI is not built yet.
+
+### Orphan cleanup
+
+If the spawner fails before the child's first turn, `BranchSeamAdapter.Fork`
+deletes the child session (the branch row cascades) and returns the error, so
+the dispatcher reports `fork_failed` instead of a `branch_id` for a run that
+never started — no more orphan "New session (branch)".
+
+### `isolation: "worktree"`
+
+Served entry points pass `rpc.WithWorktreeIsolation()`. A worktree-isolated
+dispatch runs `git worktree add -b agent/<id> <workspace>/.worktrees/<id> HEAD`
+via `os/exec` (no shell; ids are generated, `[a-z0-9-]`), adds
+`/.worktrees/` to the repository's `info/exclude`, and tells the worker to
+work and commit only there. **Nothing merges automatically: the dispatching
+agent (hub) or the user merges `agent/<id>`.** When the worker finishes the
+worktree is removed if clean (the branch is kept when it has commits, deleted
+when it has none); with uncommitted changes it is left in place and the path
+reported. Fail closed: no git binary (PATH, then
+`/run/current-system/sw/bin/git`) or a workspace that is not a git repository
+with at least one commit refuses the dispatch with `worktree_unavailable`.
+Desktop refuses the option with `worktree_not_supported`.
+
+Note for kenaz-workbench: the harness unit's PATH only gets git if the
+kenaz-harness leaf declares `requiredTools = [ "git" ]`; today git reaches
+`/run/current-system/sw/bin` only when another app (vscode-server, the dev
+toolchain) declares it.
+
+Without isolation, a write-capable profile (its intended tools include
+write/edit/bash) dispatched into `paths` overlapping another running
+write-capable sub-agent of the same parent gets a `warnings` entry in the
+spawn result (no `paths` = the whole workspace).
+
 ## Self-update: desktop-only
 
 Settled 2026-08-18 by `self-update-repair-01PMUP01` §5, following the
