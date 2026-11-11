@@ -1449,7 +1449,6 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 	scope, current := m.scope(), m.currentAccount() != "" && m.currentAccount() == st.Account
 	var older []string // scope kinds of the older notes waiting on the line
 	out := MemorySyncStatus{Entitled: m.entitled(), LocalEnabled: st.Enabled, Lane: m.lanes().Snapshot(LaneMemorySync)}
-	out.LocalErasePending = st.LocalErasePending != ""
 	out.OrgPaused, out.PausedCategory = m.orgPaused()
 	if m.isStopped() {
 		// A lane stopped by sign-out (or node_removed) records nothing; the
@@ -1457,6 +1456,7 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 		// capability answer (not_entitled) the signed-out client gives.
 		out.Lane = LaneSnapshot{Status: LaneOff, Reason: "signed_out", LastSuccessAt: out.Lane.LastSuccessAt}
 	}
+	out.LocalErasePending = current && st.LocalErasePending != ""
 	if all, err := m.cfg.Store.ListAll(ctx); err == nil {
 		for _, c := range all {
 			if c.Account == memory.AccountUnresolved && memory.IsSyncScope(c.ScopeKind) {
@@ -1719,6 +1719,9 @@ func (m *MemorySync) localCutoff(erasedBefore string) string {
 	m.mu.Lock()
 	offset := m.serverOffset
 	m.mu.Unlock()
+	// A wrong Date header or a clock jump must not reach far: an erase can't be
+	// undone. Past this, Fleet refuses this device's pushes anyway.
+	offset = max(min(offset, memory.HLCMaxSkew), -memory.HLCMaxSkew)
 	return memory.ShiftHLC(erasedBefore, offset)
 }
 

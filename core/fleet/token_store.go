@@ -151,8 +151,8 @@ func accessTokenKeyStrict() (key string, present bool, err error) {
 	gen := accessKeyCache.gen
 	accessKeyCache.Unlock()
 
-	// Outside the lock: a hung keychain tool must not hold up the saves that
-	// drop this cache.
+	// Outside the lock, so this cache isn't one more thing a hung keychain tool
+	// holds up. Saves still wait on the keyring's own lock.
 	tok, err := keychainGet(keyringService, keyAccessToken())
 	if errors.Is(err, keyring.ErrNotFound) {
 		tok, err = "", nil

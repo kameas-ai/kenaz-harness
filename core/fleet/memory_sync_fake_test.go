@@ -70,6 +70,8 @@ type fakeMemoryFleet struct {
 	// offerErasedReset answers the next empty-cursor pull with reset:true for
 	// this erased_before, once.
 	offerErasedReset string
+	// dateOffset shifts the Date header it answers with.
+	dateOffset time.Duration
 	// pausedCategory, when set, models a staff org pause (kenaz-fleet
 	// #206): every memory route answers 403 org_paused EXCEPT the
 	// data-rights allowlist (forget-all here).
@@ -164,7 +166,7 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests++
-	w.Header().Set("Date", f.now().UTC().Format(http.TimeFormat))
+	w.Header().Set("Date", f.now().Add(f.dateOffset).UTC().Format(http.TimeFormat))
 	if f.status429 > 0 {
 		f.status429--
 		w.Header().Set("Retry-After", "120")

@@ -169,6 +169,7 @@ async function confirmDisable() {
     confirmingDisable.value = false;
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : String(err);
+    await refresh(); // the backend may have moved on: sync can be off by now
   } finally {
     busy.value = false;
   }
@@ -265,8 +266,8 @@ async function confirmDisable() {
             builds its own). Anything that looks like a credential is refused and stays local.
           </li>
           <li>
-            Turning this off keeps Fleet's copy; you can also erase your notes from Fleet and this
-            device at any time.
+            Turning this off keeps Fleet's copy. To erase your notes from Fleet and this device, do
+            that here first, or turn sync back on later to do it.
           </li>
         </ul>
       </div>

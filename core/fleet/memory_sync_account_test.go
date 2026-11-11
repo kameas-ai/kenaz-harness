@@ -1284,3 +1284,21 @@ func TestPull_ObservesErasedBefore(t *testing.T) {
 func laterErasedBefore(string) string {
 	return memory.FormatHLC(time.Now().Add(24*time.Hour).UnixMilli(), 0, "fleet")
 }
+
+// A wrong Date header can't reach far: an erase can't be undone.
+func TestEmptyCursorPull_WrongDateHeaderIsBounded(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.signIn(accountA)
+	erased := memory.FormatHLC(w.wall.now().UnixMilli(), 0, "fleet")
+	w.wall.advance(10 * time.Minute)
+	d.add("well-after", memory.ScopeKindSession, "10 minutes after the erase")
+	w.fleet.mu.Lock()
+	w.fleet.offerErasedBefore = erased
+	w.fleet.dateOffset = -24 * time.Hour // this device looks a day ahead
+	w.fleet.mu.Unlock()
+	d.enable()
+	d.ms.RunOnce(ctx)
+	accountChunk(t, d, "well-after")
+}
