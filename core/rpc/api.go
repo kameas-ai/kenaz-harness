@@ -166,6 +166,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
 	coreskill "github.com/kameas-ai/kenaz-harness/core/tools/skill"
+	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
 	"github.com/kameas-ai/kenaz-harness/core/units"
 	coreupdate "github.com/kameas-ai/kenaz-harness/core/update"
@@ -2903,7 +2904,11 @@ func New(c *core.Core, opts ...Option) *API {
 			Containment: a.scheduledRunContainment,
 		}))
 		logging.L().Info("rpc.subagent_run_spawner.armed")
-		registerSubagentDispatchTool(c, stack.builtins, a.branchSeam)
+		var worktrees []coresubagent.WorktreeManager
+		if opt.worktreeIsolation && c != nil && c.WorkspaceDir() != "" {
+			worktrees = append(worktrees, &coresubagent.GitWorktrees{Root: c.WorkspaceDir()})
+		}
+		registerSubagentDispatchTool(c, stack.builtins, a.branchSeam, worktrees...)
 	}
 
 	// confirm-each-enforcement-01PMAG05 WP02: the resolve leg. Bound to

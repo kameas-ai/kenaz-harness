@@ -490,7 +490,7 @@ func registerBuiltinTools(
 // child run, never "the seam object exists but nothing will happen" —
 // crash-recovery-tool-gating-0XQTC4RK's invariant that a tool which
 // always fails is never advertised.
-func registerSubagentDispatchTool(c *core.Core, registry *toolloop.BuiltinRegistry, seam agentgraph.BranchSeam) {
+func registerSubagentDispatchTool(c *core.Core, registry *toolloop.BuiltinRegistry, seam agentgraph.BranchSeam, worktrees ...coresubagent.WorktreeManager) {
 	if registry == nil || seam == nil {
 		logging.L().Info("rpc.builtins.subagent_dispatch_skipped",
 			"reason", "BranchSeam not wired with a live run spawner — tool omitted from model catalog (FR-007)",
@@ -501,7 +501,7 @@ func registerSubagentDispatchTool(c *core.Core, registry *toolloop.BuiltinRegist
 	if c != nil {
 		dataDir = c.DataDir()
 	}
-	subagentTool := coresubagent.New(coresubagent.Options{
+	opts := coresubagent.Options{
 		DataDir: dataDir,
 		Seam:    seam,
 		// Tasks deliberately left nil — see the Options.Tasks doc in
@@ -513,7 +513,14 @@ func registerSubagentDispatchTool(c *core.Core, registry *toolloop.BuiltinRegist
 		// Wiring this field too would register a second, competing
 		// Tasks-panel row for the same dispatch.
 		Tasks: nil,
-	})
+	}
+	// isolation:"worktree" (B11): served workbenches pass a GitWorktrees
+	// rooted at the agent workspace; desktop passes none and the option is
+	// refused with worktree_not_supported.
+	if len(worktrees) > 0 {
+		opts.Worktrees = worktrees[0]
+	}
+	subagentTool := coresubagent.New(opts)
 	registry.Register(subagentTool)
 	logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
 }
