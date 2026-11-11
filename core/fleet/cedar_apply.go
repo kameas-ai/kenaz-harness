@@ -161,7 +161,11 @@ func (a *CedarBundleApplier) SetTeamBundle(ctx context.Context, delta *CedarDelt
 		}
 		return &CedarApplyError{Category: CedarErrInstall}
 	}
-	a.engine.SetFleetPolicyMeta(delta.meta())
+	ruleIDs := make([]string, 0, len(rules))
+	for id := range rules {
+		ruleIDs = append(ruleIDs, id)
+	}
+	cedarpolicy.SetFleetPolicyMeta(ruleIDs, delta.meta())
 	_ = ctx
 	return nil
 }

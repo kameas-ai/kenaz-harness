@@ -39,7 +39,8 @@ func TestPolicyDeniedError_UserMessage(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		e.SetFleetPolicyMeta(&FleetPolicyMeta{PublishedAt: at})
+		SetFleetPolicyMeta([]string{"r1"}, &FleetPolicyMeta{PublishedAt: at})
+		t.Cleanup(func() { SetFleetPolicyMeta(nil, nil) })
 		err := CheckUseTool(t.Context(), e, "github", "create_issue")
 		var pe *PolicyDeniedError
 		if !errors.As(err, &pe) {
@@ -58,8 +59,13 @@ func TestPolicyDeniedError_UserMessage(t *testing.T) {
 		if !strings.Contains(pe.Error(), "fleet-team/r1") {
 			t.Fatalf("raw error lost the matched policy: %q", pe.Error())
 		}
+		// Meta for another snapshot's rule ids is not attached.
+		SetFleetPolicyMeta([]string{"r2"}, &FleetPolicyMeta{PublishedAt: at})
+		if msg := pe.UserMessage(); msg != FleetDenialText {
+			t.Fatalf("stale meta attached: %q", msg)
+		}
 		// Cleared meta → plain copy.
-		e.SetFleetPolicyMeta(nil)
+		SetFleetPolicyMeta(nil, nil)
 		d := e.Evaluate(t.Context(), UserUID(), ActionUseTool, ToolUID("github", "create_issue"), nil)
 		if got, ok := UserFacingDenial(d); !ok || got != FleetDenialText {
 			t.Fatalf("UserFacingDenial = %q,%v; want %q,true", got, ok, FleetDenialText)

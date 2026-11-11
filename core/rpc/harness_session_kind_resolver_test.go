@@ -325,7 +325,8 @@ func TestCedarSessionKindResolver_FleetDenialCopy(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	engine.SetFleetPolicyMeta(&cedar.FleetPolicyMeta{PublishedAt: time.Date(2026, 11, 7, 9, 30, 0, 0, time.UTC)})
+	cedar.SetFleetPolicyMeta([]string{"r1"}, &cedar.FleetPolicyMeta{PublishedAt: time.Date(2026, 11, 7, 9, 30, 0, 0, time.UTC)})
+	t.Cleanup(func() { cedar.SetFleetPolicyMeta(nil, nil) })
 
 	res, err := r.Resolve(ctx, rec.ID, "github", "create_issue")
 	if err != nil {

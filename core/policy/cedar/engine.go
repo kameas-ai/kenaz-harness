@@ -241,10 +241,6 @@ type Engine struct {
 	// hot path (Evaluate) is lock-free.
 	policies atomic.Pointer[cedar.PolicySet]
 
-	// fleetMeta describes the installed fleet rule set (SetFleetPolicyMeta);
-	// attached to decisions a fleet rule produced (fleet_denial.go).
-	fleetMeta atomic.Pointer[FleetPolicyMeta]
-
 	// reloadMu serialises Reload so concurrent reload requests do not
 	// race on directory walks or partial-set installation.
 	reloadMu sync.Mutex
@@ -615,11 +611,7 @@ func (e *Engine) decide(
 	if len(diag.Errors) > 0 {
 		e.evalErrors.record(ps, diag.Errors)
 	}
-	out := fromCedar(action, principal, resource, dec, diag, ps, e.opts.DefaultDeny)
-	if IsFleetDecision(out) {
-		out.fleetMeta = e.fleetMeta.Load()
-	}
-	return out
+	return fromCedar(action, principal, resource, dec, diag, ps, e.opts.DefaultDeny)
 }
 
 // FleetTeamSnippetPrefix namespaces every Cedar snippet the fleet config

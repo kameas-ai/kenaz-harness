@@ -2,6 +2,7 @@ package cedar
 
 import (
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -14,20 +15,46 @@ type FleetPolicyMeta struct {
 	PublishedAt time.Time
 }
 
-// SetFleetPolicyMeta records the metadata of the fleet rule set just
-// installed (core/fleet's cedar applier calls it after
-// ReplaceHarnessSnippets; nil when the snapshot cleared every fleet rule).
-// Decisions produced by a fleet rule carry it, so a denial can say whose
-// policy blocked the call (FleetDenialMessage).
-func (e *Engine) SetFleetPolicyMeta(m *FleetPolicyMeta) {
-	if e == nil {
+// fleetMetaIndex is the publish metadata of the installed fleet rule set,
+// keyed by the team_rule_ids it covers. It is process-wide rather than on
+// Engine or Decision: cedar.Decision is a Wails-bound type (its declaration
+// is pinned by check-codegen's wailsjs hash), and production has exactly one
+// engine (check-cedar-engine-singleton). Keying by rule id means metadata is
+// only ever attached to a decision from the snapshot it describes.
+type fleetMetaIndex struct {
+	rules map[string]struct{}
+	meta  FleetPolicyMeta
+}
+
+var fleetMeta atomic.Pointer[fleetMetaIndex]
+
+// SetFleetPolicyMeta records the publish metadata of the fleet rule
+// snapshot just installed (core/fleet's cedar applier calls it after
+// ReplaceHarnessSnippets) for the team_rule_ids it installed. A nil meta or
+// no rule ids (the snapshot cleared every fleet rule) clears it.
+func SetFleetPolicyMeta(ruleIDs []string, m *FleetPolicyMeta) {
+	if m == nil || len(ruleIDs) == 0 {
+		fleetMeta.Store(nil)
 		return
 	}
-	if m != nil {
-		cp := *m
-		m = &cp
+	idx := &fleetMetaIndex{rules: make(map[string]struct{}, len(ruleIDs)), meta: *m}
+	for _, id := range ruleIDs {
+		idx.rules[id] = struct{}{}
 	}
-	e.fleetMeta.Store(m)
+	fleetMeta.Store(idx)
+}
+
+// fleetMetaFor returns the metadata for a fleet rule id, nil when unknown.
+func fleetMetaFor(ruleID string) *FleetPolicyMeta {
+	idx := fleetMeta.Load()
+	if idx == nil {
+		return nil
+	}
+	if _, ok := idx.rules[ruleID]; !ok {
+		return nil
+	}
+	m := idx.meta
+	return &m
 }
 
 // FleetDenialText is the user-facing copy for a tool call (or any action)
@@ -65,10 +92,14 @@ func FleetDenialMessage(m *FleetPolicyMeta) string {
 // not-applicable, or a deny from a local / embedded rule — callers keep
 // their existing copy for those).
 func UserFacingDenial(d Decision) (string, bool) {
-	if d.Outcome != Deny || !IsFleetDecision(d) {
+	if d.Outcome != Deny {
 		return "", false
 	}
-	return FleetDenialMessage(d.fleetMeta), true
+	ruleID, ok := FleetRuleIDFromPolicyID(d.MatchedPolicy)
+	if !ok {
+		return "", false
+	}
+	return FleetDenialMessage(fleetMetaFor(ruleID)), true
 }
 
 // UserMessage is the user-facing text for this denial: FleetDenialMessage
