@@ -232,7 +232,12 @@ func main() {
 		// (explicit permit use_tool on Tool::"kenaz__bash"), not the
 		// desktop Settings toggle the served UI cannot reach. Both served
 		// entry points must agree (Spec 078 precedent).
-		rpc.WithFleetGatedBash())
+		rpc.WithFleetGatedBash(),
+		// B11: host-supplied model-slot defaults (kenaz-meta.env) and
+		// worktree isolation for sub-agents under the /workspace grant.
+		// Both served entry points must agree (Spec 078 precedent).
+		rpc.WithHostModelDefaults(serve.HostModelDefaults(os.Getenv, log)),
+		rpc.WithWorktreeIsolation())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

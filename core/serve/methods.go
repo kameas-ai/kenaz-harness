@@ -90,6 +90,7 @@ var (
 		"Settings_FleetConfigPullStatus",
 		"Settings_FleetHealth",
 		"Settings_FleetSession",
+		"Settings_ModelSlots",
 		"ShellStatus",
 	}
 

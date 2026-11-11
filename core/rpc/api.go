@@ -67,6 +67,7 @@ import (
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/harnessmodels"
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/install"
 	"github.com/kameas-ai/kenaz-harness/core/keyring"
@@ -1707,6 +1708,14 @@ type options struct {
 	// decision. See WithFleetGatedBash.
 	fleetGatedBash bool
 
+	// hostModelDefaults is the host layer of the model slots. See
+	// WithHostModelDefaults.
+	hostModelDefaults harnessmodels.Overrides
+
+	// worktreeIsolation enables isolation:"worktree" for
+	// kenaz__subagent_dispatch. See WithWorktreeIsolation.
+	worktreeIsolation bool
+
 	// settingsStore overrides the settings store New would otherwise
 	// build via settings.NewFileStoreFromEnv(). See WithSettingsStore.
 	settingsStore settings.SettingsStore
@@ -1748,6 +1757,25 @@ type options struct {
 // machine.
 func WithHostProviders(profiles []corellm.ProviderProfile) Option {
 	return func(o *options) { o.hostProviders = profiles }
+}
+
+// WithHostModelDefaults seeds the host layer of the harness model slots
+// (default sub-agent model + per-role models) from the control plane —
+// the served harness passes harnessmodels.ParseHostEnv over
+// KENAZ_HARNESS_SUBAGENT_MODEL / KENAZ_HARNESS_ROLE_MODELS (kenaz-meta.env).
+// Values are validated against the host provider's models at resolve
+// time; an unknown id is ignored. Desktop never passes this option.
+func WithHostModelDefaults(o harnessmodels.Overrides) Option {
+	return func(opts *options) { opts.hostModelDefaults = o }
+}
+
+// WithWorktreeIsolation turns on isolation:"worktree" for
+// kenaz__subagent_dispatch: each such sub-agent gets its own
+// `git worktree` under <workspace>/.worktrees/<agent-id> on branch
+// agent/<agent-id>. Served mode only — the workspace is /workspace there.
+// Without it the option is refused with a clear error.
+func WithWorktreeIsolation() Option {
+	return func(opts *options) { opts.worktreeIsolation = true }
 }
 
 // WithServedConnectors installs the served-mode connector supervisor
@@ -2230,6 +2258,19 @@ func New(c *core.Core, opts ...Option) *API {
 	settingsImpl := settings.NewAPI(settingsStore)
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
+	// fleet-workbench-next-plan-2026-11-10 B11: model slots. The session
+	// provider a served workbench derives from is its host profile; the
+	// desktop path has none, so nothing is derived there (its slots keep
+	// their historical per-consumer fallbacks) and only an explicit
+	// setting or the org layer resolves.
+	{
+		var sessionProvider func() *corellm.ProviderProfile
+		if len(opt.hostProviders) > 0 {
+			hp := opt.hostProviders[0]
+			sessionProvider = func() *corellm.ProviderProfile { p := hp; return &p }
+		}
+		settingsImpl.SetModelSlots(harnessmodels.NewResolver(opt.hostModelDefaults, logging.L()), sessionProvider)
+	}
 	// Fleet-delivered provider keys follow the signed-in account: a sign-in
 	// as someone else (or into another org) purges what the previous
 	// account left (provider-credentials-client-01PCCLI01 WP04).
@@ -2806,6 +2847,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// is belt-and-suspenders.
 	if a.branchSeam != nil && a.llmAPI != nil && a.eventBus != nil {
 		capturedPersonalStoreForSubagent := personalForLLM
+		var subagentDerivationsLogged sync.Map // log each derivation once
 		a.branchSeam.SetRunSpawner(NewSubagentRunSpawner(SubagentRunSpawnerDeps{
 			UsageParent: newFleetUsageObserver(a.settingsImpl).AttributeTo,
 			LLM:         a.llmAPI,
@@ -2837,6 +2879,16 @@ func New(c *core.Core, opts ...Option) *API {
 					return ""
 				}
 				return profs[0].ID
+			},
+			// B11: a served workbench has no personal provider — derive
+			// the sub-agent's model from the host provider instead.
+			DerivedModel: func(declared string) (string, string, bool) {
+				p, m, src, ok := a.settingsImpl.MapSubagentModel(declared)
+				if _, seen := subagentDerivationsLogged.LoadOrStore(declared+"\x00"+p+"\x00"+m, true); ok && !seen {
+					logging.L().Info("rpc.subagent_run_spawner.model_derived",
+						"profile_id", p, "model", m, "source", string(src), "declared", declared)
+				}
+				return p, m, ok
 			},
 			// owner directive 2026-09-09, mission requirement 3: the SAME
 			// registry instance buildChatRunner wired into
@@ -6905,16 +6957,24 @@ func newLLMStack(
 				return "", "", false
 			}
 			profs, perr := capturedRaterStore.List()
-			if perr != nil || len(profs) == 0 {
+			if perr != nil {
+				profs = nil
+			}
+			// B11: the served host provider is a candidate too — a
+			// workbench's personal store is empty by construction.
+			if settingsImpl != nil {
+				if hp := settingsImpl.SessionProvider(); hp != nil {
+					profs = append(profs, *hp)
+				}
+			}
+			if len(profs) == 0 {
 				return "", "", false
 			}
 			var setting risk.RaterModelSetting
-			if settingsImpl != nil && settingsImpl.Store() != nil {
-				if s, serr := settingsImpl.Store().LoadAll(); serr == nil {
-					setting = risk.RaterModelSetting{
-						ProviderID: s.RiskRaterModel.ProviderID,
-						ModelID:    s.RiskRaterModel.ModelID,
-					}
+			if settingsImpl != nil {
+				// Effective slot: org > settings > host > derived (B11).
+				if e, ok := settingsImpl.ResolveModelSlot(harnessmodels.SlotRiskRater); ok {
+					setting = risk.RaterModelSetting{ProviderID: e.ProviderID, ModelID: e.ModelID}
 				}
 			}
 			profileID, model, _, ok := risk.ResolveRaterModel(setting, profs)
@@ -6984,23 +7044,26 @@ func newLLMStack(
 		}
 		stackSidecarMgr, stackSidecarProbe = sidecarMgr, sidecarProbe
 		loadAdvisorProfiles := func() []corellm.ProviderProfile {
-			if capturedAdvisorStore == nil {
-				return nil
+			var profs []corellm.ProviderProfile
+			if capturedAdvisorStore != nil {
+				if ps, perr := capturedAdvisorStore.List(); perr == nil {
+					profs = ps
+				}
 			}
-			profs, perr := capturedAdvisorStore.List()
-			if perr != nil {
-				return nil
+			// B11: include the served host provider.
+			if settingsImpl != nil {
+				if hp := settingsImpl.SessionProvider(); hp != nil {
+					profs = append(profs, *hp)
+				}
 			}
 			return profs
 		}
 		loadAdvisorSetting := func() advice.AdvisorModelSetting {
 			var setting advice.AdvisorModelSetting
-			if settingsImpl != nil && settingsImpl.Store() != nil {
-				if s, serr := settingsImpl.Store().LoadAll(); serr == nil {
-					setting = advice.AdvisorModelSetting{
-						ProviderID: s.AdvisorModel.ProviderID,
-						ModelID:    s.AdvisorModel.ModelID,
-					}
+			if settingsImpl != nil {
+				// Effective slot: org > settings > host > derived (B11).
+				if e, ok := settingsImpl.ResolveModelSlot(harnessmodels.SlotAdvisor); ok {
+					setting = advice.AdvisorModelSetting{ProviderID: e.ProviderID, ModelID: e.ModelID}
 				}
 			}
 			return setting
@@ -7566,6 +7629,12 @@ func buildCompactionWiring(
 				return compaction.ProviderProfileRef{}, false
 			}
 			if s.CompactionModel.IsZero() {
+				// B11: served workbenches derive the slot (cheapest model of
+				// the host provider) or take it from host/org; desktop
+				// resolves nothing here and keeps the session-model fallback.
+				if e, ok := settingsImpl.ResolveModelSlot(harnessmodels.SlotCompaction); ok {
+					return compaction.ProviderProfileRef{ProviderID: e.ProviderID, ModelID: e.ModelID}, true
+				}
 				return compaction.ProviderProfileRef{}, false
 			}
 			return compaction.ProviderProfileRef{
@@ -12655,4 +12724,13 @@ func (r revocationWorkflowsAdapter) CatalogInstalledWorkflows(ctx context.Contex
 
 func (r revocationWorkflowsAdapter) RemoveRevokedWorkflow(ctx context.Context, workflowID, catalogID string) (bool, error) {
 	return r.wf.RemoveRevokedCatalogDocument(ctx, workflowID, catalogID)
+}
+
+// ModelSlots returns the effective harness model slots and their source
+// (fleet-workbench-next-plan-2026-11-10 B11) — served Settings_ModelSlots.
+func (a *API) ModelSlots(ctx context.Context) (settings.ModelSlotsView, error) {
+	if a == nil || a.settingsImpl == nil {
+		return settings.ModelSlotsView{Slots: []harnessmodels.Effective{}}, nil
+	}
+	return a.settingsImpl.EffectiveModelSlots(ctx)
 }
