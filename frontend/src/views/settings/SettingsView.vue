@@ -227,7 +227,7 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   'mcp-servers': { title: 'MCP servers', subtitle: 'Health behaviour for local MCP servers.' },
   peers: { title: 'Peers', subtitle: 'Trusted ACP agent peers — register, inspect, and revoke.' },
   sync: { title: 'Sync', subtitle: 'Cross-device settings sync — keep provider profiles, model prefs, MCP recipes, installed MCPs, and UI theme in sync across all your devices.' },
-  compliance: { title: 'Compliance', subtitle: 'Immutable fleet audit archival and local retention window (Team+ tier).' },
+  compliance: { title: 'Compliance', subtitle: 'Fleet audit archive status and local retention window.' },
   'crash-reporting': { title: 'Crash Reporting', subtitle: 'Configure error and crash-report telemetry consent.' },
   recommendations: { title: 'Recommendations', subtitle: 'Install, check and remove the local ML engine that powers branch, compact and model-switch suggestions.' },
   // dogfood 2026-10-05: this key was missing, so the pane fell through to
