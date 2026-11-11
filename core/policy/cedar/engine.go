@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	cedar "github.com/cedar-policy/cedar-go"
 )
@@ -544,6 +545,51 @@ func (e *Engine) Evaluate(
 	contextAttrs map[cedar.String]cedar.Value,
 ) Decision {
 	_ = ctx
+	out := e.decide(principal, action, resource, contextAttrs)
+	e.decisions.Append(out)
+	return out
+}
+
+// Probe evaluates (principal, action, resource, contextAttrs) exactly as
+// Evaluate does — same context population, same fail-closed handling of
+// an erroring forbid — but records NO Decision. It is a capability probe
+// ("may this tool be offered to the model?") consulted on every tool
+// listing, not the authorization of an action; the action itself is
+// still authorized by Evaluate at dispatch time. Evaluation errors ARE
+// recorded in the eval-error tracker, so a broken rule stays visible.
+//
+// Served-mode bash availability (D-h, 2026-11-10) is the caller: bash is
+// on by default in a workbench and a forbid on use_tool /
+// Tool::"kenaz__bash" — from the org's fleet rule set or any other
+// installed source — turns it off, so the probe's Outcome == Deny is
+// the whole test. Decision.MatchedPolicy names the forbid;
+// FleetRuleIDFromPolicyID tells a fleet rule from a local one.
+func (e *Engine) Probe(
+	principal cedar.EntityUID,
+	action string,
+	resource cedar.EntityUID,
+	contextAttrs map[cedar.String]cedar.Value,
+) Decision {
+	if e == nil {
+		return Decision{
+			Outcome:     NotApplicable,
+			Action:      action,
+			Resource:    resource.String(),
+			Reason:      "no engine wired",
+			EvaluatedAt: time.Now().UTC(),
+		}
+	}
+	return e.decide(principal, action, resource, contextAttrs)
+}
+
+// decide is the shared body of Evaluate and Probe: the cedar.Authorize
+// call plus fromCedar classification. It appends nothing.
+func (e *Engine) decide(
+	principal cedar.EntityUID,
+	action string,
+	resource cedar.EntityUID,
+	contextAttrs map[cedar.String]cedar.Value,
+) Decision {
 	if principal.IsZero() {
 		principal = UserUID()
 	}
@@ -565,66 +611,32 @@ func (e *Engine) Evaluate(
 	if len(diag.Errors) > 0 {
 		e.evalErrors.record(ps, diag.Errors)
 	}
-	out := fromCedar(action, principal, resource, dec, diag, ps, e.opts.DefaultDeny)
-	e.decisions.Append(out)
-	return out
+	return fromCedar(action, principal, resource, dec, diag, ps, e.opts.DefaultDeny)
 }
 
-// PermittedBySnippet reports whether (principal, action, resource,
-// contextAttrs) is ALLOWED and at least one of the permits that
-// determined that Allow was installed by a harness snippet whose name
-// starts with snippetPrefix (e.g. the fleet push-down's "fleet-team/").
-//
-// It answers "did THIS policy source explicitly grant it", which
-// Evaluate cannot: an Allow can come from any embedded permit (the
-// default tool policy permits every server_name=="kenaz" tool), so
-// Outcome == Allow alone does not mean an admin opted in. A matching
-// forbid — or a forbid that fails to evaluate (fail-closed, as in
-// Evaluate) — makes the result false regardless of any permit.
-//
-// Unlike Evaluate it records NO Decision: it is a capability probe
-// ("may this tool be offered to the model?") consulted on every tool
-// listing, not the authorization of an action. The action itself is
-// still authorized by Evaluate at dispatch time. Evaluation errors ARE
-// recorded in the eval-error tracker, so a broken rule stays visible.
-func (e *Engine) PermittedBySnippet(
-	principal cedar.EntityUID,
-	action string,
-	resource cedar.EntityUID,
-	contextAttrs map[cedar.String]cedar.Value,
-	snippetPrefix string,
-) bool {
-	if e == nil || snippetPrefix == "" {
-		return false
+// FleetTeamSnippetPrefix namespaces every Cedar snippet the fleet config
+// poller installs from the org's signed bundle (core/fleet/cedar_apply.go
+// installs rule <team_rule_id> as "fleet-team/<team_rule_id>", so its
+// PolicyIDs read "harness-self/fleet-team/<team_rule_id>#<n>"). Declared
+// here, below core/fleet in the import graph, so a denial can be told
+// apart as "your organization's policy" vs a local rule without this
+// package importing fleet.
+const FleetTeamSnippetPrefix = "fleet-team/"
+
+// FleetRuleIDFromPolicyID reports whether policyID (Decision.MatchedPolicy)
+// names a fleet-installed rule and, if so, its team_rule_id.
+func FleetRuleIDFromPolicyID(policyID string) (ruleID string, ok bool) {
+	name, ok := snippetNameOf(cedar.PolicyID(policyID))
+	if !ok || !strings.HasPrefix(name, FleetTeamSnippetPrefix) {
+		return "", false
 	}
-	if principal.IsZero() {
-		principal = UserUID()
-	}
-	ps := e.policies.Load()
-	if ps == nil {
-		return false
-	}
-	contextAttrs = populateFamilyContext(action, resource, contextAttrs)
-	contextAttrs = withDeviceKind(contextAttrs, e.opts.DeviceKind)
-	req := cedar.Request{
-		Principal: principal,
-		Action:    ActionUID(action),
-		Resource:  resource,
-		Context:   cedar.NewRecord(contextAttrs),
-	}
-	dec, diag := cedar.Authorize(ps, cedar.EntityMap{}, req)
-	if len(diag.Errors) > 0 {
-		e.evalErrors.record(ps, diag.Errors)
-	}
-	if fromCedar(action, principal, resource, dec, diag, ps, e.opts.DefaultDeny).Outcome != Allow {
-		return false
-	}
-	for _, r := range diag.Reasons {
-		if name, ok := snippetNameOf(r.PolicyID); ok && strings.HasPrefix(name, snippetPrefix) {
-			return true
-		}
-	}
-	return false
+	return strings.TrimPrefix(name, FleetTeamSnippetPrefix), true
+}
+
+// IsFleetDecision reports whether d was produced by a fleet-installed rule.
+func IsFleetDecision(d Decision) bool {
+	_, ok := FleetRuleIDFromPolicyID(d.MatchedPolicy)
+	return ok
 }
 
 // PolicyDeniedError is the typed error returned by gate-hook helpers

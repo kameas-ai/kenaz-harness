@@ -1795,14 +1795,13 @@ func WithServedConnectors(sup *connectors.Supervisor) Option {
 // policy decision instead of the local Settings.BashEnabled toggle.
 //
 // Served/workbench mode passes this (both served entry points: main.go's
-// runServeMode and cmd/harness-served). There, kenaz__bash is offered to
-// the model — and callable — iff the org's fleet Cedar policy (pushed in
-// the signed config bundle, installed as "fleet-team/..." snippets)
-// explicitly permits `use_tool` on Tool::"kenaz__bash" and no forbid
-// matches. With no such permit it is not advertised at all: the served
-// UI has no Settings toggle, so a Settings-gated bash was permanently off
-// in every workbench, and a tool that is advertised but always fails
-// would be a lie. Re-evaluated on every listing/dispatch, so a Fleet
+// runServeMode and cmd/harness-served). There, kenaz__bash is ON BY
+// DEFAULT (decision D-h, 2026-11-10) and a Cedar forbid on `use_tool` /
+// Tool::"kenaz__bash" — the org's fleet rule set, pushed in the signed
+// config bundle as "fleet-team/..." snippets — turns it off: not
+// advertised and not dispatchable, never advertised-but-always-denied.
+// The served UI has no Settings toggle, so Settings.BashEnabled cannot be
+// the gate there. Re-evaluated on every listing/dispatch, so a Fleet
 // change takes effect on the next poll + next turn, no restart.
 //
 // Which commands run is unchanged: Cedar run_bash_command (fleet permit
