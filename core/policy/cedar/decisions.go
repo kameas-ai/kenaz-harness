@@ -36,6 +36,12 @@ type Decision struct {
 
 	// EvaluatedAt is the wall-clock time of the decision, UTC.
 	EvaluatedAt time.Time `json:"evaluated_at"`
+
+	// fleetMeta is the installed fleet policy's metadata when a
+	// fleet-installed rule produced this decision (Engine.decide). Not
+	// serialized: it only feeds the user-facing denial copy
+	// (UserFacingDenial / PolicyDeniedError.UserMessage).
+	fleetMeta *FleetPolicyMeta
 }
 
 // DecisionStore is the seam Engine writes decisions through. The

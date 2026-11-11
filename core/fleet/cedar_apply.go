@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
@@ -61,6 +62,30 @@ type CedarDelta struct {
 	Rules map[string]string `json:"rules"`
 	// RuleText is the legacy single-rule field; used only when Rules is empty.
 	RuleText string `json:"rule_text,omitempty"`
+	// PublishedAt / PublishedByEmail describe the published policy. Only
+	// published_at is on the wire today (contract-harness-sync.md
+	// "Bundle cedar_delta wire shape"); published_by_email (the name the
+	// GET /cedar-policy entry already uses) is read when Fleet adds it to
+	// the bundle. Fleet's published_by is a user id, not display copy, so
+	// it is not read. They feed the user-facing fleet-denial copy
+	// (cedar.FleetDenialMessage), nothing else. cedar_delta is a RawMessage
+	// in Bundle, so these do not touch the signing payload.
+	PublishedAt      string `json:"published_at,omitempty"`
+	PublishedByEmail string `json:"published_by_email,omitempty"`
+}
+
+// meta returns the policy metadata the engine attaches to fleet decisions;
+// nil when the delta installs no rules. An unparseable published_at is
+// dropped, not an error: it is display copy, not policy.
+func (d *CedarDelta) meta() *cedarpolicy.FleetPolicyMeta {
+	if d == nil || len(d.snapshot()) == 0 {
+		return nil
+	}
+	m := &cedarpolicy.FleetPolicyMeta{PublishedBy: strings.TrimSpace(d.PublishedByEmail)}
+	if t, err := time.Parse(time.RFC3339, strings.TrimSpace(d.PublishedAt)); err == nil {
+		m.PublishedAt = t
+	}
+	return m
 }
 
 // snapshot returns the rule set this delta installs.
@@ -136,6 +161,7 @@ func (a *CedarBundleApplier) SetTeamBundle(ctx context.Context, delta *CedarDelt
 		}
 		return &CedarApplyError{Category: CedarErrInstall}
 	}
+	a.engine.SetFleetPolicyMeta(delta.meta())
 	_ = ctx
 	return nil
 }

@@ -666,3 +666,25 @@ func TestToolDispatchExecutor_DoomLoopThresholdConfigurable(t *testing.T) {
 		t.Fatalf("should_replan = %v on 2nd call with threshold=2, want true", res.Outputs["should_replan"])
 	}
 }
+
+type fleetDeniedErr struct{ user string }
+
+func (e fleetDeniedErr) Error() string {
+	return `policy denied use_tool on Tool::"github__search": forbid policy matched (policy=harness-self/fleet-team/r1#0)`
+}
+func (e fleetDeniedErr) UserMessage() string { return e.user }
+
+// E2E-11: a fleet denial's tool result is the user-facing copy; any other
+// denial keeps the historical text with the raw error.
+func TestPolicyDenialContent(t *testing.T) {
+	if got := policyDenialContent(fmt.Errorf("wrapped: %w", fleetDeniedErr{user: "Blocked by your organization's Fleet policy"})); got != "Blocked by your organization's Fleet policy" {
+		t.Fatalf("fleet denial content = %q", got)
+	}
+	local := fleetDeniedErr{}
+	if got := policyDenialContent(local); got != "tool denied by policy: "+local.Error() {
+		t.Fatalf("local denial content = %q", got)
+	}
+	if got := policyDenialContent(errors.New("boom")); got != "tool denied by policy: boom" {
+		t.Fatalf("plain error content = %q", got)
+	}
+}

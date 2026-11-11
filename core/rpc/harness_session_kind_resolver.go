@@ -9,6 +9,7 @@ import (
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
@@ -268,6 +269,14 @@ func (r *cedarSessionKindResolver) Resolve(ctx context.Context, sessionID, serve
 	if decision.Outcome == cedar.Deny {
 		res.Policy = toolloop.PolicyDeny
 		res.Reason = decision.Reason
+		// E2E-11: a denial by the org's Fleet policy reads as such to the
+		// user; the Cedar internals (matched policy id) go to the log only.
+		if msg, ok := cedar.UserFacingDenial(decision); ok {
+			res.Reason = msg
+			logging.L().Info("rpc.tool_denied.fleet_policy",
+				"server", server, "tool", tool,
+				"matched_policy", decision.MatchedPolicy, "cedar_reason", decision.Reason)
+		}
 		return res, nil
 	}
 	// Allow and NotApplicable both report PolicyAutoAllow with an EMPTY
