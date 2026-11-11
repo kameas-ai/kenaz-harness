@@ -521,9 +521,11 @@ func (a *kernelToolAdapter) dispatchCall(ctx context.Context, call coreag.ToolCa
 		}
 		return res, nil
 	}
+	// A tool that ran but reports failure in-band ({"is_error":true,...})
+	// is a failed call, not a successful one (E2E-2).
 	return coreag.ToolResult{
 		Content: string(out),
-		IsError: false,
+		IsError: toolloop.ResultFlagsError(out),
 	}, nil
 }
 

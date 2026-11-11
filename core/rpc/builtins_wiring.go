@@ -792,6 +792,7 @@ func registerFSBuiltinTools(
 	store settings.SettingsStore,
 	promptRegistry *cedar.Registry,
 	dataDir string,
+	workspaceDir func() string,
 	blockedSink corefs.BlockedRequestSink,
 	originResolve corefs.OriginResolver,
 ) *corefs.Gate {
@@ -843,7 +844,18 @@ func registerFSBuiltinTools(
 		// <DataDir>/policy convention bash's own snippet writer uses
 		// (bash.go:598, cedar.PolicyDir).
 		PolicyDir: policyDir,
+		// E2E-3: the harness's own state (session databases, credential
+		// metadata, the policy directory above) is labelled privileged in
+		// the prompt and never gets a remembered grant; the agent
+		// workspace is exempt even when it falls back under DataDir.
+		StateDirs:    corefs.HarnessStateDirs(dataDir),
+		WorkspaceDir: workspaceDir,
 	})
+	// E2E-1: an Allow-always answered on one fs prompt releases every
+	// queued fs prompt the resulting grant covers, inside the same
+	// Resolve call, so the person is not asked again for sibling files
+	// of a directory they just granted.
+	promptRegistry.SetGrantCoverage(cedar.FamilyFilesystem, gate.GrantCoverage)
 
 	// Per-family enabled closures. Soft-fail to false on transient store
 	// errors so filesystem tools stay off rather than on by default.
