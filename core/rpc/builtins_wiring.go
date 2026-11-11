@@ -25,7 +25,6 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	"github.com/kameas-ai/kenaz-harness/core/conversation"
-	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	coredocs "github.com/kameas-ai/kenaz-harness/core/docs"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -1048,12 +1047,11 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 
 // builtinEnabledPredicateFor is builtinEnabledPredicate with the source of
 // kenaz__bash availability made explicit. When bash reports that it is
-// fleet-managed (served/workbench mode — see bashAvailability), the bash
-// case consults the fleet Cedar policy instead of Settings.BashEnabled,
-// and that answer wins over every other branch, including the nil-store
-// "all enabled" test fallback: in a workbench nothing but an explicit
-// fleet permit may put bash in front of the model. A nil bash (or one
-// never switched to fleet policy) is the desktop path, unchanged.
+// policy-managed (served/workbench mode — see bashAvailability), the bash
+// case consults the Cedar policy instead of Settings.BashEnabled, and that
+// answer wins over every other branch, including the nil-store "all
+// enabled" test fallback. A nil bash (or one never switched to policy
+// control) is the desktop path, unchanged.
 func builtinEnabledPredicateFor(s *settings.API, bash *bashAvailability) func(string) bool {
 	inner := settingsBuiltinPredicate(s)
 	return func(name string) bool {
@@ -1069,22 +1067,25 @@ func builtinEnabledPredicateFor(s *settings.API, bash *bashAvailability) func(st
 // bashAvailability decides where kenaz__bash's on/off comes from.
 //
 // Zero value (desktop): Settings.BashEnabled, the local toggle.
+//
 // After useFleetPolicy (served/workbench mode, rpc.WithFleetGatedBash):
-// bash is offered iff the shared Cedar engine ALLOWS
-// use_tool on Tool::"kenaz__bash" AND a fleet-installed permit
-// ("fleet-team/..." snippet, the org policy Fleet pushes) is among the
-// policies that granted it. The embedded default tool policy permits every
-// kenaz tool, so a plain Allow would turn bash on with no admin opt-in;
-// a fleet forbid (or a forbid that fails to evaluate) turns it off even
-// alongside a permit. Evaluated on every listing/dispatch, so a Fleet
-// change applied by the poller takes effect on the next turn.
+// bash is ON BY DEFAULT (decision D-h, 2026-11-10) and turned off by a
+// Cedar forbid on use_tool / Tool::"kenaz__bash" — in practice the org's
+// fleet rule set pushed in the signed bundle, though a forbid from any
+// installed source counts. The probe is engine.Probe (Evaluate without
+// recording a Decision); bash is off iff its Outcome is Deny, which covers
+// a matching forbid, a forbid that errors (fail closed — e.g. one whose
+// `when` reads context the probe does not carry) and a DefaultDeny engine
+// with no permit. Evaluated on every listing/dispatch, so a Fleet change
+// applied by the poller takes effect on the next turn, no restart.
 type bashAvailability struct {
 	fleetEngine atomic.Pointer[cedar.Engine]
 	fleetGated  atomic.Bool
 }
 
-// useFleetPolicy switches bash to fleet-policy control. A nil engine keeps
-// it fleet-managed and therefore OFF (fail closed: no engine, no permit).
+// useFleetPolicy switches bash to policy control. A nil engine keeps it
+// policy-managed and OFF: with no engine a forbid cannot be evaluated, so
+// "no forbid" cannot be established (fail closed).
 func (b *bashAvailability) useFleetPolicy(engine *cedar.Engine) {
 	if b == nil {
 		return
@@ -1101,25 +1102,29 @@ func (b *bashAvailability) fleetDecision() (enabled, managed bool) {
 	if b == nil || !b.fleetGated.Load() {
 		return false, false
 	}
-	return fleetPermitsBash(b.fleetEngine.Load()), true
+	return policyAllowsBash(b.fleetEngine.Load()), true
 }
 
-// fleetPermitsBash is the served-mode bash availability probe. The
-// resource is built by useToolResource — the constructor the chat
-// use_tool gate uses for the same call — from the bash tool's dispatched
-// (server, tool) split: ("kenaz", "bash") -> Tool::"kenaz__bash".
-func fleetPermitsBash(engine *cedar.Engine) bool {
+// policyAllowsBash is the served-mode bash availability probe: true unless
+// Cedar denies use_tool on the bash tool. The resource is built by
+// useToolResource — the constructor the chat use_tool gate uses for the
+// same call — from the bash tool's dispatched (server, tool) split:
+// ("kenaz", "bash") -> Tool::"kenaz__bash". So any forbid shape that would
+// block a dispatched bash call (exact tool, `resource` unconstrained, a
+// server_name condition) also hides it from the model — no
+// advertised-but-always-denied tool.
+func policyAllowsBash(engine *cedar.Engine) bool {
 	if engine == nil {
 		return false
 	}
 	tool := strings.TrimPrefix(corebash.Name, toolloop.BuiltinServerName+"__")
-	return engine.PermittedBySnippet(
+	d := engine.Probe(
 		cedar.UserUID(),
 		cedar.ActionUseTool,
 		useToolResource(toolloop.BuiltinServerName, tool),
 		nil,
-		corefleet.TeamSnippetPrefix,
 	)
+	return d.Outcome != cedar.Deny
 }
 
 // settingsBuiltinPredicate maps the in-binary tool names onto the Settings
