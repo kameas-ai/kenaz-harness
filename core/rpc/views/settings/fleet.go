@@ -39,6 +39,9 @@ type auditEmitter interface {
 // It is attached to API after construction via SetFleetClient.
 type fleetState struct {
 	mu              sync.RWMutex
+	// modelSlots is the harness model-slot state (SetModelSlots); the
+	// org_config.harness_models section is applied into it.
+	modelSlots *ModelSlots
 	client          *fleet.Client
 	dataDir         string
 	poller          *fleet.CapabilityPoller
@@ -2172,6 +2175,22 @@ func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.
 	//     compat gap, so it gets the same error-not-skip treatment as
 	//     cedar_delta/mandated_items — an ACK must not read
 	//     "applied:true" for a section this device cannot actually apply.
+	// org_config.harness_models (fleet-workbench-next-plan-2026-11-10
+	// B11): a harness-local section, not a SyncKind — it has no user scope
+	// and nothing to collect. An absent section clears the org layer so
+	// slots fall back to settings / host / derived, the same "absent means
+	// the organisation sets nothing" rule tool_exposure follows.
+	{
+		a.state.mu.RLock()
+		ms := a.state.modelSlots
+		a.state.mu.RUnlock()
+		if raw, ok := b.OrgConfig[OrgConfigHarnessModels]; ok {
+			errs = append(errs, ms.applyOrgHarnessModels(raw)...)
+		} else {
+			ms.clearOrgHarnessModels()
+		}
+	}
+
 	if len(b.OrgConfig) > 0 {
 		a.state.mu.RLock()
 		registry := a.state.syncKindRegistry
@@ -2190,6 +2209,9 @@ func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.
 			}
 			sort.Strings(ids)
 			for _, id := range ids {
+				if id == OrgConfigHarnessModels {
+					continue // applied above
+				}
 				payload := b.OrgConfig[id]
 				kind, ok := registry.Kind(id)
 				if !ok {
