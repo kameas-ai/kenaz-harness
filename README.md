@@ -115,7 +115,7 @@ carve-out documented in [`docs/adr/`](docs/adr/)).
 
 ## Build from source
 
-Requires Go 1.26+ (release builds use go1.27.3), Node 20+, and the Wails CLI.
+Requires Go 1.26+ (release builds use go1.27.4), Node 20+, and the Wails CLI.
 
 ```bash
 # Wails CLI
