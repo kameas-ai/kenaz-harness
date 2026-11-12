@@ -251,6 +251,20 @@ func RemoveForSync(ctx context.Context, store Store, rec ForgetRecorder, id stri
 	return store.Delete(ctx, id)
 }
 
+// Fleet's D157 erase-signal refusals (kenaz-fleet contract-harness-memory
+// §11). Both judge a create by its created_at, so the block holds for the
+// note's lifetime.
+const (
+	BlockErasedBeforeCutoff = "erased_before_cutoff"
+	BlockCreatedAtInFuture  = "created_at_in_future"
+)
+
+// BlockFollowsCreatedAt reports whether a SyncBlocked code depends only on
+// created_at, so it must survive a rewrite that keeps CreatedAt.
+func BlockFollowsCreatedAt(code string) bool {
+	return code == BlockErasedBeforeCutoff || code == BlockCreatedAtInFuture
+}
+
 // FreshIdentity returns c as a brand-new record for sync: every Fleet
 // identity field (HLC stamps, sent/synced markers, rejection) is cleared
 // so the store stamps it on Add, and recall is re-based — this device's
@@ -267,6 +281,11 @@ func FreshIdentity(c Chunk, newID string) Chunk {
 		out.Account = AccountUnknown
 	}
 	out.SyncDirty, out.SyncSentAt, out.SyncedAt, out.SyncBlocked, out.SyncGen = false, time.Time{}, time.Time{}, "", 0
+	if BlockFollowsCreatedAt(c.SyncBlocked) {
+		// A rewrite keeps CreatedAt, so Fleet's D157 refusal still applies
+		// (and a future stamp would get in once Fleet's clock caught up).
+		out.SyncBlocked = c.SyncBlocked
+	}
 	out.RecallFolded = c.RecallFolded + c.RecallOthers
 	out.RecallOthers = 0
 	recomputeRecall(&out)
