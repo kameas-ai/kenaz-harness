@@ -46,6 +46,8 @@ type MemorySyncStatusView struct {
 	// answered (legal D164); OlderNotesAccount is who they would sync to.
 	OlderNotes        int    `json:"olderNotes"`
 	OlderNotesAccount string `json:"olderNotesAccount,omitempty"`
+	// LocalErasePending: erased from Fleet, not yet from this device.
+	LocalErasePending bool `json:"localErasePending,omitempty"`
 	// UnresolvedNotes stay on this device: the keychain couldn't be read when
 	// they were written.
 	UnresolvedNotes int `json:"unresolvedNotes"`
@@ -85,6 +87,7 @@ func memorySyncView(s fleet.MemorySyncStatus) MemorySyncStatusView {
 		OlderNotes:            s.OlderNotes,
 		OlderNotesAccount:     s.OlderNotesAccount,
 		UnresolvedNotes:       s.UnresolvedNotes,
+		LocalErasePending:     s.LocalErasePending,
 		InheritedErase:        s.InheritedErase,
 		InheritedOptOut:       s.InheritedOptOut,
 		FleetError:            s.FleetError,

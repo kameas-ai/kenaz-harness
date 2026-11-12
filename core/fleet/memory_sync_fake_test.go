@@ -65,6 +65,13 @@ type fakeMemoryFleet struct {
 	status429, status403 int
 	pushes               []memPushRequest
 	forgetAlls           int
+	// offerErasedBefore is Fleet's D157 signal on an empty-cursor pull.
+	offerErasedBefore string
+	// offerErasedReset answers the next empty-cursor pull with reset:true for
+	// this erased_before, once.
+	offerErasedReset string
+	// dateOffset shifts the Date header it answers with.
+	dateOffset time.Duration
 	// pausedCategory, when set, models a staff org pause (kenaz-fleet
 	// #206): every memory route answers 403 org_paused EXCEPT the
 	// data-rights allowlist (forget-all here).
@@ -159,7 +166,7 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests++
-	w.Header().Set("Date", f.now().UTC().Format(http.TimeFormat))
+	w.Header().Set("Date", f.now().Add(f.dateOffset).UTC().Format(http.TimeFormat))
 	if f.status429 > 0 {
 		f.status429--
 		w.Header().Set("Retry-After", "120")
@@ -329,6 +336,12 @@ func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, memPullResponse{Enabled: true, Reset: true, ResetReason: reason, ErasedBefore: erased, Records: []memPullRecord{}})
 		return
 	}
+	if raw == "" && f.offerErasedReset != "" {
+		erased := f.offerErasedReset
+		f.offerErasedReset = ""
+		writeJSON(w, 200, memPullResponse{Enabled: true, Reset: true, ResetReason: "erased", ErasedBefore: erased, Records: []memPullRecord{}})
+		return
+	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit <= 0 {
 		limit = 200
@@ -346,6 +359,9 @@ func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
 		rows = rows[:limit]
 	}
 	out := memPullResponse{Enabled: true, Records: []memPullRecord{}, Cursor: raw, HasMore: more}
+	if raw == "" {
+		out.ErasedBefore = f.offerErasedBefore
+	}
 	var last int64
 	for _, rec := range rows {
 		last = rec.seq

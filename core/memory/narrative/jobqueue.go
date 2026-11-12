@@ -25,6 +25,9 @@ type Job struct {
 	SessionID  string
 	TurnID     string
 	ProjectID  string
+	// Account is who the turn belongs to (see memory/account.go). The note a job
+	// writes is that account's, whoever is signed in by the time it runs.
+	Account    string
 	Attempt    int
 	RetryAt    time.Time
 	LastError  string
