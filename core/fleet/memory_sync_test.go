@@ -812,3 +812,61 @@ func TestMemorySync_V091GobFullSyncCycle(t *testing.T) {
 		t.Fatal("B missing the long_term chunk")
 	}
 }
+
+// D157 erase signal (Fleet contract §11): a create refused for created_at
+// is dropped and kept locally without holding the lane, unless this
+// device's clock really is fast, which keeps the clock_in_future hold.
+func TestMemorySync_EraseSignalCreateRefusals(t *testing.T) {
+	w := newMemWorld(t)
+	setReject := func(m map[string]memPushResult) {
+		w.fleet.mu.Lock()
+		w.fleet.forceReject = m
+		w.fleet.mu.Unlock()
+	}
+	setReject(map[string]memPushResult{
+		"mem-old":    rejectedRes("mem-old", "erased_before_cutoff", "created_at", false),
+		"mem-future": rejectedRes("mem-future", "clock_in_future", "created_at", false),
+		"mem-fast":   rejectedRes("mem-fast", "clock_in_future", "created_at", false),
+	})
+
+	a := w.device("devA", 0)
+	a.enable()
+	a.add("mem-old", "global", "written before a forget-all elsewhere")
+	a.add("mem-future", "global", "stamped while the clock was wrong")
+	a.add("mem-ok", "global", "fine")
+	a.ms.RunOnce(context.Background())
+	// Shown like any other refused note, never as a clock problem.
+	if s := a.lanes.Snapshot(LaneMemorySync); s.Reason != "items_refused" {
+		t.Fatalf("created_at refusals on a correct clock: lane = %+v", s)
+	}
+	ch := a.chunks()
+	for _, id := range []string{"mem-old", "mem-future"} {
+		if _, ok := ch[id]; !ok {
+			t.Fatalf("%s must stay on the device", id)
+		}
+	}
+	if ch["mem-ok"].SyncDirty {
+		t.Fatal("the other note must still sync")
+	}
+	n := len(w.fleet.pushLog())
+	a.ms.RunOnce(context.Background())
+	for _, p := range w.fleet.pushLog()[n:] {
+		for _, it := range p.Items {
+			if it.ID == "mem-old" || it.ID == "mem-future" {
+				t.Fatalf("%s was retried after a retry:false refusal", it.ID)
+			}
+		}
+	}
+
+	// A device that really is 7 minutes fast keeps the existing hold.
+	fast := w.device("devFast", 7*time.Minute)
+	fast.enable()
+	fast.add("mem-fast", "global", "from a fast clock")
+	fast.ms.RunOnce(context.Background())
+	if s := fast.lanes.Snapshot(LaneMemorySync); s.Status != LaneDegraded || s.Reason != "clock_in_future" {
+		t.Fatalf("fast clock lane = %+v", s)
+	}
+	if c := fast.chunks()["mem-fast"]; !c.SyncDirty {
+		t.Fatalf("fast-clock note must stay dirty for after the clock is fixed: %+v", c)
+	}
+}
