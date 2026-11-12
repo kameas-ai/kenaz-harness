@@ -176,7 +176,7 @@ func formatRecall(prefix string, snippets []memory.Snippet) string {
 			b.WriteString(RecallAutoLabel)
 			b.WriteString("]\n  ")
 		}
-		content := strings.ReplaceAll(strings.ReplaceAll(s.Content, "\r\n", "\n"), "\r", "\n")
+		content := recallLineBreaks.Replace(s.Content)
 		b.WriteString(strings.ReplaceAll(strings.TrimRight(content, "\n"), "\n", "\n  "))
 		b.WriteString("\n")
 	}
@@ -185,6 +185,13 @@ func formatRecall(prefix string, snippets []memory.Snippet) string {
 
 // insertRecallMessage puts the recall message after any leading system
 // messages, just before conversation history.
+// recallLineBreaks turns every line break a model might read as one into
+// "\n", so the indentation in formatRecall covers it.
+var recallLineBreaks = strings.NewReplacer(
+	"\r\n", "\n", "\r", "\n", "\v", "\n", "\f", "\n",
+	"\u0085", "\n", "\u2028", "\n", "\u2029", "\n",
+)
+
 func insertRecallMessage(messages []HookMessage, content string) []HookMessage {
 	// Prepend the system message. Mission A's system-prompt work
 	// will land another system message earlier in the slice; the
