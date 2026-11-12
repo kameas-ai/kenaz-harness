@@ -99,6 +99,9 @@ func SaveTokens(ts TokenSet) error {
 	if err := keyring.Set(keyringService, keyExpiresAt(), expStr); err != nil {
 		return fmt.Errorf("fleet: save expires_at: %w", err)
 	}
+	// Drop the token-key cache before waking anyone: a woken reader must
+	// see the new account, not a cached answer from the old token.
+	dropAccessKeyCache()
 	NotifyTokensAvailable()
 	return nil
 }
