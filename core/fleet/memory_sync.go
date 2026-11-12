@@ -1162,7 +1162,6 @@ func pushCandidate(c memory.Chunk, scopes map[string]bool) bool {
 	return c.SyncDirty && c.FleetMayKnow() // demotion (to session or project)
 }
 
-// skip records a refused chunk for the in-memory, change-scoped skip set.
 // deviceAhead reports whether this device's clock is more than HLCMaxSkew
 // ahead of Fleet's, going by the last response's Date header.
 func (m *MemorySync) deviceAhead() bool {
@@ -1171,6 +1170,7 @@ func (m *MemorySync) deviceAhead() bool {
 	return m.serverOffset > memory.HLCMaxSkew
 }
 
+// skip records a refused chunk for the in-memory, change-scoped skip set.
 func (m *MemorySync) skip(id string, gen int64) {
 	m.mu.Lock()
 	m.skipped[id] = gen
@@ -1360,25 +1360,23 @@ func (m *MemorySync) applyResults(ctx context.Context, entries []pushEntry, resp
 		case "rejected":
 			retry := r.Retry != nil && *r.Retry
 			switch {
-			case r.Code == "clock_in_future" && r.Field == "created_at" && !m.deviceAhead():
-				// Fleet's D157 erase signal refuses a create stamped more
-				// than 5 minutes after Fleet's clock (contract §11). This
-				// device's clock is fine now, so the note was stamped while
-				// it was wrong: holding the lane on it would never clear.
-				// Drop it like any retry:false refusal; it stays local.
-				logging.L().Info("fleet.memory_sync.item_rejected", "code", r.Code, "field", r.Field)
-				m.skip(r.ID, e.gen)
-				continue
+			case r.Field == "created_at" && (r.Code == "clock_in_future" || r.Code == "erased_before_cutoff"):
+				// Fleet's D157 erase signal refuses a create by its
+				// created_at (contract §11): older than a forget-all made
+				// elsewhere, or stamped more than 5 minutes after Fleet's
+				// clock. Both are permanent. A future stamp would get in
+				// once Fleet's clock caught up, which is the note the erase
+				// keeps out, so the block is durable (it survives restarts
+				// and edits; created_at never changes). The note stays on
+				// this device. A device that is fast now still gets the
+				// clock warning so its next notes aren't refused too.
+				o.Kind, o.Code = memory.OutcomeBlocked, r.Code
+				if r.Code == "clock_in_future" && m.deviceAhead() {
+					clockFuture = true
+				}
 			case r.Code == "clock_in_future":
 				clockFuture = true
 				continue // stays dirty; lane degraded until the clock is fixed
-			case r.Code == "erased_before_cutoff":
-				// A create older than a forget-all on another device (D157,
-				// contract §11): Fleet won't take it back. It stays local and
-				// is not retried; the next erase-signal pull removes it here.
-				logging.L().Info("fleet.memory_sync.item_rejected", "code", r.Code, "field", r.Field)
-				m.skip(r.ID, e.gen)
-				continue
 			case r.Code == "scope_not_enabled":
 				m.invalidateSettings()
 				continue // scopes changed on Fleet; re-read next cycle
