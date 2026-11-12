@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 )
+
+// unknownEnvWarn rate-limits the unrecognised-KENAZ_HARNESS_ENV warning.
+var unknownEnvWarn sync.Once
 
 // EnvProfile holds the Zitadel and fleet-server coordinates for a single
 // deployment environment.
@@ -184,7 +188,12 @@ func ResolveProfile() EnvProfile {
 			OIDCScopes:     DefaultOIDCScopes,
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "fleet: unrecognized KENAZ_HARNESS_ENV %q; defaulting to prod\n", env)
+		// Once per process: ResolveProfile runs on every FleetSigningKeys()
+		// call (per-env pin selection), so an unguarded warning would print
+		// on every poll.
+		unknownEnvWarn.Do(func() {
+			fmt.Fprintf(os.Stderr, "fleet: unrecognized KENAZ_HARNESS_ENV %q; defaulting to prod\n", env)
+		})
 		return EnvProfile{
 			Name:           EnvProd,
 			ZitadelIssuer:  prodIssuer,

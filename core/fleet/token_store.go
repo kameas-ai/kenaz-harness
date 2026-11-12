@@ -54,8 +54,13 @@ var (
 // source itself must be safe for concurrent use.
 func SetExternalTokenSource(fn func() string) {
 	externalTokenMu.Lock()
-	defer externalTokenMu.Unlock()
 	externalTokenSource = fn
+	externalTokenMu.Unlock()
+	if fn != nil {
+		// A config poller that already found "not signed in" polls now
+		// rather than ~5 minutes later (fleet-policy push-down #4).
+		NotifyTokensAvailable()
+	}
 }
 
 // ExternalTokenSourceActive reports whether token renewal is externally
@@ -94,6 +99,7 @@ func SaveTokens(ts TokenSet) error {
 	if err := keyring.Set(keyringService, keyExpiresAt(), expStr); err != nil {
 		return fmt.Errorf("fleet: save expires_at: %w", err)
 	}
+	NotifyTokensAvailable()
 	return nil
 }
 

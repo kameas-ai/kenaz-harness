@@ -87,7 +87,10 @@ var (
 		"Sessions_SendMessageWithBlocks",
 		"Sessions_SetSystemPrompt",
 		"Sessions_SuggestTitle",
+		"Settings_FleetConfigPullStatus",
+		"Settings_FleetHealth",
 		"Settings_FleetSession",
+		"Settings_ModelSlots",
 		"ShellStatus",
 	}
 

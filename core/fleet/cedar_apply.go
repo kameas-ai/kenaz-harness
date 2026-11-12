@@ -1,21 +1,21 @@
 // Package fleet — cedar_apply.go
 //
-// CedarBundleApplier merges fleet-distributed Cedar policy deltas into the
-// local Cedar engine. The delta carries Cedar policy source bytes (raw .cedar
-// text) keyed by a team_rule_id. Each team rule is installed under a
-// "fleet-team/<team_rule_id>" PolicyID namespace so local forbid overrides can
-// cancel individual team rules.
+// CedarBundleApplier installs the fleet-distributed Cedar policy snapshot
+// into the local Cedar engine. The bundle's cedar_delta carries Cedar source
+// keyed by a team_rule_id; each rule is installed under the snippet name
+// "fleet-team/<team_rule_id>" (PolicyIDs "harness-self/fleet-team/<id>#<n>").
 //
-// Override semantics (spec WP03):
+// Snapshot semantics (fleet-policy push-down, contract #1, 2026-10-31):
+// despite its name, cedar_delta is the org's COMPLETE current fleet rule
+// set. Every apply REPLACES all previously-installed fleet-team rules
+// atomically (Engine.ReplaceHarnessSnippets builds a fresh PolicySet and
+// swaps it in). An absent/null cedar_delta, or one with no rules, removes
+// every fleet-installed rule. An unparseable delta is an apply error and
+// the previous fleet rules stay in force.
 //
-//	Local forbid rule `when { context.team_rule_id == "X" }` cancels the
-//	team-distributed permit rule for rule-id "X". The frontend Override button
-//	writes exactly this forbid statement into the user's local policy dir.
-//
-// The apply is atomic from Cedar's perspective: a fresh PolicySet is built
-// by merging the existing set with the incoming delta; it is installed via
-// atomic.Pointer.Store so in-flight Evaluate calls see either the old or
-// the new bundle, never a torn state.
+// Override semantics (spec WP03): a local forbid rule
+// `when { context.team_rule_id == "X" }` is meant to cancel team rule "X";
+// the frontend Override button writes exactly this statement.
 //
 // (fleet-config-pull-01NDFSEX10 WP03)
 package fleet
@@ -25,32 +25,110 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
-	cedar "github.com/cedar-policy/cedar-go"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
+// fleetTeamSnippetPrefix namespaces every fleet-installed Cedar snippet.
+// The constant lives in core/policy/cedar (FleetTeamSnippetPrefix) so a
+// decision can be attributed to a FLEET rule (cedar.IsFleetDecision) —
+// served-mode bash availability and the "Blocked by your organization's
+// Fleet policy" denial copy — without that package importing fleet.
+const fleetTeamSnippetPrefix = cedarpolicy.FleetTeamSnippetPrefix
+
+// legacyRuleTextID is the team_rule_id given to a cedar_delta that carries
+// only the pre-2026-10-31 Fleet shape {"rule_text": "..."} with no "rules"
+// map (see CedarDelta.RuleText).
+const legacyRuleTextID = "rule-text"
+
 // CedarDelta is the decoded form of Bundle.CedarDelta.
 //
-// Wire shape (subset the fleet server may populate):
+// Wire shape:
 //
 //	{
-//	  "rules": {
-//	    "<team_rule_id>": "<cedar source bytes as string>"
-//	  }
+//	  "rules": { "<team_rule_id>": "<cedar source>" },
+//	  "rule_text": "<cedar source>",       // legacy; ignored when rules is set
+//	  "published_at": "<RFC3339>"          // informational; ignored
 //	}
 //
-// Each rule entry is a complete Cedar permit/forbid statement. The team_rule_id
-// is an opaque server-assigned identifier used as the PolicyID prefix so the
-// frontend override mechanism can address individual rules.
+// Rules is the full snapshot (the union of its entries is the org's fleet
+// rule set). RuleText is the shape Fleet emitted before it added Rules; a
+// bundle carrying only rule_text is applied as the single rule
+// "rule-text" so it is enforced rather than ACKed as applied and dropped.
 type CedarDelta struct {
 	// Rules maps team_rule_id → Cedar policy source (one or more statements).
 	Rules map[string]string `json:"rules"`
+	// RuleText is the legacy single-rule field; used only when Rules is empty.
+	RuleText string `json:"rule_text,omitempty"`
+	// PublishedAt / PublishedByEmail describe the published policy. Only
+	// published_at is on the wire today (contract-harness-sync.md
+	// "Bundle cedar_delta wire shape"); published_by_email (the name the
+	// GET /cedar-policy entry already uses) is read when Fleet adds it to
+	// the bundle. Fleet's published_by is a user id, not display copy, so
+	// it is not read. They feed the user-facing fleet-denial copy
+	// (cedar.FleetDenialMessage), nothing else. cedar_delta is a RawMessage
+	// in Bundle, so these do not touch the signing payload.
+	PublishedAt      string `json:"published_at,omitempty"`
+	PublishedByEmail string `json:"published_by_email,omitempty"`
 }
 
-// CedarBundleApplier applies fleet-distributed Cedar policy deltas to a
-// cedar.Engine. Satisfies the ConfigApplier interface when combined with the
-// other section appliers in a composite applier.
+// meta returns the policy metadata the engine attaches to fleet decisions;
+// nil when the delta installs no rules. An unparseable published_at is
+// dropped, not an error: it is display copy, not policy.
+func (d *CedarDelta) meta() *cedarpolicy.FleetPolicyMeta {
+	if d == nil || len(d.snapshot()) == 0 {
+		return nil
+	}
+	m := &cedarpolicy.FleetPolicyMeta{PublishedBy: strings.TrimSpace(d.PublishedByEmail)}
+	if t, err := time.Parse(time.RFC3339, strings.TrimSpace(d.PublishedAt)); err == nil {
+		m.PublishedAt = t
+	}
+	return m
+}
+
+// snapshot returns the rule set this delta installs.
+func (d *CedarDelta) snapshot() map[string]string {
+	if d == nil {
+		return nil
+	}
+	if len(d.Rules) > 0 {
+		return d.Rules
+	}
+	if strings.TrimSpace(d.RuleText) != "" {
+		return map[string]string{legacyRuleTextID: d.RuleText}
+	}
+	return nil
+}
+
+// Sanitized Cedar apply failure categories. An apply error carries one of
+// these plus the team_rule_id, NEVER the parser message: cedar-go's
+// messages can quote rule text, and the error reaches lastError (served
+// status), logs, and the ACK.
+const (
+	CedarErrInvalidCedar   = "invalid_cedar"   // a rule failed to parse
+	CedarErrMalformedDelta = "malformed_delta" // cedar_delta JSON did not decode
+	CedarErrEmptyRuleID    = "empty_rule_id"   // a rules entry had an empty key
+	CedarErrNoEngine       = "no_engine"       // no Cedar engine wired
+	CedarErrInstall        = "install_failed"  // engine refused the snapshot
+)
+
+// CedarApplyError is a sanitized cedar_delta apply failure.
+type CedarApplyError struct {
+	RuleID   string // team_rule_id, "" when not rule-specific
+	Category string // one of the CedarErr* constants
+}
+
+func (e *CedarApplyError) Error() string {
+	if e.RuleID != "" {
+		return fmt.Sprintf("cedar apply: rule %q: %s", e.RuleID, e.Category)
+	}
+	return "cedar apply: " + e.Category
+}
+
+// CedarBundleApplier applies fleet-distributed Cedar policy snapshots to a
+// cedar.Engine.
 type CedarBundleApplier struct {
 	engine *cedarpolicy.Engine
 }
@@ -60,59 +138,62 @@ func NewCedarBundleApplier(engine *cedarpolicy.Engine) *CedarBundleApplier {
 	return &CedarBundleApplier{engine: engine}
 }
 
-// SetTeamBundle parses delta and installs each team rule into the Cedar engine
-// under the "fleet-team/<team_rule_id>" PolicyID namespace.
-//
-// Errors from individual rule parse failures are collected and returned as a
-// joined error; rules that parse successfully are still installed (partial
-// apply, not all-or-nothing).
+// SetTeamBundle replaces every installed fleet-team rule with delta's
+// snapshot, all-or-nothing: a rule that fails to parse aborts the whole
+// apply and the previous fleet rules stay installed. A nil/empty delta
+// removes every fleet-team rule.
 func (a *CedarBundleApplier) SetTeamBundle(ctx context.Context, delta *CedarDelta) error {
 	if a.engine == nil {
-		return errors.New("cedar apply: engine is nil")
+		return &CedarApplyError{Category: CedarErrNoEngine}
 	}
-	if delta == nil || len(delta.Rules) == 0 {
-		return nil
+	rules := delta.snapshot()
+	snippets := make(map[string][]byte, len(rules))
+	for ruleID, src := range rules {
+		if ruleID == "" {
+			return &CedarApplyError{Category: CedarErrEmptyRuleID}
+		}
+		snippets[fleetTeamSnippetPrefix+ruleID] = []byte(src)
 	}
-
-	snippets := make(map[string][]byte, len(delta.Rules))
-	for ruleID, src := range delta.Rules {
-		name := fmt.Sprintf("fleet-team/%s", ruleID)
-		snippets[name] = []byte(src)
+	if err := a.engine.ReplaceHarnessSnippets(fleetTeamSnippetPrefix, snippets); err != nil {
+		var pe *cedarpolicy.SnippetParseError
+		if errors.As(err, &pe) {
+			return &CedarApplyError{RuleID: strings.TrimPrefix(pe.Name, fleetTeamSnippetPrefix), Category: CedarErrInvalidCedar}
+		}
+		return &CedarApplyError{Category: CedarErrInstall}
 	}
-
-	// LoadHarnessSnippets is the existing mechanism that adds named policy
-	// sources to the active PolicySet without a full reload. Re-using it
-	// avoids duplicating the atomic-store / file-list logic.
-	if err := a.engine.LoadHarnessSnippets(snippets); err != nil {
-		return fmt.Errorf("cedar apply: install team bundle: %w", err)
+	ruleIDs := make([]string, 0, len(rules))
+	for id := range rules {
+		ruleIDs = append(ruleIDs, id)
 	}
+	cedarpolicy.SetFleetPolicyMeta(ruleIDs, delta.meta())
 	_ = ctx
 	return nil
 }
 
-// ApplyCedarDelta decodes the raw JSON delta from a Bundle and delegates to
-// SetTeamBundle. Returns nil when CedarDelta is nil or empty (not all bundles
-// carry a Cedar update).
+// ApplyCedarDelta decodes the raw JSON delta from a Bundle and installs it as
+// the fleet rule snapshot. An empty or JSON-null rawDelta clears every
+// fleet-installed rule. A delta that does not decode is an error and leaves
+// the previous rules in force.
 func ApplyCedarDelta(ctx context.Context, engine *cedarpolicy.Engine, rawDelta json.RawMessage) error {
-	if len(rawDelta) == 0 {
-		return nil
-	}
 	var delta CedarDelta
-	if err := json.Unmarshal(rawDelta, &delta); err != nil {
-		return fmt.Errorf("cedar apply: decode delta: %w", err)
+	if len(rawDelta) > 0 {
+		if err := json.Unmarshal(rawDelta, &delta); err != nil {
+			return &CedarApplyError{Category: CedarErrMalformedDelta}
+		}
 	}
-	applier := NewCedarBundleApplier(engine)
-	return applier.SetTeamBundle(ctx, &delta)
+	return NewCedarBundleApplier(engine).SetTeamBundle(ctx, &delta)
 }
 
-// TeamRuleIDFromPolicyID extracts the team_rule_id from a PolicyID with the
-// "fleet-team/" prefix. Returns ("", false) when the ID does not carry the
-// fleet-team prefix.
-func TeamRuleIDFromPolicyID(id cedar.PolicyID) (string, bool) {
-	const prefix = "fleet-team/"
-	s := string(id)
-	if len(s) > len(prefix) && s[:len(prefix)] == prefix {
-		return s[len(prefix):], true
+// ActiveFleetCedarRules returns the team_rule_ids currently installed from
+// fleet bundles, sorted (nil engine → nil).
+func ActiveFleetCedarRules(engine *cedarpolicy.Engine) []string {
+	if engine == nil {
+		return nil
 	}
-	return "", false
+	names := engine.HarnessSnippetNames(fleetTeamSnippetPrefix)
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, strings.TrimPrefix(n, fleetTeamSnippetPrefix))
+	}
+	return out
 }

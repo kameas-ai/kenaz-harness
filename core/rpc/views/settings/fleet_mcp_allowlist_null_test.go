@@ -19,7 +19,8 @@ import (
 // correct today and becomes load-bearing on the first-ever bundle delivery:
 //
 //   - "mcp_allowlist": null, or the key absent → nil slice → the applier
-//     SKIPS the section → no fleet restriction (every recipe allowed).
+//     REMOVES any fleet restriction (every recipe allowed) — replace
+//     semantics, fleet-policy push-down contract #1.
 //   - "mcp_allowlist": []                      → non-nil EMPTY slice → the
 //     applier installs it → BLOCK-ALL (no recipe allowed).
 //
@@ -67,8 +68,9 @@ func TestBundle_MCPAllowlist_NullVsEmptyDecode(t *testing.T) {
 		})
 	}
 
-	// The applier SKIPS a nil section rather than clearing: a prior
-	// restriction survives a bundle whose mcp_allowlist is null/absent.
+	// Replace semantics: a null/absent section REMOVES a prior fleet
+	// restriction (before the push-down it was skipped, so a restriction
+	// lifted in Fleet stayed enforced until restart).
 	recipes.ApplyFleetAllowlist([]string{"slack"})
 	var b fleet.Bundle
 	if err := json.Unmarshal([]byte(`{"bundle_id":2,"mcp_allowlist":null}`), &b); err != nil {
@@ -77,8 +79,8 @@ func TestBundle_MCPAllowlist_NullVsEmptyDecode(t *testing.T) {
 	if errs := applier.ApplyBundle(context.Background(), &b); len(errs) != 0 {
 		t.Fatalf("apply: %v", errs)
 	}
-	if recipes.IsAllowed("github") || !recipes.IsAllowed("slack") {
-		t.Error("a null mcp_allowlist must skip the section (prior [slack] restriction kept), not overwrite it")
+	if !recipes.IsAllowed("github") || !recipes.IsAllowed("slack") {
+		t.Error("a null mcp_allowlist must remove the prior [slack] fleet restriction")
 	}
 
 	// The distinction is covered by the signature: null and [] produce

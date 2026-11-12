@@ -126,11 +126,49 @@ const (
 	DecisionDeny PromptDecision = "deny"
 )
 
+// GrantScope qualifies a DecisionAllowAlways: how wide the persisted
+// grant should be. It is advisory to the gate site that owns the
+// resource family — today only the filesystem gate (core/tools/fs)
+// reads it; every other family treats any scope as the exact resource.
+//
+// Before this type existed the filesystem modal's "This directory and
+// below" radio was never transmitted: every Allow-always persisted an
+// exact-path permit regardless of the radio, and the next write in the
+// same directory prompted again (fleet e2e 2026-11-07, E2E-1).
+type GrantScope string
+
+const (
+	// ScopeExact persists a grant for the exact resource. The default
+	// when no scope is sent.
+	ScopeExact GrantScope = "exact"
+	// ScopeDirectory persists a grant for the resource's parent
+	// directory and everything below it, for the prompted op only.
+	ScopeDirectory GrantScope = "directory"
+	// ScopeDirectoryReadWrite is ScopeDirectory plus a read grant for
+	// the same directory when the prompted op was a write. Reading back
+	// what one may overwrite is the common next step; a read prompt
+	// never widens to writes through this scope.
+	ScopeDirectoryReadWrite GrantScope = "directory_rw"
+)
+
+// validScope reports whether s is one of the closed set (or empty).
+func validScope(s GrantScope) bool {
+	switch s {
+	case "", ScopeExact, ScopeDirectory, ScopeDirectoryReadWrite:
+		return true
+	}
+	return false
+}
+
 // Resolution is the resolved-decision payload. Returned by
 // RequestInteractive and accepted by Registry.Resolve.
 type Resolution struct {
 	// Decision is the user's pick.
 	Decision PromptDecision `json:"decision"`
+
+	// Scope qualifies DecisionAllowAlways (see GrantScope). Empty for
+	// every other decision and when the surface sent none.
+	Scope GrantScope `json:"scope,omitempty"`
 
 	// Reason is a redaction-safe diagnostic string. Set by the registry
 	// on timeout / overflow / cancel; user-driven resolutions leave it
@@ -181,9 +219,21 @@ type BashPromptSurface struct {
 
 // FSPromptSurface — fs:permission-pending payload.
 type FSPromptSurface struct {
-	Op            string `json:"op"` // read | write | delete | move
+	Op            string `json:"op"` // read | write | delete | move | recipe_dir_add
 	CanonicalPath string `json:"canonical_path"`
 	Dangerous     bool   `json:"dangerous"` // FR-019
+	// ParentMissing is true when the target's parent directory does not
+	// exist yet, i.e. a write here CREATES the directory. The modal uses
+	// it to default the Allow-always scope to "this directory and
+	// below": the first write into a new directory is almost never the
+	// last one (E2E-1).
+	ParentMissing bool `json:"parent_missing,omitempty"`
+	// Privileged, when non-empty, is a one-line explanation of why this
+	// path is sensitive beyond the dangerous-tier table: it is (or
+	// contains) the harness's own state directory — session databases,
+	// credential metadata, the Cedar policy directory (E2E-3). The modal
+	// renders it as a banner; the gate still prompts.
+	Privileged string `json:"privileged,omitempty"`
 }
 
 // CredPromptSurface — cred:permission-pending payload.
@@ -497,7 +547,24 @@ const (
 	// surface can render "denied — too many pending approvals" rather
 	// than an unexplained tool failure.
 	SourceOverflow ResolutionSource = "overflow"
+	// SourceCovered is the registry's own allow for a request that was
+	// still queued when the person granted an Allow-always whose scope
+	// covers it (fleet e2e 2026-11-07, E2E-1: three parallel writes into
+	// one new directory produced three prompts even after the first was
+	// answered "this directory and below"). It is the ONE outbound
+	// source that carries an allow, and only ever DecisionAllowOnce: the
+	// covering grant is what persists; the covered request rides it.
+	// Which requests a grant covers is decided by the family's
+	// GrantCoverage (SetGrantCoverage), never by the registry.
+	SourceCovered ResolutionSource = "covered"
 )
+
+// GrantCoverage answers, for an Allow-always decision on granted with
+// scope, which OTHER pending requests of the same family the resulting
+// grant covers. It returns nil when the grant covers nothing beyond
+// itself (exact scope, a grant the gate will refuse to persist, ...).
+// The returned predicate is called under no registry lock.
+type GrantCoverage func(granted PendingRequest, scope GrantScope) func(PendingRequest) bool
 
 // ResolvedEvent is delivered to every registered ResolutionObserver
 // exactly once per approval id, in every interleaving. See
@@ -509,7 +576,9 @@ type ResolvedEvent struct {
 	Request PendingRequest
 	// Decision is the winning decision. Always DecisionDeny for the
 	// timeout / cancelled / overflow sources — absence of consent is
-	// denial, and there is no auto-allow reachable through this path.
+	// denial. The one registry-synthesised allow is SourceCovered, which
+	// is always DecisionAllowOnce and only follows an explicit
+	// Allow-always on a request whose grant covers this one.
 	Decision PromptDecision
 	// Source is the class of surface that produced the decision.
 	Source ResolutionSource
@@ -594,6 +663,79 @@ type Registry struct {
 
 	// timeout is configurable for tests; defaults to PromptTimeout.
 	timeout time.Duration
+
+	// coverage holds the per-family GrantCoverage (SetGrantCoverage).
+	// Guarded by hooksMu.
+	coverage map[Family]GrantCoverage
+}
+
+// SetGrantCoverage installs the GrantCoverage for family f (nil
+// removes it). The filesystem gate (core/tools/fs.Gate) installs one so
+// a directory grant releases every queued request it covers in the
+// same Resolve call that granted it — synchronously, so by the time the
+// Resolve RPC returns the covered rows are already gone from
+// ListPending and the modal's reconcile drops them.
+func (r *Registry) SetGrantCoverage(f Family, c GrantCoverage) {
+	if r == nil {
+		return
+	}
+	r.hooksMu.Lock()
+	defer r.hooksMu.Unlock()
+	if r.coverage == nil {
+		r.coverage = map[Family]GrantCoverage{}
+	}
+	if c == nil {
+		delete(r.coverage, f)
+		return
+	}
+	r.coverage[f] = c
+}
+
+// releaseCovered resolves, as SourceCovered allow-once, every pending
+// request of granted's family that the family's GrantCoverage says the
+// just-granted Allow-always covers. Returns how many it released.
+func (r *Registry) releaseCovered(granted PendingRequest, scope GrantScope) int {
+	r.hooksMu.RLock()
+	cov := r.coverage[granted.Family]
+	r.hooksMu.RUnlock()
+	if cov == nil {
+		return 0
+	}
+	match := cov(granted, scope)
+	if match == nil {
+		return 0
+	}
+	r.mu.RLock()
+	candidates := make([]*pendingEntry, 0, len(r.pending))
+	for _, e := range r.pending {
+		if e.request.Family == granted.Family {
+			candidates = append(candidates, e)
+		}
+	}
+	r.mu.RUnlock()
+
+	released := 0
+	for _, e := range candidates {
+		if !match(e.request) {
+			continue
+		}
+		r.mu.Lock()
+		if _, still := r.pending[e.request.RequestID]; !still {
+			r.mu.Unlock()
+			continue
+		}
+		delete(r.pending, e.request.RequestID)
+		if cnt := r.perTopicCount[e.request.Family]; cnt > 0 {
+			r.perTopicCount[e.request.Family] = cnt - 1
+		}
+		r.mu.Unlock()
+		r.fire(e, Resolution{
+			Decision: DecisionAllowOnce,
+			Reason:   "covered by allow-always grant " + granted.RequestID,
+		}, SourceCovered)
+		released++
+	}
+	return released
 }
 
 // PromptPosture controls how the registry handles interactive prompts
@@ -1130,11 +1272,26 @@ func (r *Registry) Resolve(requestID string, decision PromptDecision) error {
 // propagating it — a duplicate decision on an at-least-once event
 // stream is expected traffic, not a fault.
 func (r *Registry) ResolveFrom(requestID string, decision PromptDecision, source ResolutionSource) error {
+	return r.ResolveScoped(requestID, decision, source, "")
+}
+
+// ResolveScoped is ResolveFrom with a GrantScope qualifying an
+// allow_always decision. The scope is validated against the closed set
+// and dropped (never widened) for any decision other than
+// DecisionAllowAlways; it travels on the Resolution to the gate site,
+// which decides what a scope means for its family.
+func (r *Registry) ResolveScoped(requestID string, decision PromptDecision, source ResolutionSource, scope GrantScope) error {
 	if r == nil {
 		return errors.New("cedar/prompt: registry nil")
 	}
 	if decision != DecisionAllowOnce && decision != DecisionAllowAlways && decision != DecisionDeny {
 		return fmt.Errorf("cedar/prompt: invalid decision %q", decision)
+	}
+	if !validScope(scope) {
+		return fmt.Errorf("cedar/prompt: invalid grant scope %q", scope)
+	}
+	if decision != DecisionAllowAlways {
+		scope = ""
 	}
 	switch source {
 	case SourceHost, SourceGuest, SourceRemote:
@@ -1160,8 +1317,11 @@ func (r *Registry) ResolveFrom(requestID string, decision PromptDecision, source
 	}
 	r.mu.Unlock()
 
-	resolution := Resolution{Decision: decision}
+	resolution := Resolution{Decision: decision, Scope: scope}
 	r.fire(entry, resolution, source)
+	if decision == DecisionAllowAlways {
+		r.releaseCovered(entry.request, scope)
+	}
 	return nil
 }
 

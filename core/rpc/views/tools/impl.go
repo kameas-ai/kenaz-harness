@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	corefs "github.com/kameas-ai/kenaz-harness/core/tools/fs"
 )
 
 // AuditEmitter is the narrow seam the tools view calls when emitting
@@ -672,6 +674,59 @@ func (a *API) UninstallRecipe(ctx context.Context, id string) error {
 	return nil
 }
 
+// AllowlistStopResult is one enabled recipe the active MCP allow-list no
+// longer permits. Stopped is true when a running server was shut down by
+// this call; Err is non-nil when the shutdown failed.
+type AllowlistStopResult struct {
+	RecipeID string
+	Stopped  bool
+	Err      error
+}
+
+// StopDisallowedRecipes enforces the active allow-list on servers that are
+// ALREADY running (fleet-policy push-down): IsAllowed is otherwise only
+// consulted at install / boot-load time, so a narrowed fleet allow-list
+// would leave a now-forbidden server serving tools until restart.
+//
+// Every enabled recipe the allow-list refuses is closed through the same
+// Pool.CloseOne lifecycle UninstallRecipe uses. The enabled-list entry is
+// KEPT (this is a policy block, not an uninstall): the boot path skips it
+// while blocked, and a later widening + restart brings it back. Returns one
+// result per blocked enabled recipe, sorted by id.
+func (a *API) StopDisallowedRecipes(ctx context.Context) []AllowlistStopResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cfg.Enabled == nil {
+		return nil
+	}
+	var out []AllowlistStopResult
+	for _, entry := range a.cfg.Enabled.List() {
+		if recipes.IsAllowed(entry.ID) {
+			continue
+		}
+		res := AllowlistStopResult{RecipeID: entry.ID}
+		if a.cfg.Pool != nil {
+			err := a.cfg.Pool.CloseOne(ctx, entry.ID)
+			switch {
+			case err == nil:
+				res.Stopped = true
+			case errors.Is(err, stdio.ErrServerNotFound):
+				// Not running — nothing to stop.
+			default:
+				res.Err = err
+			}
+		}
+		if res.Stopped {
+			a.emit(ctx, "mcp.recipe.stopped_by_allowlist", map[string]any{
+				"recipe_id": entry.ID,
+			})
+		}
+		out = append(out, res)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].RecipeID < out[j].RecipeID })
+	return out
+}
+
 // ForgetRecipeKey removes one keychain entry. The recipe stays
 // enabled (or not); callers that want to fully forget should chain
 // this with Uninstall.
@@ -811,6 +866,23 @@ func (a *API) RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, r
 		canonical = path // best-effort fallback; validation already passed
 	}
 
+	// E2E-3: the harness's own state directory is never handed to the
+	// filesystem MCP server — it holds the session databases, credential
+	// metadata and the Cedar policy directory, so a grant there would let
+	// the server rewrite the harness's permissions. A directory that
+	// CONTAINS the state (on a workbench, HOME=/var/lib/kenaz-harness is
+	// exactly that) still prompts, but the prompt says so.
+	inside, contains, stateRoot := corefs.StateRelation(canonical, corefs.HarnessStateDirs(a.cfg.DataDir), a.cfg.WorkspaceDir)
+	if inside {
+		return false, canonical, fmt.Errorf("%w: %q is inside the harness state directory %q", ErrPrivilegedDir, canonical, stateRoot)
+	}
+	var privileged string
+	if contains {
+		privileged = "This directory contains the harness's own state (" + stateRoot + "): session " +
+			"databases, credential metadata and permission policies. Allowing it lets the " +
+			"filesystem server read and change them."
+	}
+
 	if a.cfg.PromptRegistry == nil {
 		return false, canonical, errors.New("tools: prompt registry not configured")
 	}
@@ -821,6 +893,7 @@ func (a *API) RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, r
 			Op:            "recipe_dir_add",
 			CanonicalPath: canonical,
 			Dangerous:     false,
+			Privileged:    privileged,
 		},
 		Reason: reason,
 	}
@@ -1037,6 +1110,11 @@ func (a *API) restartRecipe(ctx context.Context, recipe recipes.Recipe, updatedC
 	}
 	return nil
 }
+
+// ErrPrivilegedDir is returned by RequestAdditionalAllowedDir for a path
+// inside the harness's own state directory (E2E-3). It is refused before
+// any prompt, like a deny-list path.
+var ErrPrivilegedDir = errors.New("tools: path is harness state and cannot be granted")
 
 // writeAllowAlwaysSnippet writes a Cedar policy file that permanently
 // permits recipe_dir_add for the canonical path. Best-effort: failure is

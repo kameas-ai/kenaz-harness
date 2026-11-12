@@ -969,6 +969,24 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "Settings_FleetSession":
 		return s.api.Settings().FleetSession(ctx)
 
+	// Settings_FleetConfigPullStatus / Settings_FleetHealth — read-only,
+	// network-free snapshots of the config poller (fleet-policy push-down):
+	// which bundle is applied, when, the last error, and whether fleet
+	// Cedar rules / an MCP allow-list restriction are in force. Without them
+	// the in-VM FleetHealthChip and CedarEditor could not show the applied
+	// fleet policy at all. Rule ids only — never rule text or tokens.
+	case "Settings_FleetConfigPullStatus":
+		return s.api.Settings().FleetConfigPullStatus(ctx)
+	case "Settings_FleetHealth":
+		return s.api.Settings().FleetHealth(ctx)
+
+	// Settings_ModelSlots: the effective model slots (default sub-agent +
+	// advisor / compaction / branch advisor / risk rater) and which layer
+	// set each one (derived / host / org / settings). Read-only; the
+	// served Settings page renders it (fleet-workbench-next-plan B11).
+	case "Settings_ModelSlots":
+		return s.api.ModelSlots(ctx)
+
 	case "Fleet_TelemetryStatus":
 		st, err := s.api.Settings().FleetTelemetryStatus(ctx)
 		if err != nil {

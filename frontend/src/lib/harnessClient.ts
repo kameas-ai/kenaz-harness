@@ -2690,6 +2690,12 @@ export interface SettingsClient {
    * which calls it once and then follows `fleet:session-changed`.
    */
   fleetSession(): Promise<FleetSessionView>;
+  /**
+   * Effective harness model slots and where each came from
+   * (Settings_ModelSlots; fleet-workbench-next-plan B11). Served-only and
+   * read-only: undefined on the desktop client, which has per-slot pickers.
+   */
+  modelSlots?(): Promise<ModelSlotsView>;
 
   // ── fleet-capability-surface-01NDFSEX09 WP11 ────────────────────────────
   /** Return the in-memory fleet capability snapshot. */
@@ -3958,6 +3964,23 @@ export function fakeSidecarStatus(): Promise<SidecarStatusView> {
 }
 
 // ── fleet telemetry client (fleet-otel-archival-01NDFSEX11 WP06) ─────────
+
+/** One harness model slot (Go: harnessmodels.Effective). */
+export interface ModelSlot {
+  slot: 'subagent_default' | 'advisor' | 'compaction' | 'branch_advisor' | 'risk_rater';
+  providerId?: string;
+  modelId?: string;
+  /** Which layer decided: org > settings > host > derived; none = unresolved. */
+  source: 'org' | 'settings' | 'host' | 'derived' | 'profile' | 'none';
+}
+
+/** Settings_ModelSlots result (Go: settings.ModelSlotsView). */
+export interface ModelSlotsView {
+  providerId?: string;
+  models?: string[];
+  slots: ModelSlot[];
+  orgErrors?: string[];
+}
 
 /** Payload-free export health (Go: settings.FleetTelemetryStatusView). */
 export interface FleetTelemetryStatus {
@@ -5794,12 +5817,17 @@ export function createServedHarnessClient(opts?: {
         transport.call<PermissionRequest[]>('Permissions_ListPending'),
     },
 
-    // Settings_FleetSession — the only settings method core/serve answers
-    // (fleet-session-truth-01DOGF0A FR-1). Everything else under settings
-    // stays an honest ServedUnsupportedError.
+    // Settings_FleetSession (fleet-session-truth-01DOGF0A FR-1) plus the two
+    // read-only config-poller snapshots (fleet-policy push-down), so the
+    // in-VM FleetHealthChip shows the applied fleet policy. Everything else
+    // under settings stays an honest ServedUnsupportedError.
     settings: {
       ...base.settings,
       fleetSession: () => transport.call<FleetSessionView>('Settings_FleetSession'),
+      fleetConfigPullStatus: () =>
+        transport.call<FleetConfigPullStatusView>('Settings_FleetConfigPullStatus'),
+      fleetHealth: () => transport.call<FleetHealthView>('Settings_FleetHealth'),
+      modelSlots: () => transport.call<ModelSlotsView>('Settings_ModelSlots'),
     },
 
     // Fleet telemetry consent + status: the workbench is where everyday work

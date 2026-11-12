@@ -109,12 +109,32 @@ const stateDescription = computed(() => {
   return `Fleet: ${label.value}`;
 });
 
+// What is in force: bundle id, when it was applied, and the fleet rules
+// (fleet-policy push-down). Empty when the backend predates those fields.
+const appliedLine = computed(() => {
+  const h = health.value;
+  if (!h || !h.lastAppliedId) return '';
+  const when = h.lastAppliedAt ? ` at ${h.lastAppliedAt}` : '';
+  const rules = h.fleetCedarRules?.length ?? 0;
+  const parts: string[] = [];
+  if (rules > 0) parts.push(`${rules} fleet Cedar rule${rules === 1 ? '' : 's'}`);
+  if (h.mcpAllowlistActive) parts.push('fleet MCP allow-list');
+  const active =
+    h.fleetRulesActive === undefined
+      ? ''
+      : parts.length > 0
+        ? ` In force: ${parts.join(', ')}.`
+        : ' No fleet rules in force.';
+  return ` Bundle #${h.lastAppliedId} applied${when}.${active}`;
+});
+
 // Tooltip text.
 const tooltip = computed(() => {
   if (orgPaused.value) return `${ORG_PAUSED_TITLE}. ${orgPausedCategoryLine(pausedCategory.value)}`;
+  const base = stateDescription.value + appliedLine.value;
   const err = health.value?.configLastError;
-  if (err) return `${stateDescription.value} Last error: ${err}`;
-  return stateDescription.value;
+  if (err) return `${base} Last error: ${err}`;
+  return base;
 });
 </script>
 

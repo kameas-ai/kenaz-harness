@@ -9,6 +9,7 @@ import (
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
@@ -254,7 +255,7 @@ func (r *cedarSessionKindResolver) Resolve(ctx context.Context, sessionID, serve
 	}
 
 	kind := r.kindFor(ctx, sessionID)
-	toolUID := cedar.PermissionToolUID(server + "__" + tool)
+	toolUID := useToolResource(server, tool)
 	decision := r.engine.Evaluate(
 		ctx,
 		cedar.UserUID(),
@@ -268,6 +269,14 @@ func (r *cedarSessionKindResolver) Resolve(ctx context.Context, sessionID, serve
 	if decision.Outcome == cedar.Deny {
 		res.Policy = toolloop.PolicyDeny
 		res.Reason = decision.Reason
+		// E2E-11: a denial by the org's Fleet policy reads as such to the
+		// user; the Cedar internals (matched policy id) go to the log only.
+		if msg, ok := cedar.UserFacingDenial(decision); ok {
+			res.Reason = msg
+			logging.L().Info("rpc.tool_denied.fleet_policy",
+				"server", server, "tool", tool,
+				"matched_policy", decision.MatchedPolicy, "cedar_reason", decision.Reason)
+		}
 		return res, nil
 	}
 	// Allow and NotApplicable both report PolicyAutoAllow with an EMPTY
@@ -276,4 +285,13 @@ func (r *cedarSessionKindResolver) Resolve(ctx context.Context, sessionID, serve
 	// so would make sessionResolverShim treat this as a match and this
 	// arm would then override the static resolver for every tool.
 	return res, nil
+}
+
+// useToolResource is the ONE constructor of the Tool resource the
+// `use_tool` gate evaluates for a dispatched call (server "kenaz" + tool
+// "bash" -> Tool::"kenaz__bash"). The served-mode bash availability probe
+// (policyAllowsBash) uses it too, so the rule an admin writes against the
+// chat gate is the same rule that decides whether bash is offered at all.
+func useToolResource(server, tool string) cedarlib.EntityUID {
+	return cedar.PermissionToolUID(server + "__" + tool)
 }

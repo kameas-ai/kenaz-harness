@@ -1,0 +1,287 @@
+package fs
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+)
+
+// grant is one persistent permit the gate writes for an Allow-always
+// decision: op on exactly path, or (dir) on path and everything below.
+type grant struct {
+	op   Op
+	path string
+	dir  bool
+}
+
+// covers reports whether g permits op on canonical.
+func (g grant) covers(op Op, canonical string) bool {
+	if g.op != op {
+		return false
+	}
+	if !g.dir {
+		return canonical == g.path
+	}
+	return canonical == g.path || isWithin(canonical, g.path)
+}
+
+// isWithin reports whether p sits strictly below dir.
+func isWithin(p, dir string) bool {
+	prefix := strings.TrimSuffix(dir, string(filepath.Separator)) + string(filepath.Separator)
+	return strings.HasPrefix(p, prefix)
+}
+
+// isWithinOrEqual reports whether p is dir or sits below it.
+func isWithinOrEqual(p, dir string) bool {
+	return p == dir || isWithin(p, dir)
+}
+
+// privilege is the gate's E2E-3 classification of one canonical path.
+type privilege struct {
+	// inside is true when the path IS harness state: inside a StateDir
+	// and not inside the agent workspace.
+	inside bool
+	// dirCoversState is true when the path's parent directory contains a
+	// StateDir, so a "this directory and below" grant would cover state.
+	dirCoversState bool
+	// root is the state directory involved, for the copy.
+	root string
+	// copy is the banner text for the prompt; empty when neither holds.
+	copy string
+}
+
+// privilege classifies canonical against GateOptions.StateDirs.
+func (g *Gate) privilege(canonical string) privilege {
+	if len(g.opts.StateDirs) == 0 {
+		return privilege{}
+	}
+	if ws := g.workspace(); ws != "" && isWithinOrEqual(canonical, ws) {
+		return privilege{}
+	}
+	for _, root := range g.opts.StateDirs {
+		if isWithinOrEqual(canonical, root) {
+			return privilege{
+				inside: true,
+				root:   root,
+				copy: "This is the harness's own state directory (" + root + "): session " +
+					"databases, credential metadata and permission policies. It can be " +
+					"allowed once, but will not be remembered.",
+			}
+		}
+	}
+	parent := filepath.Dir(canonical)
+	for _, root := range g.opts.StateDirs {
+		if isWithinOrEqual(root, parent) {
+			return privilege{
+				dirCoversState: true,
+				root:           root,
+				copy: "“This directory and below” here would include the harness's own " +
+					"state directory (" + root + "), so Allow always is remembered for this " +
+					"exact path only.",
+			}
+		}
+	}
+	return privilege{}
+}
+
+// StateRelation classifies canonical against the harness state
+// directories: inside is true when canonical is (or is below) one of
+// stateDirs and not inside workspace; contains is true when canonical is
+// a strict ancestor of one. root names the state directory involved.
+// Shared by the fs gate and the recipe_dir_add path
+// (core/rpc/views/tools) so both draw the same line (E2E-3).
+func StateRelation(canonical string, stateDirs []string, workspace string) (inside, contains bool, root string) {
+	if workspace != "" && isWithinOrEqual(canonical, workspace) {
+		return false, false, ""
+	}
+	for _, r := range stateDirs {
+		if isWithinOrEqual(canonical, r) {
+			return true, false, r
+		}
+	}
+	for _, r := range stateDirs {
+		if isWithin(r, canonical) {
+			return false, true, r
+		}
+	}
+	return false, false, ""
+}
+
+func (g *Gate) workspace() string {
+	if g.opts.WorkspaceDir == nil {
+		return ""
+	}
+	ws := g.opts.WorkspaceDir()
+	if ws == "" {
+		return ""
+	}
+	c, err := Canonicalize(ws)
+	if err != nil {
+		return ""
+	}
+	return c
+}
+
+// parentMissing reports whether canonical's parent directory does not
+// exist yet.
+func parentMissing(canonical string) bool {
+	_, err := os.Stat(filepath.Dir(canonical))
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// grantsFor returns the persistent grants an Allow-always response on
+// (op, canonical) produces, or none plus a reason when nothing may be
+// persisted. note explains any narrowing so the decision reason (and
+// the audit row) records it.
+//
+// This is the one place the meaning of a scope is decided: Evaluate
+// persists exactly these grants, and GrantCoverage releases queued
+// requests by exactly these grants, so a queued request is released
+// only if the grant that was written would have permitted it anyway.
+func (g *Gate) grantsFor(op Op, canonical string, resp PromptResponse) (grants []grant, note string) {
+	priv := g.privilege(canonical)
+	if priv.inside {
+		return nil, "path is inside the harness state directory " + priv.root + " and cannot be remembered"
+	}
+	switch resp {
+	case PromptAllowDirectory, PromptAllowDirectoryReadWrite:
+		if priv.dirCoversState {
+			note = "directory scope narrowed to the exact path: the directory contains the harness state directory " + priv.root
+			break
+		}
+		dir := filepath.Dir(canonical)
+		if !cedar.PersistableFamilyID(dir) {
+			return nil, "directory cannot be persisted"
+		}
+		grants = append(grants, grant{op: op, path: dir, dir: true})
+		if resp == PromptAllowDirectoryReadWrite && op == OpWrite {
+			grants = append(grants, grant{op: OpRead, path: dir, dir: true})
+		}
+		return grants, ""
+	case PromptAllowExact:
+	default:
+		return nil, "unknown grant scope"
+	}
+	if !cedar.PersistableFamilyID(canonical) {
+		return nil, "path cannot be persisted"
+	}
+	return []grant{{op: op, path: canonical}}, note
+}
+
+// persist writes one snippet per grant, then reloads the engine so the
+// grants bind in this process. Before the reload existed, an
+// Allow-always (exact OR directory) wrote its file and the very next
+// call prompted again: nothing re-read the policy directory until the
+// next restart or an unrelated policy edit (E2E-1).
+func (g *Gate) persist(ctx context.Context, grants []grant) error {
+	if g.opts.PolicyDir == "" {
+		return errors.New("no policy directory configured")
+	}
+	for _, gr := range grants {
+		var name, body string
+		if gr.dir {
+			name, body = snippetName(gr.op, gr.path, "dir"), buildDirectorySnippet(gr.op, gr.path)
+		} else {
+			name, body = snippetName(gr.op, gr.path, "path"), buildExactSnippet(gr.op, gr.path)
+		}
+		if err := g.writePolicySnippet(name, body); err != nil {
+			return err
+		}
+	}
+	if r, ok := g.opts.Engine.(reloader); ok {
+		if err := r.Reload(context.WithoutCancel(ctx)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func describeGrants(grants []grant) string {
+	parts := make([]string, 0, len(grants))
+	for _, gr := range grants {
+		if gr.dir {
+			parts = append(parts, string(gr.op)+" "+gr.path+" and below")
+		} else {
+			parts = append(parts, string(gr.op)+" exact path")
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// responseForScope maps the registry's GrantScope onto the gate's
+// response vocabulary. Unknown or empty scopes are the exact path: an
+// unrecognised scope never widens a grant.
+func responseForScope(scope cedar.GrantScope) PromptResponse {
+	switch scope {
+	case cedar.ScopeDirectory:
+		return PromptAllowDirectory
+	case cedar.ScopeDirectoryReadWrite:
+		return PromptAllowDirectoryReadWrite
+	default:
+		return PromptAllowExact
+	}
+}
+
+// GrantCoverage is the gate's cedar.GrantCoverage for the filesystem
+// family. Install it with Registry.SetGrantCoverage(cedar.FamilyFilesystem,
+// gate.GrantCoverage) so a queued fs prompt is released the moment the
+// person answers an earlier one with a grant that covers it.
+//
+// Coverage is deliberately no wider than what Evaluate persists for the
+// same decision (both go through grantsFor), and never releases a
+// queued request that is itself dangerous-tier or privileged: those
+// were never going to be satisfied by a remembered grant, so the person
+// still sees them.
+func (g *Gate) GrantCoverage(granted cedar.PendingRequest, scope cedar.GrantScope) func(cedar.PendingRequest) bool {
+	fsSurf := granted.Surface.FS
+	if fsSurf == nil {
+		return nil
+	}
+	op, ok := gateOp(fsSurf.Op)
+	if !ok {
+		return nil
+	}
+	if fsSurf.Dangerous && !g.opts.AllowDangerousPersist {
+		return nil
+	}
+	grants, _ := g.grantsFor(op, fsSurf.CanonicalPath, responseForScope(scope))
+	if len(grants) == 0 {
+		return nil
+	}
+	return func(req cedar.PendingRequest) bool {
+		s := req.Surface.FS
+		if s == nil || s.Dangerous || req.RequestID == granted.RequestID {
+			return false
+		}
+		qop, ok := gateOp(s.Op)
+		if !ok {
+			return false
+		}
+		if g.privilege(s.CanonicalPath).inside {
+			return false
+		}
+		for _, gr := range grants {
+			if gr.covers(qop, s.CanonicalPath) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// gateOp maps a prompt surface op string onto the gate's Op. Only read
+// and write prompts come from this gate; recipe_dir_add and the rest
+// are other gates' prompts and are never covered.
+func gateOp(s string) (Op, bool) {
+	switch Op(s) {
+	case OpRead:
+		return OpRead, true
+	case OpWrite:
+		return OpWrite, true
+	}
+	return "", false
+}

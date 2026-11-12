@@ -61,7 +61,13 @@ to the chassis; they reach the LLM through:
 
 2. **`core/toolloop.EnabledFilter`** — wraps the registry with the
    `Settings.WebSearchEnabled` / `Settings.BashEnabled` predicate so a
-   user-side toggle takes effect on the next chat turn.
+   user-side toggle takes effect on the next chat turn. **Exception —
+   served/workbench mode (`rpc.WithFleetGatedBash`, both served entry
+   points):** `kenaz__bash` ignores `Settings.BashEnabled` and is on by default;
+   a Cedar forbid on `use_tool` / `Tool::"kenaz__bash"` (the org's fleet
+   rule set in practice) turns it off (`cedar.Engine.Probe`, decision
+   D-h). See `docs/served-mode-boundary.md` § "Bash in
+   workbenches".
 
 3. **`core/toolloop.BuiltinPool`** — wraps the MCP pool. Built-in
    tools surface via `Tools()` under the synthetic server prefix

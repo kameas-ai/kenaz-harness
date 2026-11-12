@@ -2006,6 +2006,18 @@ type FleetConfigPullStatusView struct {
 	// in this binary (FR-002). When false the fleet config distribution is
 	// silently disabled (safe fail-closed), and the UI shows a degraded state.
 	ConfigDistributionEnabled bool `json:"configDistributionEnabled"`
+	// FleetRulesActive is true when at least one fleet-distributed Cedar
+	// rule or a fleet MCP allow-list restriction is currently enforced.
+	FleetRulesActive bool `json:"fleetRulesActive"`
+	// FleetCedarRules lists the team_rule_ids of the fleet Cedar rules in
+	// force (the last applied cedar_delta snapshot).
+	FleetCedarRules []string `json:"fleetCedarRules"`
+	// MCPAllowlistActive is true when a fleet MCP allow-list restriction is
+	// in force (null in the bundle clears it).
+	MCPAllowlistActive bool `json:"mcpAllowlistActive"`
+	// MCPRecipesBlocked lists enabled MCP recipes the allow-list currently
+	// blocks; their running servers were stopped on the last apply.
+	MCPRecipesBlocked []string `json:"mcpRecipesBlocked"`
 }
 
 // FleetHealthView is the wire-safe projection of overall fleet health
@@ -2022,6 +2034,22 @@ type FleetHealthView struct {
 	ConfigLastError string `json:"configLastError"`
 	// SignedIn is true when the client has a valid (non-expired) session.
 	SignedIn bool `json:"signedIn"`
+	// LastAppliedID / LastAppliedAt mirror FleetConfigPullStatusView: the
+	// bundle in force and when it was (re-)applied (RFC3339, "" if never).
+	LastAppliedID int64  `json:"lastAppliedId"`
+	LastAppliedAt string `json:"lastAppliedAt"`
+	// FleetRulesActive is true when at least one fleet-distributed Cedar
+	// rule or a fleet MCP allow-list restriction is currently enforced.
+	FleetRulesActive bool `json:"fleetRulesActive"`
+	// FleetCedarRules lists the team_rule_ids of the fleet Cedar rules in
+	// force (the last applied cedar_delta snapshot).
+	FleetCedarRules []string `json:"fleetCedarRules"`
+	// MCPAllowlistActive is true when a fleet MCP allow-list restriction is
+	// in force (null in the bundle clears it).
+	MCPAllowlistActive bool `json:"mcpAllowlistActive"`
+	// MCPRecipesBlocked lists enabled MCP recipes the allow-list currently
+	// blocks; their running servers were stopped on the last apply.
+	MCPRecipesBlocked []string `json:"mcpRecipesBlocked"`
 }
 
 // AuditSettings holds the operator-configurable audit log retention policy.

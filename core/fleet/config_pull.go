@@ -9,7 +9,19 @@
 //   - 200 → verify signature → apply each section → ACK → persist
 //   - Signature failure → hard-reject; previous applied bundle is kept
 //   - Backoff on error: 5 / 15 / 60 min ceiling
-//   - Disk cache: <DataDir>/fleet/bundle.json + bundle_checksum.txt
+//   - Disk cache: <DataDir>/fleet/bundle.json (the last fully-applied
+//     bundle, raw signed body, 0600) + bundle_id.txt + bundle_checksum.txt.
+//     On Start the cached bundle is re-verified (signature + this build's
+//     pinned key set) and re-applied BEFORE the first poll, so a restart
+//     enforces the last fleet policy even when the server answers 304. A
+//     cached bundle that no longer verifies is discarded and the checksum
+//     cleared, so the next poll re-fetches.
+//   - Per-org state: bundle_org.txt records the org (token resource-owner
+//     claim) the state belongs to; an org change resets id, checksum, cache
+//     and the applied sections (config_pull_org.go).
+//   - Sign-in wake: a poll that finds no session parks; a token arriving
+//     (NotifyTokensAvailable — sign-in, served-mode token source) wakes it
+//     for an immediate round instead of waiting out the 5-minute tick.
 //
 // (fleet-config-pull-01NDFSEX10 WP02)
 package fleet
@@ -29,6 +41,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,6 +129,9 @@ type ConfigPoller struct {
 	// wake asks the loop for an immediate round with a reset backoff
 	// (buffered 1; the OnOrgUnpaused fan-out never blocks).
 	wake chan struct{}
+	// awaitingSignIn: the last poll found no session (ErrNotSignedIn); a
+	// NotifyTokensAvailable then wakes the loop.
+	awaitingSignIn bool
 
 	// buildVersion is this binary's version (SetBuildVersion). With
 	// reapplyID it implements review F1's re-apply rule: when the build
@@ -131,6 +147,12 @@ type ConfigPoller struct {
 	// catalog revocation sweep piggybacks this cadence — no timer of its
 	// own; skill-library-01SKLIB01 WP03). Never affects the poll's backoff.
 	afterPoll func(context.Context)
+
+	// orgID is the org the bundle state (lastAppliedID, checksum, cached
+	// bundle, applied sections) belongs to; "" until known. orgOf returns
+	// the current org (nil = currentTokenOrg). See config_pull_org.go.
+	orgID string
+	orgOf func() string
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -225,6 +247,7 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 	// Restore state from disk cache.
 	if id, cs, err := loadBundleState(p.dataDir); err == nil {
 		p.mu.Lock()
+		p.orgID = loadBundleOrg(p.dataDir)
 		p.lastAppliedID = id
 		p.checksum = cs
 		if id > 0 {
@@ -244,9 +267,12 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 	p.cancel = cancel
 	p.mu.Unlock()
 
+	registerTokenWaker(p)
+
 	go func() {
 		defer close(p.done)
 		defer cancel()
+		defer unregisterTokenWaker(p)
 		// Recover panics from the polling loop (FR-003). The goroutine logs
 		// the panic and exits cleanly rather than crashing the process.
 		defer func() {
@@ -258,6 +284,12 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 				)
 			}
 		}()
+
+		// A cached bundle from another org is not re-enforced: syncOrg
+		// resets the state first (lastAppliedID 0 → restore is a no-op).
+		p.syncOrg(innerCtx)
+		// Re-enforce the last applied bundle before the first fetch.
+		p.restoreCachedBundle(innerCtx)
 
 		// Immediate first poll.
 		if err := p.round(innerCtx); err != nil {
@@ -352,6 +384,10 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return ErrFleetDisabled
 	}
 
+	// Bundle state is per org: reset it when the signed-in org changed
+	// since the state was recorded (config_pull_org.go).
+	p.syncOrg(ctx)
+
 	// Build the URL with machine + checksum query params.
 	nodeID, _ := NodeID(p.dataDir)
 	p.mu.RLock()
@@ -359,13 +395,27 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	p.mu.RUnlock()
 
 	urlPath := fmt.Sprintf("/api/v1/configs?machine=%s&checksum=%s", url.QueryEscape(nodeID), url.QueryEscape(cs))
+	gen := tokenGeneration()
 
 	// We need to inspect the status code before letting the fleet http.Client
 	// discard non-2xx bodies, so we call Get directly.
 	resp, err := p.client.Get(ctx, urlPath)
+	if err == nil || !errors.Is(err, ErrNotSignedIn) {
+		p.mu.Lock()
+		p.awaitingSignIn = false
+		p.mu.Unlock()
+	}
 	if err != nil {
 		if errors.Is(err, ErrNotSignedIn) {
-			// Not signed in — skip silently; don't backoff.
+			// Not signed in — skip silently; don't backoff. Park for a
+			// NotifyTokensAvailable wake; if a token arrived while this
+			// request was failing, wake ourselves (no lost notification).
+			p.mu.Lock()
+			p.awaitingSignIn = true
+			p.mu.Unlock()
+			if tokenGeneration() != gen {
+				p.wakeNow()
+			}
 			return nil
 		}
 		if IsOrgPaused(err) {
@@ -402,7 +452,16 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		if p.lastAppliedID > 0 {
 			p.source = "fleet"
 		}
+		current := p.lastAppliedID
 		p.mu.Unlock()
+		if checkinRequested(resp.Header) {
+			// An admin pressed "Request check-in" on Fleet's Hosts page.
+			// A 304 carries nothing to apply, so re-ACK the bundle we are
+			// already running: that is what moves the node's last_report.
+			// With nothing applied there is no bundle to ACK; the GET
+			// itself was the check-in.
+			p.ackCurrentBundle(current)
+		}
 		return nil
 	}
 
@@ -488,6 +547,7 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		hadRefusals = true
 	}
 	buildVersion := p.buildVersion
+	bundleOrg := p.orgID
 	if len(applyErrs) == 0 {
 		p.lastAppliedID = b.BundleID
 		p.lastAppliedAt = time.Now()
@@ -508,13 +568,21 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	p.source = "fleet"
 	p.mu.Unlock()
 
-	// Persist state to disk only on full success.
+	// Persist state to disk only on full success. bundle.json first, so a
+	// crash between the writes leaves an id/checksum that never names a
+	// bundle newer than the cached one.
 	if len(applyErrs) == 0 {
+		if saveErr := saveBundleBody(p.dataDir, body); saveErr != nil {
+			log.Printf("fleet: save bundle body: %v", saveErr)
+		}
 		if saveErr := saveBundleState(p.dataDir, b.BundleID, newChecksum); saveErr != nil {
 			log.Printf("fleet: save bundle state: %v", saveErr)
 		}
 		if saveErr := saveBundleApplyMeta(p.dataDir, bundleApplyMeta{BuildVersion: buildVersion, HadRefusals: hadRefusals}); saveErr != nil {
 			log.Printf("fleet: save bundle apply meta: %v", saveErr)
+		}
+		if saveErr := saveBundleOrg(p.dataDir, bundleOrg); saveErr != nil {
+			log.Printf("fleet: save bundle org: %v", saveErr)
 		}
 	}
 
@@ -532,6 +600,37 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return applyErrs[0] // triggers backoff; all errors already in lastError
 	}
 	return nil
+}
+
+// CheckinRequestedHeader is set by Fleet on a GET /api/v1/configs response
+// (200 or 304) when an org admin asked this node to check in
+// (POST /orgs/{org}/nodes/{node}/checkin; plan WS-A A8). The value is "1".
+// On a 200 the normal apply → ACK path already answers it; on a 304 the
+// poller re-ACKs the bundle it is running (ackCurrentBundle).
+const CheckinRequestedHeader = "X-Fleet-Checkin-Requested"
+
+// checkinRequested reports whether h carries the check-in request flag.
+func checkinRequested(h http.Header) bool {
+	v := strings.TrimSpace(h.Get(CheckinRequestedHeader))
+	return v == "1" || strings.EqualFold(v, "true")
+}
+
+// ackCurrentBundle re-ACKs bundleID as applied with no errors — the bundle
+// is the one this device already applied cleanly (lastAppliedID only
+// advances on a clean apply). bundleID 0 (nothing applied) is a no-op.
+// Best-effort, like every ACK.
+func (p *ConfigPoller) ackCurrentBundle(bundleID int64) {
+	if bundleID <= 0 || p.client == nil || p.client.isNop {
+		return
+	}
+	ackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	machineID, _ := NodeID(p.dataDir)
+	if err := PostConfigACK(ackCtx, p.client, bundleID, nil, ConfigACKReport{MachineID: machineID}); err != nil {
+		log.Printf("fleet: check-in ack: %v", err)
+		return
+	}
+	logging.L().Info("fleet.config_poller.checkin_acked", "bundle_id", bundleID)
 }
 
 // setError records a TRANSIENT failure (fetch, non-200 status, body read).
@@ -560,6 +659,11 @@ func (p *ConfigPoller) ResumeAfterOrgUnpause() {
 		p.lastError = ""
 	}
 	p.mu.Unlock()
+	p.wakeNow()
+}
+
+// wakeNow asks the loop for an immediate round (non-blocking; coalesces).
+func (p *ConfigPoller) wakeNow() {
 	select {
 	case p.wake <- struct{}{}:
 	default:

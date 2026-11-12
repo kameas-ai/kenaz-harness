@@ -30,6 +30,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -521,38 +522,48 @@ func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	if args.MaxResults <= 0 {
 		args.MaxResults = 500
 	}
-	if args.BaseDir == "" {
-		var err error
-		args.BaseDir, err = os.Getwd()
-		if err != nil {
-			return errResult("glob: getwd: " + err.Error()), nil
-		}
+	root, rel, err := splitGlobRoot(args.Pattern, args.BaseDir)
+	if err != nil {
+		return errResult("glob: " + err.Error()), nil
 	}
 
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpRead, args.BaseDir)
+	// Gate the longest literal prefix of the pattern, not the base
+	// directory it happens to be evaluated from: glob(/home/*) asks to
+	// read /home, not / (E2E-4).
+	canonical, err := gateCheck(ctx, t.gate, corefs.OpRead, root)
 	if err != nil {
 		return errResult("glob: " + err.Error()), nil
 	}
 
 	var matches []string
 	truncated := false
+	// Without "**" a pattern of N segments can only match at depth N, so
+	// the walk need not descend further (glob(/home/*) must not walk the
+	// whole of /home to list its top level).
+	maxDepth := -1
+	if !strings.Contains(rel, "**") {
+		maxDepth = len(strings.Split(filepath.ToSlash(rel), "/"))
+	}
 
 	err = filepath.WalkDir(canonical, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil // skip unreadable
 		}
+		relPath, relErr := filepath.Rel(canonical, path)
+		if relErr != nil {
+			relPath = path
+		}
 		if d.IsDir() {
+			if maxDepth >= 0 && path != canonical && len(strings.Split(filepath.ToSlash(relPath), "/")) >= maxDepth {
+				return filepath.SkipDir
+			}
 			return nil // only match files
 		}
 		if len(matches) >= args.MaxResults {
 			truncated = true
 			return filepath.SkipAll
 		}
-		rel, relErr := filepath.Rel(canonical, path)
-		if relErr != nil {
-			rel = path
-		}
-		matched, matchErr := matchGlob(args.Pattern, rel)
+		matched, matchErr := matchGlob(rel, relPath)
 		if matchErr != nil {
 			return matchErr
 		}
@@ -567,6 +578,49 @@ func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 
 	sort.Strings(matches)
 	return okResult(globResult{Matches: matches, Truncated: truncated}), nil
+}
+
+// splitGlobRoot splits a glob into the directory to walk (the base
+// directory joined with the pattern's longest literal prefix) and the
+// remaining pattern relative to it. An absolute (or "~"-rooted)
+// pattern ignores baseDir; a relative one is rooted at baseDir, or at
+// the working directory when baseDir is empty. A pattern with no
+// wildcard at all names one file: root is its directory, rel its name.
+func splitGlobRoot(pattern, baseDir string) (root, rel string, err error) {
+	p := filepath.ToSlash(pattern)
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "/") {
+		baseDir = ""
+		if strings.HasPrefix(p, "~") {
+			baseDir, p = "~", strings.TrimPrefix(strings.TrimPrefix(p, "~"), "/")
+		} else {
+			baseDir, p = "/", strings.TrimPrefix(p, "/")
+		}
+	}
+	if baseDir == "" {
+		if baseDir, err = os.Getwd(); err != nil {
+			return "", "", fmt.Errorf("getwd: %w", err)
+		}
+	}
+	segs := strings.Split(p, "/")
+	i := 0
+	for i < len(segs) && !hasGlobMeta(segs[i]) {
+		i++
+	}
+	if i == len(segs) {
+		// No wildcard: the last segment is the file to match.
+		i = len(segs) - 1
+	}
+	root = filepath.Join(append([]string{baseDir}, segs[:i]...)...)
+	rel = strings.Join(segs[i:], "/")
+	if rel == "" {
+		return "", "", errors.New("pattern is empty")
+	}
+	return root, rel, nil
+}
+
+// hasGlobMeta reports whether a pattern segment contains a wildcard.
+func hasGlobMeta(seg string) bool {
+	return strings.ContainsAny(seg, "*?[\\")
 }
 
 // matchGlob matches a path against a glob pattern, supporting ** as a
@@ -855,10 +909,54 @@ func (t *WriteFileTool) Call(ctx context.Context, raw json.RawMessage) (json.Raw
 	}
 
 	if err := atomicWrite(canonical, []byte(args.Content), fs.FileMode(args.Mode)); err != nil {
+		return errResult("write_file: " + err.Error() + identityHint(err)), nil
+	}
+	// Read the file back through the same path the read tools use. A
+	// write is only reported as done when read_file / list_dir / glob
+	// will find it there (E2E-2): "OK" for a file the associate cannot
+	// then see is the failure mode, not a success.
+	if err := verifyWritten(canonical, int64(len(args.Content))); err != nil {
 		return errResult("write_file: " + err.Error()), nil
 	}
 
 	return okResult(writeFileResult{Written: int64(len(args.Content)), Path: canonical}), nil
+}
+
+// verifyWritten confirms canonical is now a regular file of size n that
+// this process can open for reading.
+func verifyWritten(canonical string, n int64) error {
+	f, err := os.Open(canonical)
+	if err != nil {
+		return fmt.Errorf("written file is not readable back: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("written file is not readable back: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() != n {
+		return fmt.Errorf("written file read back as %s with %d bytes, expected a %d-byte regular file", info.Mode().Type(), info.Size(), n)
+	}
+	return nil
+}
+
+// identityHint appends which account the harness writes as when err is
+// a permission failure, so "permission denied" on /home/<someone>
+// explains itself: on a workbench the served harness runs as its own
+// service user whose HOME is its state directory, not the associate's.
+func identityHint(err error) string {
+	if !errors.Is(err, fs.ErrPermission) {
+		return ""
+	}
+	who := "the harness process"
+	if u, uerr := user.Current(); uerr == nil && u.Username != "" {
+		who = "user " + u.Username
+	}
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return " (the harness writes as " + who + ")"
+	}
+	return " (the harness writes as " + who + ", HOME=" + home + ")"
 }
 
 // atomicWrite writes data to path using a tmp-file-then-rename pattern.

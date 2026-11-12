@@ -170,6 +170,158 @@ title-clear, bash `!command`, user slash-command execution, memory
 `untriaged` class in `scripts/ci/allowlists/i15-serve-dispatch-gap.txt`,
 not repeated here.
 
+## Bash in workbenches: on by default, a Fleet forbid turns it off
+
+Settled 2026-11-07 (bash in workbenches is managed by Fleet policy via
+Cedar, no new wire field) and revised 2026-11-10 (decision D-h: **on by
+default in served mode; a Fleet `forbid` turns it off** — #477 had shipped
+it off until an org published a permit). The desktop gate for the bash
+built-in is `Settings.BashEnabled`, which the served SPA has no toggle
+for. In served mode (`rpc.WithFleetGatedBash`, passed by both
+`main.go --serve` and `cmd/harness-served`) the `builtinEnabledPredicate`
+bash case ignores that setting and asks the shared Cedar engine
+(`cedar.Engine.Probe`: Evaluate without recording a decision) whether
+`use_tool` on `Tool::"kenaz__bash"` is denied. Bash is off iff it is.
+To turn bash off for an org, publish:
+
+```cedar
+forbid(principal, action == Action::"use_tool", resource == Tool::"kenaz__bash");
+```
+
+A denied bash is neither listed to the model nor dispatchable — not
+advertised-and-failing. The probe runs on every listing/dispatch, so a
+Fleet change takes effect on the next bundle poll + next chat turn,
+without a restart. A permit is not needed and adds nothing; it cannot
+outweigh a forbid.
+
+What admins should know:
+
+- **Any forbid that would block a dispatched bash call hides it**, not
+  only the exact rule above: `forbid(principal, action == Action::"use_tool",
+  resource);` (every tool) or one keyed on `context.server_name == "kenaz"`
+  also turns bash off. The probe uses the same resource constructor as the
+  chat `use_tool` gate (`useToolResource`), so the two cannot disagree on
+  the tool's name.
+- **Context-reading rules fail closed.** The availability probe has no
+  session context. A forbid on the bash tool whose `when` reads a context
+  attribute the probe does not carry errors there, and an erroring forbid
+  denies: bash is off in every session. Attributes the engine zero-fills
+  for `use_tool` (`tool_name`, `server_name`, `session_kind` = `""`,
+  `prompt_on_first_use` = false) do not error: a forbid conditioned on,
+  say, `context.session_kind == "scheduled"` leaves bash listed and is
+  enforced at dispatch, in the sessions it names. Keep tool-availability
+  rules context-free.
+- A served harness with no Cedar engine keeps bash off (no forbid can be
+  ruled out). Every real served boot has one.
+
+Which commands run is still Cedar `run_bash_command` (resource
+`BashCommand::"<pattern>"`, `context.pattern` from `DerivePattern`: the
+argv[0] basename, plus argv[1] when it is subcommand-shaped, e.g. `git
+status`): a fleet permit runs without asking, a forbid blocks, unmatched
+raises `bash:permission-pending`, which the WS pump forwards to the
+session's socket and `Permissions_Resolve` answers
+(`core/serve/bash_prompt_roundtrip_test.go`). **Limit, do not overstate
+it:** `run_bash_command` is evaluated on the FIRST segment of the command
+line only (`FirstSegmentArgv`); the whole string then runs under
+`bash -lc`. A per-command forbid stops `uname -a` but not `ls; uname`,
+`env uname` or `bash -c uname` — it is a guard rail, not a containment
+boundary. Turning bash off entirely (a `use_tool` forbid) is the
+enforceable control. The sandbox root is the
+resolved agent workspace (`KENAZ_HARNESS_WORKSPACE`, normally
+`/workspace`).
+
+## Sub-agents in workbenches: model slots, worktrees, cleanup
+
+fleet-workbench-next-plan-2026-11-10 B11. A served workbench has exactly one
+provider — the host-supplied `kenaz-host` profile — and read-only settings
+(HR-4), so every model slot used to be empty and the first
+`kenaz__subagent_dispatch` failed with `no default LLM profile configured`.
+
+### Model slots and precedence
+
+Slots: `subagent_default`, and the roles `advisor`, `compaction`,
+`branch_advisor`, `risk_rater`. Each resolves through four layers, highest
+first (`core/harnessmodels`):
+
+| Layer | Source | Notes |
+|---|---|---|
+| `org` | signed bundle `org_config.harness_models` | validated against the session provider's model list; an unknown id is refused **and reported in the bundle ack** (the valid entries still apply) |
+| `settings` | the user's explicit Settings value (`advisorModel`, `compactionModel`, `branchAdvisorDefaultModel`, `riskRaterModel`) | `subagent_default` has no Settings field |
+| `host` | `KENAZ_HARNESS_SUBAGENT_MODEL`, `KENAZ_HARNESS_ROLE_MODELS` (JSON role → model id) on `kenaz-meta.env` | an id the provider does not offer is ignored (logged at boot when malformed) |
+| `derived` | the session provider's models, classified by the provider-owned size tiers in `core/llm/capabilities` | `subagent_default`/`branch_advisor` → first `medium` (else `small`); `compaction` → cheapest (`small`, else `medium`); `advisor`/`risk_rater` → the session model. Logged once per slot (`harness.models.derived`) |
+
+A sub-agent profile's declared model (`explore: anthropic/claude-haiku-4.5`)
+is used verbatim when the provider offers it; otherwise an `org`/`host`
+`subagent_default` wins; otherwise the declared model's tier picks a provider
+model of the same tier (explore → the host's haiku-class model, implementer →
+sonnet-class); otherwise the derived default. Derivation happens only in
+served mode (a session provider exists); desktop keeps its configured
+personal profile and its per-consumer fallbacks.
+
+The served Settings page shows every slot, its model and its source,
+read-only (`Settings_ModelSlots`, served-only — see
+`i15-serve-dispatch-reverse.txt`).
+
+### `org_config.harness_models` (wire shape for the Fleet side)
+
+An additive key in the bundle's existing `org_config` map, signed and acked
+exactly like `org_config.workbench`. Every field is optional; absent or
+empty means "no org opinion".
+
+```json
+"org_config": {
+  "harness_models": {
+    "subagent_default": "claude-sonnet-4-5",
+    "roles": {
+      "advisor":        "claude-opus-5-5",
+      "compaction":     "claude-haiku-4-5",
+      "branch_advisor": "claude-sonnet-4-5",
+      "risk_rater":     "claude-haiku-4-5"
+    }
+  }
+}
+```
+
+Values are bare model ids on the workbench's provider (the ids Kenaz delivers
+in `KENAZ_HARNESS_MODELS`). Harness behaviour: unknown top-level or role keys,
+non-string values and ids the provider does not offer are each one ack error
+(`fleet/config: org_config kind "harness_models": …`); the remaining entries
+apply. A later bundle without the key clears the org layer. On a desktop
+harness (no session provider) the section is shape-checked but not applied.
+Fleet authoring UI is not built yet.
+
+### Orphan cleanup
+
+If the spawner fails before the child's first turn, `BranchSeamAdapter.Fork`
+deletes the child session (the branch row cascades) and returns the error, so
+the dispatcher reports `fork_failed` instead of a `branch_id` for a run that
+never started — no more orphan "New session (branch)".
+
+### `isolation: "worktree"`
+
+Served entry points pass `rpc.WithWorktreeIsolation()`. A worktree-isolated
+dispatch runs `git worktree add -b agent/<id> <workspace>/.worktrees/<id> HEAD`
+via `os/exec` (no shell; ids are generated, `[a-z0-9-]`), adds
+`/.worktrees/` to the repository's `info/exclude`, and tells the worker to
+work and commit only there. **Nothing merges automatically: the dispatching
+agent (hub) or the user merges `agent/<id>`.** When the worker finishes the
+worktree is removed if clean (the branch is kept when it has commits, deleted
+when it has none); with uncommitted changes it is left in place and the path
+reported. Fail closed: no git binary (PATH, then
+`/run/current-system/sw/bin/git`) or a workspace that is not a git repository
+with at least one commit refuses the dispatch with `worktree_unavailable`.
+Desktop refuses the option with `worktree_not_supported`.
+
+Note for kenaz-workbench: the harness unit's PATH only gets git if the
+kenaz-harness leaf declares `requiredTools = [ "git" ]`; today git reaches
+`/run/current-system/sw/bin` only when another app (vscode-server, the dev
+toolchain) declares it.
+
+Without isolation, a write-capable profile (its intended tools include
+write/edit/bash) dispatched into `paths` overlapping another running
+write-capable sub-agent of the same parent gets a `warnings` entry in the
+spawn result (no `paths` = the whole workspace).
+
 ## Self-update: desktop-only
 
 Settled 2026-08-18 by `self-update-repair-01PMUP01` §5, following the
@@ -313,7 +465,7 @@ harness rendered that button — over a `Catalog_Publish` served mode refuses.
 
 So `lib/featureFlags.ts` now closes `signedIn` and `capability()` outright
 when `isServedMode()` is true. No fleet CAPABILITY method is in the
-`servedMethods` allowlist (55 entries; 39 as of served-mode-is-a-real-mode-01PMZ707
+`servedMethods` allowlist (58 entries; 39 as of served-mode-is-a-real-mode-01PMZ707
 WP08, up from the 33 this line originally cited — this count moves every
 time a method is ported; `TestServedMethodsCountMatchesDoc`,
 `core/serve/wp08_served_count_test.go`, fails and names both citations to
@@ -324,7 +476,12 @@ capability-gated features: without them a workbench could never leave consent
 `none`. `Settings_FleetSession` (fleet-session-truth-01DOGF0A) is a read-only
 snapshot of the fleet session so served surfaces can render the truth instead
 of the "signed out" an unsupported-method error collapses to; it opens no
-capability gate (the fence below still closes `signedIn` / `capability()`). They do not depend on `signedIn` / `capability()`, so no fleet gate can legitimately open in
+capability gate (the fence below still closes `signedIn` / `capability()`).
+`Settings_FleetConfigPullStatus` and `Settings_FleetHealth` (fleet-policy
+push-down, 2026-10-31) are likewise read-only snapshots: which signed bundle
+is applied, when, the last error, and whether fleet Cedar rules / an MCP
+allow-list restriction are in force — so the in-VM fleet chip can show the
+applied org policy. Rule ids only, never rule text. They do not depend on `signedIn` / `capability()`, so no fleet gate can legitimately open in
 served mode, and the fence needs no per-surface knowledge. Its scope is
 also narrower than "everything": it closes exactly `signedIn` and
 `capability()`, both FLEET gates — every finding this doc's own history
