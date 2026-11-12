@@ -4930,6 +4930,21 @@ func New(c *core.Core, opts ...Option) *API {
 			cap := p.Current()
 			return cap.Has(corefleet.CapAuditLogImmudb)
 		}
+		// withheldCheck: the plan includes the archive (audit_ledger_read
+		// carries the tier value) but Fleet advertises audit_log_immudb
+		// false for this org (legal D173). The panel must not say
+		// "upgrade" to an org that already has the plan.
+		withheldCheck := func() bool {
+			if a.settingsImpl == nil {
+				return false
+			}
+			p := a.settingsImpl.CapabilityPoller()
+			if p == nil {
+				return false
+			}
+			cap := p.Current()
+			return !cap.Has(corefleet.CapAuditLogImmudb) && cap.Has(corefleet.CapAuditLedgerRead)
+		}
 		// Construct only when we have a fleet client (non-nop) and a
 		// DataDir for cursor persistence. Degrade gracefully when the
 		// user is not enrolled or fleet is disabled.
@@ -4995,7 +5010,7 @@ func New(c *core.Core, opts ...Option) *API {
 			a.auditSweeper = sweeper
 
 			// Replace the stub with the real compliance view.
-			a.complianceAPI = complianceview.NewAPI(archiver, sweeper, capCheck)
+			a.complianceAPI = complianceview.NewAPI(archiver, sweeper, capCheck).WithWithheldCheck(withheldCheck)
 			logging.L().Info("fleet.audit_archiver.wired",
 				"data_dir", dataDir,
 				"fleet_client_nil", flCl == nil,

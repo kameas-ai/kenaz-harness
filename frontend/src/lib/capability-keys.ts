@@ -35,6 +35,7 @@ export const CAPABILITY_KEYS = [
   'org_graph_sharing',
   'memory_sync',
   'hosted_inference',
+  'audit_ledger_read',
 ] as const;
 
 export type Capability = (typeof CAPABILITY_KEYS)[number];
