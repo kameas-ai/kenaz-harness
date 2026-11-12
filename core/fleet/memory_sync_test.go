@@ -814,7 +814,7 @@ func TestMemorySync_V091GobFullSyncCycle(t *testing.T) {
 }
 
 // D157 erase signal (Fleet contract §11): a create refused for its
-// created_at is blocked for good and kept locally. A future stamp would be
+// created_at (erased_before_cutoff, created_at_in_future) is blocked for good and kept locally. A future stamp would be
 // accepted once Fleet's clock caught up, which is the note the erase keeps
 // out, so it must never be resent, even when Fleet would now take it. A
 // device that is fast now also gets the clock warning. Per-field
@@ -828,7 +828,7 @@ func TestMemorySync_EraseSignalCreateRefusals(t *testing.T) {
 	}
 	setReject(map[string]memPushResult{
 		"mem-old":    rejectedRes("mem-old", "erased_before_cutoff", "created_at", false),
-		"mem-future": rejectedRes("mem-future", "clock_in_future", "created_at", false),
+		"mem-future": rejectedRes("mem-future", "created_at_in_future", "created_at", false),
 		"mem-hlc":    rejectedRes("mem-hlc", "clock_in_future", "content", false),
 	})
 
@@ -839,7 +839,7 @@ func TestMemorySync_EraseSignalCreateRefusals(t *testing.T) {
 	a.add("mem-ok", "global", "fine")
 	a.ms.RunOnce(context.Background())
 	ch := a.chunks()
-	if ch["mem-old"].SyncBlocked != "erased_before_cutoff" || ch["mem-future"].SyncBlocked != "clock_in_future" {
+	if ch["mem-old"].SyncBlocked != "erased_before_cutoff" || ch["mem-future"].SyncBlocked != "created_at_in_future" {
 		t.Fatalf("created_at refusals must block durably: old=%q future=%q", ch["mem-old"].SyncBlocked, ch["mem-future"].SyncBlocked)
 	}
 	if s := a.lanes.Snapshot(LaneMemorySync); s.Reason == "clock_in_future" {
@@ -882,14 +882,14 @@ func TestMemorySync_EraseSignalCreateRefusals(t *testing.T) {
 	fast := w.device("devFast", 7*time.Minute)
 	fast.enable()
 	setReject(map[string]memPushResult{
-		"mem-fast": rejectedRes("mem-fast", "clock_in_future", "created_at", false),
+		"mem-fast": rejectedRes("mem-fast", "created_at_in_future", "created_at", false),
 	})
 	fast.add("mem-fast", "global", "from a fast clock")
 	fast.ms.RunOnce(context.Background())
 	if s := fast.lanes.Snapshot(LaneMemorySync); s.Status != LaneDegraded || s.Reason != "clock_in_future" {
 		t.Fatalf("fast clock lane = %+v", s)
 	}
-	if c := fast.chunks()["mem-fast"]; c.SyncBlocked != "clock_in_future" {
+	if c := fast.chunks()["mem-fast"]; c.SyncBlocked != "created_at_in_future" {
 		t.Fatalf("fast-clock created_at refusal must block too: %+v", c)
 	}
 }

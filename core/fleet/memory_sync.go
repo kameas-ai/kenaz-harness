@@ -1360,7 +1360,7 @@ func (m *MemorySync) applyResults(ctx context.Context, entries []pushEntry, resp
 		case "rejected":
 			retry := r.Retry != nil && *r.Retry
 			switch {
-			case r.Field == "created_at" && (r.Code == "clock_in_future" || r.Code == "erased_before_cutoff"):
+			case r.Code == "erased_before_cutoff" || r.Code == "created_at_in_future":
 				// Fleet's D157 erase signal refuses a create by its
 				// created_at (contract §11): older than a forget-all made
 				// elsewhere, or stamped more than 5 minutes after Fleet's
@@ -1371,7 +1371,7 @@ func (m *MemorySync) applyResults(ctx context.Context, entries []pushEntry, resp
 				// this device. A device that is fast now still gets the
 				// clock warning so its next notes aren't refused too.
 				o.Kind, o.Code = memory.OutcomeBlocked, r.Code
-				if r.Code == "clock_in_future" && m.deviceAhead() {
+				if r.Code == "created_at_in_future" && m.deviceAhead() {
 					clockFuture = true
 				}
 			case r.Code == "clock_in_future":
