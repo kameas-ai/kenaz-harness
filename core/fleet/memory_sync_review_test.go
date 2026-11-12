@@ -72,8 +72,8 @@ func TestMemorySync_F2_DeleteFromFleetNeverReuploads(t *testing.T) {
 	if w.fleet.live("mem-1") != nil {
 		t.Fatal("a cycle after delete-from-Fleet re-uploaded mem-1")
 	}
-	if _, ok := a.chunks()["mem-1"]; !ok {
-		t.Fatal("delete from Fleet must not delete here")
+	if _, ok := a.chunks()["mem-1"]; ok {
+		t.Fatal("forget-all must erase this device's copy too (legal D157)")
 	}
 }
 

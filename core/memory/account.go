@@ -63,13 +63,55 @@ func (s AccountScope) Owns(c Chunk) bool {
 	return c.Account == s.Account
 }
 
+// Erases reports whether this account's forget-all removes c from the device
+// (legal D157, Option A): everything stamped for the account, in every scope, and
+// every older note whichever account or signed-out session made it. Signed-out
+// and unresolved notes stay, as do other accounts' stamped notes.
+func (s AccountScope) Erases(c Chunk) bool {
+	if s.Account == "" {
+		return false
+	}
+	if c.AccountUnstamped() {
+		return true
+	}
+	return s.Owns(c)
+}
+
 // OwnsForget reports whether a queued forget may be sent for this account.
 func (s AccountScope) OwnsForget(op ForgetOp) bool {
 	return s.Owns(Chunk{Account: op.Account})
 }
 
+// AccountView is who is using the device right now, as far as can be known.
+type AccountView struct {
+	// Stamp is what a new note records: Account, a pending stamp,
+	// AccountUnresolved, or "" for signed out.
+	Stamp string
+	// Account is the confirmed account, "" if none.
+	Account string
+	// TokenKey is the current token's key, "" if none.
+	TokenKey string
+	// LegacyOwner is the first account the device recorded, "" if none yet.
+	LegacyOwner string
+}
+
+// Sees reports whether this person may read or act on c (legal, Option A). The
+// notes of another account are neither read nor touched: recalls, pins and
+// deletes would carry over to what that account later pushes.
+func (v AccountView) Sees(c Chunk) bool {
+	switch {
+	case c.Account == AccountSignedOut:
+		return true // not anyone's, so any account on the device
+	case c.AccountUnstamped(), c.Account == AccountUnresolved:
+		return v.LegacyOwner == "" || (v.Account != "" && v.Account == v.LegacyOwner)
+	case v.TokenKey != "" && c.Account == PendingAccount(v.TokenKey):
+		return true
+	}
+	return v.Account != "" && c.Account == v.Account
+}
+
 // AccountStamper is the optional store capability the rpc wiring uses to
-// install the source of the signed-in account.
+// install the source of who is using the device.
 type AccountStamper interface {
-	SetAccountSource(fn func() string)
+	SetAccountSource(fn func() AccountView)
 }

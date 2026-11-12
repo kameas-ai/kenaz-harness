@@ -4927,6 +4927,8 @@ export interface MemorySyncStatus {
   olderNotes: number;
   /** Who those notes would sync to. */
   olderNotesAccount?: string;
+  /** Erased from Fleet, not yet from this device. It keeps trying. */
+  localErasePending?: boolean;
   /** Notes that stay on this device: the keychain couldn't be read when they were written. */
   unresolvedNotes: number;
   /** An earlier version left an erase unfinished (legal). Shown until dismissed. */

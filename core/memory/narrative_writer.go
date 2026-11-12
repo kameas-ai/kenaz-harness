@@ -81,6 +81,7 @@ func (w *NarrativeStoreWriter) WriteNarrative(ctx context.Context, req narrative
 	}
 	next := Chunk{
 		ID: id, SessionID: req.SessionID, ProjectID: req.ProjectID, TurnID: req.TurnID,
+		Account: req.Account,
 		ScopeKind: ScopeKindSession, ScopeID: req.SessionID,
 		Content: req.Content, ContentHash: hash,
 		Kind: string(req.Kind), RetrievalWeight: req.RetrievalWeight, Source: req.Source,
