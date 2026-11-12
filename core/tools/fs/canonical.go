@@ -16,6 +16,7 @@ package fs
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -56,6 +57,12 @@ func Canonicalize(path string) (string, error) {
 			return "", ErrInvalidPath
 		}
 	}
+	// "~" and "~/..." mean the process HOME, exactly as they do to the
+	// bash tool's shell. Without this, write_file("~/x") wrote to
+	// "<cwd>/~/x" while `ls ~` in bash looked in $HOME — two tools, two
+	// different files for the same string (E2E-2). "~user" is left alone
+	// (no passwd lookups here); it stays a literal relative segment.
+	path = expandHome(path)
 	// filepath.Abs calls filepath.Clean internally. We call both
 	// explicitly to be explicit about what we want.
 	abs, err := filepath.Abs(path)
@@ -74,4 +81,20 @@ func Canonicalize(path string) (string, error) {
 		}
 	}
 	return clean, nil
+}
+
+// expandHome rewrites a leading "~" or "~/" to the process HOME. Any
+// other input, or an unresolvable HOME, is returned unchanged.
+func expandHome(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, path[2:])
 }

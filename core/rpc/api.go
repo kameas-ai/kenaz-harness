@@ -67,6 +67,7 @@ import (
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/harnessmodels"
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/install"
 	"github.com/kameas-ai/kenaz-harness/core/keyring"
@@ -165,6 +166,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
 	coreskill "github.com/kameas-ai/kenaz-harness/core/tools/skill"
+	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
 	"github.com/kameas-ai/kenaz-harness/core/units"
 	coreupdate "github.com/kameas-ai/kenaz-harness/core/update"
@@ -508,6 +510,12 @@ type API struct {
 	// going through the toolloop. Populated at boot from the same
 	// registry the LLM tool catalog reads.
 	builtins *toolloop.BuiltinRegistry
+	// builtinFilter is the EnabledFilter every model-facing tool listing
+	// and builtin dispatch reads (the predicate deciding which registered
+	// builtins are on). Held so wiring tests assert against the production
+	// instance — e.g. served-mode bash following fleet policy — rather than
+	// a reconstructed predicate. nil on the stub path.
+	builtinFilter *toolloop.EnabledFilter
 
 	// Stable view-accessor instances (plan §4.2).
 	llmAPI llm.LLMConnectorAPI
@@ -1697,6 +1705,18 @@ type options struct {
 	// connectors. See WithConnectorTokens.
 	connectorTokens tools.ConnectorTokenSource
 
+	// fleetGatedBash makes kenaz__bash availability a fleet Cedar policy
+	// decision. See WithFleetGatedBash.
+	fleetGatedBash bool
+
+	// hostModelDefaults is the host layer of the model slots. See
+	// WithHostModelDefaults.
+	hostModelDefaults harnessmodels.Overrides
+
+	// worktreeIsolation enables isolation:"worktree" for
+	// kenaz__subagent_dispatch. See WithWorktreeIsolation.
+	worktreeIsolation bool
+
 	// settingsStore overrides the settings store New would otherwise
 	// build via settings.NewFileStoreFromEnv(). See WithSettingsStore.
 	settingsStore settings.SettingsStore
@@ -1740,6 +1760,25 @@ func WithHostProviders(profiles []corellm.ProviderProfile) Option {
 	return func(o *options) { o.hostProviders = profiles }
 }
 
+// WithHostModelDefaults seeds the host layer of the harness model slots
+// (default sub-agent model + per-role models) from the control plane —
+// the served harness passes harnessmodels.ParseHostEnv over
+// KENAZ_HARNESS_SUBAGENT_MODEL / KENAZ_HARNESS_ROLE_MODELS (kenaz-meta.env).
+// Values are validated against the host provider's models at resolve
+// time; an unknown id is ignored. Desktop never passes this option.
+func WithHostModelDefaults(o harnessmodels.Overrides) Option {
+	return func(opts *options) { opts.hostModelDefaults = o }
+}
+
+// WithWorktreeIsolation turns on isolation:"worktree" for
+// kenaz__subagent_dispatch: each such sub-agent gets its own
+// `git worktree` under <workspace>/.worktrees/<agent-id> on branch
+// agent/<agent-id>. Served mode only — the workspace is /workspace there.
+// Without it the option is refused with a clear error.
+func WithWorktreeIsolation() Option {
+	return func(opts *options) { opts.worktreeIsolation = true }
+}
+
 // WithServedConnectors installs the served-mode connector supervisor
 // (spec 091). When set, the persisted-enabled MCP recipe bootstrap is
 // REPLACED by the supervisor's whitelist-driven bootstrap — the profile
@@ -1750,6 +1789,28 @@ func WithHostProviders(profiles []corellm.ProviderProfile) Option {
 // The DESKTOP path never passes this option; host behaviour is unchanged.
 func WithServedConnectors(sup *connectors.Supervisor) Option {
 	return func(o *options) { o.servedConnectors = sup }
+}
+
+// WithFleetGatedBash makes the bash built-in's availability an org fleet
+// policy decision instead of the local Settings.BashEnabled toggle.
+//
+// Served/workbench mode passes this (both served entry points: main.go's
+// runServeMode and cmd/harness-served). There, kenaz__bash is ON BY
+// DEFAULT (decision D-h, 2026-11-10) and a Cedar forbid on `use_tool` /
+// Tool::"kenaz__bash" — the org's fleet rule set, pushed in the signed
+// config bundle as "fleet-team/..." snippets — turns it off: not
+// advertised and not dispatchable, never advertised-but-always-denied.
+// The served UI has no Settings toggle, so Settings.BashEnabled cannot be
+// the gate there. Re-evaluated on every listing/dispatch, so a Fleet
+// change takes effect on the next poll + next turn, no restart.
+//
+// Which commands run is unchanged: Cedar run_bash_command (fleet permit
+// runs, forbid blocks, unmatched prompts the workbench user).
+//
+// The DESKTOP path never passes this option; Settings.BashEnabled stays
+// the source of truth there.
+func WithFleetGatedBash() Option {
+	return func(o *options) { o.fleetGatedBash = true }
 }
 
 // WithConnectorTokens installs the broker-backed token source the tools
@@ -2197,6 +2258,19 @@ func New(c *core.Core, opts ...Option) *API {
 	settingsImpl := settings.NewAPI(settingsStore)
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
+	// fleet-workbench-next-plan-2026-11-10 B11: model slots. The session
+	// provider a served workbench derives from is its host profile; the
+	// desktop path has none, so nothing is derived there (its slots keep
+	// their historical per-consumer fallbacks) and only an explicit
+	// setting or the org layer resolves.
+	{
+		var sessionProvider func() *corellm.ProviderProfile
+		if len(opt.hostProviders) > 0 {
+			hp := opt.hostProviders[0]
+			sessionProvider = func() *corellm.ProviderProfile { p := hp; return &p }
+		}
+		settingsImpl.SetModelSlots(harnessmodels.NewResolver(opt.hostModelDefaults, logging.L()), sessionProvider)
+	}
 	// Fleet-delivered provider keys follow the signed-in account: a sign-in
 	// as someone else (or into another org) purges what the previous
 	// account left (provider-credentials-client-01PCCLI01 WP04).
@@ -2654,6 +2728,12 @@ func New(c *core.Core, opts ...Option) *API {
 		func(ctx context.Context) { a.publishPendingBlockedRequests(ctx) })
 
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, &acpAuditBridge{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions, blockedSink, a.scheduledRunOrigins.Resolve, a.mlProducer)
+	// Served/workbench mode: bash availability follows the org fleet Cedar
+	// policy (WithFleetGatedBash). Set before any turn can list tools.
+	if opt.fleetGatedBash {
+		stack.bashAvail.useFleetPolicy(a.cedarEngine)
+		logging.L().Info("rpc.builtins.bash_availability", "source", "fleet_policy", "cedar_engine", a.cedarEngine != nil)
+	}
 	// model-harness-toolset-01MHTS001 WP02 (H-1): the scheduled-run tool
 	// allowlist arm. Bound into the SAME session arm every tool call's
 	// permission resolution already goes through (the merged resolver
@@ -2767,6 +2847,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// is belt-and-suspenders.
 	if a.branchSeam != nil && a.llmAPI != nil && a.eventBus != nil {
 		capturedPersonalStoreForSubagent := personalForLLM
+		var subagentDerivationsLogged sync.Map // log each derivation once
 		a.branchSeam.SetRunSpawner(NewSubagentRunSpawner(SubagentRunSpawnerDeps{
 			UsageParent: newFleetUsageObserver(a.settingsImpl).AttributeTo,
 			LLM:         a.llmAPI,
@@ -2799,6 +2880,16 @@ func New(c *core.Core, opts ...Option) *API {
 				}
 				return profs[0].ID
 			},
+			// B11: a served workbench has no personal provider — derive
+			// the sub-agent's model from the host provider instead.
+			DerivedModel: func(declared string) (string, string, bool) {
+				p, m, src, ok := a.settingsImpl.MapSubagentModel(declared)
+				if _, seen := subagentDerivationsLogged.LoadOrStore(declared+"\x00"+p+"\x00"+m, true); ok && !seen {
+					logging.L().Info("rpc.subagent_run_spawner.model_derived",
+						"profile_id", p, "model", m, "source", string(src), "declared", declared)
+				}
+				return p, m, ok
+			},
 			// owner directive 2026-09-09, mission requirement 3: the SAME
 			// registry instance buildChatRunner wired into
 			// chat.Config.SubagentBudgets, obtained through the accessor
@@ -2812,7 +2903,11 @@ func New(c *core.Core, opts ...Option) *API {
 			Containment: a.scheduledRunContainment,
 		}))
 		logging.L().Info("rpc.subagent_run_spawner.armed")
-		registerSubagentDispatchTool(c, stack.builtins, a.branchSeam)
+		var worktrees []coresubagent.WorktreeManager
+		if opt.worktreeIsolation && c != nil && c.WorkspaceDir() != "" {
+			worktrees = append(worktrees, &coresubagent.GitWorktrees{Root: c.WorkspaceDir()})
+		}
+		registerSubagentDispatchTool(c, stack.builtins, a.branchSeam, worktrees...)
 	}
 
 	// confirm-each-enforcement-01PMAG05 WP02: the resolve leg. Bound to
@@ -2834,6 +2929,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// shutdown-race analysis.
 	hookMCPInvoker.setPool(stack.dispatchPool)
 	a.builtins = stack.builtins
+	a.builtinFilter = stack.builtinFilter
 	// Spec 092: document tools + knowledge-site builder. Needs a.unitsMgr
 	// (built above, not passed to newLLMStack) and the fs gate the stack
 	// built — see registerDocumentTools.
@@ -6161,6 +6257,13 @@ type llmStack struct {
 	// on the stack so the chassis-level wiring path can register and
 	// unregister tools as the user toggles them in Settings.
 	builtins *toolloop.BuiltinRegistry
+	// builtinFilter is the predicate-gated view of builtins the catalog
+	// and dispatch read. See API.builtinFilter.
+	builtinFilter *toolloop.EnabledFilter
+	// bashAvail is where the builtin predicate reads kenaz__bash's on/off
+	// from: Settings on desktop, the fleet Cedar policy once New() calls
+	// useFleetPolicy (rpc.WithFleetGatedBash). nil on the stub path.
+	bashAvail *bashAvailability
 	// fsGate is the Cedar filesystem gate registerFSBuiltinTools built.
 	// Held so tools registered after newLLMStack returns (the spec-092
 	// knowledge-site builder) are bound by the same write policy as
@@ -6711,7 +6814,11 @@ func newLLMStack(
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
 	// on the next chat turn. Uses the same Cedar engine as the bash tool.
-	fsGate := registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir, blockedSink, originResolve)
+	var fsWorkspaceDir func() string
+	if c != nil {
+		fsWorkspaceDir = c.WorkspaceDir
+	}
+	fsGate := registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir, fsWorkspaceDir, blockedSink, originResolve)
 	// unified-context-artifacts-01NCTXU01: register the read_context_file
 	// built-in so the agent can read on-demand files from attached context
 	// modules. Requires both the contexts library AND an attachment manager;
@@ -6723,7 +6830,11 @@ func newLLMStack(
 		}
 		registerReadContextFileTool(builtinRegistry, contextsLib, modSrc)
 	}
-	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
+	// bashAvail starts on the desktop source (Settings.BashEnabled); New()
+	// switches it to fleet Cedar policy when rpc.WithFleetGatedBash is set
+	// (the served/workbench entry points).
+	bashAvail := &bashAvailability{}
+	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicateFor(settingsImpl, bashAvail))
 	// wrappedPool merges the dispatch pool (all transports) with the
 	// builtin tool registry. The dispatch pool routes Call/Tools across
 	// stdio, http, and sse sub-pools transparently.
@@ -6869,16 +6980,24 @@ func newLLMStack(
 				return "", "", false
 			}
 			profs, perr := capturedRaterStore.List()
-			if perr != nil || len(profs) == 0 {
+			if perr != nil {
+				profs = nil
+			}
+			// B11: the served host provider is a candidate too — a
+			// workbench's personal store is empty by construction.
+			if settingsImpl != nil {
+				if hp := settingsImpl.SessionProvider(); hp != nil {
+					profs = append(profs, *hp)
+				}
+			}
+			if len(profs) == 0 {
 				return "", "", false
 			}
 			var setting risk.RaterModelSetting
-			if settingsImpl != nil && settingsImpl.Store() != nil {
-				if s, serr := settingsImpl.Store().LoadAll(); serr == nil {
-					setting = risk.RaterModelSetting{
-						ProviderID: s.RiskRaterModel.ProviderID,
-						ModelID:    s.RiskRaterModel.ModelID,
-					}
+			if settingsImpl != nil {
+				// Effective slot: org > settings > host > derived (B11).
+				if e, ok := settingsImpl.ResolveModelSlot(harnessmodels.SlotRiskRater); ok {
+					setting = risk.RaterModelSetting{ProviderID: e.ProviderID, ModelID: e.ModelID}
 				}
 			}
 			profileID, model, _, ok := risk.ResolveRaterModel(setting, profs)
@@ -6948,23 +7067,26 @@ func newLLMStack(
 		}
 		stackSidecarMgr, stackSidecarProbe = sidecarMgr, sidecarProbe
 		loadAdvisorProfiles := func() []corellm.ProviderProfile {
-			if capturedAdvisorStore == nil {
-				return nil
+			var profs []corellm.ProviderProfile
+			if capturedAdvisorStore != nil {
+				if ps, perr := capturedAdvisorStore.List(); perr == nil {
+					profs = ps
+				}
 			}
-			profs, perr := capturedAdvisorStore.List()
-			if perr != nil {
-				return nil
+			// B11: include the served host provider.
+			if settingsImpl != nil {
+				if hp := settingsImpl.SessionProvider(); hp != nil {
+					profs = append(profs, *hp)
+				}
 			}
 			return profs
 		}
 		loadAdvisorSetting := func() advice.AdvisorModelSetting {
 			var setting advice.AdvisorModelSetting
-			if settingsImpl != nil && settingsImpl.Store() != nil {
-				if s, serr := settingsImpl.Store().LoadAll(); serr == nil {
-					setting = advice.AdvisorModelSetting{
-						ProviderID: s.AdvisorModel.ProviderID,
-						ModelID:    s.AdvisorModel.ModelID,
-					}
+			if settingsImpl != nil {
+				// Effective slot: org > settings > host > derived (B11).
+				if e, ok := settingsImpl.ResolveModelSlot(harnessmodels.SlotAdvisor); ok {
+					setting = advice.AdvisorModelSetting{ProviderID: e.ProviderID, ModelID: e.ModelID}
 				}
 			}
 			return setting
@@ -7313,6 +7435,8 @@ func newLLMStack(
 		secrets:             secretsBackend,
 		reg:                 reg,
 		builtins:            builtinRegistry,
+		bashAvail:           bashAvail,
+		builtinFilter:       builtinFilter,
 		fsGate:              fsGate,
 		bashStore:           bashStore,
 		compactionScheduler: sweepScheduler,
@@ -7528,6 +7652,12 @@ func buildCompactionWiring(
 				return compaction.ProviderProfileRef{}, false
 			}
 			if s.CompactionModel.IsZero() {
+				// B11: served workbenches derive the slot (cheapest model of
+				// the host provider) or take it from host/org; desktop
+				// resolves nothing here and keeps the session-model fallback.
+				if e, ok := settingsImpl.ResolveModelSlot(harnessmodels.SlotCompaction); ok {
+					return compaction.ProviderProfileRef{ProviderID: e.ProviderID, ModelID: e.ModelID}, true
+				}
 				return compaction.ProviderProfileRef{}, false
 			}
 			return compaction.ProviderProfileRef{
@@ -12617,4 +12747,13 @@ func (r revocationWorkflowsAdapter) CatalogInstalledWorkflows(ctx context.Contex
 
 func (r revocationWorkflowsAdapter) RemoveRevokedWorkflow(ctx context.Context, workflowID, catalogID string) (bool, error) {
 	return r.wf.RemoveRevokedCatalogDocument(ctx, workflowID, catalogID)
+}
+
+// ModelSlots returns the effective harness model slots and their source
+// (fleet-workbench-next-plan-2026-11-10 B11) — served Settings_ModelSlots.
+func (a *API) ModelSlots(ctx context.Context) (settings.ModelSlotsView, error) {
+	if a == nil || a.settingsImpl == nil {
+		return settings.ModelSlotsView{Slots: []harnessmodels.Effective{}}, nil
+	}
+	return a.settingsImpl.EffectiveModelSlots(ctx)
 }

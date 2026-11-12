@@ -37,6 +37,12 @@ const (
 	// PromptAllowDirectory means the user granted a persistent grant for
 	// the parent directory and everything below it.
 	PromptAllowDirectory
+	// PromptAllowDirectoryReadWrite is PromptAllowDirectory plus, when the
+	// prompted op was a write, a read grant for the same directory —
+	// reading back what was just written is the usual next step (E2E-1).
+	// For a read prompt it is identical to PromptAllowDirectory: a read
+	// prompt never widens to writes.
+	PromptAllowDirectoryReadWrite
 )
 
 // PromptSurface carries the context the permission modal needs to
@@ -53,6 +59,16 @@ type PromptSurface struct {
 	// IsInsideRecipeDir is true when the path falls inside a
 	// recipe-declared allowed directory.
 	IsInsideRecipeDir bool
+	// ParentMissing is true for a write whose parent directory does not
+	// exist yet, i.e. the write creates a new directory. The modal
+	// defaults its Allow-always scope to "this directory and below" for
+	// these: the first file written into a new directory is rarely the
+	// last (E2E-1).
+	ParentMissing bool
+	// Privileged, when non-empty, is the banner text explaining that the
+	// path is (or a directory grant here would include) the harness's own
+	// state directory (E2E-3). See GateOptions.StateDirs.
+	Privileged string
 }
 
 // Prompter is the interface the gate calls to surface an interactive
@@ -91,6 +107,47 @@ type GateOptions struct {
 	// paths. Must be explicitly set true; the default is false so the
 	// safe posture requires no configuration.
 	AllowDangerousPersist bool
+	// StateDirs are the harness's own state directories (its DataDir and
+	// the per-env root above it — see HarnessStateDirs). A path inside one
+	// is PRIVILEGED (E2E-3): it holds the session databases, credential
+	// metadata and the Cedar policy directory this gate persists grants
+	// into, so a remembered write grant there would let the agent write
+	// its own permits. Privileged paths still prompt and may be allowed
+	// once, but are never remembered, and a "directory and below" grant
+	// whose directory would contain a state dir is narrowed to the exact
+	// path. Empty disables the classification.
+	StateDirs []string
+	// WorkspaceDir, when set, returns the agent workspace. The private
+	// fallback workspace lives under DataDir on a grant-less workbench;
+	// it is the agent's own working area, not harness state, so paths
+	// under it are never privileged.
+	WorkspaceDir func() string
+}
+
+// HarnessStateDirs returns the state directories GateOptions.StateDirs
+// should carry for a harness whose DataDir is dataDir: dataDir itself
+// and, when dataDir follows the <root>/harness/<env> layout
+// (~/.kenaz/harness/prod), the <root>/harness directory holding every
+// env's state. Empty input returns nil.
+func HarnessStateDirs(dataDir string) []string {
+	if dataDir == "" {
+		return nil
+	}
+	clean, err := Canonicalize(dataDir)
+	if err != nil {
+		return nil
+	}
+	out := []string{clean}
+	if parent := filepath.Dir(clean); filepath.Base(parent) == "harness" {
+		out = append(out, parent)
+	}
+	return out
+}
+
+// reloader is the optional engine capability the gate uses to make a
+// just-written grant effective in this process. *cedar.Engine has it.
+type reloader interface {
+	Reload(ctx context.Context) error
 }
 
 // Gate orchestrates the WP04 filesystem permission flow:
@@ -195,12 +252,15 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 			return d, nil
 		}
 		// Invoke the interactive prompt.
+		priv := g.privilege(canonical)
 		surface := PromptSurface{
 			Op:                op,
 			CanonicalPath:     canonical,
 			IsDangerous:       dangerous,
 			DangerCopy:        dangerCopy,
 			IsInsideRecipeDir: recipeDirMatch,
+			ParentMissing:     op == OpWrite && parentMissing(canonical),
+			Privileged:        priv.copy,
 		}
 		resp, perr := g.opts.Prompter.Prompt(ctx, surface)
 		if perr != nil {
@@ -222,45 +282,36 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 			d.Reason = "user granted allow-once (transient)"
 			return d, nil
 
-		case PromptAllowExact:
+		case PromptAllowExact, PromptAllowDirectory, PromptAllowDirectoryReadWrite:
 			if dangerous && !g.opts.AllowDangerousPersist {
 				// Dangerous tier: refuse persistent grant.
 				d.Outcome = cedar.Deny
 				d.Reason = "dangerous path: allow-always requires AllowDangerousPersist override"
 				return d, nil
 			}
-			if !cedar.PersistableFamilyID(canonical) {
-				// A path a policy literal cannot carry (invalid UTF-8,
-				// U+FFFD, control characters) is granted for this
-				// session only, as Allow once would be.
+			grants, note := g.grantsFor(op, canonical, resp)
+			if len(grants) == 0 {
+				// Nothing persistable (privileged path, or a path a
+				// policy literal cannot carry): this session only, as
+				// Allow once would be.
 				g.addTransientGrant(op, canonical)
 				d.Outcome = cedar.Allow
-				d.Reason = "user granted allow-always; path cannot be persisted, granted allow-once (transient)"
+				d.Reason = "user granted allow-always; " + note + ", granted allow-once (transient)"
 				return d, nil
 			}
-			body := buildExactSnippet(op, canonical)
-			_ = g.writePolicySnippet(snippetName(op, canonical, "path"), body)
-			d.Outcome = cedar.Allow
-			d.Reason = "user granted allow-always (exact path)"
-			return d, nil
-
-		case PromptAllowDirectory:
-			if dangerous && !g.opts.AllowDangerousPersist {
-				d.Outcome = cedar.Deny
-				d.Reason = "dangerous path: allow-always requires AllowDangerousPersist override"
-				return d, nil
-			}
-			dir := filepath.Dir(canonical)
-			if !cedar.PersistableFamilyID(dir) {
+			if err := g.persist(ctx, grants); err != nil {
+				// The person approved this call; it proceeds. Without a
+				// persisted file the grant cannot outlive this session.
 				g.addTransientGrant(op, canonical)
 				d.Outcome = cedar.Allow
-				d.Reason = "user granted allow-always; directory cannot be persisted, granted allow-once (transient)"
+				d.Reason = "user granted allow-always; persisting failed (" + err.Error() + "), granted allow-once (transient)"
 				return d, nil
 			}
-			body := buildDirectorySnippet(op, dir)
-			_ = g.writePolicySnippet(snippetName(op, dir, "dir"), body)
 			d.Outcome = cedar.Allow
-			d.Reason = "user granted allow-always (directory)"
+			d.Reason = "user granted allow-always (" + describeGrants(grants) + ")"
+			if note != "" {
+				d.Reason += "; " + note
+			}
 			return d, nil
 		}
 	}
@@ -333,7 +384,11 @@ func buildExactSnippet(op Op, canonical string) string {
 // buildDirectorySnippet returns the Cedar policy body for an
 // "allow this directory and everything below" persistent grant.
 //
-//	permit (...) when { context.canonical_path like "<dir>/*" };
+//	permit (...) when { context.canonical_path == "<dir>" ||
+//	                    context.canonical_path like "<dir>/*" };
+//
+// The directory itself is included: "this directory and below" granted
+// on a write into /p/new must also let list_dir /p/new read it back.
 func buildDirectorySnippet(op Op, dir string) string {
 	action := "read_filesystem"
 	if op == OpWrite {
@@ -350,9 +405,10 @@ func buildDirectorySnippet(op Op, dir string) string {
 			"    action == Action::\"%s\",\n"+
 			"    resource is FilesystemOp\n"+
 			") when {\n"+
+			"    context.canonical_path == %s ||\n"+
 			"    context.canonical_path like %s\n"+
 			"};\n",
-		action, cedar.QuoteLikePrefix(prefix),
+		action, cedar.QuoteString(strings.TrimSuffix(dir, "/")), cedar.QuoteLikePrefix(prefix),
 	)
 }
 

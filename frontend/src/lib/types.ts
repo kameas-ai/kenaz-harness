@@ -4043,6 +4043,12 @@ export interface PermissionRequest {
       /** True when the pattern cannot be saved as an "Allow always" grant. */
       allow_always_unavailable?: boolean;
     };
+    fs?: {
+      /** The write creates its parent directory (E2E-1): default the scope to the directory. */
+      parent_missing?: boolean;
+      /** Banner text: the path is, or a directory grant would include, harness state (E2E-3). */
+      privileged?: string;
+    };
   };
 }
 

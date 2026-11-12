@@ -47,6 +47,7 @@ import MCPHealthSettingsPanel from '@/views/settings/MCPHealthSettingsPanel.vue'
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import BranchAdvisorSettings from '@/components/settings/BranchAdvisorSettings.vue';
 import RiskRaterModelPicker from '@/components/settings/RiskRaterModelPicker.vue';
+import ModelSlotsPanel from '@/views/settings/ModelSlotsPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { accountSectionSubtitle, useFleetSession } from '@/lib/fleetSession';
 import { debouncedSave } from '@/lib/settings';
@@ -1099,10 +1100,11 @@ onMounted(() => {
          RPCs) and Agent Profiles (Agents_* — contracts/agents-served-rpc.md)
          are the settings served mode has. -->
     <FleetTelemetryPanel />
+    <ModelSlotsPanel />
     <AgentsView />
     <NotAvailableInServedMode
       feature="Other settings"
-      reason="Apart from Fleet telemetry and Agent Profiles above, settings are read and written through desktop-only RPCs. Workbench-level configuration lives in Kenaz on the host."
+      reason="Apart from Fleet telemetry, Models and Agent Profiles above, settings are read and written through desktop-only RPCs. Workbench-level configuration lives in Kenaz on the host."
     />
   </div>
   <SettingsShell

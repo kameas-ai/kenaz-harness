@@ -980,6 +980,13 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "Settings_FleetHealth":
 		return s.api.Settings().FleetHealth(ctx)
 
+	// Settings_ModelSlots: the effective model slots (default sub-agent +
+	// advisor / compaction / branch advisor / risk rater) and which layer
+	// set each one (derived / host / org / settings). Read-only; the
+	// served Settings page renders it (fleet-workbench-next-plan B11).
+	case "Settings_ModelSlots":
+		return s.api.ModelSlots(ctx)
+
 	case "Fleet_TelemetryStatus":
 		st, err := s.api.Settings().FleetTelemetryStatus(ctx)
 		if err != nil {

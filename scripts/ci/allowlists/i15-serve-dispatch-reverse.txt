@@ -64,3 +64,11 @@
 # only says the asymmetry is not a naming accident).
 "Connectors_List"
 "Connectors_Status"
+
+# JUSTIFIED 2026-11-10 (fleet-workbench-next-plan-2026-11-10 B11).
+# Settings_ModelSlots is the served Settings page's read-only view of the
+# effective model slots and their source (derived / host / org). Desktop
+# has editable per-slot pickers instead; a desktop binding needs a
+# `wails generate module` regeneration and lands with the desktop panel
+# that would call it (owner: the desktop Settings model-slots follow-up).
+"Settings_ModelSlots"

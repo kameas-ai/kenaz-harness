@@ -13,6 +13,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
@@ -488,7 +489,7 @@ func registerBuiltinTools(
 // child run, never "the seam object exists but nothing will happen" —
 // crash-recovery-tool-gating-0XQTC4RK's invariant that a tool which
 // always fails is never advertised.
-func registerSubagentDispatchTool(c *core.Core, registry *toolloop.BuiltinRegistry, seam agentgraph.BranchSeam) {
+func registerSubagentDispatchTool(c *core.Core, registry *toolloop.BuiltinRegistry, seam agentgraph.BranchSeam, worktrees ...coresubagent.WorktreeManager) {
 	if registry == nil || seam == nil {
 		logging.L().Info("rpc.builtins.subagent_dispatch_skipped",
 			"reason", "BranchSeam not wired with a live run spawner — tool omitted from model catalog (FR-007)",
@@ -499,7 +500,7 @@ func registerSubagentDispatchTool(c *core.Core, registry *toolloop.BuiltinRegist
 	if c != nil {
 		dataDir = c.DataDir()
 	}
-	subagentTool := coresubagent.New(coresubagent.Options{
+	opts := coresubagent.Options{
 		DataDir: dataDir,
 		Seam:    seam,
 		// Tasks deliberately left nil — see the Options.Tasks doc in
@@ -511,7 +512,14 @@ func registerSubagentDispatchTool(c *core.Core, registry *toolloop.BuiltinRegist
 		// Wiring this field too would register a second, competing
 		// Tasks-panel row for the same dispatch.
 		Tasks: nil,
-	})
+	}
+	// isolation:"worktree" (B11): served workbenches pass a GitWorktrees
+	// rooted at the agent workspace; desktop passes none and the option is
+	// refused with worktree_not_supported.
+	if len(worktrees) > 0 {
+		opts.Worktrees = worktrees[0]
+	}
+	subagentTool := coresubagent.New(opts)
 	registry.Register(subagentTool)
 	logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
 }
@@ -790,6 +798,7 @@ func registerFSBuiltinTools(
 	store settings.SettingsStore,
 	promptRegistry *cedar.Registry,
 	dataDir string,
+	workspaceDir func() string,
 	blockedSink corefs.BlockedRequestSink,
 	originResolve corefs.OriginResolver,
 ) *corefs.Gate {
@@ -841,7 +850,18 @@ func registerFSBuiltinTools(
 		// <DataDir>/policy convention bash's own snippet writer uses
 		// (bash.go:598, cedar.PolicyDir).
 		PolicyDir: policyDir,
+		// E2E-3: the harness's own state (session databases, credential
+		// metadata, the policy directory above) is labelled privileged in
+		// the prompt and never gets a remembered grant; the agent
+		// workspace is exempt even when it falls back under DataDir.
+		StateDirs:    corefs.HarnessStateDirs(dataDir),
+		WorkspaceDir: workspaceDir,
 	})
+	// E2E-1: an Allow-always answered on one fs prompt releases every
+	// queued fs prompt the resulting grant covers, inside the same
+	// Resolve call, so the person is not asked again for sibling files
+	// of a directory they just granted.
+	promptRegistry.SetGrantCoverage(cedar.FamilyFilesystem, gate.GrantCoverage)
 
 	// Per-family enabled closures. Soft-fail to false on transient store
 	// errors so filesystem tools stay off rather than on by default.
@@ -1034,6 +1054,94 @@ func mcpRootsDir(c *core.Core, dataDir string) string {
 // A nil settings impl returns "all enabled" so the test harness path
 // (rpc.New(nil)) doesn't accidentally hide tools.
 func builtinEnabledPredicate(s *settings.API) func(string) bool {
+	return builtinEnabledPredicateFor(s, nil)
+}
+
+// builtinEnabledPredicateFor is builtinEnabledPredicate with the source of
+// kenaz__bash availability made explicit. When bash reports that it is
+// policy-managed (served/workbench mode — see bashAvailability), the bash
+// case consults the Cedar policy instead of Settings.BashEnabled, and that
+// answer wins over every other branch, including the nil-store "all
+// enabled" test fallback. A nil bash (or one never switched to policy
+// control) is the desktop path, unchanged.
+func builtinEnabledPredicateFor(s *settings.API, bash *bashAvailability) func(string) bool {
+	inner := settingsBuiltinPredicate(s)
+	return func(name string) bool {
+		if name == corebash.Name {
+			if v, managed := bash.fleetDecision(); managed {
+				return v
+			}
+		}
+		return inner(name)
+	}
+}
+
+// bashAvailability decides where kenaz__bash's on/off comes from.
+//
+// Zero value (desktop): Settings.BashEnabled, the local toggle.
+//
+// After useFleetPolicy (served/workbench mode, rpc.WithFleetGatedBash):
+// bash is ON BY DEFAULT (decision D-h, 2026-11-10) and turned off by a
+// Cedar forbid on use_tool / Tool::"kenaz__bash" — in practice the org's
+// fleet rule set pushed in the signed bundle, though a forbid from any
+// installed source counts. The probe is engine.Probe (Evaluate without
+// recording a Decision); bash is off iff its Outcome is Deny, which covers
+// a matching forbid, a forbid that errors (fail closed — e.g. one whose
+// `when` reads context the probe does not carry) and a DefaultDeny engine
+// with no permit. Evaluated on every listing/dispatch, so a Fleet change
+// applied by the poller takes effect on the next turn, no restart.
+type bashAvailability struct {
+	fleetEngine atomic.Pointer[cedar.Engine]
+	fleetGated  atomic.Bool
+}
+
+// useFleetPolicy switches bash to policy control. A nil engine keeps it
+// policy-managed and OFF: with no engine a forbid cannot be evaluated, so
+// "no forbid" cannot be established (fail closed).
+func (b *bashAvailability) useFleetPolicy(engine *cedar.Engine) {
+	if b == nil {
+		return
+	}
+	if engine != nil {
+		b.fleetEngine.Store(engine)
+	}
+	b.fleetGated.Store(true)
+}
+
+// fleetDecision returns (enabled, managed). managed=false means the caller
+// falls back to the desktop Settings toggle.
+func (b *bashAvailability) fleetDecision() (enabled, managed bool) {
+	if b == nil || !b.fleetGated.Load() {
+		return false, false
+	}
+	return policyAllowsBash(b.fleetEngine.Load()), true
+}
+
+// policyAllowsBash is the served-mode bash availability probe: true unless
+// Cedar denies use_tool on the bash tool. The resource is built by
+// useToolResource — the constructor the chat use_tool gate uses for the
+// same call — from the bash tool's dispatched (server, tool) split:
+// ("kenaz", "bash") -> Tool::"kenaz__bash". So any forbid shape that would
+// block a dispatched bash call (exact tool, `resource` unconstrained, a
+// server_name condition) also hides it from the model — no
+// advertised-but-always-denied tool.
+func policyAllowsBash(engine *cedar.Engine) bool {
+	if engine == nil {
+		return false
+	}
+	tool := strings.TrimPrefix(corebash.Name, toolloop.BuiltinServerName+"__")
+	d := engine.Probe(
+		cedar.UserUID(),
+		cedar.ActionUseTool,
+		useToolResource(toolloop.BuiltinServerName, tool),
+		nil,
+	)
+	return d.Outcome != cedar.Deny
+}
+
+// settingsBuiltinPredicate maps the in-binary tool names onto the Settings
+// store toggles (the desktop source of truth for every builtin).
+func settingsBuiltinPredicate(s *settings.API) func(string) bool {
 	if s == nil || s.Store() == nil {
 		logging.L().Info("rpc.builtins.predicate.no_store")
 		return func(string) bool { return true }

@@ -35,9 +35,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
-	coreagents "github.com/kameas-ai/kenaz-harness/core/agents"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	coreagents "github.com/kameas-ai/kenaz-harness/core/agents"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
@@ -91,12 +92,17 @@ const inputSchema = `{
     "isolation": {
       "type": "string",
       "enum": ["session", "worktree"],
-      "description": "Isolation level. 'session' (default) uses copy-on-write conversation storage. 'worktree' is reserved for a future mission.",
+      "description": "Isolation level. 'session' (default) shares the workspace and uses copy-on-write conversation storage. 'worktree' (served workbenches) gives the sub-agent its own git worktree under <workspace>/.worktrees/<agent-id> on branch agent/<agent-id>; you or the user merge that branch afterwards. Use 'worktree' for parallel write-capable sub-agents.",
       "default": "session"
     },
     "description": {
       "type": "string",
       "description": "Optional human-readable label shown in the BranchSidebar status chip."
+    },
+    "paths": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Workspace-relative paths this sub-agent will change (e.g. [\"internal/foo\"]). Used to warn when two write-capable sub-agents without worktree isolation target overlapping paths. Omitted = the whole workspace."
     }
   },
   "required": ["profile", "prompt"]
@@ -104,27 +110,44 @@ const inputSchema = `{
 
 // toolInput is the parsed wire shape.
 type toolInput struct {
-	Profile           string `json:"profile"`
-	Prompt            string `json:"prompt"`
-	RunInBackground   *bool  `json:"run_in_background"`
-	Isolation         string `json:"isolation"`
-	Description       string `json:"description"`
+	Profile         string   `json:"profile"`
+	Prompt          string   `json:"prompt"`
+	RunInBackground *bool    `json:"run_in_background"`
+	Isolation       string   `json:"isolation"`
+	Description     string   `json:"description"`
+	Paths           []string `json:"paths"`
 }
 
 // toolResultRunning is returned when run_in_background=true.
 type toolResultRunning struct {
-	BranchID  string `json:"branch_id"`
-	Status    string `json:"status"`
-	ProfileID string `json:"profile_id"`
+	BranchID  string        `json:"branch_id"`
+	Status    string        `json:"status"`
+	ProfileID string        `json:"profile_id"`
+	Worktree  *worktreeInfo `json:"worktree,omitempty"`
+	Warnings  []string      `json:"warnings,omitempty"`
+}
+
+// worktreeInfo is the isolation:"worktree" part of a result.
+type worktreeInfo struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch"`
+	// Outcome is set once the worker finished (sync dispatch). For a
+	// background dispatch the worktree is finished when the worker
+	// completes: removed if clean, left in place if it has uncommitted
+	// changes.
+	Outcome *WorktreeOutcome `json:"outcome,omitempty"`
+	Note    string           `json:"note,omitempty"`
 }
 
 // toolResultComplete is returned when run_in_background=false and the worker
 // has finished.
 type toolResultComplete struct {
-	BranchID     string `json:"branch_id"`
-	Status       string `json:"status"`
-	ProfileID    string `json:"profile_id"`
-	MergeSummary string `json:"merge_summary,omitempty"`
+	BranchID     string        `json:"branch_id"`
+	Status       string        `json:"status"`
+	ProfileID    string        `json:"profile_id"`
+	MergeSummary string        `json:"merge_summary,omitempty"`
+	Worktree     *worktreeInfo `json:"worktree,omitempty"`
+	Warnings     []string      `json:"warnings,omitempty"`
 }
 
 // toolResultError is returned when the profile is unknown or the input is
@@ -190,12 +213,18 @@ type Options struct {
 	// populated on the production path. Tests that don't go through
 	// that dispatch layer must call toolloop.WithSessionID themselves.
 	SessionResolver func(context.Context) string
+
+	// Worktrees provides isolation:"worktree" (served workbenches —
+	// fleet-workbench-next-plan-2026-11-10 B11). nil refuses that
+	// isolation with worktree_not_supported.
+	Worktrees WorktreeManager
 }
 
 // Tool implements the kenaz__subagent_dispatch builtin.
 type Tool struct {
 	opts            Options
 	sessionResolver func(context.Context) string
+	writers         overlapTracker
 }
 
 // New constructs a Tool.
@@ -261,9 +290,9 @@ func (t *Tool) Call(ctx context.Context, rawArgs json.RawMessage) (json.RawMessa
 		return marshalErr("invalid_isolation",
 			fmt.Sprintf("isolation must be 'session' or 'worktree', got %q", isolation))
 	}
-	if isolation == "worktree" {
+	if isolation == "worktree" && t.opts.Worktrees == nil {
 		return marshalErr("worktree_not_supported",
-			"worktree isolation is not yet supported (deferred mission). Use isolation='session'.")
+			"worktree isolation is only available in served workbenches (it needs the /workspace git repository). Use isolation='session'.")
 	}
 
 	// Check that the BranchSeam is wired.
@@ -288,13 +317,55 @@ func (t *Tool) Call(ctx context.Context, rawArgs json.RawMessage) (json.RawMessa
 		title = profile.Name + " worker"
 	}
 
+	handoff := buildHandoffPrompt(profile, in.Prompt)
+
+	// isolation:"worktree": create the worktree before forking so a
+	// failure refuses the dispatch outright (fail closed — never fall back
+	// to the shared workspace).
+	var wt *Worktree
+	var wtInfo *worktreeInfo
+	if isolation == "worktree" {
+		created, werr := t.opts.Worktrees.Create(ctx)
+		if werr != nil {
+			return marshalErr("worktree_unavailable", werr.Error())
+		}
+		wt = &created
+		wtInfo = &worktreeInfo{Path: created.Path, Branch: created.Branch}
+		handoff = worktreeHandoff(created) + handoff
+	}
+
+	// Without isolation, warn when two write-capable sub-agents of the
+	// same parent are given overlapping path scopes.
+	var warnings []string
+	release := func() {}
+	if isolation == "session" && writeCapable(profile) {
+		warnings, release = t.writers.register(parentSessionID, title, profile.ID, normalizeScopes(in.Paths))
+	}
+
+	// finish runs exactly once when the worker reaches a terminal state:
+	// drop the overlap entry and finish the worktree.
+	var finishOnce sync.Once
+	var finishMu sync.Mutex
+	var finished *WorktreeOutcome
+	finish := func() {
+		finishOnce.Do(func() {
+			release()
+			if wt != nil {
+				out := t.opts.Worktrees.Finish(context.Background(), *wt)
+				finishMu.Lock()
+				finished = &out
+				finishMu.Unlock()
+			}
+		})
+	}
+
 	// Build the ForkRequest. The profile's model override, tool allowlist,
 	// and system prompt override are applied via the seam.
 	forkReq := agentgraph.ForkRequest{
 		ParentSessionID: parentSessionID,
 		Title:           title,
 		TaskHint:        in.Prompt,
-		HandoffPrompt:   buildHandoffPrompt(profile, in.Prompt),
+		HandoffPrompt:   handoff,
 		ModelID:         profile.Model,
 		ToolAllowlist:   profile.AllowedTools,
 		// BudgetTokens / BudgetTimeS (owner directive 2026-09-09,
@@ -309,11 +380,13 @@ func (t *Tool) Call(ctx context.Context, rawArgs json.RawMessage) (json.RawMessa
 		// SubagentBranch.profileId later — this is the ONE call site
 		// that knows which persona profile actually drove the dispatch.
 		ProfileID: profile.ID,
+		OnRunDone: func(error) { finish() },
 	}
 
 	// Fork the session.
 	handle, err := t.opts.Seam.Fork(ctx, forkReq)
 	if err != nil {
+		finish()
 		return marshalErr("fork_failed", fmt.Sprintf("could not spawn sub-agent branch: %v", err))
 	}
 
@@ -329,10 +402,15 @@ func (t *Tool) Call(ctx context.Context, rawArgs json.RawMessage) (json.RawMessa
 
 	if runBg {
 		// Async path: return immediately.
+		if wtInfo != nil {
+			wtInfo.Note = "removed when the worker finishes if it is clean (commits stay on the branch); left in place if it has uncommitted changes"
+		}
 		return marshalJSON(toolResultRunning{
 			BranchID:  handle.BranchID,
 			Status:    "running",
 			ProfileID: profile.ID,
+			Worktree:  wtInfo,
+			Warnings:  warnings,
 		})
 	}
 
@@ -340,6 +418,18 @@ func (t *Tool) Call(ctx context.Context, rawArgs json.RawMessage) (json.RawMessa
 	if err := t.opts.Seam.WaitForChildRun(ctx, handle.BranchID); err != nil {
 		return marshalErr("worker_wait_failed",
 			fmt.Sprintf("sub-agent did not complete: %v", err))
+	}
+	// The spawner calls OnRunDone before Wait returns; finish() is a no-op
+	// then. It runs here for a seam that tracks no run (nothing would ever
+	// call OnRunDone).
+	finish()
+	if wtInfo != nil {
+		finishMu.Lock()
+		wtInfo.Outcome = finished
+		finishMu.Unlock()
+		if wtInfo.Outcome != nil && wtInfo.Outcome.Dirty {
+			wtInfo.Note = "the worktree has uncommitted changes and was left in place at " + wtInfo.Path
+		}
 	}
 
 	// Pull the last N messages from the child as the merge summary.
@@ -355,6 +445,8 @@ func (t *Tool) Call(ctx context.Context, rawArgs json.RawMessage) (json.RawMessa
 		Status:       "complete",
 		ProfileID:    profile.ID,
 		MergeSummary: summary,
+		Worktree:     wtInfo,
+		Warnings:     warnings,
 	})
 }
 

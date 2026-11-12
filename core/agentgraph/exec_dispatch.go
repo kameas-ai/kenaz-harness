@@ -224,7 +224,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		// env.Policy is the AllowAll boot-stage default.
 		if env.Policy != nil {
 			if err := env.Policy.CheckTool(ctx, oc.call.Name); err != nil {
-				oc.result = ToolResult{Content: "tool denied by policy: " + err.Error(), IsError: true}
+				oc.result = ToolResult{Content: policyDenialContent(err), IsError: true}
 				oc.outcome = ToolOutcomeDenied
 				oc.err = err
 				_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
@@ -645,4 +645,21 @@ func parseToolArgs(raw string) (map[string]any, string) {
 	// pull the bytes if it knows to look. The static toolExecutor
 	// performs the same fallback semantics implicitly via map override.
 	return map[string]any{"_raw": raw}, raw
+}
+
+// policyDenialContent is the tool-result text for a Cedar tool-gate
+// denial. A denial by the org's Fleet policy reads "Blocked by your
+// organization's Fleet policy (...)" (E2E-11) — the error's UserMessage,
+// matched structurally because this package does not import cedar. Every
+// other denial keeps the historical "tool denied by policy: <err>". The
+// raw error (action, resource, matched policy id) always stays in the
+// EventNodeError "err" field and oc.err.
+func policyDenialContent(err error) string {
+	var um interface{ UserMessage() string }
+	if errors.As(err, &um) {
+		if msg := um.UserMessage(); msg != "" {
+			return msg
+		}
+	}
+	return "tool denied by policy: " + err.Error()
 }
