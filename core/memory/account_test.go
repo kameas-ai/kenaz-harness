@@ -403,3 +403,18 @@ func TestAccount_FailedEraseSaveKeepsTheRows(t *testing.T) {
 		t.Fatalf("sweep dropped rows in memory: %+v", all)
 	}
 }
+
+// A rewrite keeps CreatedAt, so a D157 created_at refusal must survive
+// FreshIdentity; other blocks (content-based) are cleared.
+func TestFreshIdentity_KeepsCreatedAtBlocks(t *testing.T) {
+	for code, keep := range map[string]bool{
+		BlockErasedBeforeCutoff: true,
+		BlockCreatedAtInFuture:  true,
+		"secret_detected":       false,
+	} {
+		out := FreshIdentity(Chunk{ID: "old", SyncBlocked: code}, "new")
+		if got := out.SyncBlocked != ""; got != keep {
+			t.Fatalf("%s: kept=%v want %v", code, got, keep)
+		}
+	}
+}

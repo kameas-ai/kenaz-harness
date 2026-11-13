@@ -70,6 +70,9 @@ type fakeMemoryFleet struct {
 	// offerErasedReset answers the next empty-cursor pull with reset:true for
 	// this erased_before, once.
 	offerErasedReset string
+	// forceReject answers a push of these ids with the given refusal,
+	// modelling Fleet's D157 create checks (contract §11).
+	forceReject map[string]memPushResult
 	// dateOffset shifts the Date header it answers with.
 	dateOffset time.Duration
 	// pausedCategory, when set, models a staff org pause (kenaz-fleet
@@ -449,6 +452,9 @@ func (f *fakeMemoryFleet) itemLocked(dev string, it memPushItem) memPushResult {
 	target := it.ID
 	if c, ok := f.aliases[it.ID]; ok {
 		target = c
+	}
+	if r, ok := f.forceReject[it.ID]; ok && it.Op != "forget" {
+		return r
 	}
 	if it.Op == "forget" {
 		rec := f.recs[target]

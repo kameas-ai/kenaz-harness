@@ -812,3 +812,84 @@ func TestMemorySync_V091GobFullSyncCycle(t *testing.T) {
 		t.Fatal("B missing the long_term chunk")
 	}
 }
+
+// D157 erase signal (Fleet contract §11): a create refused for its
+// created_at (erased_before_cutoff, created_at_in_future) is blocked for good and kept locally. A future stamp would be
+// accepted once Fleet's clock caught up, which is the note the erase keeps
+// out, so it must never be resent, even when Fleet would now take it. A
+// device that is fast now also gets the clock warning. Per-field
+// clock_in_future (an HLC) keeps the existing hold.
+func TestMemorySync_EraseSignalCreateRefusals(t *testing.T) {
+	w := newMemWorld(t)
+	setReject := func(m map[string]memPushResult) {
+		w.fleet.mu.Lock()
+		w.fleet.forceReject = m
+		w.fleet.mu.Unlock()
+	}
+	setReject(map[string]memPushResult{
+		"mem-old":    rejectedRes("mem-old", "erased_before_cutoff", "created_at", false),
+		"mem-future": rejectedRes("mem-future", "created_at_in_future", "created_at", false),
+		"mem-hlc":    rejectedRes("mem-hlc", "clock_in_future", "content", false),
+	})
+
+	a := w.device("devA", 0)
+	a.enable()
+	a.add("mem-old", "global", "written before a forget-all elsewhere")
+	a.add("mem-future", "global", "stamped while the clock was wrong")
+	a.add("mem-ok", "global", "fine")
+	a.ms.RunOnce(context.Background())
+	ch := a.chunks()
+	if ch["mem-old"].SyncBlocked != "erased_before_cutoff" || ch["mem-future"].SyncBlocked != "created_at_in_future" {
+		t.Fatalf("created_at refusals must block durably: old=%q future=%q", ch["mem-old"].SyncBlocked, ch["mem-future"].SyncBlocked)
+	}
+	if s := a.lanes.Snapshot(LaneMemorySync); s.Reason == "clock_in_future" {
+		t.Fatalf("a correct clock must not get the clock warning: %+v", s)
+	}
+	if ch["mem-ok"].SyncDirty {
+		t.Fatal("the other note must still sync")
+	}
+
+	// Fleet would accept them now (its clock caught up): still never resent.
+	setReject(nil)
+	n := len(w.fleet.pushLog())
+	a.ms.RunOnce(context.Background())
+	for _, p := range w.fleet.pushLog()[n:] {
+		for _, it := range p.Items {
+			if it.ID == "mem-old" || it.ID == "mem-future" {
+				t.Fatalf("%s was resent after a D157 refusal", it.ID)
+			}
+		}
+	}
+	if _, ok := a.chunks()["mem-future"]; !ok {
+		t.Fatal("blocked notes stay on the device")
+	}
+
+	// A per-field (HLC) clock_in_future on a correct clock keeps the hold:
+	// the note stays dirty and unblocked.
+	setReject(map[string]memPushResult{
+		"mem-hlc": rejectedRes("mem-hlc", "clock_in_future", "content", false),
+	})
+	a.add("mem-hlc", "global", "field stamped ahead")
+	a.ms.RunOnce(context.Background())
+	if c := a.chunks()["mem-hlc"]; c.SyncBlocked != "" || !c.SyncDirty {
+		t.Fatalf("per-field clock_in_future must hold, not block: %+v", c)
+	}
+	if s := a.lanes.Snapshot(LaneMemorySync); s.Reason != "clock_in_future" {
+		t.Fatalf("per-field clock_in_future lane = %+v", s)
+	}
+
+	// A device that is 7 minutes fast: blocked AND warned about its clock.
+	fast := w.device("devFast", 7*time.Minute)
+	fast.enable()
+	setReject(map[string]memPushResult{
+		"mem-fast": rejectedRes("mem-fast", "created_at_in_future", "created_at", false),
+	})
+	fast.add("mem-fast", "global", "from a fast clock")
+	fast.ms.RunOnce(context.Background())
+	if s := fast.lanes.Snapshot(LaneMemorySync); s.Status != LaneDegraded || s.Reason != "clock_in_future" {
+		t.Fatalf("fast clock lane = %+v", s)
+	}
+	if c := fast.chunks()["mem-fast"]; c.SyncBlocked != "created_at_in_future" {
+		t.Fatalf("fast-clock created_at refusal must block too: %+v", c)
+	}
+}

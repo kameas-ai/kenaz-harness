@@ -1162,6 +1162,14 @@ func pushCandidate(c memory.Chunk, scopes map[string]bool) bool {
 	return c.SyncDirty && c.FleetMayKnow() // demotion (to session or project)
 }
 
+// deviceAhead reports whether this device's clock is more than HLCMaxSkew
+// ahead of Fleet's, going by the last response's Date header.
+func (m *MemorySync) deviceAhead() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.serverOffset > memory.HLCMaxSkew
+}
+
 // skip records a refused chunk for the in-memory, change-scoped skip set.
 func (m *MemorySync) skip(id string, gen int64) {
 	m.mu.Lock()
@@ -1352,6 +1360,20 @@ func (m *MemorySync) applyResults(ctx context.Context, entries []pushEntry, resp
 		case "rejected":
 			retry := r.Retry != nil && *r.Retry
 			switch {
+			case memory.BlockFollowsCreatedAt(r.Code):
+				// Fleet's D157 erase signal refuses a create by its
+				// created_at (contract §11): older than a forget-all made
+				// elsewhere, or stamped more than 5 minutes after Fleet's
+				// clock. Both are permanent. A future stamp would get in
+				// once Fleet's clock caught up, which is the note the erase
+				// keeps out, so the block is durable (it survives restarts
+				// and edits; created_at never changes). The note stays on
+				// this device. A device that is fast now still gets the
+				// clock warning so its next notes aren't refused too.
+				o.Kind, o.Code = memory.OutcomeBlocked, r.Code
+				if r.Code == memory.BlockCreatedAtInFuture && m.deviceAhead() {
+					clockFuture = true
+				}
 			case r.Code == "clock_in_future":
 				clockFuture = true
 				continue // stays dirty; lane degraded until the clock is fixed
