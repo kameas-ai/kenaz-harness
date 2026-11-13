@@ -2,7 +2,7 @@ module github.com/kameas-ai/kenaz-harness
 
 go 1.26.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/PuerkitoBio/goquery v1.12.0

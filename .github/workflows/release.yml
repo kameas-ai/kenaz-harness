@@ -83,9 +83,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Match go.mod's `toolchain` line (go1.27.3: CVE-2026-111943 crypto/x509
-  # denylist). Bump here when go.mod's toolchain bumps.
-  GO_VERSION: '1.27.3'
+  # Match go.mod's `toolchain` line (go1.27.4: GO-2026-6859 net/http;
+  # go1.27.3 before it: CVE-2026-111943 crypto/x509 denylist). Bump here
+  # when go.mod's toolchain bumps.
+  GO_VERSION: '1.27.4'
   NODE_VERSION: '20'
   # Kameas ML engine pin (see the `pin kenaz-ml engine release` step in the
   # build job). Bumping the engine a harness build installs is a one-line
