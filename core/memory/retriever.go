@@ -67,6 +67,11 @@ func (r *Retriever) WithSessionID(sessionID string) *Retriever {
 type Snippet struct {
 	Content    string
 	Similarity float32
+	// Kind and Pinned let the recall hook label automatically captured
+	// notes as untrusted (docs/memory-notes.md in kameas-fleet-plugin:
+	// "Recalled automatic notes are labelled as untrusted").
+	Kind   string
+	Pinned bool
 }
 
 // Retrieve embeds query and returns up to k snippets above the
@@ -128,6 +133,8 @@ func (r *Retriever) retrieve(ctx context.Context, query string, k int, scopes []
 			out = append(out, Snippet{
 				Content:    res.Chunk.Content,
 				Similarity: res.Similarity,
+				Kind:       res.Chunk.Kind,
+				Pinned:     res.Chunk.Pinned,
 			})
 		}
 	}
