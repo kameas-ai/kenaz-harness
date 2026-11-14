@@ -7985,6 +7985,7 @@ export namespace settings {
 	export class FleetDeviceNameSettings {
 	    share: boolean;
 	    useComputerName: boolean;
+	    useNeutralName: boolean;
 	    customName: string;
 	    computerName: string;
 	    defaultName: string;
@@ -7999,6 +8000,7 @@ export namespace settings {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.share = source["share"];
 	        this.useComputerName = source["useComputerName"];
+	        this.useNeutralName = source["useNeutralName"];
 	        this.customName = source["customName"];
 	        this.computerName = source["computerName"];
 	        this.defaultName = source["defaultName"];
@@ -8900,6 +8902,7 @@ export namespace settings {
 	    fleetDeviceNameHidden?: boolean;
 	    fleetDeviceNameUseComputerName?: boolean;
 	    fleetDeviceNameCustom?: string;
+	    fleetDeviceNameNeutral?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -9009,6 +9012,7 @@ export namespace settings {
 	        this.fleetDeviceNameHidden = source["fleetDeviceNameHidden"];
 	        this.fleetDeviceNameUseComputerName = source["fleetDeviceNameUseComputerName"];
 	        this.fleetDeviceNameCustom = source["fleetDeviceNameCustom"];
+	        this.fleetDeviceNameNeutral = source["fleetDeviceNameNeutral"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

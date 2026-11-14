@@ -4,13 +4,14 @@ package fleet
 // field (fleet contract §16; Fleet ER-43). Fleet's Hosts page labels it
 // "Device name"; without it a harness install shows only its node id.
 //
-// Parity with the Fleet plugin relay (kameas-fleet-plugin internal/device,
-// legal D58): the name is member-controlled. By default it is a neutral
-// "<OS> device <4 hex>" label derived from the node id, the computer's own
-// name is sent only when the member chooses it, a custom name overrides
-// both, and the member can turn sharing off entirely (nothing is sent, and
-// because Fleet's enroll upsert rewrites the column, the stored name is
-// cleared on the next enroll).
+// The name is member-controlled. By default it is the computer's own name
+// (owner decision 2026-11-14: "It should be usable"), falling back to a
+// neutral "<OS> device <4 hex>" label derived from the node id when the
+// computer's name is empty, unreadable or generic (a VM's "localhost").
+// The member can instead choose the neutral label or a custom name, or
+// turn sharing off entirely (nothing is sent, and because Fleet's enroll
+// upsert rewrites the column, the stored name is cleared on the next
+// enroll).
 
 import (
 	"context"
@@ -34,10 +35,14 @@ const MaxDeviceNameLen = 64
 type DeviceNameChoice struct {
 	// Share: send a device name at all. Off = the field is omitted.
 	Share bool
-	// UseComputerName: send this computer's own name instead of the
-	// neutral default.
+	// UseComputerName records an explicit choice of this computer's name.
+	// It resolves the same as the default (no choice made); it is kept so
+	// the choice also survives on a harness older than the new default.
 	UseComputerName bool
-	// Custom, when non-empty after sanitising, overrides both.
+	// UseNeutral: send the neutral "<OS> device <4 hex>" label instead of
+	// the computer's name. False when the member never chose it.
+	UseNeutral bool
+	// Custom, when non-empty after sanitising, overrides the others.
 	Custom string
 }
 
@@ -88,9 +93,10 @@ func SanitizeDeviceName(s string) string {
 }
 
 // ResolveDeviceName returns the name enroll sends for choice: "" when
-// sharing is off; else the custom name, else (when chosen) the computer's
-// name, else the neutral default. computerName is called only when the
-// computer's name is actually needed.
+// sharing is off; else the custom name; else the neutral label when the
+// member chose it; else (the default) the computer's name, falling back to
+// the neutral label when that is empty or generic. computerName is called
+// only when the computer's name is actually needed.
 func ResolveDeviceName(choice DeviceNameChoice, goos, nodeID string, computerName func() string) string {
 	if !choice.Share {
 		return ""
@@ -98,18 +104,50 @@ func ResolveDeviceName(choice DeviceNameChoice, goos, nodeID string, computerNam
 	if n := SanitizeDeviceName(choice.Custom); n != "" {
 		return n
 	}
-	if choice.UseComputerName && computerName != nil {
-		if n := SanitizeDeviceName(computerName()); n != "" {
+	if !choice.UseNeutral && computerName != nil {
+		if n := SanitizeDeviceName(computerName()); n != "" && !IsGenericComputerName(n) {
 			return n
 		}
 	}
 	return SanitizeDeviceName(DefaultDeviceName(goos, nodeID))
 }
 
+// genericComputerNames are names that do not tell one device from another:
+// OS and image defaults, and the hostnames Kenaz Workbench VM images set
+// (kenaz-workbench nix/modules/placeholder-base.nix,
+// guest/distro-headless/modules/vm-image.nix). Compared case-insensitively
+// against the first label.
+var genericComputerNames = map[string]bool{
+	"localhost": true, "(none)": true, "none": true, "unknown": true,
+	"ubuntu": true, "debian": true, "fedora": true, "alpine": true,
+	"archlinux": true, "nixos": true, "linux": true, "vm": true,
+	"kameas-workbench": true, "kenaz-headless": true, "kenaz-workbench": true,
+}
+
+// IsGenericComputerName reports whether name is empty or a generic default
+// ("localhost", a distro or Workbench VM image default, or a 12-hex
+// container id) that should fall back to the neutral label.
+func IsGenericComputerName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if i := strings.IndexByte(n, '.'); i > 0 {
+		n = n[:i]
+	}
+	if n == "" || genericComputerNames[n] {
+		return true
+	}
+	if len(n) == 12 {
+		if _, err := hex.DecodeString(n); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // ComputerName returns this computer's user-facing name, sanitised: on
 // macOS the Sharing "Computer Name" (scutil --get ComputerName), on Windows
 // %COMPUTERNAME%, elsewhere the hostname. Falls back to the short hostname.
-// "" when none can be read. It is read only on demand (never cached), so a
+// "" when none can be read or the name is generic (IsGenericComputerName),
+// so a Workbench VM's "localhost" is never offered as this computer's name. It is read only on demand (never cached), so a
 // rename shows up on the next enroll.
 func ComputerName() string {
 	return computerNameFor(runtime.GOOS, scutilComputerName, os.Getenv, os.Hostname)
@@ -117,6 +155,14 @@ func ComputerName() string {
 
 // computerNameFor is the pure core of ComputerName.
 func computerNameFor(goos string, scutil func() (string, error), getenv func(string) string, hostname func() (string, error)) string {
+	n := rawComputerNameFor(goos, scutil, getenv, hostname)
+	if IsGenericComputerName(n) {
+		return ""
+	}
+	return n
+}
+
+func rawComputerNameFor(goos string, scutil func() (string, error), getenv func(string) string, hostname func() (string, error)) string {
 	switch goos {
 	case "darwin":
 		if scutil != nil {

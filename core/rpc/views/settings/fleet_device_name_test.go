@@ -121,9 +121,9 @@ func stubComputerName(t *testing.T, name string) {
 	t.Cleanup(func() { computerNameFn.Store(prev) })
 }
 
-// TestFleetDeviceName_SettingReachesEnrollBody: default on with the neutral
-// name; a change re-enrolls at once; the computer name is used only when
-// chosen; a custom name overrides it; off sends nothing.
+// TestFleetDeviceName_SettingReachesEnrollBody: default on with the
+// computer's name; a change re-enrolls at once; an explicit neutral choice
+// sends the neutral label; a custom name overrides; off sends nothing.
 func TestFleetDeviceName_SettingReachesEnrollBody(t *testing.T) {
 	// NOT parallel: SetExternalTokenSource and computerNameFn are global.
 	if fleet.Disabled() {
@@ -145,29 +145,44 @@ func TestFleetDeviceName_SettingReachesEnrollBody(t *testing.T) {
 	a.SetFleetClient(fleet.NewClientForTestingWithDataDir(f.srv.URL, dataDir), dataDir)
 	t.Cleanup(a.StopFleetBackground)
 
-	// Default: shared, neutral "<OS> device <4 hex>", never the computer name.
+	// Default (never chosen): shared, this computer's name.
 	if _, err := a.FleetRefreshIdentity(ctx); err != nil {
 		t.Fatalf("enroll: %v", err)
 	}
 	nodeID := fleet.ReadNodeID(dataDir)
 	def := fleet.DefaultDeviceName(runtime.GOOS, nodeID)
-	if def == "" || f.last(t)["hostname"] != def {
-		t.Fatalf("default hostname = %v, want %q", f.last(t)["hostname"], def)
+	if def == "" || f.last(t)["hostname"] != "Example-Workstation" {
+		t.Fatalf("default hostname = %v, want the computer name", f.last(t)["hostname"])
 	}
 	dn, err := a.GetFleetDeviceName(ctx)
-	if err != nil || !dn.Share || dn.UseComputerName || dn.CustomName != "" ||
-		dn.DefaultName != def || dn.EffectiveName != def ||
+	if err != nil || !dn.Share || dn.UseComputerName || dn.UseNeutralName || dn.CustomName != "" ||
+		dn.DefaultName != def || dn.EffectiveName != "Example-Workstation" ||
 		dn.ComputerName != "Example-Workstation" || dn.MaxLength != 64 {
 		t.Fatalf("Get default = %+v, %v", dn, err)
 	}
 
-	// Use this computer's name: re-enrolls with it.
+	// The neutral label, chosen: re-enrolls with it, and it is kept.
 	n := f.count()
+	if err := a.SetFleetDeviceName(ctx, FleetDeviceNameSettings{Share: true, UseNeutralName: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.waitEnroll(t, n)["hostname"]; got != def {
+		t.Fatalf("neutral hostname = %v, want %q", got, def)
+	}
+	if dn, _ := a.GetFleetDeviceName(ctx); !dn.UseNeutralName || dn.UseComputerName || dn.EffectiveName != def {
+		t.Fatalf("Get neutral = %+v", dn)
+	}
+
+	// Use this computer's name: re-enrolls with it, clearing neutral.
+	n = f.count()
 	if err := a.SetFleetDeviceName(ctx, FleetDeviceNameSettings{Share: true, UseComputerName: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.waitEnroll(t, n)["hostname"]; got != "Example-Workstation" {
 		t.Fatalf("computer-name hostname = %v", got)
+	}
+	if s, _ := a.Get(ctx); s.FleetDeviceNameNeutral || !s.FleetDeviceNameUseComputerName {
+		t.Fatalf("explicit computer choice stored as neutral=%v computer=%v", s.FleetDeviceNameNeutral, s.FleetDeviceNameUseComputerName)
 	}
 
 	// Custom overrides it; stored sanitised and capped.
@@ -211,6 +226,53 @@ func TestFleetDeviceName_SettingReachesEnrollBody(t *testing.T) {
 		t.Fatalf("after stale Set: hidden=%v custom=%q theme=%q", s.FleetDeviceNameHidden, s.FleetDeviceNameCustom, s.Theme)
 	}
 }
+
+// TestFleetDeviceName_StoredChoices: what a settings.json written by an
+// earlier harness (or by this one) resolves to. Never chosen moves to the
+// computer-name default; an explicit neutral, custom or off is kept; an
+// empty or generic computer name falls back to the neutral label.
+func TestFleetDeviceName_StoredChoices(t *testing.T) {
+	const node = "node-1"
+	def := fleet.DefaultDeviceName(runtime.GOOS, node)
+	cases := []struct {
+		name     string
+		json     string
+		computer string
+		want     string
+	}{
+		{"never chosen (no keys)", `{}`, "Example-Workstation", "Example-Workstation"},
+		{"never chosen, other settings", `{"theme":"dark"}`, "Example-Workstation", "Example-Workstation"},
+		{"explicit computer (pre-change)", `{"fleetDeviceNameUseComputerName":true}`, "Example-Workstation", "Example-Workstation"},
+		{"explicit neutral", `{"fleetDeviceNameNeutral":true}`, "Example-Workstation", def},
+		{"custom preserved", `{"fleetDeviceNameCustom":"Test Laptop"}`, "Example-Workstation", "Test Laptop"},
+		{"custom over neutral", `{"fleetDeviceNameNeutral":true,"fleetDeviceNameCustom":"Test Laptop"}`, "Example-Workstation", "Test Laptop"},
+		{"off preserved", `{"fleetDeviceNameHidden":true}`, "Example-Workstation", ""},
+		{"off with custom", `{"fleetDeviceNameHidden":true,"fleetDeviceNameCustom":"Test Laptop"}`, "Example-Workstation", ""},
+		{"empty computer name", `{}`, "", def},
+		{"generic VM hostname", `{}`, "localhost", def},
+		{"workbench image hostname", `{}`, "kameas-workbench", def},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stubComputerName(t, tc.computer)
+			var s Settings
+			if err := json.Unmarshal([]byte(tc.json), &s); err != nil {
+				t.Fatal(err)
+			}
+			a := &API{store: fixedLoadStore{s: s}}
+			if got := a.fleetDeviceName(node); got != tc.want {
+				t.Fatalf("fleetDeviceName = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+type fixedLoadStore struct {
+	SettingsStore
+	s Settings
+}
+
+func (f fixedLoadStore) LoadAll() (Settings, error) { return f.s, nil }
 
 // TestFleetDeviceName_NotEnrolledDoesNotEnroll: changing the setting before
 // sign-in persists it and makes no network call.
