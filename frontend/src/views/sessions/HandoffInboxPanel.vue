@@ -33,11 +33,20 @@ const client = useHarnessClient();
 const busyID = ref('');
 const errorByID = ref<Record<string, string>>({});
 
-/** Why THIS device cannot receive shares, when its key isn't registered. */
+/**
+ * Why THIS device cannot receive shares, when its key isn't registered.
+ * reauth_required: the button lives in Settings → Account, so point there.
+ * reauth_refused: the message already says to contact the administrator
+ * (kenaz-fleet ER-40); no "sign in again" pointer.
+ */
 const receiveWarning = computed(() => {
   const dk = fleetSession.value?.deviceKeys;
   if (!dk || dk.status === 'registered') return '';
-  return dk.message ?? '';
+  const msg = dk.message ?? '';
+  if (dk.status === 'reauth_required' && msg) {
+    return `${msg} Open Settings → Account to sign in again.`;
+  }
+  return msg;
 });
 
 function fromLabel(it: FleetInboxItemView): string {

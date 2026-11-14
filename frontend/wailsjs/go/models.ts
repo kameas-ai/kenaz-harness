@@ -7964,6 +7964,30 @@ export namespace settings {
 	        this.handoffFingerprint = source["handoffFingerprint"];
 	    }
 	}
+	export class FleetDeviceNameSettings {
+	    share: boolean;
+	    useComputerName: boolean;
+	    customName: string;
+	    computerName: string;
+	    defaultName: string;
+	    effectiveName: string;
+	    maxLength: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetDeviceNameSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.share = source["share"];
+	        this.useComputerName = source["useComputerName"];
+	        this.customName = source["customName"];
+	        this.computerName = source["computerName"];
+	        this.defaultName = source["defaultName"];
+	        this.effectiveName = source["effectiveName"];
+	        this.maxLength = source["maxLength"];
+	    }
+	}
 	export class FleetHealthView {
 	    configDistributionEnabled: boolean;
 	    configSource: string;
@@ -8457,6 +8481,66 @@ export namespace settings {
 		    return a;
 		}
 	}
+	export class MemberNoticeView {
+	    family: string;
+	    edition: string;
+	    text: string;
+	    textHash: string;
+	    action: string;
+	    rowEdition: string;
+	    acked: boolean;
+	    actedAt: string;
+	    ackedSince: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemberNoticeView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.family = source["family"];
+	        this.edition = source["edition"];
+	        this.text = source["text"];
+	        this.textHash = source["textHash"];
+	        this.action = source["action"];
+	        this.rowEdition = source["rowEdition"];
+	        this.acked = source["acked"];
+	        this.actedAt = source["actedAt"];
+	        this.ackedSince = source["ackedSince"];
+	    }
+	}
+	export class MemberNoticesView {
+	    notices: MemberNoticeView[];
+	    stateError?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemberNoticesView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.notices = this.convertValues(source["notices"], MemberNoticeView);
+	        this.stateError = source["stateError"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MemorySyncStatusView {
 	    wired: boolean;
 	    entitled: boolean;
@@ -8481,6 +8565,8 @@ export namespace settings {
 	    lane: FleetSyncLaneView;
 	    orgPaused: boolean;
 	    pausedCategory?: string;
+	    noticeHold: boolean;
+	    noticeHoldReason?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MemorySyncStatusView(source);
@@ -8511,6 +8597,8 @@ export namespace settings {
 	        this.lane = this.convertValues(source["lane"], FleetSyncLaneView);
 	        this.orgPaused = source["orgPaused"];
 	        this.pausedCategory = source["pausedCategory"];
+	        this.noticeHold = source["noticeHold"];
+	        this.noticeHoldReason = source["noticeHoldReason"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -8765,6 +8853,9 @@ export namespace settings {
 	    settingsSyncUploadsConfirmed?: boolean;
 	    settingsSyncEnabledCategories?: string[];
 	    mlLocalActivityRetentionDays?: number;
+	    fleetDeviceNameHidden?: boolean;
+	    fleetDeviceNameUseComputerName?: boolean;
+	    fleetDeviceNameCustom?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8871,6 +8962,9 @@ export namespace settings {
 	        this.settingsSyncUploadsConfirmed = source["settingsSyncUploadsConfirmed"];
 	        this.settingsSyncEnabledCategories = source["settingsSyncEnabledCategories"];
 	        this.mlLocalActivityRetentionDays = source["mlLocalActivityRetentionDays"];
+	        this.fleetDeviceNameHidden = source["fleetDeviceNameHidden"];
+	        this.fleetDeviceNameUseComputerName = source["fleetDeviceNameUseComputerName"];
+	        this.fleetDeviceNameCustom = source["fleetDeviceNameCustom"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

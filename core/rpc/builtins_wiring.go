@@ -1267,6 +1267,8 @@ func settingsBuiltinPredicate(s *settings.API) func(string) bool {
 		// Always-on: reading context module files on demand is low-risk and
 		// is the expected companion behaviour to module attachment. Path-
 		// confinement enforced within the tool itself (module root boundary).
+		// Its read-only "shared" argument (teammates' Fleet context) gates
+		// itself per call on Fleet sign-in (sharedContextSource.SignedIn).
 		case corereadctx.ToolName:
 			return true
 
@@ -1380,6 +1382,7 @@ func registerReadContextFileTool(
 	registry *toolloop.BuiltinRegistry,
 	lib *corecontexts.Library,
 	moduleSource corereadctx.ModuleSource,
+	shared corereadctx.SharedSource,
 ) {
 	if registry == nil || lib == nil || moduleSource == nil {
 		logging.L().Info("rpc.builtins.read_context_file_skipped",
@@ -1389,6 +1392,7 @@ func registerReadContextFileTool(
 	tool := corereadctx.New(corereadctx.Options{
 		Library: lib,
 		Modules: moduleSource,
+		Shared:  shared,
 	})
 	registry.Register(tool)
 	logging.L().Info("rpc.builtins.register", "tool", tool.Name())

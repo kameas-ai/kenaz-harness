@@ -87,6 +87,23 @@ attached.
 **Requires active consent:** This path is inactive if the user has not opted
 into any telemetry category. Each category is individually user-controlled.
 
+### 6. Enroll (sign-in and every app start while signed in)
+
+**Endpoint:** `POST /api/v1/enroll` (fleet contract §16)  
+**Payload sent:** `node_id` (opaque, generated per install), `platform`,
+client `version`, `arch`, a short OS version (`macOS 14.5`), `client_kind`,
+the device's public handoff/signing keys, and, inside a Kenaz workbench VM
+only, `in_vm` / `vm_id` / `host_node_id`.  
+**Device name (`hostname` field):** a display name your org admins see as
+"Device name" on Fleet's Hosts page. Controlled in Settings → Account →
+Device name ("Share this device's name with your organization", default
+on). By default it is a neutral `"<OS> device <4 hex>"` label derived from
+the node id; the computer's own name (macOS Computer Name, Windows
+`COMPUTERNAME`, Linux hostname) is sent only when you choose it, and a
+custom name overrides both. Sanitised (no control or invisible
+characters) and capped at 64 characters. Turning sharing off omits the
+field, which clears the stored name on the next enroll.
+
 ---
 
 ## What never egresses (regardless of fleet configuration)

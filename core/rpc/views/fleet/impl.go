@@ -16,7 +16,10 @@ import (
 // so impl_test.go can substitute a fake instead of spinning up a real fleet
 // HTTP server for every SetTelemetryConsent test.
 type optInPusher interface {
-	Push(ctx context.Context, level corefleet.ConsentLevel) error
+	// PushWithNotice pushes level's vector; a non-empty noticeEdition is
+	// the Agent Telemetry notice edition the panel showed, sent as
+	// notice_version "kenaz-harness/<edition>" while Fleet still serves it.
+	PushWithNotice(ctx context.Context, level corefleet.ConsentLevel, noticeEdition string) error
 }
 
 // Impl implements FleetAPI backed by core/fleet.TelemetryConsent and the
@@ -112,6 +115,14 @@ func (f *Impl) GetTelemetryConsent(_ context.Context) (string, error) {
 //     disk) via the same two triggers: the next tier change, or the next app
 //     start (fleetEnroll calls Reconcile).
 func (f *Impl) SetTelemetryConsent(ctx context.Context, level string) error {
+	return f.SetTelemetryConsentWithNotice(ctx, level, "")
+}
+
+// SetTelemetryConsentWithNotice is SetTelemetryConsent for a tier change made
+// while the panel showed the Agent Telemetry notice text Fleet served for
+// noticeEdition (contract-harness-sync §17.2; "" when no text was shown). The
+// notice never changes whether the tier saves or pushes.
+func (f *Impl) SetTelemetryConsentWithNotice(ctx context.Context, level, noticeEdition string) error {
 	cl := corefleet.ConsentLevel(level)
 	switch cl {
 	case corefleet.ConsentNone, corefleet.ConsentAggregate, corefleet.ConsentFull:
@@ -134,7 +145,7 @@ func (f *Impl) SetTelemetryConsent(ctx context.Context, level string) error {
 	if f.OptIns == nil {
 		return nil // no fleet client wired — local-only path, unchanged behaviour
 	}
-	if err := f.OptIns.Push(ctx, cl); err != nil {
+	if err := f.OptIns.PushWithNotice(ctx, cl, noticeEdition); err != nil {
 		if errors.Is(err, corefleet.ErrFleetDisabled) {
 			return nil
 		}

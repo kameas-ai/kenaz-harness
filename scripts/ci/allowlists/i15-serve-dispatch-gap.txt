@@ -1298,6 +1298,24 @@
 "Fleet_MemorySyncEnable"
 "Fleet_MemorySyncStatus"
 
+# CLASS: desktop-only-by-nature -- fleet spec 017 T23 member notice acks, 2026-11-13.
+# 2 entries.
+#
+# The member notices read and the memory-access "I have read this" / withdraw
+# (contract-harness-sync §17). The memory-access notice is mounted inside
+# MemorySyncPanel (the boundary-panelled Settings › Sync tab, same disposition
+# as the Fleet_MemorySync* entries above) and its hold lives in the desktop
+# memory sync lane. FleetTelemetryPanel also reads Fleet_MemberNotices to show
+# the Agent Telemetry text; in served mode the read rejects with
+# ServedUnsupportedError and the panel shows no notice and sends no edition,
+# which is exactly the dormant behaviour (no ack is recorded for a text that
+# wasn't shown). Fleet_SetTelemetryConsent itself stays served.
+#
+# Blocker: a served settings surface (none exists for any Settings_Fleet*
+# panel). Dated 2026-11-13. Owner: alec.
+"Fleet_MemberNotices"
+"Fleet_RespondMemberNotice"
+
 # CLASS: desktop-only-by-nature -- ml-producer-01MLPRD01 WP01, 2026-10-09.
 # 3 entries.
 #
@@ -1395,6 +1413,18 @@
 "Settings_GetModelCallTelemetry"
 "Settings_SetModelCallTelemetry"
 
+# CLASS: boundary-panelled -- fleet ER-43 device display name, 2026-11-13.
+# 2 entries.
+#
+# Settings_GetFleetDeviceName / Settings_SetFleetDeviceName: "Share this
+# device's name with your organization" and the name choice. Their only
+# caller is views/settings/FleetDeviceNamePanel.vue, mounted only in
+# SettingsView's desktop SettingsShell (the Account pane), like
+# ModelCallTelemetryPanel above. A served harness enrolls with the
+# stored (default) choice. Blocker: a served settings surface. Owner: alec.
+"Settings_GetFleetDeviceName"
+"Settings_SetFleetDeviceName"
+
 # CLASS: desktop-only-by-nature -- settings-sync review round, 2026-10-16.
 # 1 entries.
 #
@@ -1422,3 +1452,18 @@
 "Settings_DeleteMLLocalActivity"
 "Settings_GetMLLocalActivity"
 "Settings_SetMLLocalActivityRetention"
+
+# CLASS: desktop-only-by-nature -- kenaz-fleet ER-40 device-key step-up, 2026-11-13.
+# 1 entries.
+#
+# Settings_FleetDeviceKeysReauth opens a max_age=0 browser re-authentication
+# through the desktop PKCE loopback flow, then retries PUT
+# /api/v1/me/nodes/{id}/keys once. Served mode's session is owned by the host
+# auth broker (no browser flow on this side), and the only caller,
+# AccountPanel, lives under SettingsView, which is boundary-panelled
+# (NotAvailableInServedMode) in served mode -- the same disposition as
+# Settings_FleetSignIn / Settings_FleetSignInCancel.
+#
+# Blocker: a served settings surface (none exists for any Settings_Fleet*
+# panel). Dated 2026-11-13. Owner: alec.
+"Settings_FleetDeviceKeysReauth"

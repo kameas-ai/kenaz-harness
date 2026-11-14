@@ -215,6 +215,28 @@ export interface ModelCallTelemetrySettings {
 }
 
 /**
+ * Settings › Account › Device name (Go settings.FleetDeviceNameSettings,
+ * Fleet ER-43): the name your organization's Fleet admins see for this
+ * device.
+ */
+export interface FleetDeviceNameSettings {
+  /** "Share this device's name with your organization" — default true. */
+  share: boolean;
+  /** Send this computer's own name instead of the neutral default. */
+  useComputerName: boolean;
+  /** When non-empty, sent instead (sanitised, at most maxLength). */
+  customName: string;
+  /** Read-only: this computer's name as it would be sent. */
+  computerName: string;
+  /** Read-only: the neutral "<OS> device <4 hex>" name ('' before sign-in). */
+  defaultName: string;
+  /** Read-only: what the next enroll sends ('' = nothing). */
+  effectiveName: string;
+  /** Read-only: Fleet's limit, in characters. */
+  maxLength: number;
+}
+
+/**
  * The local ML activity store (ml-producer-01MLPRD01 WP11): what Kenaz keeps
  * on this device to power local suggestions (rpc.MLLocalActivityView).
  */
@@ -4940,6 +4962,37 @@ export interface MemorySyncStatus {
   /** Staff org pause (kenaz-fleet PR 206): show the paused banner, keep data-rights actions. */
   orgPaused?: boolean;
   pausedCategory?: string;
+  /**
+   * Uploads wait until the memory-access notice is read in this org (legal
+   * D168(2)). Never set while Fleet serves no memory-access text.
+   */
+  noticeHold?: boolean;
+  /** unread | text_refused | check_failed */
+  noticeHoldReason?: string;
+}
+
+/**
+ * Mirrors settings.MemberNoticeView — one notice text Fleet serves on the
+ * kenaz-harness surface (contract-harness-sync §17) and this member's read
+ * state for its family in the current org. `text` is shown verbatim.
+ */
+export interface MemberNotice {
+  family: 'memory-access' | 'agent-telemetry' | string;
+  edition: string;
+  text: string;
+  textHash: string;
+  /** Latest row in this org: 'ack', 'withdraw', or '' for none. */
+  action: string;
+  rowEdition: string;
+  acked: boolean;
+  actedAt: string;
+  ackedSince: string;
+}
+
+/** Mirrors settings.MemberNoticesView. `notices` is empty while nothing is registered. */
+export interface MemberNotices {
+  notices: MemberNotice[];
+  stateError?: string;
 }
 
 /**
@@ -5172,7 +5225,12 @@ export interface FleetSessionView {
 
 /** Mirrors settings.FleetDeviceKeysView. */
 export interface FleetDeviceKeysView {
-  /** registered | too_many_devices | invalid_key | unavailable */
+  /**
+   * registered | too_many_devices | invalid_key | unavailable |
+   * reauth_required (kenaz-fleet ER-40: replacing this device's active key
+   * needs a fresh sign-in — settings.fleetDeviceKeysReauth()) |
+   * reauth_refused (a fresh sign-in was refused: contact the administrator).
+   */
   status: string;
   /** Human copy when this device cannot receive shared sessions. */
   message?: string;

@@ -362,6 +362,8 @@ export function Fleet_MLAckNotice(arg1:number,arg2:string):Promise<settings.MLSt
 
 export function Fleet_MLStatus():Promise<settings.MLStatusView>;
 
+export function Fleet_MemberNotices():Promise<settings.MemberNoticesView>;
+
 export function Fleet_MemorySyncContinueOlderNotes():Promise<settings.MemorySyncStatusView>;
 
 export function Fleet_MemorySyncDisable(arg1:boolean,arg2:string):Promise<settings.MemorySyncStatusView>;
@@ -374,7 +376,9 @@ export function Fleet_MemorySyncStatus():Promise<settings.MemorySyncStatusView>;
 
 export function Fleet_PendingApprovals():Promise<settings.PendingApprovalsView>;
 
-export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
+export function Fleet_RespondMemberNotice(arg1:string,arg2:string,arg3:string,arg4:string):Promise<settings.MemberNoticesView>;
+
+export function Fleet_SetTelemetryConsent(arg1:string,arg2:string):Promise<void>;
 
 export function Fleet_SetWorkflowEventsOptIn(arg1:boolean):Promise<settings.MLStatusView>;
 
@@ -766,6 +770,8 @@ export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
 
 export function Settings_FleetConfigPullStatus():Promise<settings.FleetConfigPullStatusView>;
 
+export function Settings_FleetDeviceKeysReauth():Promise<void>;
+
 export function Settings_FleetHealth():Promise<settings.FleetHealthView>;
 
 export function Settings_FleetLockdownStatus():Promise<settings.LockdownStatusView>;
@@ -817,6 +823,8 @@ export function Settings_GetFSReadEnabled():Promise<boolean>;
 export function Settings_GetFSRequestAccessEnabled():Promise<boolean>;
 
 export function Settings_GetFSWriteEnabled():Promise<boolean>;
+
+export function Settings_GetFleetDeviceName():Promise<settings.FleetDeviceNameSettings>;
 
 export function Settings_GetLocalRuntimeRAMOverrideGB():Promise<number>;
 
@@ -887,6 +895,8 @@ export function Settings_SetFSReadEnabled(arg1:boolean):Promise<void>;
 export function Settings_SetFSRequestAccessEnabled(arg1:boolean):Promise<void>;
 
 export function Settings_SetFSWriteEnabled(arg1:boolean):Promise<void>;
+
+export function Settings_SetFleetDeviceName(arg1:settings.FleetDeviceNameSettings):Promise<void>;
 
 export function Settings_SetLocalRuntimeRAMOverrideGB(arg1:number):Promise<void>;
 

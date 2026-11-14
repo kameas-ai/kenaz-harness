@@ -13,6 +13,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MemorySyncStatus } from '@/lib/types';
 import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
+import MemoryAccessNotice from '@/views/settings/MemoryAccessNotice.vue';
 
 const client = useHarnessClient();
 
@@ -183,6 +184,13 @@ async function confirmDisable() {
     </h2>
 
     <OrgPausedBanner v-if="paused" force :category="status.pausedCategory" />
+
+    <!-- The memory-access notice (legal D168(2)). Renders nothing until Fleet
+         serves a text; while it is unread, uploads wait on this device. -->
+    <p v-if="status.noticeHold" class="text-[12px] text-signal-warn" data-testid="memory-sync-notice-hold">
+      Uploads are waiting. Your notes stay on this device until then.
+    </p>
+    <MemoryAccessNotice @changed="refresh" />
 
     <p v-if="status.localErasePending" class="text-[12px] text-signal-warn" data-testid="memory-sync-local-erase-pending">
       Your notes were erased from Kameas Fleet but not yet from this device. It will keep trying.

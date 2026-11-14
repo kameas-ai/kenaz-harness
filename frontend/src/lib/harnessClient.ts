@@ -159,6 +159,7 @@ import type {
   SessionUsage,
   ModelCall,
   ModelCallTelemetrySettings,
+  FleetDeviceNameSettings,
   SettingsResetUnreadableResult,
   MLLocalActivity,
   TurnRun,
@@ -186,6 +187,7 @@ import type {
   FleetProfileInfo,
   FleetSessionView,
   MemorySyncStatus,
+  MemberNotices,
   MLStatus,
   PendingApprovals,
   CapabilitiesView,
@@ -312,6 +314,9 @@ interface WailsBindingsLike {
   Sessions_ModelCalls(id: string, limit: number): Promise<ModelCall[] | null>;
   Settings_GetModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   Settings_SetModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  // ── Fleet ER-43: device display name ────────────────────────────────
+  Settings_GetFleetDeviceName(): Promise<FleetDeviceNameSettings>;
+  Settings_SetFleetDeviceName(dn: FleetDeviceNameSettings): Promise<void>;
   /** "Reset settings" recovery for an unreadable settings.json. Desktop-only. */
   Settings_ResetUnreadable(): Promise<SettingsResetUnreadableResult>;
   // ── ml-producer-01MLPRD01 WP11 ──────────────────────────────────────
@@ -649,6 +654,8 @@ interface WailsBindingsLike {
   Settings_FleetSignIn(): Promise<FleetIdentity>;
   Settings_FleetSignOut(): Promise<void>;
   Settings_FleetSignInCancel(): Promise<void>;
+  // kenaz-fleet ER-40: step-up before replacing this device's keys
+  Settings_FleetDeviceKeysReauth(): Promise<void>;
   Settings_FleetRefreshIdentity(): Promise<FleetIdentity>;
   Settings_FleetProfile(): Promise<FleetProfileInfo>;
   // fleet-session-truth-01DOGF0A FR-1
@@ -1033,7 +1040,9 @@ interface WailsBindingsLike {
   /** Returns the current fleet telemetry consent level: "none" | "aggregate" | "full". */
   Fleet_GetTelemetryConsent(): Promise<string>;
   /** Persists a new fleet telemetry consent level. Returns an error if the org tier is insufficient. */
-  Fleet_SetTelemetryConsent(level: string): Promise<void>;
+  Fleet_SetTelemetryConsent(level: string, noticeEdition: string): Promise<void>;
+  Fleet_MemberNotices(): Promise<MemberNotices>;
+  Fleet_RespondMemberNotice(family: string, edition: string, textHash: string, action: string): Promise<MemberNotices>;
   Fleet_TelemetryStatus(): Promise<FleetTelemetryStatus>;
   // ── Fleet learned-memory sync (memory-sync-01MEMSY01 WP08) ────────────
   Fleet_MemorySyncStatus(): Promise<MemorySyncStatus>;
@@ -2536,6 +2545,14 @@ export interface SettingsClient {
   /** Persist them; turning sharing on exports only calls that start afterwards. */
   setModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
   /**
+   * The device name Fleet admins see for this install (Fleet ER-43):
+   * share on/off (default on), computer name or custom name. The
+   * read-only fields carry the computer, default and effective names.
+   */
+  getFleetDeviceName(): Promise<FleetDeviceNameSettings>;
+  /** Persist it; when signed in, Fleet sees the change at once. */
+  setFleetDeviceName(dn: FleetDeviceNameSettings): Promise<void>;
+  /**
    * Recovery for a settings file that cannot be read: moves it aside to
    * settings.json.corrupt-<UTC timestamp> (returned as backupPath), writes
    * the defaults, and turns settings sync off. Rejects, changing nothing,
@@ -2675,6 +2692,14 @@ export interface SettingsClient {
    * no flow is running.
    */
   fleetSignInCancel(): Promise<void>;
+  /**
+   * kenaz-fleet ER-40: Fleet refused to replace this device's keys without a
+   * fresh sign-in (deviceKeys.status === 'reauth_required'). Opens the
+   * browser for a fresh sign-in, then retries the key update once. Cancel
+   * with fleetSignInCancel() (rejects with "context canceled"; the
+   * reauth_required state stays on the session).
+   */
+  fleetDeviceKeysReauth(): Promise<void>;
   /** Clear tokens and identity cache. */
   fleetSignOut(): Promise<void>;
   /** Re-call the fleet enroll endpoint and update the cached identity. */
@@ -4029,8 +4054,24 @@ export interface FleetClient {
   getTelemetryStatus(): Promise<FleetTelemetryStatus>;
   /** Returns the current fleet telemetry consent level. */
   getTelemetryConsent(): Promise<'none' | 'aggregate' | 'full'>;
-  /** Persists a new consent level. Rejects when the org tier is insufficient. */
-  setTelemetryConsent(level: 'none' | 'aggregate' | 'full'): Promise<void>;
+  /**
+   * Persists a new consent level. Rejects when the org tier is insufficient.
+   * noticeEdition is the Agent Telemetry notice edition shown with the
+   * choice (contract-harness-sync §17.2), omitted when none was shown.
+   */
+  setTelemetryConsent(level: 'none' | 'aggregate' | 'full', noticeEdition?: string): Promise<void>;
+  /**
+   * Notice texts Fleet serves on the kenaz-harness surface, with this
+   * member's read state in the current org. Empty while nothing is registered.
+   */
+  memberNotices(): Promise<MemberNotices>;
+  /** "I have read this" (ack) or withdraw, for the memory-access text shown. */
+  respondMemberNotice(
+    family: string,
+    edition: string,
+    textHash: string,
+    action: 'ack' | 'withdraw',
+  ): Promise<MemberNotices>;
   /** Learned-memory sync panel state (memory-sync-01MEMSY01 WP08). */
   memorySyncStatus(): Promise<MemorySyncStatus>;
   /** Opt in with scopes ⊆ long_term/global and the accepted disclosure version. */
@@ -4812,6 +4853,8 @@ export function createHarnessClient(): HarnessClient {
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
       getModelCallTelemetry: () => b().Settings_GetModelCallTelemetry(),
       setModelCallTelemetry: (mc) => b().Settings_SetModelCallTelemetry(mc),
+      getFleetDeviceName: () => b().Settings_GetFleetDeviceName(),
+      setFleetDeviceName: (dn) => b().Settings_SetFleetDeviceName(dn),
       resetUnreadable: () => b().Settings_ResetUnreadable(),
       getMLLocalActivity: () => b().Settings_GetMLLocalActivity(),
       setMLLocalActivityRetention: (days) => b().Settings_SetMLLocalActivityRetention(days),
@@ -4852,6 +4895,7 @@ export function createHarnessClient(): HarnessClient {
       fleetSignIn: () => b().Settings_FleetSignIn(),
       fleetSignOut: () => b().Settings_FleetSignOut(),
       fleetSignInCancel: () => b().Settings_FleetSignInCancel(),
+      fleetDeviceKeysReauth: () => b().Settings_FleetDeviceKeysReauth(),
       fleetRefreshIdentity: () => b().Settings_FleetRefreshIdentity(),
       fleetProfile: () => b().Settings_FleetProfile(),
       fleetSession: () => b().Settings_FleetSession(),
@@ -5168,7 +5212,11 @@ export function createHarnessClient(): HarnessClient {
         b()
           .Fleet_GetTelemetryConsent()
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
-      setTelemetryConsent: (level) => b().Fleet_SetTelemetryConsent(level),
+      setTelemetryConsent: (level, noticeEdition) =>
+        b().Fleet_SetTelemetryConsent(level, noticeEdition ?? ''),
+      memberNotices: () => b().Fleet_MemberNotices(),
+      respondMemberNotice: (family, edition, textHash, action) =>
+        b().Fleet_RespondMemberNotice(family, edition, textHash, action),
       getTelemetryStatus: () => b().Fleet_TelemetryStatus(),
       memorySyncStatus: () => b().Fleet_MemorySyncStatus(),
       memorySyncEnable: (scopes, consentVersion) => b().Fleet_MemorySyncEnable(scopes, consentVersion),
@@ -5838,8 +5886,11 @@ export function createServedHarnessClient(opts?: {
         transport
           .call<string>('Fleet_GetTelemetryConsent')
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
-      setTelemetryConsent: (level) =>
-        transport.call<void>('Fleet_SetTelemetryConsent', { level }),
+      setTelemetryConsent: (level, noticeEdition) =>
+        transport.call<void>(
+          'Fleet_SetTelemetryConsent',
+          noticeEdition ? { level, noticeEdition } : { level },
+        ),
       getTelemetryStatus: () => transport.call<FleetTelemetryStatus>('Fleet_TelemetryStatus'),
     },
 
@@ -6389,6 +6440,16 @@ export function createFakeHarnessClient(
         shareWithFleet: false,
       }),
       setModelCallTelemetry: noop,
+      getFleetDeviceName: async () => ({
+        share: true,
+        useComputerName: false,
+        customName: '',
+        computerName: '',
+        defaultName: '',
+        effectiveName: '',
+        maxLength: 64,
+      }),
+      setFleetDeviceName: noop,
       resetUnreadable: async () => ({ backupPath: '' }),
       getMLLocalActivity: async () => fakeMLLocalActivity(),
       setMLLocalActivityRetention: async (days: number) => fakeMLLocalActivity(days),
@@ -6472,6 +6533,7 @@ export function createFakeHarnessClient(
       }),
       fleetSignOut: noop,
       fleetSignInCancel: noop,
+      fleetDeviceKeysReauth: noop,
       fleetRefreshIdentity: async () => ({
         userId: '', orgId: '', teamId: '',
       }),
@@ -7162,6 +7224,8 @@ export function createFakeHarnessClient(
     fleet: {
       getTelemetryConsent: async () => 'none' as const,
       setTelemetryConsent: noop,
+      memberNotices: async () => ({ notices: [] }),
+      respondMemberNotice: async () => ({ notices: [] }),
       memorySyncStatus: async () => fakeMemorySyncStatus(),
       memorySyncEnable: async () => fakeMemorySyncStatus(),
       memorySyncContinueOlderNotes: async () => fakeMemorySyncStatus(),

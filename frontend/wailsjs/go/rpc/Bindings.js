@@ -594,6 +594,10 @@ export function Fleet_MLStatus() {
   return window['go']['rpc']['Bindings']['Fleet_MLStatus']();
 }
 
+export function Fleet_MemberNotices() {
+  return window['go']['rpc']['Bindings']['Fleet_MemberNotices']();
+}
+
 export function Fleet_MemorySyncContinueOlderNotes() {
   return window['go']['rpc']['Bindings']['Fleet_MemorySyncContinueOlderNotes']();
 }
@@ -618,8 +622,12 @@ export function Fleet_PendingApprovals() {
   return window['go']['rpc']['Bindings']['Fleet_PendingApprovals']();
 }
 
-export function Fleet_SetTelemetryConsent(arg1) {
-  return window['go']['rpc']['Bindings']['Fleet_SetTelemetryConsent'](arg1);
+export function Fleet_RespondMemberNotice(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Fleet_RespondMemberNotice'](arg1, arg2, arg3, arg4);
+}
+
+export function Fleet_SetTelemetryConsent(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Fleet_SetTelemetryConsent'](arg1, arg2);
 }
 
 export function Fleet_SetWorkflowEventsOptIn(arg1) {
@@ -1402,6 +1410,10 @@ export function Settings_FleetConfigPullStatus() {
   return window['go']['rpc']['Bindings']['Settings_FleetConfigPullStatus']();
 }
 
+export function Settings_FleetDeviceKeysReauth() {
+  return window['go']['rpc']['Bindings']['Settings_FleetDeviceKeysReauth']();
+}
+
 export function Settings_FleetHealth() {
   return window['go']['rpc']['Bindings']['Settings_FleetHealth']();
 }
@@ -1504,6 +1516,10 @@ export function Settings_GetFSRequestAccessEnabled() {
 
 export function Settings_GetFSWriteEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetFSWriteEnabled']();
+}
+
+export function Settings_GetFleetDeviceName() {
+  return window['go']['rpc']['Bindings']['Settings_GetFleetDeviceName']();
 }
 
 export function Settings_GetLocalRuntimeRAMOverrideGB() {
@@ -1644,6 +1660,10 @@ export function Settings_SetFSRequestAccessEnabled(arg1) {
 
 export function Settings_SetFSWriteEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetFSWriteEnabled'](arg1);
+}
+
+export function Settings_SetFleetDeviceName(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFleetDeviceName'](arg1);
 }
 
 export function Settings_SetLocalRuntimeRAMOverrideGB(arg1) {

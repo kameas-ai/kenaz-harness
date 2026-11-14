@@ -985,6 +985,22 @@ type Settings struct {
 	// Settings_SetMLLocalActivityRetention or a whole-settings Set.
 	MLLocalActivityRetentionDays int `json:"mlLocalActivityRetentionDays,omitempty"`
 
+	// FleetDeviceNameHidden is the inverted "Share this device's name with
+	// your organization" (default on = false here). When true the enroll
+	// body carries no device name (`hostname`), which also clears the name
+	// Fleet stored (the enroll upsert rewrites it). Fleet ER-43.
+	// FleetDeviceNameUseComputerName sends this computer's own name
+	// (macOS Computer Name, Windows COMPUTERNAME, Linux hostname) instead
+	// of the neutral "<OS> device <4 hex>" default (relay parity, legal
+	// D58). FleetDeviceNameCustom, when non-empty, overrides both.
+	// Read on every enroll by API.fleetDeviceName (wired as the
+	// fleet.Client device-name source in SetFleetClient). Written only by
+	// SetFleetDeviceName: a whole-settings Set keeps the stored values.
+	// UI: Settings › Account › Device name.
+	FleetDeviceNameHidden          bool   `json:"fleetDeviceNameHidden,omitempty"`
+	FleetDeviceNameUseComputerName bool   `json:"fleetDeviceNameUseComputerName,omitempty"`
+	FleetDeviceNameCustom          string `json:"fleetDeviceNameCustom,omitempty"`
+
 	// gates:settings-struct-end — keep this marker the LAST line of the
 	// struct and add new fields ABOVE it. scripts/ci/gates_can_fail_test.go
 	// plants a probe field here, so it no longer re-anchors on whichever
@@ -1012,6 +1028,31 @@ type ModelCallTelemetrySettings struct {
 	// ShareWithFleet is "Share model-call telemetry with Fleet" (default
 	// false).
 	ShareWithFleet bool `json:"shareWithFleet"`
+}
+
+// FleetDeviceNameSettings is the wire shape of Settings › Account › Device
+// name: the device display name sent to Fleet on enroll (Fleet ER-43).
+type FleetDeviceNameSettings struct {
+	// Share is "Share this device's name with your organization" (default
+	// true). Off = no name is sent and Fleet's stored name is cleared.
+	Share bool `json:"share"`
+	// UseComputerName sends this computer's own name instead of the
+	// neutral default.
+	UseComputerName bool `json:"useComputerName"`
+	// CustomName, when non-empty, is sent instead (sanitised, at most
+	// MaxLength characters).
+	CustomName string `json:"customName"`
+
+	// Read-only (ignored by SetFleetDeviceName):
+	// ComputerName is this computer's own name as it would be sent.
+	ComputerName string `json:"computerName"`
+	// DefaultName is the neutral "<OS> device <4 hex>" name ("" before
+	// this install has a Fleet node id).
+	DefaultName string `json:"defaultName"`
+	// EffectiveName is what the next enroll sends ("" = nothing).
+	EffectiveName string `json:"effectiveName"`
+	// MaxLength is Fleet's limit on the name, in characters.
+	MaxLength int `json:"maxLength"`
 }
 
 // EffectiveBundleSigningPolicy normalizes BundleSigningPolicy to one of
@@ -1831,6 +1872,14 @@ type SettingsAPI interface {
 	// (fleet-session-truth-01DOGF0A FR-5)
 	FleetSignInCancel(ctx context.Context) error
 
+	// FleetDeviceKeysReauth is the "Sign in again" for a device-key update
+	// Fleet refused without a fresh sign-in (kenaz-fleet ER-40, 403
+	// reauth_required / keys_reauth_required). It runs a max_age=0
+	// re-authentication, holds the ID token in memory only, and retries the
+	// key registration ONCE. Cancellable with FleetSignInCancel (returns
+	// context.Canceled; the reauth_required state stays visible).
+	FleetDeviceKeysReauth(ctx context.Context) error
+
 	// FleetSignOut clears persisted tokens and the identity cache.
 	// Returns fleet.ErrFleetDisabled when the kill switch is active.
 	FleetSignOut(ctx context.Context) error
@@ -1841,6 +1890,12 @@ type SettingsAPI interface {
 	// FleetRefreshIdentity re-calls the fleet enroll endpoint and updates
 	// the cached identity. Returns fleet.ErrNotSignedIn if not signed in.
 	FleetRefreshIdentity(ctx context.Context) (FleetIdentity, error)
+	// GetFleetDeviceName returns the device-name setting with the computer,
+	// default and effective names filled (Fleet ER-43).
+	GetFleetDeviceName(ctx context.Context) (FleetDeviceNameSettings, error)
+	// SetFleetDeviceName persists the device-name setting and, when
+	// enrolled, re-enrolls in the background so Fleet sees the change.
+	SetFleetDeviceName(ctx context.Context, dn FleetDeviceNameSettings) error
 
 	// ReconcileTelemetry brings fleet export in line with the current
 	// (identity, effective consent). Idempotent.
@@ -1882,6 +1937,15 @@ type SettingsAPI interface {
 	// deleteFromFleet it first erases everything on Fleet (forget-all);
 	// confirm must then be exactly "forget-all".
 	FleetMemorySyncDisable(ctx context.Context, deleteFromFleet bool, confirm string) (MemorySyncStatusView, error)
+	// FleetMemberNotices lists the notice texts Fleet serves on the
+	// kenaz-harness surface (memory-access, agent-telemetry) with this
+	// member's read state in their current org (contract-harness-sync §17).
+	// Empty while nothing is registered.
+	FleetMemberNotices(ctx context.Context) (MemberNoticesView, error)
+	// FleetRespondMemberNotice records "I have read this" (action "ack") or a
+	// withdraw for the memory-access text shown (edition + textHash, as
+	// served), then releases the memory push hold.
+	FleetRespondMemberNotice(ctx context.Context, family, edition, textHash, action string) (MemberNoticesView, error)
 	// FleetMLStatus returns the Cloud ML consent panel state: a fresh
 	// GET /me/ml read (ml-producer-01MLPRD01 WP01, spec §5), the rendered
 	// notice, and the producer's shipping status.

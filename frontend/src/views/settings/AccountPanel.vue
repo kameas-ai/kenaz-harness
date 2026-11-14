@@ -113,16 +113,50 @@ const sessionMessage = computed(() => {
       'This device was removed from your organization by an org admin. Sign in again to re-register it as a new device.'
     );
   }
-  if (s.deviceKeys && s.deviceKeys.status !== 'registered' && s.deviceKeys.message) {
-    // Enrolled, but without a handoff key (too many devices / rejected key).
-    return s.deviceKeys.message;
-  }
   return '';
+});
+
+/**
+ * Why this device's keys aren't registered (too many devices, rejected key,
+ * a fresh sign-in needed or refused). Its own line, so it shows alongside a
+ * degraded session's message instead of being hidden by it.
+ */
+const deviceKeysMessage = computed(() => {
+  const dk = fleet.session.value?.deviceKeys;
+  if (!dk || dk.status === 'registered') return '';
+  return dk.message ?? '';
 });
 
 const needsReauth = computed(
   () => isDegraded.value && fleet.session.value?.reason === 'needs_reauth',
 );
+/**
+ * kenaz-fleet ER-40: Fleet kept this device's previous key because replacing
+ * it needs a fresh sign-in (e.g. after a recovery-code import). Offer
+ * "Sign in again"; the session message explains why.
+ */
+const keysNeedReauth = computed(
+  () => fleet.session.value?.deviceKeys?.status === 'reauth_required',
+);
+/**
+ * A fresh sign-in was presented and still refused (status reauth_refused):
+ * the organization's sign-in can't confirm the change yet (e.g. SSO-only
+ * sessions until a Fleet setting is on). The message says to contact the
+ * administrator; "Try again" stays available, demoted to secondary.
+ */
+const keysReauthRefused = computed(
+  () => fleet.session.value?.deviceKeys?.status === 'reauth_refused',
+);
+/**
+ * One sign-in button at most: when the session itself needs a new sign-in
+ * (needs_reauth), "Update sign-in" runs a full sign-in, whose fresh ID token
+ * also covers the key update, so the device-key button is not shown.
+ */
+const showKeysReauth = computed(
+  () => !needsReauth.value && (keysNeedReauth.value || keysReauthRefused.value),
+);
+/** The device-key step-up is waiting for the browser. */
+const keysReauthing = ref(false);
 const degradedHeadline = computed(() => {
   switch (fleet.session.value?.reason) {
     case 'not_provisioned':
@@ -231,6 +265,48 @@ function humanizeFleetError(raw: string): string {
   }
   // Fall back to the raw error — at least it\'s informative for a developer.
   return raw;
+}
+
+/**
+ * keysReauth runs the fresh sign-in Fleet requires before it replaces this
+ * device's keys, then the key update is retried once (backend). Never
+ * automatic: only this click starts it, so a refusal cannot loop. Cancel
+ * leaves the reauth_required message in place.
+ */
+async function keysReauth() {
+  keysReauthing.value = true;
+  actionError.value = '';
+  try {
+    await client.settings.fleetDeviceKeysReauth();
+  } catch (e: unknown) {
+    if (!isSignInCancelled(e)) {
+      const raw = e instanceof Error ? e.message : String(e ?? '');
+      actionError.value = humanizeKeysReauthError(raw);
+    }
+  } finally {
+    keysReauthing.value = false;
+    await fleet.refresh();
+  }
+}
+
+async function cancelKeysReauth() {
+  try {
+    await client.settings.fleetSignInCancel();
+  } catch {
+    // Nothing in flight: the session snapshot is the truth either way.
+  }
+}
+
+function humanizeKeysReauthError(raw: string): string {
+  if (raw.includes('different account')) {
+    return 'You signed in with a different account. Sign in again with the account this device uses.';
+  }
+  if (raw.includes("can't confirm this change")) {
+    // The session's reauth_refused copy ("Contact your administrator")
+    // already says it, persistently; no second, temporary line.
+    return '';
+  }
+  return humanizeFleetError(raw);
 }
 
 async function signOut() {
@@ -405,6 +481,29 @@ async function refreshIdentity() {
         <span class="identity-value fingerprint" data-testid="identity-device-fingerprint">
           {{ handoffFingerprint }}
         </span>
+      </div>
+    </div>
+
+    <div v-if="deviceKeysMessage" class="device-keys" data-testid="device-keys">
+      <p class="error-msg" role="status" data-testid="device-keys-msg">{{ deviceKeysMessage }}</p>
+      <div v-if="showKeysReauth" class="panel-actions">
+        <button
+          class="btn"
+          :class="keysReauthRefused ? 'btn-secondary' : 'btn-primary'"
+          :disabled="loading || keysReauthing"
+          data-testid="keys-reauth-btn"
+          @click="keysReauth"
+        >
+          {{ keysReauthing ? 'Waiting for browser…' : keysReauthRefused ? 'Try again' : 'Sign in again' }}
+        </button>
+        <button
+          v-if="keysReauthing"
+          class="btn btn-secondary"
+          data-testid="keys-reauth-cancel-btn"
+          @click="cancelKeysReauth"
+        >
+          Cancel
+        </button>
       </div>
     </div>
 
@@ -604,6 +703,10 @@ async function refreshIdentity() {
   color: var(--warn);
   margin: 0 0 0.75rem;
   padding-left: 1rem;
+}
+
+.device-keys {
+  margin-bottom: 0.75rem;
 }
 
 .error-msg {
