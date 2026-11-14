@@ -60,10 +60,11 @@ func lexicalWithinOrEqual(p, dir string) bool {
 // byte-prefix compare alone missed aliases of the same directory: a
 // case variant on a case-insensitive volume, a path through a symlink
 // (on macOS every /var path is /private/var underneath), or a hard link.
-// So besides the (case-folded) lexical compare, every existing ancestor
-// of p is checked with os.SameFile against dir. p itself need not exist
-// (a file about to be written). Only used for state and workspace
-// classification, never to widen a grant.
+// So besides the (case-folded) lexical compare, the ancestors of p — and
+// of p's resolved location (resolveExisting) — are checked with
+// os.SameFile against dir. p itself need not exist (a file about to be
+// written). Only used for state and workspace classification, never to
+// widen a grant.
 func sameDirOrBelow(p, dir string) bool {
 	if p == "" || dir == "" {
 		return false
@@ -71,11 +72,21 @@ func sameDirOrBelow(p, dir string) bool {
 	if lexicalWithinOrEqual(p, dir) {
 		return true
 	}
-	return sameFileAncestor(p, dir)
+	rp := resolveExisting(p)
+	if lexicalWithinOrEqual(rp, resolveExisting(dir)) {
+		return true
+	}
+	di, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	return sameFileAncestorOf(p, di) || sameFileAncestorOf(rp, di)
 }
 
-// inWorkspace is the workspace exemption's compare. It does not fold case
-// lexically — the exemption is the fail-open direction, and a
+// inWorkspace is the workspace exemption's compare. It is the fail-open
+// direction, so it judges p only by where p really lands
+// (resolveExisting): a symlink inside the workspace that points into a
+// state dir is not in the workspace. It does not fold case lexically — a
 // case-sensitive volume on macOS must not exempt a look-alike — but the
 // os.SameFile walk still recognises a real alias (a symlinked workspace,
 // or a case variant on a case-insensitive volume).
@@ -83,26 +94,64 @@ func inWorkspace(p, ws string) bool {
 	if p == "" || ws == "" {
 		return false
 	}
-	return isWithinOrEqual(p, ws) || sameFileAncestor(p, ws)
-}
-
-// sameFileAncestor reports whether p or one of its existing ancestors is
-// the same directory as dir (os.SameFile). When p itself resolves through
-// a symlink, the ancestors of its resolved form are walked too: os.Stat
-// follows the link at p, but p's lexical parents are those of the link,
-// not of its target.
-func sameFileAncestor(p, dir string) bool {
-	di, err := os.Stat(dir)
-	if err != nil {
-		return false
-	}
-	if sameFileAncestorOf(p, di) {
+	rp := resolveExisting(p)
+	if isWithinOrEqual(rp, resolveExisting(ws)) {
 		return true
 	}
-	if r, err := filepath.EvalSymlinks(p); err == nil && r != filepath.Clean(p) {
-		return sameFileAncestorOf(r, di)
+	wi, err := os.Stat(ws)
+	if err != nil {
+		return isWithinOrEqual(p, ws) && rp == filepath.Clean(p)
 	}
-	return false
+	return sameFileAncestorOf(rp, wi)
+}
+
+// maxSymlinkHops bounds resolveExisting's dangling-link chasing (the
+// kernel's own limit is of the same order).
+const maxSymlinkHops = 40
+
+// resolveExisting returns where p really lands: its longest existing
+// prefix with every symlink resolved, plus the components that do not
+// exist yet. filepath.EvalSymlinks alone fails for a path that does not
+// exist — the very case of a file about to be written — so a new file
+// behind a planted link (/tmp/pl -> <DataDir>/policy, then
+// write_file /tmp/pl/evil.cedar) used to be judged by its lexical
+// location. A dangling link is followed too: writing through one creates
+// its target. Falls back to the cleaned p when nothing resolves.
+func resolveExisting(p string) string {
+	p = filepath.Clean(p)
+	for hop := 0; hop < maxSymlinkHops; hop++ {
+		cur := p
+		var tail []string
+		for {
+			if _, err := os.Lstat(cur); err == nil {
+				break
+			}
+			parent := filepath.Dir(cur)
+			if parent == cur {
+				return p
+			}
+			tail = append([]string{filepath.Base(cur)}, tail...)
+			cur = parent
+		}
+		if r, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(append([]string{r}, tail...)...)
+		}
+		// cur exists but does not resolve: its parent does (Lstat walked
+		// through it), so cur is a dangling (or looping) link. Follow it.
+		target, err := os.Readlink(cur)
+		if err != nil {
+			return filepath.Join(append([]string{cur}, tail...)...)
+		}
+		if !filepath.IsAbs(target) {
+			base := filepath.Dir(cur)
+			if rb, err := filepath.EvalSymlinks(base); err == nil {
+				base = rb
+			}
+			target = filepath.Join(base, target)
+		}
+		p = filepath.Join(append([]string{target}, tail...)...)
+	}
+	return p
 }
 
 func sameFileAncestorOf(p string, di os.FileInfo) bool {
