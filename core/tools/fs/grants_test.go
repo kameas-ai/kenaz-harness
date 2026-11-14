@@ -813,3 +813,30 @@ func TestGate_RecipeDirMatchNeedsTheResolvedLocation(t *testing.T) {
 		t.Fatalf("read through a recipe-dir link to an outside file was allowed by policy (%s)", d.Reason)
 	}
 }
+
+// Only the benign macOS aliases are folded before the dangerous-tier
+// check: a link to /private/var/db/... stays dangerous, while ordinary
+// /tmp and per-user temp (/var/folders) paths are not.
+func TestGate_DangerousTierAliasFolding(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir() // /var/folders/... on macOS
+	cases := []struct {
+		name, target string
+		dangerous    bool
+	}{
+		{"private_var_db", "/private/var/db/kenaz-test-never-created", true},
+		{"tmp", "/tmp/kenaz-test-never-created", false},
+		{"user_temp", filepath.Join(dir, "plain.txt"), false},
+	}
+	for _, c := range cases {
+		link := filepath.Join(t.TempDir(), "k")
+		symlinkOrSkip(t, c.target, link)
+		g, p := newTestGate(PromptDeny, cedar.NotApplicable, "", false)
+		if _, err := g.Evaluate(context.Background(), OpRead, link); err != nil {
+			t.Fatalf("%s: Evaluate: %v", c.name, err)
+		}
+		if p.last.IsDangerous != c.dangerous {
+			t.Errorf("%s: dangerous = %v, want %v (resolved %q)", c.name, p.last.IsDangerous, c.dangerous, p.last.ResolvedPath)
+		}
+	}
+}

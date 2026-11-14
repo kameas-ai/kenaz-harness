@@ -111,24 +111,34 @@ func IsDangerousPath(canonical string) (bool, string) {
 	return false, ""
 }
 
-// unaliasDarwin folds macOS's system aliases back to the paths users
-// type: /private/var/... -> /var/..., /private/tmp/... -> /tmp/...,
-// /private/etc/... -> /etc/... (dangerous either way), and the data
-// volume /System/Volumes/Data/... -> /... (where /home and other
-// automount links resolve; the folded path is still checked, so a link to
-// /System/Volumes/Data/Users/u/.ssh is still ~/.ssh). On other platforms,
-// or for any other path, p is returned unchanged.
+// unaliasDarwin folds only the BENIGN macOS aliases back to the paths
+// users type, so a resolved path can be compared with the requested one:
+//
+//	/private/var/folders/... -> /var/folders/...  (per-user temp)
+//	/private/tmp/...         -> /tmp/...
+//	/private/var/tmp/...     -> /var/tmp/...
+//	/System/Volumes/Data/home/... -> /home/...    (the /home automount)
+//
+// and the same under /System/Volumes/Data. Nothing else is folded:
+// /private/var/db or /private/etc stay as they are, so the dangerous-tier
+// table (which lists /private/var/ and /private/etc/) still sees them,
+// and a link to /System/Volumes/Data/Users/u/.ssh stays under /System/.
+// On other platforms p is returned unchanged.
 func unaliasDarwin(p string) string {
 	if runtime.GOOS != "darwin" {
 		return p
 	}
 	const dataVol = "/System/Volumes/Data"
-	if strings.HasPrefix(p, dataVol+"/") {
-		p = strings.TrimPrefix(p, dataVol)
+	q := p
+	if strings.HasPrefix(q, dataVol+"/") {
+		q = strings.TrimPrefix(q, dataVol)
 	}
-	for _, a := range []string{"/private/var", "/private/tmp", "/private/etc"} {
-		if p == a || strings.HasPrefix(p, a+"/") {
-			return strings.TrimPrefix(p, "/private")
+	if q == "/home" || strings.HasPrefix(q, "/home/") {
+		return q
+	}
+	for _, a := range []string{"/private/var/folders", "/private/tmp", "/private/var/tmp"} {
+		if q == a || strings.HasPrefix(q, a+"/") {
+			return strings.TrimPrefix(q, "/private")
 		}
 	}
 	return p
