@@ -95,8 +95,9 @@ func pull(t *testing.T, s *corefleet.ContextGraphSyncer) {
 
 const otherDeviceNode = "6b2f6f0e-0000-4000-8000-0000000000b1"
 
-func nodeAt(n map[string]any, updated string) map[string]any {
-	n["updated_at"] = updated
+// nodeV sets a node's Fleet version and updated_at.
+func nodeV(n map[string]any, version int, updated string) map[string]any {
+	n["version"], n["updated_at"] = version, updated
 	return n
 }
 
@@ -163,7 +164,7 @@ func TestShareStates_StaleRowDoesNotBeatFreshPublish(t *testing.T) {
 	r := newPulledRig(t)
 	syncer, api := r.open(t)
 	wire := syncer.WireNodeID("notes.md")
-	r.srv.setNodes(nodeAt(curatedNode(wire, "user-a", "notes", "team_shared", "be-id"), "2026-11-01T00:00:00Z"))
+	r.srv.setNodes(nodeV(curatedNode(wire, "user-a", "notes", "team_shared", "be-id"), 1, "2026-11-01T00:00:00Z"))
 	pull(t, syncer)
 	if got := shareStates(t, api, "notes.md"); len(got) != 1 || got[0].TeamID != "be-id" {
 		t.Fatalf("setup = %+v", got)
@@ -181,7 +182,8 @@ func TestShareStates_StaleRowDoesNotBeatFreshPublish(t *testing.T) {
 		t.Fatalf("after a stale re-pull = %+v, want fe-id", got)
 	}
 	// Next launch: the index is rebuilt from a pull whose row for this node
-	// is OLDER than the ledger record. The ledger wins and is not rewritten.
+	// is NOT newer (same version) than the ledger record. The ledger wins
+	// and is not rewritten.
 	r.syncerDirIndexGone(t)
 	s2, api2 := r.open(t)
 	pull(t, s2)
@@ -190,19 +192,27 @@ func TestShareStates_StaleRowDoesNotBeatFreshPublish(t *testing.T) {
 	}
 }
 
-// A NEWER Fleet row (moved on the dashboard after this device shared it)
-// wins and corrects the ledger.
+// A NEWER Fleet row (higher node version: moved on the dashboard after this
+// device shared it) wins and corrects the ledger, even though Fleet's
+// updated_at is earlier than this device's clock; and still after a
+// restart and full pull.
 func TestShareStates_NewerRowBeatsLedgerAndUpdatesIt(t *testing.T) {
 	r := newPulledRig(t)
 	syncer, api := r.open(t)
 	if _, err := api.Context_Publish(context.Background(), publishReq("notes.md", "team", "eng-id")); err != nil {
 		t.Fatal(err)
 	}
-	future := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
-	r.srv.setNodes(nodeAt(curatedNode(syncer.WireNodeID("notes.md"), "user-a", "notes", "team_shared", "be-id"), future))
+	// Higher version; Fleet's clock behind this device's by 2 minutes.
+	earlier := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano)
+	r.srv.setNodes(nodeV(curatedNode(syncer.WireNodeID("notes.md"), "user-a", "notes", "team_shared", "be-id"), 2, earlier))
 	pull(t, syncer)
 	if got := shareStates(t, api, "notes.md"); len(got) != 1 || got[0].TeamID != "be-id" {
 		t.Fatalf("share states = %+v, want be-id from Fleet", got)
+	}
+	s2, api2 := r.open(t) // restart + full pull
+	pull(t, s2)
+	if got := shareStates(t, api2, "notes.md"); len(got) != 1 || got[0].TeamID != "be-id" {
+		t.Fatalf("after restart = %+v, want be-id", got)
 	}
 	r.syncerDirIndexGone(t)
 	_, ledgerOnly := r.open(t)

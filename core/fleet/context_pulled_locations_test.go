@@ -189,7 +189,7 @@ func TestContextPull_MultiPageFullPullPrunesOnlyAtTheEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	seed, _ := json.Marshal(pulledLocationsFile{Version: pulledLocationsVersion, UserID: "user-a",
-		Nodes: map[string]PulledShareLocation{stale: {Layer: contextpack.LayerTeam, TeamID: "be-id", UpdatedAt: time.Now()}}})
+		Nodes: map[string]PulledShareLocation{stale: {Layer: contextpack.LayerTeam, TeamID: "be-id", Version: 1}}})
 	if err := os.WriteFile(pulledLocationsPath(dataDir), seed, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -273,5 +273,82 @@ func TestContextPull_AccountSwitchRestartsFullPull(t *testing.T) {
 	}
 	if got := s.PulledEntries(); len(got) != 0 {
 		t.Fatalf("previous account's entries kept: %+v", got)
+	}
+}
+
+// Rows are ordered by Fleet's node version, never by time: an admin move on
+// Fleet (higher version) replaces this install's push row even when Fleet's
+// updated_at is EARLIER than this device's (fast) clock; an older version
+// never replaces it.
+func TestPulledShareLocations_VersionOrdersRowsNotClock(t *testing.T) {
+	var mu sync.Mutex
+	var page contextPullResponse
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			_ = json.NewEncoder(w).Encode(map[string]any{"accepted_nodes": 1, "accepted_edges": 0, "conflicts": []any{}})
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		_ = json.NewEncoder(w).Encode(page)
+	}))
+	defer hs.Close()
+	stubTokens(t, TokenSet{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
+	dataDir := t.TempDir()
+	newSyncer := func() *ContextGraphSyncer {
+		return NewContextGraphSyncer(makeTestClient(t, hs.URL), dataDir, makeCapPollerWithTeamCap(t)).
+			WithSelfUserID(func() string { return "user-a" })
+	}
+	s := newSyncer()
+	ctx := context.Background()
+	fe := "fe-id"
+	if _, err := s.PushEntry(ctx, ContextNodeEntry{ID: "notes.md", Layer: contextpack.LayerTeam, Kind: "guidance",
+		Title: "notes", Body: "b", Version: 1, TeamID: &fe}, nil); err != nil {
+		t.Fatal(err)
+	}
+	wire := s.WireNodeID("notes.md")
+	node := func(team string, version int) ContextPulledNode {
+		n := pulledNode(wire, "guidance", "")
+		n.Classification, n.TeamID, n.OwnerUserID, n.Version = ClassTeamShared, team, "user-a", version
+		// Fleet's clock reads 2 minutes behind this device's.
+		n.UpdatedAt = time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano)
+		return n
+	}
+	teamOf := func(s *ContextGraphSyncer) string {
+		for _, l := range s.PulledShareLocations() {
+			if l.NodeID == wire {
+				return l.TeamID
+			}
+		}
+		return ""
+	}
+	// An older copy (version 0) never replaces the push row.
+	mu.Lock()
+	page = contextPullResponse{Nodes: []ContextPulledNode{node("old-id", 0)}, Cursor: "c1"}
+	mu.Unlock()
+	if _, err := s.PullDelta(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := teamOf(s); got != "fe-id" {
+		t.Fatalf("older version replaced the push row: %q", got)
+	}
+	// The admin move: version 2, earlier timestamp. It wins, and still
+	// does after a restart's full pull.
+	mu.Lock()
+	page = contextPullResponse{Nodes: []ContextPulledNode{node("be-id", 2)}, Cursor: "c2"}
+	mu.Unlock()
+	if _, err := s.PullDelta(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := teamOf(s); got != "be-id" {
+		t.Fatalf("after the admin move = %q, want be-id", got)
+	}
+	s2 := newSyncer()
+	if _, err := s2.PullDelta(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := teamOf(s2); got != "be-id" {
+		t.Fatalf("after restart = %q, want be-id", got)
 	}
 }

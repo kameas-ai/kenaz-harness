@@ -680,8 +680,8 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 			if entry.TeamID != nil {
 				team = *entry.TeamID
 			}
-			if s.putLocationLocked(wireID, PulledShareLocation{Layer: layer, TeamID: team, UpdatedAt: time.Now().UTC()}) {
-				s.savePulledLocationsLocked()
+			if s.putLocationLocked(wireID, PulledShareLocation{Layer: layer, TeamID: team, Version: entry.Version}) {
+				s.savePulledLocationsLocked(pushSelf)
 			}
 		}
 	}
@@ -740,7 +740,7 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 	if self != "" {
 		s.pulledFor = self
 		if s.adoptLocationsOwnerLocked(self) {
-			s.savePulledLocationsLocked()
+			s.savePulledLocationsLocked(self)
 		}
 	}
 	cursor := s.cursor
@@ -867,7 +867,7 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 		s.sweepSeen = nil
 	}
 	if locationsChanged {
-		s.savePulledLocationsLocked()
+		s.savePulledLocationsLocked(self)
 	}
 
 	// Merge edges.

@@ -13,7 +13,9 @@ package fleet
 //
 // <dataDir>/fleet/context_pulled_locations.json (0600, tmp+rename) holds
 // the account it belongs to and, per own wire node id, layer, team_id and
-// when Fleet last changed it. Teammates' nodes are not recorded at all; no
+// Fleet's node version. Rows are ordered by that version only (Fleet's
+// monotonic counter), never by a timestamp: a device clock that runs fast
+// or slow must not hide a move made on the dashboard. Teammates' nodes are not recorded at all; no
 // titles, bodies or paths are stored. A tombstone, a lane change or a node
 // that stops being own removes its row; an accepted push updates its row;
 // the full pull at each start prunes rows it no longer sees; an account
@@ -24,7 +26,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -36,9 +37,9 @@ type PulledShareLocation struct {
 	OwnerUserID string            `json:"-"`
 	Layer       contextpack.Layer `json:"layer"`
 	TeamID      string            `json:"team_id,omitempty"`
-	// UpdatedAt is when Fleet last changed the node (its updated_at), or
-	// when this install's push of it was accepted.
-	UpdatedAt time.Time `json:"updated_at"`
+	// Version is Fleet's node version: from the pull, or the version of
+	// this install's accepted push (Fleet stores the pushed version).
+	Version int `json:"version"`
 }
 
 type pulledLocationsFile struct {
@@ -47,7 +48,7 @@ type pulledLocationsFile struct {
 	Nodes   map[string]PulledShareLocation `json:"nodes"`
 }
 
-const pulledLocationsVersion = 2
+const pulledLocationsVersion = 3
 
 func pulledLocationsPath(dataDir string) string {
 	return filepath.Join(dataDir, "fleet", "context_pulled_locations.json")
@@ -76,9 +77,12 @@ func loadPulledLocations(dataDir string) (string, map[string]PulledShareLocation
 	return f.UserID, f.Nodes
 }
 
-// savePulledLocationsLocked persists s.locations. Caller holds s.mu.
-func (s *ContextGraphSyncer) savePulledLocationsLocked() {
-	if s.dataDir == "" {
+// savePulledLocationsLocked persists s.locations for self, the signed-in
+// account at the caller. With no signed-in account (a late write after
+// sign-out) nothing is written, so a removed file is not recreated. Caller
+// holds s.mu.
+func (s *ContextGraphSyncer) savePulledLocationsLocked(self string) {
+	if s.dataDir == "" || self == "" || !strings.EqualFold(self, s.locationsFor) {
 		return
 	}
 	if len(s.locations) == 0 || s.locationsFor == "" {
@@ -126,14 +130,10 @@ func (s *ContextGraphSyncer) recordPulledLocationLocked(n ContextPulledNode, lay
 		}
 		return false
 	}
-	at, err := time.Parse(time.RFC3339Nano, n.UpdatedAt)
-	if err != nil {
-		at = time.Now().UTC()
+	if prev, ok := s.locations[n.ID]; ok && n.Version < prev.Version {
+		return false // an older copy of the node (an accepted push is newer)
 	}
-	if prev, ok := s.locations[n.ID]; ok && prev.UpdatedAt.After(at) {
-		return false // an accepted push since then is newer
-	}
-	return s.putLocationLocked(n.ID, PulledShareLocation{Layer: layer, TeamID: n.TeamID, UpdatedAt: at.UTC()})
+	return s.putLocationLocked(n.ID, PulledShareLocation{Layer: layer, TeamID: n.TeamID, Version: n.Version})
 }
 
 func (s *ContextGraphSyncer) putLocationLocked(id string, loc PulledShareLocation) bool {

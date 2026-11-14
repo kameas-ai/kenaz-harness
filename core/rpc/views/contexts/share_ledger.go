@@ -34,6 +34,11 @@ type shareRecord struct {
 	Layer    string    `json:"layer"`
 	TeamID   string    `json:"team_id,omitempty"`
 	SharedAt time.Time `json:"shared_at"`
+	// Version is Fleet's node version this record matches (the accepted
+	// push's version, or the pulled row that corrected it). Compared with
+	// Fleet's row by version only, never by time. 0 = unknown (older
+	// records): Fleet's row wins.
+	Version int `json:"version,omitempty"`
 }
 
 type shareLedgerFile struct {

@@ -564,7 +564,7 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 	// known fleet user (a record nobody owns could never be read back, or
 	// worse, would match another unknown-user read).
 	if user := a.currentUserID(); user != "" && result.AcceptedNodes > 0 && !conflictedNode(result.Conflicts, wireID) {
-		rec := shareRecord{UserID: user, Layer: string(layer), SharedAt: time.Now().UTC()}
+		rec := shareRecord{UserID: user, Layer: string(layer), SharedAt: time.Now().UTC(), Version: req.Version}
 		if layer == contextpack.LayerTeam {
 			rec.TeamID = teamID
 		}
@@ -623,7 +623,7 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 	)
 	if user := a.currentUserID(); user != "" {
 		if err := a.ledger().put(a.syncer.WireNodeID(nodeID), shareRecord{
-			UserID: user, Layer: string(contextpack.LayerOrg), SharedAt: time.Now().UTC(),
+			UserID: user, Layer: string(contextpack.LayerOrg), SharedAt: time.Now().UTC(), Version: result.Node.Version,
 		}); err != nil {
 			logging.L().Warn("contexts.promote.share_record_failed", "node_id", result.Node.ID, "err", fleet.LogSafeErr(err))
 		}
@@ -647,8 +647,8 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 //
 // Nothing else: wire ids are salted per install, so a same-named file
 // shared from another device is a different node and says nothing about
-// this one. When Fleet's row is newer than the ledger record it wins and
-// the ledger is corrected; an older row never overrides the ledger. Entries
+// this one. When Fleet's row has a higher node version than the ledger
+// record it wins and the ledger is corrected; otherwise the ledger stands. Entries
 // with neither are omitted (the dialogs fall back to the enrolled team).
 // Returns an empty list (no error) when fleet is not wired or no fleet
 // user is known.
@@ -669,14 +669,17 @@ func (a *API) Context_ShareStates(_ context.Context, nodeIDs []string) ([]Contex
 		wireID := a.syncer.WireNodeID(id)
 		rec, hasRec := a.ledger().get(wireID, user)
 		loc, hasLoc := byID[wireID]
-		if hasLoc && (!hasRec || loc.UpdatedAt.After(rec.SharedAt)) {
+		// Newer = higher Fleet node version. Never a timestamp: the row's
+		// time would be Fleet's and the ledger's this device's, and a
+		// skewed clock would hide a move made on the dashboard.
+		if hasLoc && (!hasRec || loc.Version > rec.Version) {
 			view := ContextShareStateView{NodeID: id, Layer: string(loc.Layer)}
 			if loc.Layer == contextpack.LayerTeam {
 				view.TeamID = loc.TeamID
 			}
 			if hasRec && (rec.Layer != view.Layer || rec.TeamID != view.TeamID) {
 				if err := a.ledger().put(wireID, shareRecord{
-					UserID: user, Layer: view.Layer, TeamID: view.TeamID, SharedAt: loc.UpdatedAt,
+					UserID: user, Layer: view.Layer, TeamID: view.TeamID, SharedAt: time.Now().UTC(), Version: loc.Version,
 				}); err != nil {
 					logging.L().Warn("contexts.share_states.ledger_update_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
 				}
