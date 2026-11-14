@@ -12,6 +12,7 @@ package settings
 import (
 	"context"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
@@ -19,8 +20,16 @@ import (
 )
 
 // computerNameFn reads this computer's name; tests replace it so a real
-// machine name never appears in test output.
-var computerNameFn = fleet.ComputerName
+// machine name never appears in test output. Atomic: background re-enrolls
+// read it while a test may be restoring it.
+var computerNameFn atomic.Pointer[func() string]
+
+func init() {
+	f := fleet.ComputerName
+	computerNameFn.Store(&f)
+}
+
+func computerName() string { return (*computerNameFn.Load())() }
 
 // deviceNameReenrollTimeout bounds the background re-enroll after a change.
 const deviceNameReenrollTimeout = 60 * time.Second
@@ -46,7 +55,7 @@ func (a *API) fleetDeviceName(nodeID string) string {
 		logging.L().Warn("fleet.device_name.settings_unreadable", "err", err.Error())
 		return ""
 	}
-	return fleet.ResolveDeviceName(s.fleetDeviceNameChoice(), runtime.GOOS, nodeID, computerNameFn)
+	return fleet.ResolveDeviceName(s.fleetDeviceNameChoice(), runtime.GOOS, nodeID, computerName)
 }
 
 // GetFleetDeviceName returns the device-name setting with the read-only
@@ -57,7 +66,7 @@ func (a *API) GetFleetDeviceName(_ context.Context) (FleetDeviceNameSettings, er
 		return FleetDeviceNameSettings{}, err
 	}
 	nodeID := fleet.ReadNodeID(a.fleetDataDir())
-	computer := computerNameFn()
+	computer := computerName()
 	choice := s.fleetDeviceNameChoice()
 	return FleetDeviceNameSettings{
 		Share:           choice.Share,
@@ -106,8 +115,33 @@ func (a *API) reenrollForDeviceName() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), deviceNameReenrollTimeout)
 		defer cancel()
-		if _, err := a.FleetRefreshIdentity(ctx); err != nil {
-			logging.L().Warn("fleet.device_name.reenroll_failed", "err", err.Error())
-		}
+		a.pushDeviceName(ctx)
 	}()
+}
+
+// deviceNameMaxAttempts bounds pushDeviceName: the first enroll may join
+// one already in flight (RefreshIdentity is singleflight) that read the
+// old setting; a second starts after this change was stored, so it reads
+// the new one. A third covers one more change landing in between.
+const deviceNameMaxAttempts = 3
+
+// pushDeviceName enrolls until Fleet's copy of the device name matches the
+// current setting, at most deviceNameMaxAttempts times.
+func (a *API) pushDeviceName(ctx context.Context) {
+	for attempt := 1; attempt <= deviceNameMaxAttempts; attempt++ {
+		if _, err := a.FleetRefreshIdentity(ctx); err != nil {
+			logging.L().Warn("fleet.device_name.reenroll_failed", "attempt", attempt, "err", err.Error())
+			return
+		}
+		c := a.fleetClient()
+		if c == nil {
+			return
+		}
+		sent, ok := c.LastEnrolledDeviceName()
+		want := a.fleetDeviceName(fleet.ReadNodeID(a.fleetDataDir()))
+		if ok && sent == want {
+			return
+		}
+		logging.L().Info("fleet.device_name.stale_after_enroll", "attempt", attempt)
+	}
 }

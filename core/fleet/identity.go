@@ -365,6 +365,11 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		}
 	}
 
+	// Fleet accepted this body: record the device name it now holds, so a
+	// caller that joined this enroll can tell whether a setting change made
+	// meanwhile still needs sending (LastEnrolledDeviceName).
+	c.recordEnrolledDeviceName(reqBody.Hostname)
+
 	var er enrollResponse
 	if err := json.Unmarshal(respBody, &er); err != nil {
 		logging.L().Error("fleet.enroll.parse_failed", "err", err.Error(), "body_prefix", string(respBody[:min(len(respBody), 200)]))

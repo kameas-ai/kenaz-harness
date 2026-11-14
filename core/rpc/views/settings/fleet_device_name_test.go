@@ -24,6 +24,19 @@ type deviceNameFleet struct {
 
 	mu     sync.Mutex
 	bodies []map[string]any
+	// gate, when set, makes the next enroll signal entered and wait for
+	// gate to close before answering (one-shot).
+	gate    chan struct{}
+	entered chan struct{}
+}
+
+// holdNext makes the next enroll block until the returned release runs.
+func (f *deviceNameFleet) holdNext() (entered <-chan struct{}, release func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gate, f.entered = make(chan struct{}), make(chan struct{})
+	gate := f.gate
+	return f.entered, func() { close(gate) }
 }
 
 func newDeviceNameFleet(t *testing.T) *deviceNameFleet {
@@ -37,6 +50,14 @@ func newDeviceNameFleet(t *testing.T) *deviceNameFleet {
 	mux.HandleFunc("POST /api/v1/enroll", func(w http.ResponseWriter, r *http.Request) {
 		got := map[string]any{}
 		_ = json.NewDecoder(r.Body).Decode(&got)
+		f.mu.Lock()
+		gate, entered := f.gate, f.entered
+		f.gate, f.entered = nil, nil
+		f.mu.Unlock()
+		if gate != nil {
+			close(entered)
+			<-gate
+		}
 		f.mu.Lock()
 		f.bodies = append(f.bodies, got)
 		f.mu.Unlock()
@@ -77,9 +98,9 @@ func (f *deviceNameFleet) waitEnroll(t *testing.T, after int) map[string]any {
 
 func stubComputerName(t *testing.T, name string) {
 	t.Helper()
-	prev := computerNameFn
-	computerNameFn = func() string { return name }
-	t.Cleanup(func() { computerNameFn = prev })
+	fn := func() string { return name }
+	prev := computerNameFn.Swap(&fn)
+	t.Cleanup(func() { computerNameFn.Store(prev) })
 }
 
 // TestFleetDeviceName_SettingReachesEnrollBody: default on with the neutral
@@ -219,3 +240,64 @@ func TestFleetDeviceName_UnreadableSettingsSendNothing(t *testing.T) {
 type failingLoadStore struct{ SettingsStore }
 
 func (failingLoadStore) LoadAll() (Settings, error) { return Settings{}, errors.New("unreadable") }
+
+// TestFleetDeviceName_ChangeDuringInFlightEnroll: RefreshIdentity is
+// singleflight, so the re-enroll after a setting change can join an
+// enroll already in flight that read the OLD setting. Turning sharing off
+// meanwhile must still end with an enroll that carries no name.
+func TestFleetDeviceName_ChangeDuringInFlightEnroll(t *testing.T) {
+	if fleet.Disabled() {
+		t.Skip("HARNESS_FLEET_DISABLED=1")
+	}
+	stubComputerName(t, "Example-Workstation")
+	ctx := context.Background()
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newDeviceNameFleet(t)
+	dataDir := t.TempDir()
+	r := &sessionRig{dataDir: dataDir}
+	fleet.SetExternalTokenSource(r.token)
+	t.Cleanup(func() { fleet.SetExternalTokenSource(nil) })
+	r.setToken(jwtFor("sub-alice", "zitadel-org-1"))
+	a := NewAPI(store)
+	a.SetFleetClient(fleet.NewClientForTestingWithDataDir(f.srv.URL, dataDir), dataDir)
+	t.Cleanup(a.StopFleetBackground)
+
+	if err := a.SetFleetDeviceName(ctx, FleetDeviceNameSettings{Share: true, CustomName: "Test Laptop"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.FleetRefreshIdentity(ctx); err != nil { // enrolled, sends "Test Laptop"
+		t.Fatal(err)
+	}
+
+	// An enroll is in flight with the old setting...
+	entered, release := f.holdNext()
+	done := make(chan struct{})
+	go func() { defer close(done); _, _ = a.FleetRefreshIdentity(ctx) }()
+	<-entered
+	// ...when the member turns sharing off. Its re-enroll joins the
+	// in-flight call (which already read "Test Laptop").
+	if err := a.SetFleetDeviceName(ctx, FleetDeviceNameSettings{Share: false}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond) // let the re-enroll reach the singleflight
+	release()
+	<-done
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		f.mu.Lock()
+		last := f.bodies[len(f.bodies)-1]
+		n := len(f.bodies)
+		f.mu.Unlock()
+		if _, has := last["hostname"]; !has && n >= 3 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after turning sharing off mid-enroll, the last enroll (of %d) still sent hostname %v", n, last["hostname"])
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

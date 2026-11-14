@@ -80,6 +80,9 @@ type Client struct {
 	// deviceName is the SetDeviceNameSource callback (device_name.go):
 	// the enroll `hostname` (device display name), "" = omitted.
 	deviceName atomic.Pointer[func(nodeID string) string]
+	// lastDeviceName is the device name the last accepted enroll sent
+	// ("" = omitted); nil before any accepted enroll.
+	lastDeviceName atomic.Pointer[string]
 }
 
 // SetSessionBroker wires the session sink into the client. When set, a

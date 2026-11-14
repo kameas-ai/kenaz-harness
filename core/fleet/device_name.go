@@ -180,3 +180,27 @@ func (c *Client) deviceNameFor(nodeID string) string {
 	}
 	return SanitizeDeviceName((*p)(nodeID))
 }
+
+func (c *Client) recordEnrolledDeviceName(name string) {
+	if c == nil {
+		return
+	}
+	c.lastDeviceName.Store(&name)
+}
+
+// LastEnrolledDeviceName returns the device name the most recent enroll
+// Fleet accepted carried ("" = none), and false before any such enroll.
+// RefreshIdentity coalesces concurrent callers, so a caller that changed
+// the setting while an enroll was in flight may have joined one that sent
+// the old name; comparing this with the current setting tells it to
+// enroll again.
+func (c *Client) LastEnrolledDeviceName() (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	p := c.lastDeviceName.Load()
+	if p == nil {
+		return "", false
+	}
+	return *p, true
+}

@@ -39,6 +39,17 @@ func TestSanitizeDeviceName_LengthCap(t *testing.T) {
 	if !utf8.ValidString(got) {
 		t.Fatal("cap split a rune")
 	}
+	// At most 64 runes but more than 64 bytes: unchanged (the cap counts
+	// runes, never bytes).
+	for _, n := range []int{40, MaxDeviceNameLen} {
+		in := strings.Repeat("\u00e9", n)
+		if len(in) <= MaxDeviceNameLen && n == MaxDeviceNameLen {
+			t.Fatal("fixture must exceed 64 bytes")
+		}
+		if got := SanitizeDeviceName(in); got != in {
+			t.Fatalf("%d x e-acute: got %d runes, want unchanged", n, utf8.RuneCountInString(got))
+		}
+	}
 	// A space at the cut is trimmed, never sent trailing.
 	got = SanitizeDeviceName(strings.Repeat("a", MaxDeviceNameLen-1) + " tail")
 	if strings.HasSuffix(got, " ") || utf8.RuneCountInString(got) != MaxDeviceNameLen-1 {
