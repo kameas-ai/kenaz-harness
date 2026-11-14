@@ -1105,16 +1105,26 @@ func (t *EditFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 		return errResult(ErrEditWithoutRead.Error()), nil
 	}
 
-	// Never write through a link: the gate judged the link's own location
-	// (resolveFor), not wherever it points.
-	if li, lerr := os.Lstat(ioPath); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
-		return errResult("edit_file: " + ErrEditThroughLink.Error()), nil
+	// Never read or write through a link: the gate judged the link's own
+	// location (resolveFor), not wherever it points. The file is opened
+	// without following a leaf link (openNoFollow), and its content and
+	// mode come from that one handle, so a link swapped in after the
+	// gate's check cannot feed another file's content into this edit.
+	f, err := openNoFollow(ioPath)
+	if err != nil {
+		if errors.Is(err, ErrEditThroughLink) {
+			return errResult("edit_file: " + ErrEditThroughLink.Error()), nil
+		}
+		return errResult("edit_file: read: " + err.Error()), nil
 	}
-
-	// Read current content.
-	existing, err := os.ReadFile(ioPath)
+	existing, err := io.ReadAll(f)
+	info, serr := f.Stat()
+	_ = f.Close()
 	if err != nil {
 		return errResult("edit_file: read: " + err.Error()), nil
+	}
+	if serr != nil {
+		return errResult("edit_file: stat: " + serr.Error()), nil
 	}
 	content := string(existing)
 
@@ -1130,11 +1140,7 @@ func (t *EditFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 	// Apply replacement.
 	newContent := strings.Replace(content, args.OldStr, args.NewStr, 1)
 
-	// Preserve file mode.
-	info, err := os.Stat(ioPath)
-	if err != nil {
-		return errResult("edit_file: stat: " + err.Error()), nil
-	}
+	// Preserve file mode (from the opened handle).
 	mode := info.Mode()
 
 	if err := atomicWrite(ioPath, []byte(newContent), mode); err != nil {

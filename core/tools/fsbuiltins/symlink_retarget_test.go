@@ -566,3 +566,42 @@ func TestRead_LegacyGrantDoesNotCoverLinksOutOfTheDir(t *testing.T) {
 		}
 	}
 }
+
+// edit_file opens without following a leaf link, so a link swapped in
+// after the gate's check (here, while the prompt is open) is refused and
+// the other file's content is never copied in.
+func TestEditFile_LinkSwappedAfterCheckIsRefused(t *testing.T) {
+	r := newRetargetRig(t)
+	work := t.TempDir()
+	target := filepath.Join(work, "notes.txt")
+	if err := os.WriteFile(target, []byte("hello KEEP"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(secret, []byte("hello KEEP top-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gate := corefs.NewGate(corefs.GateOptions{Engine: r.engine, Prompter: &corefs.CedarPrompter{Registry: r.registry}, StateDirs: corefs.HarnessStateDirs(r.dataDir)})
+	rs := fsbuiltins.NewReadSet()
+	rs.Add("", target)
+	edit := fsbuiltins.NewEditFileTool(fsbuiltins.Options{Gate: gate, ReadSet: rs})
+	r.expect(func(p cedar.PendingRequest) {
+		if err := os.Remove(target); err != nil {
+			t.Error(err)
+		}
+		if err := os.Symlink(secret, target); err != nil {
+			t.Error(err)
+		}
+		_ = r.registry.Resolve(p.RequestID, cedar.DecisionAllowOnce)
+	})
+	m := call(t, edit, map[string]any{"path": target, "old_str": "hello", "new_str": "bye"})
+	if !isError(m) || !strings.Contains(m["error"].(string), "link") {
+		t.Fatalf("edit after a swap to a link = %v, want a link refusal", m)
+	}
+	if b, _ := os.ReadFile(secret); string(b) != "hello KEEP top-secret" {
+		t.Fatalf("secret modified: %q", b)
+	}
+	if fi, err := os.Lstat(target); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the swapped-in link was replaced by a copy (lstat %v, err %v)", fi, err)
+	}
+}
