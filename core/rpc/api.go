@@ -4862,6 +4862,11 @@ func New(c *core.Core, opts ...Option) *API {
 							a.settingsImpl.FleetNodeRemoved()
 						}
 					},
+					onKeysChanged: func() {
+						if a.settingsImpl != nil {
+							a.settingsImpl.FleetDeviceKeysChanged()
+						}
+					},
 				},
 				// fleet-enforcement-truth-01PMZ505 WP13 (owner ruling
 				// G-7): a.cedarGate() is the SAME process-singleton every

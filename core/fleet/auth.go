@@ -114,12 +114,20 @@ func openBrowser(rawURL string) error {
 //     cancelled (Settings_FleetSignInCancel) — then returns ctx.Err().
 //  5. Exchanges the code for a TokenSet.
 func DeviceCodeFlow(ctx context.Context, profile EnvProfile) (TokenSet, error) {
+	return authCodeFlow(ctx, profile, profile.OIDCScopes, nil)
+}
+
+// authCodeFlow is the PKCE loopback flow shared by the sign-in
+// (DeviceCodeFlow) and the step-up re-authentication (StepUpFlow). extra
+// carries additional authorize parameters (max_age, prompt).
+func authCodeFlow(ctx context.Context, profile EnvProfile, scopes []string, extra url.Values) (TokenSet, error) {
 	logging.L().Info("fleet.auth.device_code_flow.start",
 		"profile", profile.Name,
 		"issuer", profile.ZitadelIssuer,
 		"client_id", shortID(profile.NativeClientID),
 		"audience", shortID(profile.APIAudience),
-		"scopes", strings.Join(profile.OIDCScopes, " "),
+		"scopes", strings.Join(scopes, " "),
+		"step_up", extra.Get("max_age") != "",
 	)
 	verifier, err := generatePKCEVerifier()
 	if err != nil {
@@ -152,10 +160,13 @@ func DeviceCodeFlow(ctx context.Context, profile EnvProfile) (TokenSet, error) {
 		profile.ZitadelIssuer,
 		url.QueryEscape(profile.NativeClientID),
 		url.QueryEscape(redirectURI),
-		url.QueryEscape(strings.Join(profile.OIDCScopes, " ")),
+		url.QueryEscape(strings.Join(scopes, " ")),
 		url.QueryEscape(state),
 		url.QueryEscape(challenge),
 	)
+	if len(extra) > 0 {
+		authURL += "&" + extra.Encode()
+	}
 
 	// Channel to receive the callback result.
 	type callbackResult struct {

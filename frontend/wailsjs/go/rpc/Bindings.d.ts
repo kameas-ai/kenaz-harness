@@ -766,6 +766,8 @@ export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
 
 export function Settings_FleetConfigPullStatus():Promise<settings.FleetConfigPullStatusView>;
 
+export function Settings_FleetDeviceKeysReauth():Promise<void>;
+
 export function Settings_FleetHealth():Promise<settings.FleetHealthView>;
 
 export function Settings_FleetLockdownStatus():Promise<settings.LockdownStatusView>;

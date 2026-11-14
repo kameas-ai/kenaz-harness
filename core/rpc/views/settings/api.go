@@ -1831,6 +1831,14 @@ type SettingsAPI interface {
 	// (fleet-session-truth-01DOGF0A FR-5)
 	FleetSignInCancel(ctx context.Context) error
 
+	// FleetDeviceKeysReauth is the "Sign in again" for a device-key update
+	// Fleet refused without a fresh sign-in (kenaz-fleet ER-40, 403
+	// reauth_required / keys_reauth_required). It runs a max_age=0
+	// re-authentication, holds the ID token in memory only, and retries the
+	// key registration ONCE. Cancellable with FleetSignInCancel (returns
+	// context.Canceled; the reauth_required state stays visible).
+	FleetDeviceKeysReauth(ctx context.Context) error
+
 	// FleetSignOut clears persisted tokens and the identity cache.
 	// Returns fleet.ErrFleetDisabled when the kill switch is active.
 	FleetSignOut(ctx context.Context) error

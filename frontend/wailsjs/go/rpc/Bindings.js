@@ -1402,6 +1402,10 @@ export function Settings_FleetConfigPullStatus() {
   return window['go']['rpc']['Bindings']['Settings_FleetConfigPullStatus']();
 }
 
+export function Settings_FleetDeviceKeysReauth() {
+  return window['go']['rpc']['Bindings']['Settings_FleetDeviceKeysReauth']();
+}
+
 export function Settings_FleetHealth() {
   return window['go']['rpc']['Bindings']['Settings_FleetHealth']();
 }

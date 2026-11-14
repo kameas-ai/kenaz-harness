@@ -73,6 +73,11 @@ type Client struct {
 	// (device-keys-handoff-01DEVKH01 WP02). Mutex-guarded inside.
 	keyReg keyRegState
 
+	// stepUp holds, in memory only, the ID token from a max_age=0
+	// re-authentication that proves a fresh sign-in for a device-key
+	// replacement (device_keys_stepup.go). Never persisted.
+	stepUp stepUpHolder
+
 	// orgPause is the staff "pause paid features" state this client has
 	// observed (org_paused.go). Mutex-guarded inside.
 	orgPause orgPauseState

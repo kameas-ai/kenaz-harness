@@ -1422,3 +1422,18 @@
 "Settings_DeleteMLLocalActivity"
 "Settings_GetMLLocalActivity"
 "Settings_SetMLLocalActivityRetention"
+
+# CLASS: desktop-only-by-nature -- kenaz-fleet ER-40 device-key step-up, 2026-11-13.
+# 1 entries.
+#
+# Settings_FleetDeviceKeysReauth opens a max_age=0 browser re-authentication
+# through the desktop PKCE loopback flow, then retries PUT
+# /api/v1/me/nodes/{id}/keys once. Served mode's session is owned by the host
+# auth broker (no browser flow on this side), and the only caller,
+# AccountPanel, lives under SettingsView, which is boundary-panelled
+# (NotAvailableInServedMode) in served mode -- the same disposition as
+# Settings_FleetSignIn / Settings_FleetSignInCancel.
+#
+# Blocker: a served settings surface (none exists for any Settings_Fleet*
+# panel). Dated 2026-11-13. Owner: alec.
+"Settings_FleetDeviceKeysReauth"

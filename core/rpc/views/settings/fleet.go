@@ -211,6 +211,12 @@ type fleetState struct {
 	signIn     *signInCall
 	signInFlow func(context.Context, fleet.EnvProfile) (fleet.TokenSet, error)
 
+	// keysStepUp is the in-flight device-key step-up (nil when none);
+	// stepUpFlow is the max_age=0 re-authentication, fleet.StepUpFlow
+	// unless a test injects a fake (ER-40, fleet_keys_stepup.go).
+	keysStepUp *keysStepUpCall
+	stepUpFlow func(context.Context, fleet.EnvProfile) (string, error)
+
 	// sessionResetHooks run when one fleet session ends and another may
 	// begin (sign-in success, sign-out): per-session state held outside this
 	// package — the context-sync append breaker — forgets the old session.
@@ -1048,10 +1054,16 @@ func (a *API) FleetSignInCancel(_ context.Context) error {
 	}
 	a.fleet.mu.RLock()
 	call := a.fleet.signIn
+	stepUp := a.fleet.keysStepUp
 	a.fleet.mu.RUnlock()
 	if call != nil {
 		logging.L().Info("fleet.rpc.sign_in.cancel_requested")
 		call.cancel()
+	}
+	// The device-key step-up is the same "Waiting for browser… Cancel".
+	if stepUp != nil {
+		logging.L().Info("fleet.rpc.keys_step_up.cancel_requested")
+		stepUp.cancel()
 	}
 	return nil
 }
@@ -1111,7 +1123,13 @@ func (a *API) runSignIn(ctx context.Context) (FleetIdentity, error) {
 	if err := fleet.ClearNodeRemoved(dataDirForMarker); err != nil {
 		logging.L().Warn("fleet.rpc.sign_in.clear_node_removed_failed", "err", err.Error())
 	}
+	// A sign-in the user really just completed (fresh auth_time) is the
+	// recent interactive sign-in Fleet needs to replace a device key (ER-40),
+	// so the enroll below needs no second prompt. Held in memory only, and
+	// dropped once this enroll has run.
+	c.OfferSignInIDToken(ts.IDToken)
 	id, err := a.fleetEnroll(ctx)
+	c.ClearStepUpToken()
 	if err != nil {
 		logging.L().Error("fleet.rpc.sign_in.enroll_failed", "err", err.Error())
 		return id, err

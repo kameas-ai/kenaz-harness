@@ -649,6 +649,8 @@ interface WailsBindingsLike {
   Settings_FleetSignIn(): Promise<FleetIdentity>;
   Settings_FleetSignOut(): Promise<void>;
   Settings_FleetSignInCancel(): Promise<void>;
+  // kenaz-fleet ER-40: step-up before replacing this device's keys
+  Settings_FleetDeviceKeysReauth(): Promise<void>;
   Settings_FleetRefreshIdentity(): Promise<FleetIdentity>;
   Settings_FleetProfile(): Promise<FleetProfileInfo>;
   // fleet-session-truth-01DOGF0A FR-1
@@ -2675,6 +2677,14 @@ export interface SettingsClient {
    * no flow is running.
    */
   fleetSignInCancel(): Promise<void>;
+  /**
+   * kenaz-fleet ER-40: Fleet refused to replace this device's keys without a
+   * fresh sign-in (deviceKeys.status === 'reauth_required'). Opens the
+   * browser for a fresh sign-in, then retries the key update once. Cancel
+   * with fleetSignInCancel() (rejects with "context canceled"; the
+   * reauth_required state stays on the session).
+   */
+  fleetDeviceKeysReauth(): Promise<void>;
   /** Clear tokens and identity cache. */
   fleetSignOut(): Promise<void>;
   /** Re-call the fleet enroll endpoint and update the cached identity. */
@@ -4852,6 +4862,7 @@ export function createHarnessClient(): HarnessClient {
       fleetSignIn: () => b().Settings_FleetSignIn(),
       fleetSignOut: () => b().Settings_FleetSignOut(),
       fleetSignInCancel: () => b().Settings_FleetSignInCancel(),
+      fleetDeviceKeysReauth: () => b().Settings_FleetDeviceKeysReauth(),
       fleetRefreshIdentity: () => b().Settings_FleetRefreshIdentity(),
       fleetProfile: () => b().Settings_FleetProfile(),
       fleetSession: () => b().Settings_FleetSession(),
@@ -6472,6 +6483,7 @@ export function createFakeHarnessClient(
       }),
       fleetSignOut: noop,
       fleetSignInCancel: noop,
+      fleetDeviceKeysReauth: noop,
       fleetRefreshIdentity: async () => ({
         userId: '', orgId: '', teamId: '',
       }),
