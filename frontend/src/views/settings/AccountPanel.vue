@@ -35,6 +35,7 @@ import {
 } from '@/lib/fleetSession';
 import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
 import TeamTreeList from '@/components/fleet/TeamTreeList.vue';
+import FleetDeviceNameNotice from '@/components/fleet/FleetDeviceNameNotice.vue';
 import { useFleetTeams } from '@/lib/fleetTeams';
 
 const client = useHarnessClient();
@@ -415,6 +416,7 @@ async function refreshIdentity() {
         Cancel
       </button>
     </div>
+    <FleetDeviceNameNotice :refresh-key="state" />
     <p v-if="error" class="error-msg" data-testid="error-msg">
       {{ error }}
       <a
@@ -508,6 +510,7 @@ async function refreshIdentity() {
           {{ handoffFingerprint }}
         </span>
       </div>
+      <FleetDeviceNameNotice :refresh-key="state" />
     </div>
 
     <div v-if="deviceKeysMessage" class="device-keys" data-testid="device-keys">

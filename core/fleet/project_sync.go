@@ -5,8 +5,10 @@ package fleet
 // ProjectSyncer parallels SessionSyncer but for project bundles. A "project
 // bundle" is the set of events that describe a project: metadata changes and
 // notes. Agent memory is NOT a project-bundle class: it syncs on its own
-// user-private lane (memory_sync.go, memory-sync-01MEMSY01). Binary artifacts are excluded by default (configurable
-// via ArtifactClassOptions).
+// per-member lane (memory_sync.go, memory-sync-01MEMSY01), whose notes are
+// server-readable (encrypted in transit and at rest, not end-to-end).
+// Binary artifacts are excluded by default (configurable via
+// ArtifactClassOptions).
 //
 // Per-artifact-class opt-in:
 //   ArtifactClassOptions{Notes: true, Binaries: false} is the default.

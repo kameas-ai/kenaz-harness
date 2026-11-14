@@ -147,8 +147,9 @@ func IsGenericComputerName(name string) bool {
 // macOS the Sharing "Computer Name" (scutil --get ComputerName), on Windows
 // %COMPUTERNAME%, elsewhere the hostname. Falls back to the short hostname.
 // "" when none can be read or the name is generic (IsGenericComputerName),
-// so a Workbench VM's "localhost" is never offered as this computer's name. It is read only on demand (never cached), so a
-// rename shows up on the next enroll.
+// so a Workbench VM's "localhost" is never offered as this computer's name.
+// It is read only on demand (never cached), so a rename shows up on the
+// next enroll.
 func ComputerName() string {
 	return computerNameFor(runtime.GOOS, scutilComputerName, os.Getenv, os.Hostname)
 }

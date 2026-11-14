@@ -270,7 +270,8 @@ async function confirmDisable() {
         </p>
         <ul class="list-disc pl-5 space-y-0.5">
           <li data-testid="memory-sync-disclosure-view">
-            Only you can view your synced notes today. Kameas staff have no view of note content.
+            Only you can view your synced notes in Fleet today. Kameas staff have no view of note
+            content in the product.
           </li>
           <li data-testid="memory-sync-disclosure-storage">
             They're stored on Kameas servers in a form Kameas can read. They're encrypted in transit

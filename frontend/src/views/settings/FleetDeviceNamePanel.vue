@@ -15,6 +15,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { FleetDeviceNameSettings } from '@/lib/types';
+import { notifyFleetDeviceNameChanged } from '@/lib/fleetDeviceName';
 
 const client = useHarnessClient();
 
@@ -96,6 +97,7 @@ async function save(source: 'share' | 'mode' | 'custom') {
       maxLength: 0,
     });
     apply(await client.settings.getFleetDeviceName());
+    notifyFleetDeviceNameChanged();
   } catch (err) {
     errorMsg.value = String(err);
   } finally {
@@ -118,8 +120,14 @@ async function save(source: 'share' | 'mode' | 'custom') {
         <span>
           <span class="text-sm text-ink font-medium">Share this device's name with your organization</span>
           <span class="block text-xs text-ink-muted">
-            By default your organization's Fleet admins see this computer's name for this device, so
-            they can tell your devices apart. You can share a neutral name or one you choose instead.
+            <template v-if="computerName">
+              By default your organization's Fleet admins see this computer's name for this device, so
+              they can tell your devices apart. You can share a neutral name or one you choose instead.
+            </template>
+            <template v-else>
+              By default your organization's Fleet admins see a neutral name for this device, because
+              this computer's name isn't available. You can share a name you choose instead.
+            </template>
             When this is off, no name is sent and the one Fleet has is removed.
           </span>
         </span>
@@ -175,7 +183,8 @@ async function save(source: 'share' | 'mode' | 'custom') {
           @change="save('custom')"
         />
         <p v-if="mode === 'custom'" class="ml-6 text-xs text-ink-muted">
-          Up to {{ maxLength }} characters. Leave it empty to use this computer's name.
+          Up to {{ maxLength }} characters. Leave it empty to use
+          {{ computerName ? "this computer's name" : "the neutral name, because this computer's name isn't available" }}.
         </p>
       </div>
 

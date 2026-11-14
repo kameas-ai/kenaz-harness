@@ -86,7 +86,7 @@ describe('MemorySyncPanel', () => {
     const d = wrapper.find('[data-testid="memory-sync-disclosure"]');
     const items = d.findAll('li').map((li) => li.text().replace(/\s+/g, ' ').trim());
     const expected = [
-      'Only you can view your synced notes today. Kameas staff have no view of note content.',
+      'Only you can view your synced notes in Fleet today. Kameas staff have no view of note content in the product.',
       "They're stored on Kameas servers in a form Kameas can read. They're encrypted in transit and at rest, but not end-to-end, and our systems read them to keep your devices in sync.",
       "Your organization's admins and team leads can't read them unless your organization turns that on and you first acknowledge a notice. Only notes synced after that point would be readable, and you'd be able to see who read them.",
       'If your organization enables the Kameas connector and you opt in, apps you connect to it can read and update these notes.',

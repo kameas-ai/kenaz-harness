@@ -40,6 +40,7 @@ import {
   useFleetSession,
 } from '@/lib/fleetSession';
 import { isServedMode } from '@/lib/useServedMode';
+import FleetDeviceNameNotice from '@/components/fleet/FleetDeviceNameNotice.vue';
 import { hostInitials, useHostSession } from '@/lib/hostSession';
 
 const client = useHarnessClient();
@@ -379,6 +380,7 @@ async function handleSignOut() {
         >
           {{ loading ? 'Opening browser…' : 'Sign in' }}
         </button>
+        <FleetDeviceNameNotice v-if="canSignIn" class="user-menu-sub px-3 pb-1" />
         <button
           v-if="isSignedIn"
           type="button"

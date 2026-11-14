@@ -172,6 +172,17 @@ func TestFleetDeviceName_SettingReachesEnrollBody(t *testing.T) {
 	if dn, _ := a.GetFleetDeviceName(ctx); !dn.UseNeutralName || dn.UseComputerName || dn.EffectiveName != def {
 		t.Fatalf("Get neutral = %+v", dn)
 	}
+	// A whole-settings Set from a stale copy (no neutral flag) must not
+	// drop the explicit neutral choice and swap in the computer's name.
+	if err := a.Set(ctx, Settings{Theme: "light"}); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := a.Get(ctx); !s.FleetDeviceNameNeutral || s.Theme != "light" {
+		t.Fatalf("stale Set dropped the neutral choice: neutral=%v theme=%q", s.FleetDeviceNameNeutral, s.Theme)
+	}
+	if got := a.fleetDeviceName(nodeID); got != def {
+		t.Fatalf("after stale Set, device name = %q, want neutral %q", got, def)
+	}
 
 	// Use this computer's name: re-enrolls with it, clearing neutral.
 	n = f.count()

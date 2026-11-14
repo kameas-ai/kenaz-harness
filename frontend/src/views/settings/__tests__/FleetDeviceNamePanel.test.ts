@@ -89,6 +89,29 @@ describe('FleetDeviceNamePanel', () => {
     expect(effective(w)).toBe(`Shown to your organization as ${NEUTRAL}.`);
   });
 
+  it("says the neutral name is the default when this computer's name isn't available", async () => {
+    const { w } = setup({ computerName: '' });
+    await flushPromises();
+    const text = w.text().replace(/\s+/g, ' ');
+    expect(text).toContain(
+      "By default your organization's Fleet admins see a neutral name for this device, because this computer's name isn't available.",
+    );
+    expect(text).not.toContain("see this computer's name");
+    await w.find('[data-testid="fleet-device-name-mode-custom"]').setValue(true);
+    await flushPromises();
+    expect(w.text().replace(/\s+/g, ' ')).toContain(
+      "Leave it empty to use the neutral name, because this computer's name isn't available.",
+    );
+  });
+
+  it("says the computer's name is the default when it is available", async () => {
+    const { w } = setup();
+    await flushPromises();
+    await w.find('[data-testid="fleet-device-name-mode-custom"]').setValue(true);
+    await flushPromises();
+    expect(w.text().replace(/\s+/g, ' ')).toContain("Leave it empty to use this computer's name.");
+  });
+
   it('choosing the neutral name saves it explicitly', async () => {
     const { w, set } = setup();
     await flushPromises();

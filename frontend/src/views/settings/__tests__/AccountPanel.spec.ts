@@ -120,6 +120,69 @@ describe('AccountPanel', () => {
     expect(wrapper.find('[data-testid="identity-card"]').exists()).toBe(false);
   });
 
+  it('tells the member the device name before sign-in, without blocking it', async () => {
+    const client = buildSignedOutClient();
+    client.settings.getFleetDeviceName = vi.fn(async () => ({
+      share: true,
+      useComputerName: false,
+      useNeutralName: false,
+      customName: '',
+      computerName: 'Example-Workstation',
+      defaultName: '',
+      effectiveName: 'Example-Workstation',
+      maxLength: 64,
+    }));
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const panel = wrapper.find('[data-testid="signed-out-panel"]');
+    expect(panel.find('[data-testid="fleet-device-name-notice"]').text()).toBe(
+      `Your organization's admins will see this device as "Example-Workstation". You can change this in Settings › Account.`,
+    );
+    expect(wrapper.find('[data-testid="sign-in-btn"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('shows the device name on the Account card, and nothing when sharing is off', async () => {
+    const client = buildSignedInClient();
+    const get = vi.fn(async () => ({
+      share: true,
+      useComputerName: false,
+      useNeutralName: true,
+      customName: '',
+      computerName: 'Example-Workstation',
+      defaultName: 'macOS device 3f2a',
+      effectiveName: 'macOS device 3f2a',
+      maxLength: 64,
+    }));
+    client.settings.getFleetDeviceName = get;
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const card = wrapper.find('[data-testid="identity-card"]');
+    expect(card.find('[data-testid="fleet-device-name-notice"]').text()).toContain('as "macOS device 3f2a"');
+
+    const off = buildSignedInClient();
+    off.settings.getFleetDeviceName = vi.fn(async () => ({
+      share: false,
+      useComputerName: false,
+      useNeutralName: false,
+      customName: '',
+      computerName: 'Example-Workstation',
+      defaultName: 'macOS device 3f2a',
+      effectiveName: '',
+      maxLength: 64,
+    }));
+    _resetFleetSessionForTest();
+    const w2 = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: off } },
+    });
+    await flushPromises();
+    expect(w2.find('[data-testid="identity-card"]').exists()).toBe(true);
+    expect(w2.find('[data-testid="fleet-device-name-notice"]').exists()).toBe(false);
+  });
+
   it('3. signed-in state renders identity fields', async () => {
     const client = buildSignedInClient();
     const wrapper = mount(AccountPanel, {
