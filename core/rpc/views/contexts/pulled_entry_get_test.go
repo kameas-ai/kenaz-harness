@@ -73,6 +73,21 @@ func TestGet_PulledEntryServesBodyReadOnly(t *testing.T) {
 	if err := api.Delete(ctx, path); !errors.Is(err, contextsview.ErrPulledEntryReadOnly) {
 		t.Errorf("Delete: err = %v, want read-only", err)
 	}
+	if err := api.Rename(ctx, "team/x.md", "team/_fleet/forged"); !errors.Is(err, contextsview.ErrPulledEntryReadOnly) {
+		t.Errorf("Rename into _fleet: err = %v, want read-only", err)
+	}
+	// Never republished or promoted as the member's own: by its pulled
+	// path, or by the teammate's wire id.
+	for _, id := range []string{path, "org/_fleet/" + pulledID, pulledID} {
+		if _, err := api.Context_Publish(ctx, contextsview.ContextPublishRequest{
+			NodeID: id, Layer: "team", Kind: "guidance", Title: "Deploy", Body: "Use the blue lane.", Version: 1,
+		}); !errors.Is(err, contextsview.ErrPulledEntryNotShareable) {
+			t.Errorf("Publish(%s): err = %v, want ErrPulledEntryNotShareable", id, err)
+		}
+		if _, err := api.Context_Promote(ctx, id); !errors.Is(err, contextsview.ErrPulledEntryNotShareable) {
+			t.Errorf("Promote(%s): err = %v, want ErrPulledEntryNotShareable", id, err)
+		}
+	}
 	// An ordinary local file still reads from disk.
 	if err := api.Save(ctx, "team/notes.md", "local"); err != nil {
 		t.Fatalf("Save local: %v", err)

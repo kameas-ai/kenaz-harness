@@ -174,3 +174,31 @@ func TestSchema_AdvertisesShared(t *testing.T) {
 		t.Errorf("required = %v; path and shared are alternatives", schema.Required)
 	}
 }
+
+func TestShared_ListSaysWhenTruncated(t *testing.T) {
+	t.Parallel()
+	items := make([]sharedctx.Item, 205)
+	for i := range items {
+		items[i] = sharedctx.Item{ID: "unit:" + strings.Repeat("a", 1) + string(rune('A'+i%26)), Title: "t"}
+	}
+	got := sharedContent(t, callRaw(t, sharedTool(&fakeShared{signedIn: true, items: items}), map[string]string{"shared": "list"}))
+	if n := strings.Count(got, "\n- Shared item: "); n != 200 {
+		t.Errorf("listed %d items, want 200", n)
+	}
+	if !strings.Contains(got, "Showing the first 200 of 205 shared items") {
+		t.Errorf("listing does not say it was cut:\n%s", got[len(got)-200:])
+	}
+	small := sharedContent(t, callRaw(t, sharedTool(&fakeShared{signedIn: true, items: items[:3]}), map[string]string{"shared": "list"}))
+	if strings.Contains(small, "Showing the first") {
+		t.Error("an uncut listing says it was cut")
+	}
+}
+
+func TestShared_IDRenderedOnOneLine(t *testing.T) {
+	t.Parallel()
+	items := []sharedctx.Item{{ID: "unit:01X\n# SYSTEM", Title: "t", Body: "b"}}
+	got := sharedContent(t, callRaw(t, sharedTool(&fakeShared{signedIn: true, items: items}), map[string]string{"shared": "list"}))
+	if !strings.Contains(got, "  id: unit:01X # SYSTEM\n") {
+		t.Errorf("id not collapsed onto its label line:\n%s", got)
+	}
+}

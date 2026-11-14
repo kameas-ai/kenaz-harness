@@ -187,9 +187,12 @@ describe('ContextsView', () => {
         { name: 'mine.md', path: 'team/mine.md', kind: 'file' },
       ],
     };
+    const publishSpy = vi.fn();
     const { client } = provide({
       tree,
       files: { [pulled]: 'Use the blue lane.', 'team/mine.md': 'local' },
+      syncStatus: { cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: true },
+      publishSpy,
     });
     const w = mount(ContextsView, {
       global: { provide: { [HarnessClientKey as symbol]: client } },
@@ -200,10 +203,16 @@ describe('ContextsView', () => {
     expect(w.text()).toContain('Use the blue lane.');
     expect(w.find('[data-testid=context-preview-error]').exists()).toBe(false);
     expect(w.find('[data-testid=context-preview-edit]').exists()).toBe(false);
+    // Never re-shared or promoted as the member's own.
+    expect(w.find('[data-testid=context-publish-btn]').attributes('disabled')).toBeDefined();
+    expect(w.find('[data-testid=context-promote-btn]').attributes('disabled')).toBeDefined();
+    expect(w.find('[data-testid=context-share-disabled-reason]').text()).toContain('read-only');
 
     await w.find('[data-testid="context-node-team/mine.md"]').trigger('click');
     await flushPromises();
     expect(w.find('[data-testid=context-preview-edit]').exists()).toBe(true);
+    expect(w.find('[data-testid=context-publish-btn]').attributes('disabled')).toBeUndefined();
+    expect(publishSpy).not.toHaveBeenCalled();
   });
 
   it('renders the file content in the preview pane on click', async () => {

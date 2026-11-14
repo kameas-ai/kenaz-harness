@@ -295,6 +295,38 @@ func mergePulledEntries(root Node, pulled []fleet.ContextNodeEntry) Node {
 // teammate's shared context, shown read-only.
 var ErrPulledEntryReadOnly = errors.New("contexts: shared team/org entries are read-only")
 
+// ErrPulledEntryNotShareable refuses publishing or promoting a teammate's
+// pulled entry: it would republish their text as the member's own node.
+var ErrPulledEntryNotShareable = errors.New("contexts: an entry shared by a teammate cannot be re-shared or promoted")
+
+// isPulledPath reports whether path is (or is under) a pulled team/org
+// entry path, "<team|org>/_fleet".
+func isPulledPath(path string) bool {
+	parts := strings.SplitN(strings.TrimLeft(path, "/"), "/", 3)
+	return len(parts) >= 2 && (parts[0] == string(contextpack.LayerTeam) || parts[0] == string(contextpack.LayerOrg)) && parts[1] == "_fleet"
+}
+
+// refusePulled refuses a publish / promote whose local id is a pulled
+// entry path, or the wire id of a pulled entry someone else owns.
+func (a *API) refusePulled(nodeID string) error {
+	if isPulledPath(nodeID) {
+		return ErrPulledEntryNotShareable
+	}
+	if a.syncer == nil {
+		return nil
+	}
+	self := ""
+	if a.selfUserID != nil {
+		self = a.selfUserID()
+	}
+	for _, e := range a.syncer.PulledEntries() {
+		if e.ID == nodeID && (self == "" || !strings.EqualFold(e.OwnerUserID, self)) {
+			return ErrPulledEntryNotShareable
+		}
+	}
+	return nil
+}
+
 // ErrPulledEntryNotFound: a "<layer>/_fleet/<id>" path with no live pulled
 // entry (deleted on Fleet, or not pulled yet).
 var ErrPulledEntryNotFound = errors.New("contexts: shared entry is no longer available")
@@ -335,7 +367,7 @@ func (a *API) Save(_ context.Context, path, content string) error {
 	if a == nil || a.lib == nil {
 		return ErrLibraryUnavailable
 	}
-	if _, _, ok := pulledEntryPath(path); ok {
+	if isPulledPath(path) {
 		return ErrPulledEntryReadOnly
 	}
 	return a.lib.Save(path, content)
@@ -352,7 +384,7 @@ func (a *API) Rename(_ context.Context, oldPath, newPath string) error {
 	if a == nil || a.lib == nil {
 		return ErrLibraryUnavailable
 	}
-	if _, _, ok := pulledEntryPath(oldPath); ok {
+	if isPulledPath(oldPath) || isPulledPath(newPath) {
 		return ErrPulledEntryReadOnly
 	}
 	return a.lib.Rename(oldPath, newPath)
@@ -362,7 +394,7 @@ func (a *API) Delete(_ context.Context, path string) error {
 	if a == nil || a.lib == nil {
 		return ErrLibraryUnavailable
 	}
-	if _, _, ok := pulledEntryPath(path); ok {
+	if isPulledPath(path) {
 		return ErrPulledEntryReadOnly
 	}
 	return a.lib.Delete(path)
@@ -422,6 +454,9 @@ func toWire(in corecontexts.Node) Node {
 func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (ContextPublishResult, error) {
 	if a == nil || a.syncer == nil {
 		return ContextPublishResult{}, fleet.ErrFleetDisabled
+	}
+	if err := a.refusePulled(req.NodeID); err != nil {
+		return ContextPublishResult{}, err
 	}
 
 	layer := contextpack.Layer(req.Layer)
@@ -494,6 +529,9 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromoteResult, error) {
 	if a == nil || a.syncer == nil {
 		return ContextPromoteResult{}, fleet.ErrFleetDisabled
+	}
+	if err := a.refusePulled(nodeID); err != nil {
+		return ContextPromoteResult{}, err
 	}
 
 	logging.L().Info("contexts.promote.start", "node_id", a.syncer.WireNodeID(nodeID))

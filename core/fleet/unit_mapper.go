@@ -196,7 +196,7 @@ func (m *UnitMapper) MapUnitToNode(u units.Unit) (contextNodeInput, bool, error)
 	}
 	node := contextNodeInput{
 		ID:             u.ID,
-		Kind:           string(u.Kind), // unit lane: kind == unit_kind
+		Kind:           wireKindForUnit(u), // unit lane: kind == unit_kind, except a kept bootstrap/legacy label
 		Title:          u.Title,
 		Body:           u.Body,
 		Metadata:       meta,
@@ -285,6 +285,26 @@ func (m *UnitMapper) PulledNodeToUnit(n ContextPulledNode) (units.Unit, bool, er
 		Metadata:       cleanMeta,
 	}
 	return u, true, nil
+}
+
+// wireKindForUnit is the node kind pushed for a unit: its unit kind, except
+// a doc unit that came from a bootstrap / legacy node, which keeps its wire
+// kind (metadata fleet_kind) with unit_kind=doc — contract-harness-sync §1.1
+// ties only curated and unit kinds to a unit_kind. Anything else in the
+// label is ignored, so the push checks are unchanged.
+func wireKindForUnit(u units.Unit) string {
+	if u.Kind != units.KindDoc || len(u.Metadata) == 0 {
+		return string(u.Kind)
+	}
+	var md map[string]json.RawMessage
+	if json.Unmarshal(u.Metadata, &md) != nil {
+		return string(u.Kind)
+	}
+	var k string
+	if raw, ok := md[FleetKindMetaKey]; ok && json.Unmarshal(raw, &k) == nil && renderedAsDoc(k) {
+		return k
+	}
+	return string(u.Kind)
 }
 
 // withFleetKindLabel sets metadata[FleetKindMetaKey] = kind. Non-object

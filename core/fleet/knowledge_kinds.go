@@ -20,8 +20,8 @@
 // returns everything, so each lane ALSO skips-and-counts nodes of other kinds
 // (never aborting its cursor, never mislisting another lane's nodes).
 //
-// Fleet ruling 2026-11-13 (kenaz-fleet docs/contract-context.md "Context
-// kinds"): a reader must not drop a node whose kind is on Fleet's allowlist
+// Fleet ruling 2026-11-13 (contract-harness-sync §1.1; the "Context kinds"
+// section of docs/contract-context.md is pending kenaz-fleet #567): a reader must not drop a node whose kind is on Fleet's allowlist
 // but which it does not recognise — it renders it as a doc. The bootstrap
 // and legacy kinds (bootstrapKinds, legacyNodeKinds) are therefore pulled by
 // the Unit lane (unitLanePullKinds) and stored as doc units, with the wire

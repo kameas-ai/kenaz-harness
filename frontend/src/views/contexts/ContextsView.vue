@@ -87,6 +87,7 @@ import type {
 } from '@/lib/types';
 import ContextTree from './ContextTree.vue';
 import ContextPreview from './ContextPreview.vue';
+import { isPulledEntryPath, PULLED_ENTRY_READ_ONLY_REASON } from '@/lib/pulledContext';
 import GlobalContextPanel from '@/components/settings/GlobalContextPanel.vue';
 import ContextRecent from './ContextRecent.vue';
 import ContextHealthCard from '@/components/context/ContextHealthCard.vue';
@@ -245,6 +246,10 @@ const shareTarget = computed<'folder' | 'file' | null>(() => {
  */
 const shareBlockedReason = computed<string | null>(() => {
   if (shareTarget.value === null) return null;
+  // A teammate's pulled entry is never re-shared as the member's own.
+  if (shareTarget.value === 'file' && isPulledEntryPath(selectedPath.value)) {
+    return PULLED_ENTRY_READ_ONLY_REASON;
+  }
   return sharingDisabledReason.value;
 });
 
@@ -311,6 +316,7 @@ async function loadSyncStatus() {
  */
 function openPublishConfirm() {
   if (!teamCapEnabled.value || shareTarget.value !== 'file') return;
+  if (isPulledEntryPath(selectedPath.value)) return;
   publishError.value = null;
   publishResult.value = null;
   publishLayer.value = 'team';
@@ -369,6 +375,7 @@ const promoteLoading = ref(false);
  */
 async function onPromoteClick() {
   if (!teamCapEnabled.value || shareTarget.value !== 'file' || !selectedPath.value) return;
+  if (isPulledEntryPath(selectedPath.value)) return;
   promoteLoading.value = true;
   promoteError.value = null;
   promoteResult.value = null;
@@ -569,15 +576,8 @@ async function selectFile(path: string) {
   }
 }
 
-/**
- * A pulled team/org entry lives at the synthetic path
- * "<team|org>/_fleet/<id>" (core/rpc/views/contexts mergePulledEntries).
- * It is a teammate's shared context: shown read-only, so no Edit button.
- */
-function isPulledEntryPath(path: string | null): boolean {
-  return path !== null && /^(team|org)\/_fleet\/[^/]+$/.test(path);
-}
-
+// A pulled team/org entry is a teammate's shared context: read-only, so
+// no Edit button (and no Share / Promote — see shareBlockedReason).
 const previewOnSave = computed(() =>
   isPulledEntryPath(selectedPath.value) ? undefined : savePreview,
 );

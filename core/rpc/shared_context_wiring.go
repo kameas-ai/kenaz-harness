@@ -11,15 +11,19 @@ package rpc
 //  1. On demand: kenaz__read_context_file's "shared" argument lists and
 //     reads them (sharedContextSource implements readcontextfile.
 //     SharedSource). Read-only; refused unless signed in to Fleet.
-//  2. Eagerly: team / org units whose load_policy is "always" AND that came
-//     through Fleet (they have a sync sidecar) are prepended to the
-//     session's system attachments (alwaysBlock, via both attachment
-//     resolver adapters). Fleet lets only org admins / owners push
-//     load_policy=always (403 load_policy_requires_admin; the mapper
-//     downgrades everyone else), and pull reads load_policy only from the
-//     top-level column Fleet validates — so an eager item is one an org
-//     admin chose. A team unit made on this device and never synced stays
-//     on demand. Personal units are untouched (no change in behaviour).
+//  2. Eagerly: team / org units whose sync sidecar records that Fleet holds
+//     load_policy "always" (units.SyncState.ServerLoadPolicy, refreshed on
+//     every pull and push) are prepended to the session's system
+//     attachments (alwaysBlock, via both attachment resolver adapters).
+//     Fleet lets only org admins / owners set "always" (403
+//     load_policy_requires_admin; the mapper sends everyone else's as
+//     on_demand, and the sidecar records that). The local unit's LoadPolicy
+//     never qualifies on its own, so a demotion on Fleet, a non-admin's own
+//     unit, or a unit never synced stays on demand. Personal units are
+//     untouched.
+//
+// Pulled entries are never attachments (core/attachments refuses
+// "<team|org>/_fleet" sources): an attachment would be unframed.
 //
 // The curated source is late-bound: the ContextGraphSyncer is built in the
 // fleet wiring block, after newLLMStack registers the tool.
@@ -28,6 +32,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 
@@ -51,7 +56,7 @@ const (
 )
 
 // alwaysSubtitle follows the header on the eager block.
-const alwaysSubtitle = "loaded for every conversation because an org admin marked it always-load; " +
+const alwaysSubtitle = "loaded for every conversation because it is marked always-load in Kameas Fleet, which only org admins can do; " +
 	"list and read more with kenaz__read_context_file shared=\"list\""
 
 // sharedContextSource serves teammates' shared context to the model.
@@ -179,6 +184,12 @@ func (s *sharedContextSource) GetShared(ctx context.Context, id string) (sharedc
 // alwaysBlock renders the eager always-load block for a session, or "" when
 // there is nothing to load, the user is signed out, or anything fails (the
 // turn must never fail on this layer). projectID may be nil.
+//
+// A unit qualifies ONLY by its sync sidecar's ServerLoadPolicy == "always":
+// the load_policy Fleet holds for the node as last pulled or pushed. Fleet
+// lets only org admins / owners set it, and a demotion (or an edit pushed
+// by a non-admin, which goes out as on_demand) is recorded on the next pull
+// or push. The local unit's LoadPolicy never qualifies on its own.
 func (s *sharedContextSource) alwaysBlock(ctx context.Context, sessionID string, projectID *string) string {
 	if s == nil {
 		return ""
@@ -187,32 +198,55 @@ func (s *sharedContextSource) alwaysBlock(ctx context.Context, sessionID string,
 	if mgr == nil {
 		return ""
 	}
-	shared, err := sharedUnits(ctx, mgr, units.LoadAlways)
+	states, err := mgr.ListSyncState(ctx)
 	if err != nil {
 		logging.L().Warn("rpc.shared_context.always_list_failed", "err", err.Error())
 		return ""
 	}
-	if len(shared) == 0 {
+	var cands []units.Unit
+	for _, st := range states {
+		if st.ServerLoadPolicy != string(units.LoadAlways) {
+			continue
+		}
+		u, gerr := mgr.Get(ctx, st.UnitID)
+		if gerr != nil || !isSharedUnit(u) || !scopeMatches(u, sessionID, projectID) {
+			continue
+		}
+		cands = append(cands, u)
+	}
+	if len(cands) == 0 {
 		return ""
 	}
-	// Checked after the cheap SQL read: the sign-in check reads the keychain.
+	// Checked after the cheap SQL reads: the sign-in check reads the keychain.
 	if !s.SignedIn(ctx) {
 		return ""
 	}
+	// Org (base layer) before team, then global → project → session, then
+	// oldest first: stable across turns.
+	sort.SliceStable(cands, func(i, j int) bool {
+		if a, b := sharedClassRank(cands[i].Classification), sharedClassRank(cands[j].Classification); a != b {
+			return a < b
+		}
+		if a, b := sharedScopeRank(cands[i].Scope), sharedScopeRank(cands[j].Scope); a != b {
+			return a < b
+		}
+		if !cands[i].CreatedAt.Equal(cands[j].CreatedAt) {
+			return cands[i].CreatedAt.Before(cands[j].CreatedAt)
+		}
+		return cands[i].ID < cands[j].ID
+	})
+	return formatAlways(cands)
+}
+
+// formatAlways applies the eager caps (maxAlwaysItems items, maxAlwaysBytes
+// total, maxAlwaysItemBytes per item; a cut item is marked truncated) and
+// renders the framed block.
+func formatAlways(cands []units.Unit) string {
 	var items []sharedctx.Item
 	total := 0
-	for _, u := range shared {
+	for _, u := range cands {
 		if len(items) >= maxAlwaysItems || total >= maxAlwaysBytes {
 			break
-		}
-		if !scopeMatches(u, sessionID, projectID) {
-			continue
-		}
-		// Only units that came through Fleet: a sync sidecar exists. A team
-		// unit authored here and never synced was not vetted by Fleet's
-		// admin-only always-load guard.
-		if _, serr := mgr.GetSyncState(ctx, u.ID); serr != nil {
-			continue
 		}
 		it := unitItem(u)
 		limit := maxAlwaysItemBytes
@@ -227,6 +261,23 @@ func (s *sharedContextSource) alwaysBlock(ctx context.Context, sessionID string,
 		items = append(items, it)
 	}
 	return sharedctx.Format(alwaysSubtitle, items)
+}
+
+func sharedClassRank(c units.Classification) int {
+	if c == units.ClassOrg {
+		return 0
+	}
+	return 1
+}
+
+func sharedScopeRank(sc units.Scope) int {
+	switch sc {
+	case units.ScopeGlobal:
+		return 0
+	case units.ScopeProject:
+		return 1
+	}
+	return 2
 }
 
 // scopeMatches reports whether a unit's scope applies to the session.

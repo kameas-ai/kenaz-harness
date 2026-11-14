@@ -262,11 +262,15 @@ func (t *Tool) callShared(ctx context.Context, shared string) (json.RawMessage, 
 			return marshalErr("read_error",
 				fmt.Sprintf("read_context_file: list shared context: %v", err))
 		}
-		if len(items) > maxSharedListItems {
+		total := len(items)
+		if total > maxSharedListItems {
 			items = items[:maxSharedListItems]
 		}
 		content := sharedctx.FormatListing("list; read an item with shared=<id>", items,
 			"Nothing has been shared with you yet.")
+		if total > maxSharedListItems {
+			content += fmt.Sprintf("(Showing the first %d of %d shared items; the rest are not listed.)\n", maxSharedListItems, total)
+		}
 		out, _ := json.Marshal(sharedResult{Shared: SharedList, Content: content})
 		return out, nil
 	}
@@ -283,7 +287,7 @@ func (t *Tool) callShared(ctx context.Context, shared string) (json.RawMessage, 
 		it.Body = truncateUTF8(it.Body, int(contexts.MaxFileBytes))
 		it.Truncated = true
 	}
-	out, _ := json.Marshal(sharedResult{Shared: it.ID, Content: sharedctx.Format("", []sharedctx.Item{it})})
+	out, _ := json.Marshal(sharedResult{Shared: shared, Content: sharedctx.Format("", []sharedctx.Item{it})})
 	return out, nil
 }
 

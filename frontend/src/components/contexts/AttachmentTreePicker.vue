@@ -24,6 +24,11 @@ import type {
 } from '@/lib/types';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { X } from '@/shell/icons';
+import {
+  isPulledEntryPath,
+  PULLED_ENTRY_READ_ONLY_REASON,
+  withoutPulledEntries,
+} from '@/lib/pulledContext';
 
 const props = defineProps<{
   open: boolean;
@@ -68,7 +73,10 @@ async function loadTree() {
   loadingTree.value = true;
   treeError.value = null;
   try {
-    tree.value = await client.contexts.list();
+    // Teammates' pulled Fleet entries are never attachable: an attachment
+    // is an unframed system snapshot that outlives a Fleet takedown. The
+    // model reads them only through the framed shared-context paths.
+    tree.value = withoutPulledEntries(await client.contexts.list());
   } catch (err) {
     tree.value = null;
     treeError.value = err instanceof Error ? err.message : String(err);
@@ -78,17 +86,23 @@ async function loadTree() {
 }
 
 async function onSelect(path: string) {
+  if (isPulledEntryPath(path)) return;
   selectedPath.value = path;
   selectedKind.value = 'file';
 }
 
 async function onSelectFolder(path: string) {
+  if (isPulledEntryPath(path)) return;
   selectedPath.value = path;
   selectedKind.value = 'folder';
 }
 
 async function onAdd() {
   if (!selectedPath.value || adding.value) return;
+  if (isPulledEntryPath(selectedPath.value)) {
+    addError.value = PULLED_ENTRY_READ_ONLY_REASON;
+    return;
+  }
   adding.value = true;
   addError.value = null;
   try {

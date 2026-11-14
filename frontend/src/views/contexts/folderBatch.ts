@@ -10,6 +10,7 @@
  * progress list is truthful and a cancel stops cleanly between entries.
  */
 import type { ContextNode } from '@/lib/types';
+import { isPulledEntryPath, PULLED_ENTRY_READ_ONLY_REASON } from '@/lib/pulledContext';
 
 /**
  * contextNodeID — the LOCAL id a library path publishes/promotes under:
@@ -48,6 +49,8 @@ export type FolderBatchMode = 'share' | 'promote';
  * `sharingDisabledReason` in ContextsView), never per entry.
  */
 export function entryIneligibleReason(node: ContextNode, mode: FolderBatchMode): string | null {
+  // A teammate's pulled entry is never re-shared or promoted as one's own.
+  if (isPulledEntryPath(node.path)) return PULLED_ENTRY_READ_ONLY_REASON;
   // The wire type is `Size int64 json:"size,omitempty"` — a zero-byte
   // file arrives with NO size field, so absent means empty.
   if (mode === 'share' && node.kind === 'file' && (node.size ?? 0) === 0) {

@@ -103,6 +103,14 @@ var (
 	// not configured, etc.).
 	ErrSourceUnavailable = errors.New("attachments: source unavailable")
 
+	// ErrSharedEntryNotAttachable refuses a "library:" / "module:" source
+	// under a pulled team/org entry path ("<team|org>/_fleet/…"). That is a
+	// teammate's text from Kameas Fleet: an attachment would put it in the
+	// prompt unframed, as a system snapshot that outlives a Fleet takedown.
+	// The model reads shared context only through the framed paths
+	// (kenaz__read_context_file shared=…, the always-load block).
+	ErrSharedEntryNotAttachable = errors.New("attachments: context shared by teammates through Kameas Fleet cannot be attached")
+
 	// ErrMediaStoreUnavailable is returned by AddMedia when the manager
 	// was constructed without WithMediaStore.
 	ErrMediaStoreUnavailable = errors.New("attachments: media store not configured")
@@ -251,7 +259,16 @@ func (m *Manager) ListResolved(ctx context.Context, reader SessionProjectReader,
 		}
 		out = append(out, sessAtt...)
 	}
-	return out, nil
+	// Never resolve a pulled shared entry into the prompt, whatever wrote
+	// the row (defence in depth behind Add's refusal).
+	kept := out[:0]
+	for _, a := range out {
+		if IsPulledSharedSource(a.ContentSource) {
+			continue
+		}
+		kept = append(kept, a)
+	}
+	return kept, nil
 }
 
 // Add inserts a new attachment. ID, CreatedAt, and Position default if
@@ -283,6 +300,9 @@ func (m *Manager) Add(ctx context.Context, att Attachment) (Attachment, error) {
 	}
 	if !validContentSource(att.ContentSource) {
 		return Attachment{}, fmt.Errorf("%w: %q", ErrInvalidContentSource, att.ContentSource)
+	}
+	if IsPulledSharedSource(att.ContentSource) {
+		return Attachment{}, ErrSharedEntryNotAttachable
 	}
 	if att.ID == "" {
 		id, err := m.idGen()
@@ -427,6 +447,9 @@ func (m *Manager) Refresh(ctx context.Context, id string) (Attachment, error) {
 	if err != nil {
 		return Attachment{}, err
 	}
+	if IsPulledSharedSource(att.ContentSource) {
+		return Attachment{}, ErrSharedEntryNotAttachable
+	}
 	libPath, ok := libraryPath(att.ContentSource)
 	if !ok {
 		return att, nil
@@ -485,6 +508,23 @@ func validContentSource(src string) bool {
 		return len(src) > len("module:")
 	}
 	return false
+}
+
+// IsPulledSharedSource reports whether a "library:" or "module:" source
+// points at (or under) a pulled team/org entry path, "<team|org>/_fleet".
+func IsPulledSharedSource(src string) bool {
+	var p string
+	switch {
+	case strings.HasPrefix(src, "library:"):
+		p = src[len("library:"):]
+	case strings.HasPrefix(src, "module:"):
+		p = src[len("module:"):]
+	default:
+		return false
+	}
+	p = strings.TrimLeft(strings.ReplaceAll(p, "\\", "/"), "/")
+	parts := strings.SplitN(p, "/", 3)
+	return len(parts) >= 2 && (parts[0] == "team" || parts[0] == "org") && parts[1] == "_fleet"
 }
 
 // libraryPath returns the path portion of a "library:<path>" source,
