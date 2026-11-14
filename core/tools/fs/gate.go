@@ -221,9 +221,11 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 // when a path cannot be resolved (a symlink loop or too many links).
 var ErrUnresolvablePath = errors.New("fs: path cannot be resolved (symlink loop or too many links)")
 
-// EvaluatePath is Evaluate that also returns where the path really lands
-// (its existing prefix with symlinks resolved): the location the policy,
-// grants and harness-state check were judged on. A caller that does I/O
+// EvaluatePath is Evaluate that also returns where op on the path really
+// acts (resolveFor: every link followed for a read; for a write the parent
+// directory resolved and the leaf kept, since a write replaces a leaf
+// link): the location the policy, grants and harness-state check were
+// judged on. A caller that does I/O
 // after an Allow should use it, so a link retargeted between the check
 // and the write cannot redirect the write. ok is false when the path
 // could not be resolved; the decision then never auto-allows (the path
@@ -233,7 +235,7 @@ func (g *Gate) EvaluatePath(ctx context.Context, op Op, rawPath string) (d cedar
 	if err != nil {
 		return cedar.Decision{}, "", err
 	}
-	resolved, ok := resolveExisting(canonical)
+	resolved, ok := resolveFor(op, canonical)
 	d, err = g.evaluate(ctx, op, canonical, resolved)
 	if err == nil && !ok {
 		resolved = ""
@@ -243,17 +245,32 @@ func (g *Gate) EvaluatePath(ctx context.Context, op Op, rawPath string) (d cedar
 
 func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) (cedar.Decision, error) {
 
-	// resolved is where the path really lands (symlinks of its existing
-	// prefix resolved). Remembered grants bind it, transient grants key
-	// on it, and the state check judges it. An unresolvable path (a link
-	// loop) keeps its partial form; privilege() classes it as state.
+	// resolved is where op really acts (resolveFor). Remembered grants
+	// bind it, transient grants key on it, and the state, dangerous-tier,
+	// recipe-dir and forbid checks judge it as well as the lexical path.
+	// An unresolvable path (a link loop) keeps its partial form;
+	// privilege() classes it as state.
 	priv := g.privilege(canonical)
+	if !priv.inside && resolved != canonical {
+		if rp := g.privilege(resolved); rp.inside {
+			priv = rp
+		}
+	}
 
-	// Dangerous-tier classification.
+	// Dangerous tier: dangerous if either spelling is (a planted link to
+	// ~/.ssh/x is ~/.ssh/x). The resolved form is compared with the macOS
+	// /private aliases folded back (unaliasDarwin), or every /tmp and
+	// /var/folders path would read as the /private/var system tree.
+	rcmp := unaliasDarwin(resolved)
 	dangerous, dangerCopy := IsDangerousPath(canonical)
+	if !dangerous && rcmp != canonical {
+		dangerous, dangerCopy = IsDangerousPath(rcmp)
+	}
 
-	// Build cedar context attributes.
-	recipeDirMatch := IsInsideRecipeDir(canonical)
+	// Recipe-dir match widens what policy permits, so it needs both
+	// spellings: a link inside a recipe dir that points out of it is not
+	// "inside the recipe dir".
+	recipeDirMatch := IsInsideRecipeDir(canonical) && (rcmp == canonical || IsInsideRecipeDir(rcmp))
 	attrs := map[cedarlib.String]cedarlib.Value{
 		cedarlib.String(cedar.CtxKeyCanonicalPath):  cedarlib.String(canonical),
 		cedarlib.String(cedar.CtxKeyResolvedPath):   cedarlib.String(resolved),
@@ -268,6 +285,24 @@ func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) 
 
 	resource := cedar.FilesystemOpUID(canonical)
 	d := g.opts.Engine.Evaluate(ctx, cedar.UserUID(), action, resource, attrs)
+
+	// Forbids are written against canonical_path (filesystem-full-
+	// recommended's ~/.ssh, /etc, ...). When the path really acts
+	// somewhere else, evaluate that location too and take its Deny: a
+	// read through /tmp/x -> ~/.ssh/id_ed25519 is the forbidden read. Only
+	// a Deny is taken from this pass; it never widens the decision.
+	if d.Outcome != cedar.Deny && rcmp != canonical {
+		rattrs := map[cedarlib.String]cedarlib.Value{
+			cedarlib.String(cedar.CtxKeyCanonicalPath):  cedarlib.String(rcmp),
+			cedarlib.String(cedar.CtxKeyResolvedPath):   cedarlib.String(resolved),
+			cedarlib.String(cedar.CtxKeyRecipeDirMatch): cedarlib.Boolean(recipeDirMatch),
+			cedarlib.String(cedar.CtxKeyDangerousTier):  cedarlib.Boolean(dangerous),
+		}
+		if rd := g.opts.Engine.Evaluate(ctx, cedar.UserUID(), action, cedar.FilesystemOpUID(rcmp), rattrs); rd.Outcome == cedar.Deny {
+			rd.Reason = "the path points to " + resolved + ": " + rd.Reason
+			return rd, nil
+		}
+	}
 
 	// A policy or remembered-grant Allow never authorises harness state
 	// on its own (E2E-3): the grant may predate a retargeted link (a
@@ -308,7 +343,7 @@ func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) 
 			IsInsideRecipeDir: recipeDirMatch,
 			ParentMissing:     op == OpWrite && parentMissing(canonical),
 			Privileged:        priv.copy,
-			ResolvedPath:      resolved,
+			ResolvedPath:      shownResolved(canonical, resolved),
 		}
 		resp, perr := g.opts.Prompter.Prompt(ctx, surface)
 		if perr != nil {
@@ -530,4 +565,15 @@ func (g *Gate) writePolicySnippet(name, body string) error {
 	}
 	dst := filepath.Join(g.opts.PolicyDir, name)
 	return os.WriteFile(dst, []byte(body), 0o600)
+}
+
+// shownResolved is the prompt's "Points to" path: resolved when op really
+// acts somewhere other than canonical, "" when they differ only by the
+// macOS /private alias (every /tmp and /var/folders path would otherwise
+// show a link that the person never made).
+func shownResolved(canonical, resolved string) string {
+	if resolved == canonical || unaliasDarwin(resolved) == canonical {
+		return ""
+	}
+	return resolved
 }

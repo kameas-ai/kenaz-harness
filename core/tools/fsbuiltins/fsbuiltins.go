@@ -161,10 +161,11 @@ func gateCheck(ctx context.Context, gate *corefs.Gate, op corefs.Op, rawPath str
 }
 
 // gateCheckPath is gateCheck that also returns the path to do I/O on:
-// the resolved location the gate judged (see corefs.Gate.EvaluatePath).
-// Writers use it so what is written is what was checked — a symlink
-// retargeted after the check cannot redirect the write into, say, the
-// harness policy directory. With no gate it is the canonical path.
+// the location the gate judged (corefs.Gate.EvaluatePath — every link
+// followed for a read; for a write only the parent directory resolved, so
+// a leaf link is replaced, never written through). I/O on it means what
+// is read or written is what was checked: a link retargeted after the
+// check cannot redirect it. With no gate it is the canonical path.
 func gateCheckPath(ctx context.Context, gate *corefs.Gate, op corefs.Op, rawPath string) (canonical, ioPath string, err error) {
 	canonical, err = corefs.Canonicalize(rawPath)
 	if err != nil {
@@ -187,6 +188,9 @@ func gateCheckPath(ctx context.Context, gate *corefs.Gate, op corefs.Op, rawPath
 	}
 	return canonical, resolved, nil
 }
+
+// ErrEditThroughLink is edit_file's refusal for a path that is a symlink.
+var ErrEditThroughLink = errors.New("this file is a link; edit the file it points to directly")
 
 // errResult returns a json.RawMessage encoding {"error": msg, "is_error": true}.
 func errResult(msg string) json.RawMessage {
@@ -277,12 +281,12 @@ func (t *ReadFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 		return errResult("read_file: path is required"), nil
 	}
 
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpRead, args.Path)
+	canonical, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpRead, args.Path)
 	if err != nil {
 		return errResult("read_file: " + err.Error()), nil
 	}
 
-	f, err := os.Open(canonical)
+	f, err := os.Open(ioPath)
 	if err != nil {
 		return errResult("read_file: " + err.Error()), nil
 	}
@@ -403,10 +407,12 @@ func (t *ListDirTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMe
 		args.MaxEntries = 1000
 	}
 
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpRead, args.Path)
+	_, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpRead, args.Path)
 	if err != nil {
 		return errResult("list_dir: " + err.Error()), nil
 	}
+	// Walk the location the gate judged; entry paths are relative to it.
+	canonical := ioPath
 
 	var entries []dirEntry
 	truncated := false
@@ -543,10 +549,13 @@ func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	// Gate the longest literal prefix of the pattern, not the base
 	// directory it happens to be evaluated from: glob(/home/*) asks to
 	// read /home, not / (E2E-4).
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpRead, root)
+	shown, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpRead, root)
 	if err != nil {
 		return errResult("glob: " + err.Error()), nil
 	}
+	// Walk the location the gate judged; report matches under the path
+	// the caller named.
+	canonical := ioPath
 
 	var matches []string
 	truncated := false
@@ -581,7 +590,7 @@ func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 			return matchErr
 		}
 		if matched {
-			matches = append(matches, path)
+			matches = append(matches, filepath.Join(shown, relPath))
 		}
 		return nil
 	})
@@ -782,9 +791,17 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 		return errResult("grep: invalid pattern: " + err.Error()), nil
 	}
 
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpRead, args.Path)
+	shown, canonical, err := gateCheckPath(ctx, t.gate, corefs.OpRead, args.Path)
 	if err != nil {
 		return errResult("grep: " + err.Error()), nil
+	}
+	// canonical is the location the gate judged (walked and read);
+	// matches are reported under shown, the path the caller named.
+	display := func(p string) string {
+		if rel, err := filepath.Rel(canonical, p); err == nil {
+			return filepath.Join(shown, rel)
+		}
+		return p
 	}
 
 	var matches []grepMatch
@@ -803,7 +820,7 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 			}
 			if re.MatchString(line) {
 				matches = append(matches, grepMatch{
-					File:    filePath,
+					File:    display(filePath),
 					Line:    i + 1,
 					Content: line,
 				})
@@ -1086,6 +1103,12 @@ func (t *EditFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 	sessionID := sessionIDFromCtx(ctx)
 	if t.readSet != nil && !t.readSet.Has(sessionID, canonical) {
 		return errResult(ErrEditWithoutRead.Error()), nil
+	}
+
+	// Never write through a link: the gate judged the link's own location
+	// (resolveFor), not wherever it points.
+	if li, lerr := os.Lstat(ioPath); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
+		return errResult("edit_file: " + ErrEditThroughLink.Error()), nil
 	}
 
 	// Read current content.

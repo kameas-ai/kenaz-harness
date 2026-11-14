@@ -724,3 +724,92 @@ func TestGatePrivilege_SymlinkLoopFailsClosed(t *testing.T) {
 		t.Fatal("loop inside the workspace was exempted")
 	}
 }
+
+// resolveFor: a read follows a leaf link; a write resolves only the
+// parent directory and keeps the leaf (the write replaces the link).
+func TestResolveFor_WriteKeepsLeafReadFollowsIt(t *testing.T) {
+	t.Parallel()
+	work := t.TempDir()
+	realDir := filepath.Join(work, "real")
+	if err := os.MkdirAll(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, target, filepath.Join(realDir, "k"))
+	linkedDir := filepath.Join(work, "ld")
+	symlinkOrSkip(t, realDir, linkedDir)
+
+	rReal, _ := filepath.EvalSymlinks(realDir)
+	rTarget, _ := filepath.EvalSymlinks(target)
+	p := filepath.Join(linkedDir, "k")
+	if got, ok := resolveFor(OpWrite, p); !ok || got != filepath.Join(rReal, "k") {
+		t.Fatalf("resolveFor(write) = %q,%v, want the parent resolved and the leaf kept (%q)", got, ok, filepath.Join(rReal, "k"))
+	}
+	if got, ok := resolveFor(OpRead, p); !ok || got != rTarget {
+		t.Fatalf("resolveFor(read) = %q,%v, want the link followed (%q)", got, ok, rTarget)
+	}
+}
+
+// The prompt for a read through a link to a dangerous path is marked
+// dangerous and says where it points.
+func TestGate_ReadThroughLinkIsDangerousAndShowsTarget(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	// Never created: the link dangles, and resolveExisting follows it.
+	target := filepath.Join(home, ".ssh", "kenaz-test-never-created")
+	link := filepath.Join(t.TempDir(), "k")
+	symlinkOrSkip(t, target, link)
+	g, p := newTestGate(PromptDeny, cedar.NotApplicable, "", false)
+	if _, err := g.Evaluate(context.Background(), OpRead, link); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	seen := p.last
+	if !seen.IsDangerous {
+		t.Fatalf("read through a link into ~/.ssh: surface = %+v, want dangerous", seen)
+	}
+	if seen.ResolvedPath == "" || filepath.Base(seen.ResolvedPath) != "kenaz-test-never-created" {
+		t.Fatalf("ResolvedPath = %q, want the link target", seen.ResolvedPath)
+	}
+}
+
+// A link inside a recipe dir that points out of it is not "inside the
+// recipe dir": recipe_dir_match widens what the default policy permits,
+// so it needs both spellings. Not parallel: recipe dirs are global.
+func TestGate_RecipeDirMatchNeedsTheResolvedLocation(t *testing.T) {
+	prev := RecipeDirs()
+	t.Cleanup(func() { NotifyRecipeDirs(prev) })
+	recipe := t.TempDir()
+	NotifyRecipeDirs([]string{recipe})
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(recipe, "k")
+	symlinkOrSkip(t, outside, link)
+	engine, err := cedar.NewEngine(cedar.Options{DataDir: t.TempDir(), IncludeEmbedded: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &stubPrompter{response: PromptDeny}
+	g := NewGate(GateOptions{Engine: engine, Prompter: p})
+	// Control: a real file in the recipe dir is permitted by policy.
+	inside := filepath.Join(recipe, "ok.txt")
+	if err := os.WriteFile(inside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := g.Evaluate(context.Background(), OpRead, inside); d.Outcome != cedar.Allow {
+		t.Fatalf("control: read in the recipe dir = %s (%s), want Allow by policy", d.Outcome, d.Reason)
+	}
+	d, err := g.Evaluate(context.Background(), OpRead, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Outcome == cedar.Allow {
+		t.Fatalf("read through a recipe-dir link to an outside file was allowed by policy (%s)", d.Reason)
+	}
+}

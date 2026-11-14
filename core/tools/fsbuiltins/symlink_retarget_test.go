@@ -219,10 +219,9 @@ func TestWriteFile_PolicyAllowDoesNotCoverState(t *testing.T) {
 	}
 }
 
-// write_file writes the location the gate judged: through a symlinked
-// file it updates the link's target, not a path re-resolved after the
-// check.
-func TestWriteFile_WritesTheCheckedLocation(t *testing.T) {
+// write_file never writes through a leaf link: the link itself is
+// replaced (the location the gate judged), and its target is untouched.
+func TestWriteFile_ReplacesLeafLinkNeverWritesThrough(t *testing.T) {
 	r := newRetargetRig(t)
 	work := t.TempDir()
 	realFile := filepath.Join(work, "real.txt")
@@ -237,11 +236,11 @@ func TestWriteFile_WritesTheCheckedLocation(t *testing.T) {
 	if m := call(t, r.write, map[string]any{"path": link, "content": "new"}); isError(m) {
 		t.Fatalf("write: %v", m["error"])
 	}
-	if b, _ := os.ReadFile(realFile); string(b) != "new" {
-		t.Fatalf("target content = %q, want the write to land on the checked location", b)
+	if b, _ := os.ReadFile(realFile); string(b) != "old" {
+		t.Fatalf("target content = %q, want it untouched", b)
 	}
-	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("the link was replaced (lstat %v, err %v)", fi, err)
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("the link was not replaced by a regular file (lstat %v, err %v)", fi, err)
 	}
 }
 
@@ -296,5 +295,200 @@ func TestWriteFile_AllowOnceDoesNotFollowRetargetedLink(t *testing.T) {
 	}
 	if n := len(r.prompts()); n != 2 {
 		t.Fatalf("prompts = %d, want 2", n)
+	}
+}
+
+// leafLinkRig plants proj/k -> an outside "sensitive" file (standing in
+// for ~/.ssh/authorized_keys; a real HOME is never touched by tests).
+func leafLinkRig(t *testing.T) (proj, link, outside string) {
+	t.Helper()
+	work := t.TempDir()
+	proj = filepath.Join(work, "proj")
+	if err := os.MkdirAll(proj, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside = filepath.Join(t.TempDir(), "authorized_keys")
+	if err := os.WriteFile(outside, []byte("ssh-ed25519 KEEP"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link = filepath.Join(proj, "k")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	return proj, link, outside
+}
+
+func mustUntouched(t *testing.T, outside string) {
+	t.Helper()
+	if b, _ := os.ReadFile(outside); string(b) != "ssh-ed25519 KEEP" {
+		t.Fatalf("outside target modified: %q", b)
+	}
+}
+
+// Reviewer case (a): under an old-format (lexical-only) directory grant on
+// proj, write_file proj/k replaces the link and never writes through it.
+func TestWriteFile_LeafLinkUnderLegacyGrantNeverWritesThrough(t *testing.T) {
+	r := newRetargetRig(t)
+	proj, link, outside := leafLinkRig(t)
+	legacy := "permit (\n    principal == User::\"local\",\n    action == Action::\"write_filesystem\",\n    resource is FilesystemOp\n) when {\n    context.canonical_path like " +
+		cedar.QuoteLikePrefix(proj+"/") + "\n};\n"
+	if err := os.WriteFile(filepath.Join(r.policyDir, "fs_allow_write_legacy_proj.cedar"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.engine.Reload(context.Background()); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if m := call(t, r.write, map[string]any{"path": link, "content": "attacker-key"}); isError(m) {
+		t.Fatalf("write: %v", m["error"])
+	}
+	mustUntouched(t, outside)
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("link not replaced (lstat %v, err %v)", fi, err)
+	}
+}
+
+// Reviewer case (b): with no grant, the prompt is for the link's own
+// location (no "points to" a target that is never written) and the
+// target is untouched whatever the answer.
+func TestWriteFile_LeafLinkWithoutGrantNeverWritesThrough(t *testing.T) {
+	r := newRetargetRig(t)
+	_, link, outside := leafLinkRig(t)
+	r.expect(func(p cedar.PendingRequest) { _ = r.registry.Resolve(p.RequestID, cedar.DecisionAllowOnce) })
+	if m := call(t, r.write, map[string]any{"path": link, "content": "attacker-key"}); isError(m) {
+		t.Fatalf("write: %v", m["error"])
+	}
+	mustUntouched(t, outside)
+	ps := r.prompts()
+	if len(ps) != 1 {
+		t.Fatalf("prompts = %d, want 1", len(ps))
+	}
+	if rp := ps[0].Surface.FS.ResolvedPath; rp != "" && filepath.Base(rp) != "k" {
+		t.Fatalf("prompt points to %q; the write acts on the link itself", rp)
+	}
+}
+
+// edit_file refuses a leaf link instead of editing through it.
+func TestEditFile_RefusesLeafLink(t *testing.T) {
+	r := newRetargetRig(t)
+	_, link, outside := leafLinkRig(t)
+	gate := corefs.NewGate(corefs.GateOptions{Engine: r.engine, Prompter: &corefs.CedarPrompter{Registry: r.registry}, StateDirs: corefs.HarnessStateDirs(r.dataDir)})
+	rs := fsbuiltins.NewReadSet()
+	rs.Add("", link)
+	edit := fsbuiltins.NewEditFileTool(fsbuiltins.Options{Gate: gate, ReadSet: rs})
+	r.expect(func(p cedar.PendingRequest) { _ = r.registry.Resolve(p.RequestID, cedar.DecisionAllowOnce) })
+	m := call(t, edit, map[string]any{"path": link, "old_str": "KEEP", "new_str": "attacker"})
+	if !isError(m) || !strings.Contains(m["error"].(string), "link") {
+		t.Fatalf("edit through a link = %v, want a link refusal", m)
+	}
+	mustUntouched(t, outside)
+}
+
+// An exact-path Allow always binds the location it was given on: after
+// the parent link is retargeted to another ordinary dir, the same lexical
+// path prompts again (the exact snippet's resolved_path clause alone).
+func TestWriteFile_ExactGrantDoesNotFollowRetargetedLink(t *testing.T) {
+	r := newRetargetRig(t)
+	work := t.TempDir()
+	harmless, other := filepath.Join(work, "harmless"), filepath.Join(work, "other")
+	for _, d := range []string{harmless, other} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pl := filepath.Join(work, "pl")
+	if err := os.Symlink(harmless, pl); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	target := filepath.Join(pl, "a.txt")
+	r.expect(func(p cedar.PendingRequest) {
+		_ = r.registry.ResolveScoped(p.RequestID, cedar.DecisionAllowAlways, cedar.SourceGuest, cedar.ScopeExact)
+	})
+	if m := call(t, r.write, map[string]any{"path": target, "content": "a"}); isError(m) {
+		t.Fatalf("grant write: %v", m["error"])
+	}
+	if m := call(t, r.write, map[string]any{"path": target, "content": "a2"}); isError(m) {
+		t.Fatalf("repeat under the exact grant: %v", m["error"])
+	}
+	retarget(t, other, pl)
+	r.expect(r.deny)
+	if m := call(t, r.write, map[string]any{"path": target, "content": "b"}); !isError(m) {
+		t.Fatal("exact grant followed the retargeted link")
+	}
+	if n := len(r.prompts()); n != 2 {
+		t.Fatalf("prompts = %d, want 2", n)
+	}
+}
+
+// read_file through a link reads the location the gate judged and shows
+// it in the prompt.
+func TestReadFile_ThroughLinkShowsTarget(t *testing.T) {
+	r := newRetargetRig(t)
+	work := t.TempDir()
+	realFile := filepath.Join(work, "real.txt")
+	if err := os.WriteFile(realFile, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "k")
+	if err := os.Symlink(realFile, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	gate := corefs.NewGate(corefs.GateOptions{Engine: r.engine, Prompter: &corefs.CedarPrompter{Registry: r.registry}, StateDirs: corefs.HarnessStateDirs(r.dataDir)})
+	read := fsbuiltins.NewReadFileTool(fsbuiltins.Options{Gate: gate})
+	r.expect(func(p cedar.PendingRequest) { _ = r.registry.Resolve(p.RequestID, cedar.DecisionAllowOnce) })
+	if m := call(t, read, map[string]any{"path": link}); isError(m) {
+		t.Fatalf("read: %v", m["error"])
+	}
+	ps := r.prompts()
+	if len(ps) != 1 || filepath.Base(ps[0].Surface.FS.ResolvedPath) != "real.txt" {
+		t.Fatalf("prompts = %+v, want one prompt pointing to real.txt", ps)
+	}
+}
+
+// The I/O uses the location the gate judged: a link retargeted while the
+// prompt is open (between the check and the I/O) does not redirect it.
+func TestReadWrite_IOUsesTheCheckedLocation(t *testing.T) {
+	r := newRetargetRig(t)
+	work := t.TempDir()
+	checked, swapped := filepath.Join(work, "checked"), filepath.Join(work, "swapped")
+	for _, d := range []string{checked, swapped} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "f.txt"), []byte(filepath.Base(d)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pl := filepath.Join(work, "pl")
+	if err := os.Symlink(checked, pl); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	gate := corefs.NewGate(corefs.GateOptions{Engine: r.engine, Prompter: &corefs.CedarPrompter{Registry: r.registry}, StateDirs: corefs.HarnessStateDirs(r.dataDir)})
+	read := fsbuiltins.NewReadFileTool(fsbuiltins.Options{Gate: gate})
+	write := fsbuiltins.NewWriteFileTool(fsbuiltins.Options{Gate: gate})
+	swapThenAllow := func(to string) func(cedar.PendingRequest) {
+		return func(p cedar.PendingRequest) {
+			retarget(t, to, pl)
+			_ = r.registry.Resolve(p.RequestID, cedar.DecisionAllowOnce)
+		}
+	}
+
+	r.expect(swapThenAllow(swapped))
+	m := call(t, read, map[string]any{"path": filepath.Join(pl, "f.txt")})
+	if isError(m) {
+		t.Fatalf("read: %v", m["error"])
+	}
+	if c, _ := m["content"].(string); !strings.Contains(c, "checked") {
+		t.Fatalf("read returned %v, want the checked file's content", m)
+	}
+
+	r.expect(swapThenAllow(checked)) // pl -> swapped at check time; swapped back mid-prompt
+	if m := call(t, write, map[string]any{"path": filepath.Join(pl, "new.txt"), "content": "w"}); isError(m) {
+		t.Fatalf("write: %v", m["error"])
+	}
+	if _, err := os.Stat(filepath.Join(swapped, "new.txt")); err != nil {
+		t.Fatalf("write did not land in the checked directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(checked, "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("write followed the link swapped after the check (stat err=%v)", err)
 	}
 }

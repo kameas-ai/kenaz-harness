@@ -3,6 +3,7 @@ package fs
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -108,4 +109,27 @@ func IsDangerousPath(canonical string) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+// unaliasDarwin folds macOS's system aliases back to the paths users
+// type: /private/var/... -> /var/..., /private/tmp/... -> /tmp/...,
+// /private/etc/... -> /etc/... (dangerous either way), and the data
+// volume /System/Volumes/Data/... -> /... (where /home and other
+// automount links resolve; the folded path is still checked, so a link to
+// /System/Volumes/Data/Users/u/.ssh is still ~/.ssh). On other platforms,
+// or for any other path, p is returned unchanged.
+func unaliasDarwin(p string) string {
+	if runtime.GOOS != "darwin" {
+		return p
+	}
+	const dataVol = "/System/Volumes/Data"
+	if strings.HasPrefix(p, dataVol+"/") {
+		p = strings.TrimPrefix(p, dataVol)
+	}
+	for _, a := range []string{"/private/var", "/private/tmp", "/private/etc"} {
+		if p == a || strings.HasPrefix(p, a+"/") {
+			return strings.TrimPrefix(p, "/private")
+		}
+	}
+	return p
 }

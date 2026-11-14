@@ -29,7 +29,7 @@ func (g grant) covers(op Op, canonical string) bool {
 	if g.op != op {
 		return false
 	}
-	rc, ok := resolveExisting(canonical)
+	rc, ok := resolveFor(op, canonical)
 	if !ok {
 		return false
 	}
@@ -169,6 +169,25 @@ func resolveExisting(p string) (resolved string, ok bool) {
 		p = filepath.Join(append([]string{target}, tail...)...)
 	}
 	return p, false
+}
+
+// resolveFor returns where op on canonical really acts. A read follows
+// every link, the leaf included (open(2) does). A write resolves only the
+// parent directory: write_file and edit_file rename over a leaf symlink,
+// replacing the link, and never write through it — so a leaf link to
+// ~/.ssh/authorized_keys is judged, and written, as the link's own
+// location, while a symlinked parent directory (the retarget hole) is
+// still resolved.
+func resolveFor(op Op, canonical string) (string, bool) {
+	if op != OpWrite {
+		return resolveExisting(canonical)
+	}
+	parent := filepath.Dir(canonical)
+	if parent == canonical {
+		return resolveExisting(canonical)
+	}
+	rp, ok := resolveExisting(parent)
+	return filepath.Join(rp, filepath.Base(canonical)), ok
 }
 
 // resolvedOrSelf is resolveExisting's path, ignoring ok — for the
@@ -354,7 +373,7 @@ func (g *Gate) grantsFor(op Op, canonical string, resp PromptResponse) (grants [
 	default:
 		return nil, "unknown grant scope"
 	}
-	rc, ok := resolveExisting(canonical)
+	rc, ok := resolveFor(op, canonical)
 	if !ok || !cedar.PersistableFamilyID(canonical) || !cedar.PersistableFamilyID(rc) {
 		return nil, "path cannot be persisted"
 	}
