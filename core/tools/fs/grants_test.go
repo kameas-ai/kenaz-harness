@@ -326,7 +326,10 @@ func TestE2E3_StateDirIsPrivileged(t *testing.T) {
 		_ = rc.registry.ResolveScoped(p.RequestID, cedar.DecisionAllowAlways, cedar.SourceGuest, cedar.ScopeDirectory)
 		mustAllow(t, ch, "narrowed write")
 		entries, _ := os.ReadDir(rc.policyDir)
-		if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), "_path.cedar") {
+		// snippetName's scope is the suffix, or — when the path is long,
+		// as macOS temp dirs are — sits before a hash: fs_allow_write_path_<hash>.
+		if len(entries) != 1 || !(strings.HasSuffix(entries[0].Name(), "_path.cedar") ||
+			strings.HasPrefix(entries[0].Name(), "fs_allow_write_path_")) {
 			t.Fatalf("policy files = %v, want exactly one exact-path grant", entries)
 		}
 		// The state directory is still not writable without a prompt.
