@@ -42,6 +42,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -222,6 +223,11 @@ type ContextPulledEdge struct {
 	CreatedAt      string                `json:"created_at"`
 }
 
+// curatedFullPullPage is Fleet's default page size for GET
+// /api/v1/context/pull (the harness sends no limit). A page shorter than this
+// ends a full pull.
+const curatedFullPullPage = 1000
+
 // contextPullResponse is the body from GET /api/v1/context/pull.
 type contextPullResponse struct {
 	Nodes  []ContextPulledNode `json:"nodes"`
@@ -319,8 +325,24 @@ type ContextGraphSyncer struct {
 	pulled  []ContextNodeEntry
 	// pulledEdges is the in-memory cache of edges received from fleet.
 	pulledEdges []ContextEdgeEntry
-	// cursor is the RFC3339Nano timestamp for the next pull call.
-	cursor  string
+	// locations is where Fleet holds each pulled node (layer, team_id),
+	// persisted across restarts (context_pulled_locations.go).
+	locations map[string]PulledShareLocation
+	// locationsFor is the account the location rows belong to.
+	locationsFor string
+	// pulledFor is the account the pulled cache and cursor belong to; a
+	// different signed-in account restarts with a full pull.
+	pulledFor string
+	// selfUserID overrides the signed-in user id source (tests).
+	selfUserID func() string
+	// cursor is the RFC3339Nano timestamp for the next pull call. In
+	// memory only: each process starts with a full pull (see
+	// NewContextGraphSyncer).
+	cursor string
+	// sweepSeen holds the node ids seen since the current full pull began
+	// (cursor ""); nil when no full pull is in progress. On the full pull's
+	// last page, location-index rows it did not see are dropped.
+	sweepSeen map[string]bool
 	// lastPullAt is the wall-clock time of the last successful pull.
 	lastPullAt time.Time
 	// lastPullErr is the last pull error string (empty on success).
@@ -381,10 +403,20 @@ func NewContextGraphSyncer(client *Client, dataDir string, caps *CapabilityPolle
 		caps:    caps,
 		ids:     NewWireIDs(dataDir),
 	}
-	// Restore cursor from disk.
-	if c, err := loadContextCursor(dataDir); err == nil {
-		s.cursor = c
+	// The pulled cache lives in memory only (teammates' bodies are never
+	// written to disk), so every process starts with a FULL pull that
+	// rebuilds it: no cursor is restored. Before this, the cursor was
+	// persisted while the cache was not, so after a restart pulled entries
+	// vanished until they changed on Fleet. Fleet pages the pull (1000
+	// nodes a page by default, tombstones included); one full Curated pull
+	// per launch is within its limits. A leftover cursor file is removed.
+	if dataDir != "" {
+		_ = os.Remove(contextCursorPath(dataDir))
 	}
+	// The location index (context_pulled_locations.go) is kept from the
+	// last run so share dialogs have Fleet's answer before the full pull
+	// ends; the full pull confirms or prunes it.
+	s.locationsFor, s.locations = loadPulledLocations(dataDir)
 	return s
 }
 
@@ -622,6 +654,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		}
 	}
 
+	pushSelf := s.selfID()
 	s.mu.Lock()
 	s.lastPushErr = ""
 	if len(result.Rejected) > 0 {
@@ -637,6 +670,20 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		s.lastConflicts = append([]ContextPushConflict(nil), result.Conflicts...)
 	} else {
 		s.lastConflicts = nil
+	}
+	// An accepted push moves the node: record where it is now, so the
+	// share dialogs never read a stale pulled row right after a publish.
+	if result.AcceptedNodes > 0 && pushSelf != "" && !pushConflicted(result.Conflicts, wireID) {
+		if layer, ok := LayerForClassification(classification); ok {
+			s.adoptLocationsOwnerLocked(pushSelf)
+			team := ""
+			if entry.TeamID != nil {
+				team = *entry.TeamID
+			}
+			if s.putLocationLocked(wireID, PulledShareLocation{Layer: layer, TeamID: team, Version: entry.Version}) {
+				s.savePulledLocationsLocked(pushSelf)
+			}
+		}
 	}
 	// fleet-welcome-01NWEL01 context_synced seam: capture the hook and mark
 	// it fired (under the lock for the once-guard), then invoke it outside the
@@ -668,8 +715,8 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 
 // ── Pull-down ─────────────────────────────────────────────────────────────────
 
-// PullDelta fetches shared-graph deltas since the stored cursor, merges them
-// into the in-memory pulled cache, persists the cursor, and returns the
+// PullDelta fetches shared-graph deltas since the in-memory cursor, merges
+// them into the in-memory pulled cache, and returns the
 // number of nodes received (including tombstones).
 //
 // First sync (cursor == ""): backfills the full entitled shared graph.
@@ -682,9 +729,22 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 		return 0, nil // capability absent → local-only, no error
 	}
 
-	s.mu.RLock()
+	self := s.selfID()
+	s.mu.Lock()
+	if self != "" && s.pulledFor != "" && !strings.EqualFold(self, s.pulledFor) {
+		// Another account signed in within this process: its entitled
+		// graph differs, so drop the cache and start a full pull.
+		logging.L().Info("fleet.context.pull.account_changed_full_pull")
+		s.cursor, s.pulled, s.pulledEdges, s.sweepSeen = "", nil, nil, nil
+	}
+	if self != "" {
+		s.pulledFor = self
+		if s.adoptLocationsOwnerLocked(self) {
+			s.savePulledLocationsLocked(self)
+		}
+	}
 	cursor := s.cursor
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	// The Curated lane pulls only Curated kinds (WP03 lane split by kind).
 	urlPath := lanePullPath(curatedKinds, cursor)
@@ -735,17 +795,39 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if cursor == "" {
+		// A full pull starts (process start or ResetCursor).
+		s.sweepSeen = map[string]bool{}
+	}
+	if s.sweepSeen != nil {
+		for _, n := range pullResp.Nodes {
+			s.sweepSeen[n.ID] = true
+		}
+	}
+
+	locationsChanged := false
 	for _, n := range pullResp.Nodes {
 		// Another lane's node (unit kinds, bootstrap taxonomy, anything a
 		// server that ignores ?kind= sends): skip and count — never list it
 		// under Knowledge › Curated (audit §0-E).
 		if !curatedLaneAccepts(n) {
 			s.skippedUnknownKinds++
+			if _, had := s.locations[n.ID]; had {
+				delete(s.locations, n.ID) // moved to another lane
+				locationsChanged = true
+			}
 			continue
 		}
 		layer, ok := LayerForClassification(n.Classification)
 		if !ok {
+			if _, had := s.locations[n.ID]; had {
+				delete(s.locations, n.ID)
+				locationsChanged = true
+			}
 			continue // skip unknown classifications
+		}
+		if s.recordPulledLocationLocked(n, layer, self) {
+			locationsChanged = true
 		}
 		entry := ContextNodeEntry{
 			ID:             n.ID,
@@ -772,6 +854,22 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 		s.upsertPulledLocked(entry)
 	}
 
+	if s.sweepSeen != nil && len(pullResp.Nodes) < curatedFullPullPage {
+		// Last page of the full pull: every node still visible was sent
+		// (tombstones too), so a location row it did not mention belongs to
+		// a node this member can no longer see. Drop it.
+		for id := range s.locations {
+			if !s.sweepSeen[id] {
+				delete(s.locations, id)
+				locationsChanged = true
+			}
+		}
+		s.sweepSeen = nil
+	}
+	if locationsChanged {
+		s.savePulledLocationsLocked(self)
+	}
+
 	// Merge edges.
 	for _, e := range pullResp.Edges {
 		edge := ContextEdgeEntry{
@@ -786,14 +884,9 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 		s.upsertPulledEdgeLocked(edge)
 	}
 
-	// Advance cursor.
+	// Advance cursor (in memory only).
 	if pullResp.Cursor != "" {
 		s.cursor = pullResp.Cursor
-		if s.dataDir != "" {
-			if saveErr := saveContextCursor(s.dataDir, s.cursor); saveErr != nil {
-				log.Printf("fleet: context cursor save: %v", saveErr)
-			}
-		}
 	}
 
 	n := len(pullResp.Nodes)
@@ -855,6 +948,16 @@ func (s *ContextGraphSyncer) WireNodeID(localID string) string {
 		return ""
 	}
 	return s.ids.For(WireLaneCurated, localID)
+}
+
+// pushConflicted reports whether conflicts include wireID.
+func pushConflicted(conflicts []ContextPushConflict, wireID string) bool {
+	for _, c := range conflicts {
+		if c.NodeID == wireID {
+			return true
+		}
+	}
+	return false
 }
 
 // teamIDPtr returns a *string for a non-empty team_id string.
@@ -1316,10 +1419,14 @@ func (s *ContextGraphSyncer) ResetCursor() {
 	s.cursor = ""
 	s.pulled = nil
 	s.pulledEdges = nil
+	s.locations = map[string]PulledShareLocation{}
+	s.sweepSeen = nil
+	s.pulledFor = ""
 	s.pullCount = 0
 	s.mu.Unlock()
 	if s.dataDir != "" {
 		_ = os.Remove(contextCursorPath(s.dataDir))
+		_ = os.Remove(pulledLocationsPath(s.dataDir))
 	}
 }
 
@@ -1329,35 +1436,10 @@ func (s *ContextGraphSyncer) ResetCursor() {
 // personal-layer entry to fleet. Personal entries are device-local.
 var ErrPersonalLayerNotSyncable = errors.New("fleet: personal layer entries are local-only and cannot be pushed to fleet")
 
-// ── Cursor persistence ─────────────────────────────────────────────────────────
+// ── Legacy cursor file ─────────────────────────────────────────────────────────
 
+// contextCursorPath is the cursor file older builds wrote. It is no longer
+// read or written; NewContextGraphSyncer and ResetCursor remove it.
 func contextCursorPath(dataDir string) string {
 	return filepath.Join(dataDir, "fleet", "context_cursor.txt")
-}
-
-func loadContextCursor(dataDir string) (string, error) {
-	if dataDir == "" {
-		return "", nil
-	}
-	b, err := os.ReadFile(contextCursorPath(dataDir))
-	if err != nil {
-		return "", err
-	}
-	s := string(b)
-	// Trim trailing newlines.
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
-		s = s[:len(s)-1]
-	}
-	return s, nil
-}
-
-func saveContextCursor(dataDir, cursor string) error {
-	if dataDir == "" {
-		return nil
-	}
-	dir := filepath.Join(dataDir, "fleet")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("fleet: mkdir context cursor: %w", err)
-	}
-	return atomicWriteFile(contextCursorPath(dataDir), cursor+"\n")
 }

@@ -23,6 +23,9 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	fleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // shareRecord is where one entry was last shared from this device.
@@ -31,6 +34,11 @@ type shareRecord struct {
 	Layer    string    `json:"layer"`
 	TeamID   string    `json:"team_id,omitempty"`
 	SharedAt time.Time `json:"shared_at"`
+	// Version is Fleet's node version this record matches (the accepted
+	// push's version, or the pulled row that corrected it). Compared with
+	// Fleet's row by version only, never by time. 0 = unknown (older
+	// records): Fleet's row wins.
+	Version int `json:"version,omitempty"`
 }
 
 type shareLedgerFile struct {
@@ -45,6 +53,9 @@ type shareLedger struct {
 	path   string
 	loaded bool
 	recs   map[string]shareRecord
+	// stamp is the file's size and mtime when recs was read; a different
+	// stamp (rewritten, or removed on sign-out) reloads.
+	stamp string
 }
 
 func newShareLedger(path string) *shareLedger {
@@ -53,27 +64,52 @@ func newShareLedger(path string) *shareLedger {
 
 // shareLedgerPath is the ledger file under a profile data dir.
 func shareLedgerPath(dataDir string) string {
-	return filepath.Join(dataDir, "fleet", "context_shares.json")
+	return fleet.ContextSharesPath(dataDir)
 }
 
-// loadLocked reads the file once. A missing file is an empty ledger; an
-// unreadable or malformed one is treated as empty for reads and is
-// replaced on the next successful share (it only ever narrows a default).
+func fileStamp(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d", fi.Size(), fi.ModTime().UnixNano())
+}
+
+// loadLocked reads the file, again whenever it changed on disk (so a
+// sign-out that removes it really forgets it). A missing file is an empty
+// ledger. A
+// malformed one is treated as empty and moved aside to
+// <file>.corrupt-<unix-nanos> so the next share does not overwrite what
+// may still be recoverable by hand.
 func (l *shareLedger) loadLocked() {
-	if l.loaded {
-		return
-	}
-	l.loaded = true
-	l.recs = map[string]shareRecord{}
 	if l.path == "" {
+		if !l.loaded {
+			l.loaded, l.recs = true, map[string]shareRecord{}
+		}
 		return
 	}
+	stamp := fileStamp(l.path)
+	if l.loaded && stamp == l.stamp {
+		return
+	}
+	l.loaded, l.stamp = true, stamp
+	l.recs = map[string]shareRecord{}
 	raw, err := os.ReadFile(l.path)
 	if err != nil {
 		return
 	}
 	var f shareLedgerFile
-	if json.Unmarshal(raw, &f) == nil && f.Shares != nil {
+	if json.Unmarshal(raw, &f) != nil {
+		aside := fmt.Sprintf("%s.corrupt-%d", l.path, time.Now().UnixNano())
+		if rerr := os.Rename(l.path, aside); rerr != nil {
+			logging.L().Warn("contexts.share_ledger.corrupt_move_failed", "err", rerr.Error())
+		} else {
+			logging.L().Warn("contexts.share_ledger.corrupt_moved_aside", "file", filepath.Base(aside))
+			l.stamp = ""
+		}
+		return
+	}
+	if f.Shares != nil {
 		l.recs = f.Shares
 	}
 }
@@ -87,7 +123,7 @@ func (l *shareLedger) get(wireID, userID string) (shareRecord, bool) {
 	defer l.mu.Unlock()
 	l.loadLocked()
 	r, ok := l.recs[wireID]
-	if !ok || r.UserID != userID {
+	if !ok || userID == "" || r.UserID != userID {
 		return shareRecord{}, false
 	}
 	return r, true
@@ -95,7 +131,7 @@ func (l *shareLedger) get(wireID, userID string) (shareRecord, bool) {
 
 // put records a share and persists the ledger.
 func (l *shareLedger) put(wireID string, r shareRecord) error {
-	if l == nil || wireID == "" {
+	if l == nil || wireID == "" || r.UserID == "" {
 		return nil
 	}
 	l.mu.Lock()
@@ -120,5 +156,6 @@ func (l *shareLedger) put(wireID string, r shareRecord) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("contexts: share ledger persist: %w", err)
 	}
+	l.stamp = fileStamp(l.path)
 	return nil
 }

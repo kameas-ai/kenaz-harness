@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"path"
+	"runtime"
 	"strings"
 	"time"
 
@@ -328,11 +330,29 @@ var ErrPulledEntryReadOnly = errors.New("contexts: shared team/org entries are r
 // pulled entry: it would republish their text as the member's own node.
 var ErrPulledEntryNotShareable = errors.New("contexts: an entry shared by a teammate cannot be re-shared or promoted")
 
-// isPulledPath reports whether path is (or is under) a pulled team/org
-// entry path, "<team|org>/_fleet".
-func isPulledPath(path string) bool {
-	parts := strings.SplitN(strings.TrimLeft(path, "/"), "/", 3)
-	return len(parts) >= 2 && (parts[0] == string(contextpack.LayerTeam) || parts[0] == string(contextpack.LayerOrg)) && parts[1] == "_fleet"
+// normPulledCheckPath normalises a library path for the pulled-entry
+// checks: backslashes become slashes, then path.Clean, then no leading
+// slash — so "team/./_fleet/x", "team//_fleet/x" and "team\\_fleet\\x"
+// cannot slip past a raw string compare.
+func normPulledCheckPath(p string) string {
+	return strings.TrimLeft(path.Clean(strings.ReplaceAll(p, "\\", "/")), "/")
+}
+
+// isPulledPath reports whether p is (or is under) a pulled team/org
+// entry path, "<team|org>/_fleet", after normalisation.
+func isPulledPath(p string) bool {
+	parts := strings.SplitN(normPulledCheckPath(p), "/", 3)
+	return len(parts) >= 2 && (segEq(parts[0], string(contextpack.LayerTeam)) || segEq(parts[0], string(contextpack.LayerOrg))) && segEq(parts[1], "_fleet")
+}
+
+// segEq compares a path segment the way the library's filesystem does:
+// case-insensitively on darwin and windows (where "Team/_FLEET" is the same
+// folder as "team/_fleet"), exactly elsewhere.
+func segEq(a, b string) bool {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // refusePulled refuses a publish / promote whose local id is a pulled
@@ -362,8 +382,8 @@ var ErrPulledEntryNotFound = errors.New("contexts: shared entry is no longer ava
 
 // pulledEntryPath parses the synthetic path mergePulledEntries gives a
 // pulled entry, "<team|org>/_fleet/<id>", into its layer and id.
-func pulledEntryPath(path string) (contextpack.Layer, string, bool) {
-	parts := strings.Split(path, "/")
+func pulledEntryPath(p string) (contextpack.Layer, string, bool) {
+	parts := strings.Split(normPulledCheckPath(p), "/")
 	if len(parts) != 3 || parts[1] != "_fleet" || parts[2] == "" {
 		return "", "", false
 	}
@@ -539,8 +559,12 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		)
 		return ContextPublishResult{}, fmt.Errorf("contexts: publish: %w", err)
 	}
-	if result.AcceptedNodes > 0 {
-		rec := shareRecord{UserID: a.currentUserID(), Layer: string(layer), SharedAt: time.Now().UTC()}
+	// Record only a share Fleet actually took: accepted, not conflicted
+	// (a conflict leaves the server copy where it was), and only for a
+	// known fleet user (a record nobody owns could never be read back, or
+	// worse, would match another unknown-user read).
+	if user := a.currentUserID(); user != "" && result.AcceptedNodes > 0 && !conflictedNode(result.Conflicts, wireID) {
+		rec := shareRecord{UserID: user, Layer: string(layer), SharedAt: time.Now().UTC(), Version: req.Version}
 		if layer == contextpack.LayerTeam {
 			rec.TeamID = teamID
 		}
@@ -561,6 +585,16 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		Conflicts:      result.Conflicts,
 		EffectiveLayer: string(layer),
 	}, nil
+}
+
+// conflictedNode reports whether conflicts include the pushed node.
+func conflictedNode(conflicts []fleet.ContextPushConflict, wireID string) bool {
+	for _, c := range conflicts {
+		if c.NodeID == wireID {
+			return true
+		}
+	}
+	return false
 }
 
 // Context_Promote elevates a team_shared entry to org_shared.
@@ -587,10 +621,12 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 		"node_id", result.Node.ID,
 		"new_classification", string(result.Node.Classification),
 	)
-	if err := a.ledger().put(a.syncer.WireNodeID(nodeID), shareRecord{
-		UserID: a.currentUserID(), Layer: string(contextpack.LayerOrg), SharedAt: time.Now().UTC(),
-	}); err != nil {
-		logging.L().Warn("contexts.promote.share_record_failed", "node_id", result.Node.ID, "err", fleet.LogSafeErr(err))
+	if user := a.currentUserID(); user != "" {
+		if err := a.ledger().put(a.syncer.WireNodeID(nodeID), shareRecord{
+			UserID: user, Layer: string(contextpack.LayerOrg), SharedAt: time.Now().UTC(), Version: result.Node.Version,
+		}); err != nil {
+			logging.L().Warn("contexts.promote.share_record_failed", "node_id", result.Node.ID, "err", fleet.LogSafeErr(err))
+		}
 	}
 	return ContextPromoteResult{
 		UpdatedNodeID:     result.Node.ID,
@@ -598,27 +634,87 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 	}, nil
 }
 
-// Context_ShareStates returns where this device last shared each of
-// nodeIDs (LOCAL ids, as published), for the signed-in fleet user. Entries
-// never shared from here, or shared by another account, are omitted.
-// Returns an empty list (no error) when fleet is not wired.
+// Context_ShareStates returns where each of nodeIDs (LOCAL ids, as
+// published) is shared now, for the signed-in fleet user, so the share
+// dialogs start on that team and warn before widening it.
+//
+// Sources (kenaz-fleet spec 018 H-1; Fleet sends team_id on every pulled
+// node), newest first:
+//   - Fleet's row for the EXACT node this install pushed for the path (the
+//     same wire id) from the own-node location index
+//     (fleet.PulledShareLocations, persisted across restarts);
+//   - the local share ledger (where this device last shared it).
+//
+// Nothing else: wire ids are salted per install, so a same-named file
+// shared from another device is a different node and says nothing about
+// this one. When Fleet's row has a higher node version than the ledger
+// record it wins and the ledger is corrected; otherwise the ledger stands. Entries
+// with neither are omitted (the dialogs fall back to the enrolled team).
+// Returns an empty list (no error) when fleet is not wired or no fleet
+// user is known.
 func (a *API) Context_ShareStates(_ context.Context, nodeIDs []string) ([]ContextShareStateView, error) {
 	out := []ContextShareStateView{}
 	if a == nil || a.syncer == nil {
 		return out, nil
 	}
 	user := a.currentUserID()
+	if user == "" {
+		return out, nil
+	}
+	byID := ownPulledLocations(a.syncer.PulledShareLocations(), user)
 	for _, id := range nodeIDs {
 		if id == "" {
 			continue
 		}
-		rec, ok := a.ledger().get(a.syncer.WireNodeID(id), user)
-		if !ok {
+		wireID := a.syncer.WireNodeID(id)
+		rec, hasRec := a.ledger().get(wireID, user)
+		loc, hasLoc := byID[wireID]
+		// Newer = higher Fleet node version. Never a timestamp: the row's
+		// time would be Fleet's and the ledger's this device's, and a
+		// skewed clock would hide a move made on the dashboard.
+		if hasLoc && (!hasRec || loc.Version > rec.Version) {
+			view := ContextShareStateView{NodeID: id, Layer: string(loc.Layer)}
+			if loc.Layer == contextpack.LayerTeam {
+				view.TeamID = loc.TeamID
+			}
+			if hasRec && (rec.Layer != view.Layer || rec.TeamID != view.TeamID) {
+				if err := a.ledger().put(wireID, shareRecord{
+					UserID: user, Layer: view.Layer, TeamID: view.TeamID, SharedAt: time.Now().UTC(), Version: loc.Version,
+				}); err != nil {
+					logging.L().Warn("contexts.share_states.ledger_update_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
+				}
+			}
+			out = append(out, view)
 			continue
 		}
-		out = append(out, ContextShareStateView{NodeID: id, Layer: rec.Layer, TeamID: rec.TeamID})
+		if hasRec {
+			out = append(out, ContextShareStateView{NodeID: id, Layer: rec.Layer, TeamID: rec.TeamID})
+		}
 	}
 	return out, nil
+}
+
+// usablePulledLocation: a team node needs its team_id to say anything.
+func usablePulledLocation(l fleet.PulledShareLocation) bool {
+	switch l.Layer {
+	case contextpack.LayerTeam:
+		return l.TeamID != ""
+	case contextpack.LayerOrg:
+		return true
+	}
+	return false
+}
+
+// ownPulledLocations indexes user's own usable location rows by wire id.
+func ownPulledLocations(locs []fleet.PulledShareLocation, user string) map[string]fleet.PulledShareLocation {
+	byID := map[string]fleet.PulledShareLocation{}
+	for _, l := range locs {
+		if l.OwnerUserID == "" || !strings.EqualFold(l.OwnerUserID, user) || !usablePulledLocation(l) {
+			continue
+		}
+		byID[l.NodeID] = l
+	}
+	return byID
 }
 
 // Context_SyncStatus returns a read-only snapshot of the context-graph

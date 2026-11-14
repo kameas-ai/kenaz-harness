@@ -300,7 +300,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 			// cannot receive handoffs.
 			logging.L().Warn("fleet.enroll.keys_rejected_retrying_without_keys",
 				"status", status, "reason", st)
-			c.keyReg.set(KeyRegistration{Status: st, Message: keyRegCopy(st)})
+			c.setKeyReg(KeyRegistration{Status: st, Message: keyRegCopy(st)})
 			keysRejected = true
 			reqBody.HandoffPublicKey, reqBody.SigningPublicKey = "", ""
 			status, respBody, err = c.postEnroll(ctx, reqURL, &ts, reqBody, "")
@@ -350,7 +350,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 					}
 					return Identity{}, fmt.Errorf("%w (server: %s)", ErrUserNotProvisioned, msg)
 				case "node_removed":
-					c.keyReg.set(KeyRegistration{Message: keyRegNodeGoneCopy})
+					c.setKeyReg(KeyRegistration{Message: keyRegNodeGoneCopy})
 					return Identity{}, ErrNodeRemoved
 				case CodeOrgPaused:
 					// Defensive: fleet keeps enroll open while paused
@@ -384,10 +384,10 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 			c.setReauthRequired(reqStepUp != "")
 			logging.L().Warn("fleet.device_keys.reauth_required", "via", "enroll", "step_up_sent", reqStepUp != "")
 		case km.body.HandoffPublicKey != "":
-			c.keyReg.set(KeyRegistration{Status: KeyRegRegistered,
+			c.setKeyReg(KeyRegistration{Status: KeyRegRegistered,
 				HandoffFingerprint: km.handoffFingerprint, SigningFingerprint: km.signingFingerprint})
 		default:
-			c.keyReg.set(KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy,
+			c.setKeyReg(KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy,
 				SigningFingerprint: km.signingFingerprint})
 		}
 	}

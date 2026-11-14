@@ -88,6 +88,8 @@ type keyRegState struct {
 	// refusedFor is the account (access-token sub) a reauth_refused
 	// outcome belongs to; it means nothing for any other account.
 	refusedFor string
+	// loadOnce reads the persisted refusal (device_keys_refused.go) once.
+	loadOnce sync.Once
 }
 
 func (s *keyRegState) set(r KeyRegistration) {
@@ -110,6 +112,7 @@ func (c *Client) KeyRegistration() KeyRegistration {
 	if c == nil {
 		return KeyRegistration{}
 	}
+	c.loadPersistedRefusal()
 	kr := c.keyReg.get()
 	if kr.Status == KeyRegReauthRefused {
 		c.keyReg.mu.Lock()
@@ -248,7 +251,7 @@ func (c *Client) RegisterDeviceKeys(ctx context.Context, nodeID string) error {
 	}
 	km, kerr := c.localDeviceKeys(nodeID)
 	if km.body.empty() {
-		c.keyReg.set(KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy})
+		c.setKeyReg(KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy})
 		if kerr == nil {
 			kerr = ErrHandoffIdentityUnavailable
 		}
@@ -279,11 +282,11 @@ func (c *Client) RegisterDeviceKeys(ctx context.Context, nodeID string) error {
 		if kerr != nil {
 			reg = KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy, SigningFingerprint: km.signingFingerprint}
 		}
-		c.keyReg.set(reg)
+		c.setKeyReg(reg)
 		logging.L().Info("fleet.device_keys.registered", "via", "put", "handoff", km.body.HandoffPublicKey != "")
 		return nil
 	case isNodeRemoved(resp.StatusCode, body):
-		c.keyReg.set(KeyRegistration{Status: "", Message: keyRegNodeGoneCopy})
+		c.setKeyReg(KeyRegistration{Status: "", Message: keyRegNodeGoneCopy})
 		return ErrNodeRemoved
 	case isReauthRequired(resp.StatusCode, body):
 		// Replacing an active key needs a fresh sign-in (ER-40). Nothing
@@ -298,7 +301,7 @@ func (c *Client) RegisterDeviceKeys(ctx context.Context, nodeID string) error {
 		return errReauth(stepUp != "")
 	}
 	if st, ok := keyRejection(resp.StatusCode, body); ok {
-		c.keyReg.set(KeyRegistration{Status: st, Message: keyRegCopy(st)})
+		c.setKeyReg(KeyRegistration{Status: st, Message: keyRegCopy(st)})
 		return fmt.Errorf("%w: %s", ErrDeviceKeysRejected, keyRegCopy(st))
 	}
 	if env, ok := parseFleetError(body); ok {

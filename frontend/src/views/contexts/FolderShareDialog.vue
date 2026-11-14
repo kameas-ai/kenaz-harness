@@ -23,6 +23,7 @@ import { useFleetSession } from '@/lib/fleetSession';
 import {
   folderInitialTeam,
   folderShareMoveWarning,
+  staysWithTeamNote,
   pickableTeams,
   readShareStates,
   useFleetTeams,
@@ -68,8 +69,8 @@ const layer = ref<'team' | 'org'>('team');
 /**
  * The caller's teams as a tree and the one a "team" share goes to, by id
  * (kenaz-fleet spec 018 H-1). Fleet overwrites an entry's team on re-share,
- * so the dialog reads where each entry is shared now (the local share
- * record): it starts on their one common team if they have one, and warns
+ * so the dialog reads where each entry is shared now (Fleet's team_id for
+ * the node this install pushed, else the local share record): it starts on their one common team if they have one, and warns
  * when the chosen audience moves any of them. Until both reads finish there
  * is no picker and Share is disabled. With no team list (older Fleet, read
  * failed) each entry is re-shared to its own recorded team, and a
@@ -107,6 +108,12 @@ const moveWarning = computed(() =>
         layer: layer.value,
         teamId: teamId.value,
       })
+    : null,
+);
+/** With no team list, says a re-share keeps entries on their recorded team. */
+const staysNote = computed(() =>
+  props.mode === 'share' && teamsReady.value && phase.value === 'select'
+    ? staysWithTeamNote(teams.value, eligiblePriors(), layer.value)
     : null,
 );
 // A session refresh can demote an admin while the dialog is open.
@@ -300,6 +307,13 @@ const statusClass: Record<BatchEntry['status'], string> = {
         data-testid="folder-share-move-warning"
       >
         {{ moveWarning }}
+      </p>
+      <p
+        v-if="staysNote"
+        class="font-ui text-[12px] text-ink-muted leading-relaxed mb-3"
+        data-testid="folder-share-stays-note"
+      >
+        {{ staysNote }}
       </p>
 
       <div class="flex items-center gap-3 mb-1 font-ui text-[11px] text-ink-muted">

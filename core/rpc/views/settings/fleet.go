@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"sync"
@@ -1296,6 +1297,13 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 		if err := os.Remove(fleet.IdentityFilePath(dataDir)); err != nil && !os.IsNotExist(err) {
 			logging.L().Warn("fleet.rpc.sign_out.remove_identity_failed", "err", err.Error())
 			signOutErr = errors.Join(signOutErr, fmt.Errorf("remove identity file: %w", err))
+		}
+		// Per-account local records (share ledger, own-node location
+		// index, step-up refusal): the next account never inherits them.
+		for _, p := range fleet.AccountScopedFiles(dataDir) {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				logging.L().Warn("fleet.rpc.sign_out.remove_account_file_failed", "file", filepath.Base(p), "err", err.Error())
+			}
 		}
 	}
 	if signOutErr != nil {

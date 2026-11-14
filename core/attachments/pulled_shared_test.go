@@ -8,6 +8,7 @@ package attachments_test
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/attachments"
@@ -24,6 +25,13 @@ func TestPulledSharedSource_NeverAttached(t *testing.T) {
 		"library:/team/_fleet/x",
 		"module:team/_fleet",
 		"module:org/_fleet/sub",
+		// Non-canonical spellings of the same path (normalised first).
+		"library:team/./_fleet/x",
+		"library:team//_fleet/x",
+		"library:./team/_fleet/x",
+		"library:team/../team/_fleet/x",
+		"library:team\\_fleet\\x",
+		"module:org//_fleet",
 	} {
 		if !attachments.IsPulledSharedSource(src) {
 			t.Errorf("IsPulledSharedSource(%q) = false", src)
@@ -33,7 +41,8 @@ func TestPulledSharedSource_NeverAttached(t *testing.T) {
 			t.Errorf("Add(%q) err = %v, want ErrSharedEntryNotAttachable", src, err)
 		}
 	}
-	for _, src := range []string{"library:team/notes.md", "library:personal/_fleet/x", "library:teams/_fleet/x", "inline:abc", "module:team"} {
+	for _, src := range []string{"library:team/notes.md", "library:personal/_fleet/x", "library:teams/_fleet/x", "inline:abc", "module:team",
+		"library:team/_fleetx/a", "library:team/_fleet/../notes.md"} {
 		if attachments.IsPulledSharedSource(src) {
 			t.Errorf("IsPulledSharedSource(%q) = true", src)
 		}
@@ -56,5 +65,15 @@ func TestPulledSharedSource_NeverAttached(t *testing.T) {
 	}
 	if _, err := mgr.Refresh(ctx, "planted"); !errors.Is(err, attachments.ErrSharedEntryNotAttachable) {
 		t.Errorf("Refresh err = %v, want ErrSharedEntryNotAttachable", err)
+	}
+}
+
+// On case-insensitive filesystems (darwin, windows) "Team/_FLEET" is the
+// same folder as "team/_fleet", so it is refused there too.
+func TestPulledSharedSource_CaseFolding(t *testing.T) {
+	src := "library:Team/_FLEET/x"
+	want := runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+	if got := attachments.IsPulledSharedSource(src); got != want {
+		t.Fatalf("IsPulledSharedSource(%q) = %v on %s, want %v", src, got, runtime.GOOS, want)
 	}
 }

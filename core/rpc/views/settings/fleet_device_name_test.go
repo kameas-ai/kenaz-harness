@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -28,7 +29,15 @@ type deviceNameFleet struct {
 	// gate to close before answering (one-shot).
 	gate    chan struct{}
 	entered chan struct{}
+	// failNext makes the next N enrolls answer 503 (not recorded in bodies;
+	// counted in failed).
+	failNext int
+	failed   int
 }
+
+func (f *deviceNameFleet) failNextEnrolls(n int) { f.mu.Lock(); f.failNext = n; f.mu.Unlock() }
+
+func (f *deviceNameFleet) failures() int { f.mu.Lock(); defer f.mu.Unlock(); return f.failed }
 
 // holdNext makes the next enroll block until the returned release runs.
 func (f *deviceNameFleet) holdNext() (entered <-chan struct{}, release func()) {
@@ -51,6 +60,15 @@ func newDeviceNameFleet(t *testing.T) *deviceNameFleet {
 		got := map[string]any{}
 		_ = json.NewDecoder(r.Body).Decode(&got)
 		f.mu.Lock()
+		if f.failNext > 0 {
+			f.failNext--
+			f.failed++
+			f.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"code":"unavailable","message":"try again"}`))
+			return
+		}
 		gate, entered := f.gate, f.entered
 		f.gate, f.entered = nil, nil
 		f.mu.Unlock()
@@ -299,5 +317,115 @@ func TestFleetDeviceName_ChangeDuringInFlightEnroll(t *testing.T) {
 			t.Fatalf("after turning sharing off mid-enroll, the last enroll (of %d) still sent hostname %v", n, last["hostname"])
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// deviceNameRig is an enrolled API over a fake Fleet.
+func deviceNameRig(t *testing.T) (*API, *deviceNameFleet) {
+	t.Helper()
+	if fleet.Disabled() {
+		t.Skip("HARNESS_FLEET_DISABLED=1")
+	}
+	stubComputerName(t, "Example-Workstation")
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newDeviceNameFleet(t)
+	dataDir := t.TempDir()
+	r := &sessionRig{dataDir: dataDir}
+	fleet.SetExternalTokenSource(r.token)
+	t.Cleanup(func() { fleet.SetExternalTokenSource(nil) })
+	r.setToken(jwtFor("sub-alice", "zitadel-org-1"))
+	a := NewAPI(store)
+	a.SetFleetClient(fleet.NewClientForTestingWithDataDir(f.srv.URL, dataDir), dataDir)
+	t.Cleanup(a.StopFleetBackground)
+	t.Cleanup(a.deviceNamePushes.Wait)
+	if _, err := a.FleetRefreshIdentity(context.Background()); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+	return a, f
+}
+
+func shortDeviceNameRetry(t *testing.T) {
+	t.Helper()
+	base, maxD := deviceNameRetryBase, deviceNameRetryMax
+	deviceNameRetryBase, deviceNameRetryMax = 5*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { deviceNameRetryBase, deviceNameRetryMax = base, maxD })
+}
+
+// TestFleetDeviceName_UncontendedChangeEnrollsOnce: with nothing in flight,
+// a setting change costs exactly ONE extra enroll (the confirm-and-stop
+// check after it must hold).
+func TestFleetDeviceName_UncontendedChangeEnrollsOnce(t *testing.T) {
+	a, f := deviceNameRig(t)
+	n := f.count()
+	if err := a.SetFleetDeviceName(context.Background(), FleetDeviceNameSettings{Share: true, CustomName: "Test Laptop"}); err != nil {
+		t.Fatal(err)
+	}
+	a.deviceNamePushes.Wait()
+	if got := f.count() - n; got != 1 {
+		t.Fatalf("uncontended change made %d enrolls, want exactly 1", got)
+	}
+	if h := f.last(t)["hostname"]; h != "Test Laptop" {
+		t.Fatalf("hostname = %v", h)
+	}
+}
+
+// TestFleetDeviceName_TransientFailureRetried: a failed re-enroll (Fleet
+// briefly unavailable) is retried with backoff, so the opt-out still
+// reaches Fleet now rather than at the next start.
+func TestFleetDeviceName_TransientFailureRetried(t *testing.T) {
+	shortDeviceNameRetry(t)
+	a, f := deviceNameRig(t)
+	n := f.count()
+	f.failNextEnrolls(2)
+	if err := a.SetFleetDeviceName(context.Background(), FleetDeviceNameSettings{Share: false}); err != nil {
+		t.Fatal(err)
+	}
+	a.deviceNamePushes.Wait()
+	if f.failures() < 2 {
+		t.Fatalf("failures = %d, want the 2 injected", f.failures())
+	}
+	if got := f.count() - n; got != 1 {
+		t.Fatalf("successful enrolls after retry = %d, want 1", got)
+	}
+	if body := f.last(t); body["hostname"] != nil {
+		t.Fatalf("opt-out not delivered after retry: hostname %v", body["hostname"])
+	}
+}
+
+// TestFleetDeviceName_PersistentFailureBounded: a Fleet that keeps failing
+// gets a bounded number of tries, never a hot loop.
+func TestFleetDeviceName_PersistentFailureBounded(t *testing.T) {
+	shortDeviceNameRetry(t)
+	a, f := deviceNameRig(t)
+	n := f.count()
+	f.failNextEnrolls(1000)
+	if err := a.SetFleetDeviceName(context.Background(), FleetDeviceNameSettings{Share: true, CustomName: "Test Laptop"}); err != nil {
+		t.Fatal(err)
+	}
+	a.deviceNamePushes.Wait()
+	if f.count() != n {
+		t.Fatalf("unexpected successful enroll")
+	}
+	// Each RefreshIdentity may itself make more than one HTTP call; the
+	// bound is on pushDeviceName's tries (1 + deviceNameMaxRetries).
+	if got, maxCalls := f.failures(), (1+deviceNameMaxRetries)*4; got == 0 || got > maxCalls {
+		t.Fatalf("failed enrolls = %d, want 1..%d", got, maxCalls)
+	}
+}
+
+func TestFleetDeviceName_TerminalErrors(t *testing.T) {
+	for _, err := range []error{fleet.ErrNotSignedIn, fleet.ErrNodeRemoved, fleet.ErrTokenExpired,
+		fmt.Errorf("wrapped: %w", fleet.ErrNodeRemoved), context.DeadlineExceeded} {
+		if !deviceNameTerminal(err) {
+			t.Errorf("%v: want terminal", err)
+		}
+	}
+	for _, err := range []error{fleet.ErrFleetUnreachable, errors.New("fleet: enroll: status 503")} {
+		if deviceNameTerminal(err) {
+			t.Errorf("%v: want transient", err)
+		}
 	}
 }

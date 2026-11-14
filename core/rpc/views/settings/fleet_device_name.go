@@ -11,6 +11,7 @@ package settings
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -112,7 +113,9 @@ func (a *API) reenrollForDeviceName() {
 	if !enrolled {
 		return
 	}
+	a.deviceNamePushes.Add(1)
 	go func() {
+		defer a.deviceNamePushes.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), deviceNameReenrollTimeout)
 		defer cancel()
 		a.pushDeviceName(ctx)
@@ -125,13 +128,57 @@ func (a *API) reenrollForDeviceName() {
 // the new one. A third covers one more change landing in between.
 const deviceNameMaxAttempts = 3
 
+// deviceNameMaxRetries bounds the retries after a transient enroll failure
+// (Fleet unreachable, a 5xx, a joined in-flight enroll that failed), on top
+// of deviceNameMaxAttempts. Without them a new name, or an opt-out, would
+// reach Fleet only at the next start.
+const deviceNameMaxRetries = 3
+
+// deviceNameRetryBase is the first retry delay; it doubles per retry up to
+// deviceNameRetryMax. Variables so tests can shorten them.
+var (
+	deviceNameRetryBase = 2 * time.Second
+	deviceNameRetryMax  = 15 * time.Second
+)
+
+// deviceNameTerminal reports enroll errors a retry cannot fix: signed out,
+// the node removed by an admin, Fleet disabled or not provisioned, or the
+// push's own deadline.
+func deviceNameTerminal(err error) bool {
+	for _, t := range []error{
+		fleet.ErrNotSignedIn, fleet.ErrTokenExpired, fleet.ErrNodeRemoved,
+		fleet.ErrFleetDisabled, fleet.ErrUserNotProvisioned, fleet.ErrProfileNotConfigured,
+		context.Canceled, context.DeadlineExceeded,
+	} {
+		if errors.Is(err, t) {
+			return true
+		}
+	}
+	return false
+}
+
 // pushDeviceName enrolls until Fleet's copy of the device name matches the
-// current setting, at most deviceNameMaxAttempts times.
+// current setting, at most deviceNameMaxAttempts successful enrolls plus
+// deviceNameMaxRetries backed-off retries after transient failures. It
+// stops at once on a terminal error.
 func (a *API) pushDeviceName(ctx context.Context) {
-	for attempt := 1; attempt <= deviceNameMaxAttempts; attempt++ {
+	retries := 0
+	delay := deviceNameRetryBase
+	for attempt := 1; attempt <= deviceNameMaxAttempts; {
 		if _, err := a.FleetRefreshIdentity(ctx); err != nil {
-			logging.L().Warn("fleet.device_name.reenroll_failed", "attempt", attempt, "err", err.Error())
-			return
+			if deviceNameTerminal(err) || retries >= deviceNameMaxRetries {
+				logging.L().Warn("fleet.device_name.reenroll_failed", "attempt", attempt, "retries", retries, "err", err.Error())
+				return
+			}
+			retries++
+			logging.L().Info("fleet.device_name.reenroll_retry", "retry", retries, "delay", delay.String(), "err", err.Error())
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			delay = min(delay*2, deviceNameRetryMax)
+			continue
 		}
 		c := a.fleetClient()
 		if c == nil {
@@ -143,5 +190,6 @@ func (a *API) pushDeviceName(ctx context.Context) {
 			return
 		}
 		logging.L().Info("fleet.device_name.stale_after_enroll", "attempt", attempt)
+		attempt++
 	}
 }
