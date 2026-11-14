@@ -32,13 +32,11 @@ function notice(over: Partial<MemberNotice> = {}): MemberNotice {
 function mountNotice(
   first: MemberNotices,
   respond: (...a: any[]) => Promise<MemberNotices> = async () => ({ notices: [] }),
-  holdActive = false,
 ) {
   const memberNotices = vi.fn(async () => first);
   const respondMemberNotice = vi.fn(respond);
   const client = createFakeHarnessClient({ fleet: { memberNotices, respondMemberNotice } as any });
   const wrapper = mount(MemoryAccessNotice, {
-    props: { holdActive },
     global: { provide: { [HarnessClientKey as symbol]: client } },
   });
   return { wrapper, memberNotices, respondMemberNotice };
@@ -71,12 +69,11 @@ describe('MemoryAccessNotice', () => {
   });
 
   it('shows the served text verbatim with exactly "I have read this"', async () => {
-    const { wrapper } = mountNotice({ notices: [notice()] }, undefined, true);
+    const { wrapper } = mountNotice({ notices: [notice()] });
     await flushPromises();
     expect(wrapper.find('[data-testid="memory-access-notice-text"]').element.textContent).toBe(TEXT);
     const btn = wrapper.find('[data-testid="memory-access-notice-read"]');
     expect(btn.text()).toBe('I have read this');
-    expect(wrapper.find('[data-testid="memory-access-notice-hold"]').exists()).toBe(true);
     const words = wrapper.findAll('button').map((b) => b.text().toLowerCase());
     for (const w of words) {
       expect(w).not.toMatch(/agree|accept|consent/);
@@ -163,6 +160,23 @@ describe('MemorySyncPanel + MemoryAccessNotice', () => {
     expect(wrapper.find('[data-testid="memory-access-notice"]').exists()).toBe(false);
   });
 
+  it('shows a neutral waiting line for any hold, even with no notice to show', async () => {
+    for (const reason of ['text_refused', 'check_failed']) {
+      const client = createFakeHarnessClient({
+        fleet: {
+          memorySyncStatus: async () => status({ noticeHold: true, noticeHoldReason: reason }),
+          memberNotices: async () => ({ notices: [] }),
+        } as any,
+      });
+      const wrapper = mount(MemorySyncPanel, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+      await flushPromises();
+      const line = wrapper.find('[data-testid="memory-sync-notice-hold"]');
+      expect(line.text()).toBe('Uploads are waiting. Your notes stay on this device until then.');
+      expect(line.text()).not.toMatch(/legal|regist/i);
+      expect(wrapper.find('[data-testid="memory-access-notice"]').exists()).toBe(false);
+    }
+  });
+
   it('shows the hold line in the panel and refreshes status after the read', async () => {
     const memorySyncStatus = vi
       .fn()
@@ -179,10 +193,10 @@ describe('MemorySyncPanel + MemoryAccessNotice', () => {
     });
     const wrapper = mount(MemorySyncPanel, { global: { provide: { [HarnessClientKey as symbol]: client } } });
     await flushPromises();
-    expect(wrapper.find('[data-testid="memory-access-notice-hold"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="memory-sync-notice-hold"]').exists()).toBe(true);
     await wrapper.find('[data-testid="memory-access-notice-read"]').trigger('click');
     await flushPromises();
     expect(memorySyncStatus).toHaveBeenCalledTimes(2);
-    expect(wrapper.find('[data-testid="memory-access-notice-hold"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="memory-sync-notice-hold"]').exists()).toBe(false);
   });
 });

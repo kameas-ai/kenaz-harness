@@ -15,10 +15,6 @@ import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MemberNotice, MemberNotices } from '@/lib/types';
 
-defineProps<{
-  /** The memory push is waiting on this notice (MemorySyncStatus.noticeHold). */
-  holdActive?: boolean;
-}>();
 const emit = defineEmits<{ (e: 'changed'): void }>();
 
 /** The two control labels, fixed by §17.5. */
@@ -95,9 +91,6 @@ async function respond(action: 'ack' | 'withdraw') {
     data-testid="memory-access-notice"
   >
     <p class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">Notice</p>
-    <p v-if="holdActive" class="text-signal-warn" data-testid="memory-access-notice-hold">
-      Memory sync is waiting until you read this notice. Your notes stay on this device until then.
-    </p>
     <p class="whitespace-pre-wrap" data-testid="memory-access-notice-text">{{ notice.text }}</p>
     <p v-if="stateLine" class="text-ink-muted" data-testid="memory-access-notice-state">{{ stateLine }}</p>
     <p v-if="stateError" class="text-ink-muted" data-testid="memory-access-notice-state-error">{{ stateError }}</p>

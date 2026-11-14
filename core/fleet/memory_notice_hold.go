@@ -61,13 +61,16 @@ type noticeHold struct {
 	seen      bool // this org has an ack or withdraw row at or above the minimum
 	held      bool
 	reason    string
+	// recheck: this answer may not stand for the usual window (a lookup
+	// failed, or an ack/withdraw was just recorded): ask again next cycle.
+	recheck bool
 }
 
 // fresh reports whether the cached decision may stand without asking Fleet.
 // A held decision is never fresh: it is re-checked every cycle so an ack made
 // on another device (or the dashboard) releases this one promptly.
 func (h noticeHold) fresh(account string, now time.Time) bool {
-	if h.account != account || h.account == "" || h.held {
+	if h.account != account || h.account == "" || h.held || h.recheck {
 		return false
 	}
 	age := now.Sub(h.checkedAt)
@@ -121,12 +124,12 @@ func (m *MemorySync) checkMemoryNotice(ctx context.Context, account string, prev
 		return noticeHold{}
 	case err != nil:
 		logging.L().Warn("fleet.memory_sync.notice_check_failed", "stage", "text", "err", err.Error())
-		return heldOnCheckFailure(account, prev)
+		return holdOnTextFailure(account, prev)
 	}
 	rows, err := m.cfg.Client.GetNoticeAcks(ctx)
 	if err != nil {
 		logging.L().Warn("fleet.memory_sync.notice_check_failed", "stage", "acks", "err", err.Error())
-		return noticeHold{served: true, held: true, reason: NoticeHoldCheckFailed}
+		return holdOnAcksFailure(account, prev)
 	}
 	if MemoryNoticeSeen(rows) {
 		return noticeHold{served: true, seen: true}
@@ -134,25 +137,59 @@ func (m *MemorySync) checkMemoryNotice(ctx context.Context, account string, prev
 	return noticeHold{served: true, held: true, reason: NoticeHoldUnread}
 }
 
-// heldOnCheckFailure decides a cycle whose text lookup failed for a reason
-// other than "not registered". An account last seen dormant or seen stays as
-// it was; otherwise the upserts wait one cycle (the next cycle asks again).
-func heldOnCheckFailure(account string, prev noticeHold) noticeHold {
-	if prev.account == account && (!prev.served || prev.seen) {
-		return noticeHold{served: prev.served, seen: prev.seen}
+// holdOnTextFailure decides a cycle whose text lookup failed for a reason
+// other than "not registered" (5xx, timeout, 4xx, an undecodable body). There
+// is no hold unless an earlier answer for this account said a memory-access
+// text is served and not yet seen (§17.4: nothing is held until an edition
+// ships); a failed lookup must never stall sync on its own. Either way the
+// next cycle asks again.
+func holdOnTextFailure(account string, prev noticeHold) noticeHold {
+	if prev.account == account && prev.served && !prev.seen {
+		return noticeHold{served: true, held: true, reason: NoticeHoldCheckFailed, recheck: true}
 	}
-	return noticeHold{served: prev.account == account && prev.served, held: true, reason: NoticeHoldCheckFailed}
+	known := prev.account == account
+	return noticeHold{served: known && prev.served, seen: known && prev.seen, recheck: true}
 }
 
-// InvalidateNoticeHold drops the cached decision so the next cycle asks Fleet
-// again, and kicks a cycle. Called after this device records an ack or
+// holdOnAcksFailure decides a cycle where the text IS served but the read
+// state couldn't be fetched. An account last seen as having read it keeps
+// syncing; otherwise the upserts wait (a text is served, so §17.4 applies).
+func holdOnAcksFailure(account string, prev noticeHold) noticeHold {
+	if prev.account == account && prev.seen {
+		return noticeHold{served: true, seen: true, recheck: true}
+	}
+	return noticeHold{served: true, held: true, reason: NoticeHoldCheckFailed, recheck: true}
+}
+
+// InvalidateNoticeHold makes the next cycle ask Fleet again (keeping what is
+// known about the account, so a failed re-check can't forget that a text is
+// served), and kicks a cycle. Called after this device records an ack or
 // withdraw.
 func (m *MemorySync) InvalidateNoticeHold() {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
-	m.notice = noticeHold{}
+	m.notice.recheck = true
+	m.mu.Unlock()
+	m.Kick()
+}
+
+// NoticeAnswered records that the signed-in member just acked or withdrew the
+// memory-access notice in their current org (Fleet answered 200/201): the
+// hold is released now, Fleet is asked again next cycle, and a cycle is
+// kicked so held notes go up.
+func (m *MemorySync) NoticeAnswered() {
+	if m == nil {
+		return
+	}
+	id, ok := m.verifiedIdentity()
+	if !ok {
+		m.InvalidateNoticeHold()
+		return
+	}
+	m.mu.Lock()
+	m.notice = noticeHold{account: AccountKey(id), checkedAt: m.now(), served: true, seen: true, recheck: true}
 	m.mu.Unlock()
 	m.Kick()
 }

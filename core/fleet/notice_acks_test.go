@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -484,5 +485,132 @@ func TestNoticeHold_TamperedTextHoldsAnd422KeepsHolding(t *testing.T) {
 	d.sync()
 	if upsertedIDs(w.fleet)["n"] {
 		t.Fatal("an ack Fleet refused (422) must keep the hold")
+	}
+}
+
+// TestNoticeHold_FailedLookupNeverHoldsWithoutAServedAnswer: a notice-text
+// failure other than 404, on an account Fleet has never said a text is served
+// for, must not hold anything (§17.4: no hold until an edition ships). The
+// note pushes in cycle 1.
+func TestNoticeHold_FailedLookupNeverHoldsWithoutAServedAnswer(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"5xx after retries", 503, `{"code":"unavailable"}`},
+		{"400", 400, `{"code":"invalid_request"}`},
+		{"403 capability_required", 403, `{"code":"capability_required"}`},
+		{"undecodable 200", 200, `not json`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newMemWorld(t)
+			w.fleet.setNotice(testMemoryNotice()) // a text exists, but the lookup fails
+			w.fleet.setNoticeFailures(tc.status, 0, tc.body)
+			d := w.device("node-1", 0)
+			d.enable()
+			d.add("n", memory.ScopeKindLongTerm, "x")
+			d.sync()
+			if !upsertedIDs(w.fleet)["n"] {
+				t.Fatal("a failed lookup with no earlier served answer must not hold the note")
+			}
+			if st := d.ms.Status(context.Background()); st.NoticeHold {
+				t.Fatalf("status reports a hold: %+v", st.NoticeHoldReason)
+			}
+			// The failure isn't cached as dormant: once the lookup works, the
+			// served, unread text holds the next note at once.
+			w.fleet.setNoticeFailures(0, 0, "")
+			d.add("n2", memory.ScopeKindLongTerm, "y")
+			d.sync()
+			if upsertedIDs(w.fleet)["n2"] {
+				t.Fatal("a failed lookup must be re-checked next cycle, not trusted as dormant")
+			}
+		})
+	}
+}
+
+// TestNoticeHold_FailedLookupKeepsAKnownHoldAndAKnownRead: with an earlier
+// answer, a failed lookup keeps it — a served, unread text stays held; a
+// member who has read it keeps syncing (text or acks lookup failing).
+func TestNoticeHold_FailedLookupKeepsAKnownHoldAndAKnownRead(t *testing.T) {
+	w := newMemWorld(t)
+	w.fleet.setNotice(testMemoryNotice())
+	d := w.device("node-1", 0)
+	d.enable()
+	d.add("held", memory.ScopeKindLongTerm, "x")
+	d.sync() // answer: served, unread
+	w.fleet.setNoticeFailures(400, 0, `{"code":"invalid_request"}`)
+	d.sync()
+	if upsertedIDs(w.fleet)["held"] {
+		t.Fatal("a known served, unread text must stay held when the lookup fails")
+	}
+	if st := d.ms.Status(context.Background()); !st.NoticeHold || st.NoticeHoldReason != NoticeHoldCheckFailed {
+		t.Fatalf("status = %v %q", st.NoticeHold, st.NoticeHoldReason)
+	}
+
+	w.fleet.setNoticeFailures(0, 0, "")
+	ackAs(t, d, NoticeActionAck)
+	d.sync()
+	if !upsertedIDs(w.fleet)["held"] {
+		t.Fatal("must push after the ack")
+	}
+	for _, fail := range []struct{ text, acks int }{{400, 0}, {0, 400}} {
+		w.fleet.setNoticeFailures(fail.text, fail.acks, `{"code":"invalid_request"}`)
+		d.ms.InvalidateNoticeHold()
+		id := fmt.Sprintf("after-%d-%d", fail.text, fail.acks)
+		d.add(id, memory.ScopeKindLongTerm, id)
+		d.sync()
+		if !upsertedIDs(w.fleet)[id] {
+			t.Fatalf("text=%d acks=%d: a member known to have read it must keep syncing", fail.text, fail.acks)
+		}
+	}
+}
+
+// TestNoticeHold_AcksFailureHoldsUnknownAccount: the text is served this
+// cycle but the read state can't be fetched for an account never seen to
+// read it: hold (a text is served, so §17.4 applies).
+func TestNoticeHold_AcksFailureHoldsUnknownAccount(t *testing.T) {
+	w := newMemWorld(t)
+	w.fleet.setNotice(testMemoryNotice())
+	w.fleet.setNoticeFailures(0, 503, `{"code":"unavailable"}`)
+	d := w.device("node-1", 0)
+	d.enable()
+	d.add("n", memory.ScopeKindLongTerm, "x")
+	d.sync()
+	if upsertedIDs(w.fleet)["n"] {
+		t.Fatal("served text, unknown read state: must hold")
+	}
+}
+
+// TestNoticeHold_DemotionNeverHeld: leaving sync never waits (D164,
+// §17.4(3)). A synced note moved out of the sync scopes while held is still
+// demoted on Fleet.
+func TestNoticeHold_DemotionNeverHeld(t *testing.T) {
+	w := newMemWorld(t)
+	d := w.device("node-1", 0)
+	d.enable()
+	d.add("to-session", memory.ScopeKindGlobal, "x")
+	d.add("to-project", memory.ScopeKindGlobal, "y")
+	d.sync()
+	if w.fleet.live("to-session") == nil || w.fleet.live("to-project") == nil {
+		t.Fatal("setup: both notes must be live on Fleet")
+	}
+	w.fleet.setNotice(testMemoryNotice())
+	d.ms.InvalidateNoticeHold()
+	ctx := context.Background()
+	if err := d.store.(memory.ScopePromoter).PromoteScope(ctx, "to-session", memory.ScopeKindSession, "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.store.(memory.ScopePromoter).PromoteScope(ctx, "to-project", memory.ScopeKindProject, "proj-1"); err != nil {
+		t.Fatal(err)
+	}
+	d.add("new", memory.ScopeKindLongTerm, "z")
+	d.sync()
+	if upsertedIDs(w.fleet)["new"] {
+		t.Fatal("setup: the sync-scope upsert must be held")
+	}
+	if w.fleet.live("to-session") != nil || w.fleet.live("to-project") != nil {
+		t.Fatal("a demotion must reach Fleet while the notice hold is on")
 	}
 }

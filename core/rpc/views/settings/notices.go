@@ -143,7 +143,7 @@ func (a *API) FleetRespondMemberNotice(ctx context.Context, family, edition, tex
 		return MemberNoticesView{}, err
 	}
 	if ms := a.memorySync.Load(); ms != nil {
-		ms.InvalidateNoticeHold()
+		ms.NoticeAnswered()
 	}
 	return a.FleetMemberNotices(ctx)
 }

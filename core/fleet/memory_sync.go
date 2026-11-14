@@ -1094,8 +1094,11 @@ func (m *MemorySync) push(ctx context.Context, set MemorySyncSettings, noticeHel
 	var ids []string
 	m.mu.Lock()
 	for _, c := range all {
-		if noticeHeld {
-			break // no upserts; the refused-chunk marks stay as they are
+		if noticeHeld && memory.IsSyncScope(c.ScopeKind) {
+			// D168(2): sync-scope upserts wait (the refused-chunk marks stay
+			// as they are). A demotion still goes: leaving sync never waits
+			// (D164, §17.4(3)).
+			continue
 		}
 		if !mayPush(c, scope, olderOK) {
 			continue

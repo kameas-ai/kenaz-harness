@@ -92,6 +92,18 @@ type fakeMemoryFleet struct {
 	noticeTextGets  int
 	noticeAckStatus int
 	noticeAckCode   string
+	// noticeTextFail / noticeAcksFail, when non-zero, answer every
+	// notice-text / GET notice-acks with that status and noticeFailBody,
+	// until cleared.
+	noticeTextFail int
+	noticeAcksFail int
+	noticeFailBody string
+}
+
+func (f *fakeMemoryFleet) setNoticeFailures(text, acks int, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.noticeTextFail, f.noticeAcksFail, f.noticeFailBody = text, acks, body
 }
 
 func (f *fakeMemoryFleet) setNotice(nt *NoticeText) {
@@ -128,6 +140,12 @@ func (f *fakeMemoryFleet) serveNoticeLocked(w http.ResponseWriter, r *http.Reque
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/notice-text":
 		f.noticeTextGets++
+		if f.noticeTextFail != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(f.noticeTextFail)
+			_, _ = io.WriteString(w, f.noticeFailBody)
+			return true
+		}
 		q := r.URL.Query()
 		if f.notice == nil || q.Get("family") != f.notice.Family || q.Get("surface") != f.notice.Surface ||
 			(q.Get("edition") != "" && q.Get("edition") != f.notice.Edition) {
@@ -136,6 +154,12 @@ func (f *fakeMemoryFleet) serveNoticeLocked(w http.ResponseWriter, r *http.Reque
 		}
 		writeJSON(w, 200, f.notice)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/notice-acks":
+		if f.noticeAcksFail != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(f.noticeAcksFail)
+			_, _ = io.WriteString(w, f.noticeFailBody)
+			return true
+		}
 		fams := []NoticeAckState{}
 		if row, ok := f.noticeAcks[tokenSubject(r)]; ok {
 			fams = append(fams, row)
