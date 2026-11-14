@@ -162,3 +162,94 @@ func TestRequestAdditionalAllowedDir_StateCaseVariant(t *testing.T) {
 		t.Fatalf("granted=%v err=%v, want refusal with ErrPrivilegedDir", granted, err)
 	}
 }
+
+// With the workspace = HOME (it CONTAINS the state), the state below it is
+// still refused, and HOME itself prompts with the privileged label.
+// Before, "inside the workspace" won and the policy dir could be granted.
+func TestRequestAdditionalAllowedDir_WorkspaceHomeDoesNotExemptState(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".kenaz", "harness", "prod")
+	if err := os.MkdirAll(filepath.Join(dataDir, "policy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	newAPI := func(reg *cedar.Registry) *API {
+		return New(Config{
+			Catalog:        fsCatalogMinimal(),
+			Enabled:        installFSRecipe([]string{t.TempDir()}),
+			Pool:           newFakePool(),
+			Secrets:        secrets.NewMemoryBackend(),
+			DataDir:        dataDir,
+			WorkspaceDir:   home,
+			PromptRegistry: reg,
+		})
+	}
+	for _, p := range []string{
+		filepath.Join(dataDir, "policy"),
+		dataDir,
+		filepath.Join(home, ".kenaz", "harness"),
+	} {
+		granted, _, err := newAPI(failOnPrompt(t)).RequestAdditionalAllowedDir(context.Background(), "filesystem", p, "workaround")
+		if granted || !errors.Is(err, ErrPrivilegedDir) {
+			t.Fatalf("%s: granted=%v err=%v, want refusal with ErrPrivilegedDir", p, granted, err)
+		}
+	}
+
+	reg := cedar.NewRegistry(cedar.WithTimeout(5 * time.Second))
+	got := make(chan string, 1)
+	go func() {
+		for {
+			if p := reg.ListPending(); len(p) > 0 {
+				got <- p[0].Surface.FS.Privileged
+				_ = reg.Resolve(p[0].RequestID, cedar.DecisionDeny)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+	if granted, _, _ := newAPI(reg).RequestAdditionalAllowedDir(context.Background(), "filesystem", home, "workaround"); granted {
+		t.Fatal("granted after deny")
+	}
+	if label := <-got; !strings.Contains(label, "harness's own state") {
+		t.Fatalf("Privileged = %q, want the harness-state label", label)
+	}
+}
+
+// The fallback workspace under DataDir is still not state.
+func TestRequestAdditionalAllowedDir_FallbackWorkspaceNotState(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".kenaz", "harness", "prod")
+	ws := filepath.Join(dataDir, "agent-workspace")
+	if err := os.MkdirAll(filepath.Join(ws, "proj"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reg := cedar.NewRegistry(cedar.WithTimeout(5 * time.Second))
+	got := make(chan string, 1)
+	go func() {
+		for {
+			if p := reg.ListPending(); len(p) > 0 {
+				got <- p[0].Surface.FS.Privileged
+				_ = reg.Resolve(p[0].RequestID, cedar.DecisionDeny)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+	api := New(Config{
+		Catalog:        fsCatalogMinimal(),
+		Enabled:        installFSRecipe([]string{t.TempDir()}),
+		Pool:           newFakePool(),
+		Secrets:        secrets.NewMemoryBackend(),
+		DataDir:        dataDir,
+		WorkspaceDir:   ws,
+		PromptRegistry: reg,
+	})
+	_, _, err := api.RequestAdditionalAllowedDir(context.Background(), "filesystem", filepath.Join(ws, "proj"), "workaround")
+	if errors.Is(err, ErrPrivilegedDir) {
+		t.Fatalf("fallback workspace path refused as state: %v", err)
+	}
+	if label := <-got; label != "" {
+		t.Fatalf("Privileged = %q, want none for the fallback workspace", label)
+	}
+}
