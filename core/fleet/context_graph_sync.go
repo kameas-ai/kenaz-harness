@@ -222,6 +222,11 @@ type ContextPulledEdge struct {
 	CreatedAt      string                `json:"created_at"`
 }
 
+// curatedFullPullPage is Fleet's default page size for GET
+// /api/v1/context/pull (the harness sends no limit). A page shorter than this
+// ends a full pull.
+const curatedFullPullPage = 1000
+
 // contextPullResponse is the body from GET /api/v1/context/pull.
 type contextPullResponse struct {
 	Nodes  []ContextPulledNode `json:"nodes"`
@@ -322,8 +327,14 @@ type ContextGraphSyncer struct {
 	// locations is where Fleet holds each pulled node (layer, team_id),
 	// persisted across restarts (context_pulled_locations.go).
 	locations map[string]PulledShareLocation
-	// cursor is the RFC3339Nano timestamp for the next pull call.
-	cursor  string
+	// cursor is the RFC3339Nano timestamp for the next pull call. In
+	// memory only: each process starts with a full pull (see
+	// NewContextGraphSyncer).
+	cursor string
+	// sweepSeen holds the node ids seen since the current full pull began
+	// (cursor ""); nil when no full pull is in progress. On the full pull's
+	// last page, location-index rows it did not see are dropped.
+	sweepSeen map[string]bool
 	// lastPullAt is the wall-clock time of the last successful pull.
 	lastPullAt time.Time
 	// lastPullErr is the last pull error string (empty on success).
@@ -384,10 +395,19 @@ func NewContextGraphSyncer(client *Client, dataDir string, caps *CapabilityPolle
 		caps:    caps,
 		ids:     NewWireIDs(dataDir),
 	}
-	// Restore cursor from disk.
-	if c, err := loadContextCursor(dataDir); err == nil {
-		s.cursor = c
+	// The pulled cache lives in memory only (teammates' bodies are never
+	// written to disk), so every process starts with a FULL pull that
+	// rebuilds it: no cursor is restored. Before this, the cursor was
+	// persisted while the cache was not, so after a restart pulled entries
+	// vanished until they changed on Fleet. Fleet pages the pull (1000
+	// nodes a page by default, tombstones included); one full Curated pull
+	// per launch is within its limits. A leftover cursor file is removed.
+	if dataDir != "" {
+		_ = os.Remove(contextCursorPath(dataDir))
 	}
+	// The location index (context_pulled_locations.go) is kept from the
+	// last run so share dialogs have Fleet's answer before the full pull
+	// ends; the full pull confirms or prunes it.
 	s.locations = loadPulledLocations(dataDir)
 	return s
 }
@@ -672,8 +692,8 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 
 // ── Pull-down ─────────────────────────────────────────────────────────────────
 
-// PullDelta fetches shared-graph deltas since the stored cursor, merges them
-// into the in-memory pulled cache, persists the cursor, and returns the
+// PullDelta fetches shared-graph deltas since the in-memory cursor, merges
+// them into the in-memory pulled cache, and returns the
 // number of nodes received (including tombstones).
 //
 // First sync (cursor == ""): backfills the full entitled shared graph.
@@ -739,6 +759,16 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if cursor == "" {
+		// A full pull starts (process start or ResetCursor).
+		s.sweepSeen = map[string]bool{}
+	}
+	if s.sweepSeen != nil {
+		for _, n := range pullResp.Nodes {
+			s.sweepSeen[n.ID] = true
+		}
+	}
+
 	locationsChanged := false
 	for _, n := range pullResp.Nodes {
 		// Another lane's node (unit kinds, bootstrap taxonomy, anything a
@@ -788,6 +818,18 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 		s.upsertPulledLocked(entry)
 	}
 
+	if s.sweepSeen != nil && len(pullResp.Nodes) < curatedFullPullPage {
+		// Last page of the full pull: every node still visible was sent
+		// (tombstones too), so a location row it did not mention belongs to
+		// a node this member can no longer see. Drop it.
+		for id := range s.locations {
+			if !s.sweepSeen[id] {
+				delete(s.locations, id)
+				locationsChanged = true
+			}
+		}
+		s.sweepSeen = nil
+	}
 	if locationsChanged {
 		s.savePulledLocationsLocked()
 	}
@@ -806,14 +848,9 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 		s.upsertPulledEdgeLocked(edge)
 	}
 
-	// Advance cursor.
+	// Advance cursor (in memory only).
 	if pullResp.Cursor != "" {
 		s.cursor = pullResp.Cursor
-		if s.dataDir != "" {
-			if saveErr := saveContextCursor(s.dataDir, s.cursor); saveErr != nil {
-				log.Printf("fleet: context cursor save: %v", saveErr)
-			}
-		}
 	}
 
 	n := len(pullResp.Nodes)
@@ -1337,6 +1374,7 @@ func (s *ContextGraphSyncer) ResetCursor() {
 	s.pulled = nil
 	s.pulledEdges = nil
 	s.locations = map[string]PulledShareLocation{}
+	s.sweepSeen = nil
 	s.pullCount = 0
 	s.mu.Unlock()
 	if s.dataDir != "" {
@@ -1351,35 +1389,10 @@ func (s *ContextGraphSyncer) ResetCursor() {
 // personal-layer entry to fleet. Personal entries are device-local.
 var ErrPersonalLayerNotSyncable = errors.New("fleet: personal layer entries are local-only and cannot be pushed to fleet")
 
-// ── Cursor persistence ─────────────────────────────────────────────────────────
+// ── Legacy cursor file ─────────────────────────────────────────────────────────
 
+// contextCursorPath is the cursor file older builds wrote. It is no longer
+// read or written; NewContextGraphSyncer and ResetCursor remove it.
 func contextCursorPath(dataDir string) string {
 	return filepath.Join(dataDir, "fleet", "context_cursor.txt")
-}
-
-func loadContextCursor(dataDir string) (string, error) {
-	if dataDir == "" {
-		return "", nil
-	}
-	b, err := os.ReadFile(contextCursorPath(dataDir))
-	if err != nil {
-		return "", err
-	}
-	s := string(b)
-	// Trim trailing newlines.
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
-		s = s[:len(s)-1]
-	}
-	return s, nil
-}
-
-func saveContextCursor(dataDir, cursor string) error {
-	if dataDir == "" {
-		return nil
-	}
-	dir := filepath.Join(dataDir, "fleet")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("fleet: mkdir context cursor: %w", err)
-	}
-	return atomicWriteFile(contextCursorPath(dataDir), cursor+"\n")
 }

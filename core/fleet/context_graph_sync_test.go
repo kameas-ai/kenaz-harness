@@ -110,22 +110,6 @@ func TestContextPushResult_ConflictUnmarshal(t *testing.T) {
 	}
 }
 
-// TestCursorPersistence verifies that the cursor survives save/load round-trip.
-func TestCursorPersistence(t *testing.T) {
-	dir := t.TempDir()
-	want := "2026-06-08T10:00:00.000000001Z"
-	if err := saveContextCursor(dir, want); err != nil {
-		t.Fatalf("save cursor: %v", err)
-	}
-	got, err := loadContextCursor(dir)
-	if err != nil {
-		t.Fatalf("load cursor: %v", err)
-	}
-	if got != want {
-		t.Errorf("cursor=%q, want %q", got, want)
-	}
-}
-
 // TestContextSyncerStatus_Default verifies a freshly-created syncer
 // returns sane defaults.
 func TestContextSyncerStatus_Default(t *testing.T) {
