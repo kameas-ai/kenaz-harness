@@ -187,6 +187,22 @@ func resolveFor(op Op, canonical string) (string, bool) {
 	return filepath.Join(rp, filepath.Base(canonical)), ok
 }
 
+// resolveForWithDir is resolveFor plus the resolved directory a "this
+// directory" grant names, taken at the same moment. For a write the
+// directory is the one resolveFor already resolved; for a read (which
+// follows the leaf) it is resolved alongside. ok is false when either
+// cannot be resolved.
+func resolveForWithDir(op Op, canonical string) (resolved, dir string, ok bool) {
+	parent := filepath.Dir(canonical)
+	if op == OpWrite && parent != canonical {
+		rp, pok := resolveExisting(parent)
+		return filepath.Join(rp, filepath.Base(canonical)), rp, pok
+	}
+	resolved, rok := resolveExisting(canonical)
+	dir, dok := resolveExisting(parent)
+	return resolved, dir, rok && dok
+}
+
 // resolvedOrSelf is resolveExisting's path, ignoring ok — for the
 // comparisons whose fail-closed handling is done by the caller.
 func resolvedOrSelf(p string) string {
@@ -352,6 +368,17 @@ func (g *Gate) grantsFor(op Op, canonical, checked, checkedDir string, resp Prom
 	priv := g.privilege(canonical)
 	if priv.inside {
 		return nil, "path is inside the harness state directory " + priv.root + " and cannot be remembered"
+	}
+	// Judge the checked locations too: a link into state that was
+	// retargeted before the answer looks harmless by its name now, but
+	// the grant would bind where it was checked.
+	for _, loc := range []string{checked, checkedDir} {
+		if loc == "" {
+			continue
+		}
+		if p := g.privilege(loc); p.inside {
+			return nil, "the checked location is inside the harness state directory " + p.root + " and cannot be remembered"
+		}
 	}
 	switch resp {
 	case PromptAllowDirectory, PromptAllowDirectoryReadWrite:
