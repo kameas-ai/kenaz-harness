@@ -955,11 +955,14 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "Fleet_SetTelemetryConsent":
 		var p struct {
 			Level string `json:"level"`
+			// NoticeEdition: the Agent Telemetry notice the panel showed
+			// ("" or absent = none), contract-harness-sync §17.2.
+			NoticeEdition string `json:"noticeEdition"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, errors.New("Fleet_SetTelemetryConsent: bad params: " + err.Error())
 		}
-		return nil, s.api.Fleet().SetTelemetryConsent(ctx, p.Level)
+		return nil, s.api.Fleet().SetTelemetryConsentWithNotice(ctx, p.Level, p.NoticeEdition)
 	// Settings_FleetSession — the single fleet-session snapshot
 	// (fleet-session-truth-01DOGF0A FR-1). Without it a served client had no
 	// way to read the session at all, and every fleet surface rendered the

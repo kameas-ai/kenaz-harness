@@ -362,6 +362,8 @@ export function Fleet_MLAckNotice(arg1:number,arg2:string):Promise<settings.MLSt
 
 export function Fleet_MLStatus():Promise<settings.MLStatusView>;
 
+export function Fleet_MemberNotices():Promise<settings.MemberNoticesView>;
+
 export function Fleet_MemorySyncContinueOlderNotes():Promise<settings.MemorySyncStatusView>;
 
 export function Fleet_MemorySyncDisable(arg1:boolean,arg2:string):Promise<settings.MemorySyncStatusView>;
@@ -374,7 +376,9 @@ export function Fleet_MemorySyncStatus():Promise<settings.MemorySyncStatusView>;
 
 export function Fleet_PendingApprovals():Promise<settings.PendingApprovalsView>;
 
-export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
+export function Fleet_RespondMemberNotice(arg1:string,arg2:string,arg3:string,arg4:string):Promise<settings.MemberNoticesView>;
+
+export function Fleet_SetTelemetryConsent(arg1:string,arg2:string):Promise<void>;
 
 export function Fleet_SetWorkflowEventsOptIn(arg1:boolean):Promise<settings.MLStatusView>;
 

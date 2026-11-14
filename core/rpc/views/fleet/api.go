@@ -103,6 +103,12 @@ type FleetAPI interface {
 	// aggregate requires pro+, full requires team+).
 	SetTelemetryConsent(ctx context.Context, level string) error
 
+	// SetTelemetryConsentWithNotice is SetTelemetryConsent for a change made
+	// while the panel showed the Agent Telemetry notice Fleet served for
+	// noticeEdition ("" = none shown). The opt-in PUT then carries
+	// notice_version "kenaz-harness/<edition>" (contract-harness-sync §17.2).
+	SetTelemetryConsentWithNotice(ctx context.Context, level, noticeEdition string) error
+
 	// Unit_PromoteAsMergeRequest promotes a unit UP a classification level
 	// (review F2, 2026-10-06): personal→team is a straight push of a team
 	// copy (Status "published", no MR); team→org pushes the team node then

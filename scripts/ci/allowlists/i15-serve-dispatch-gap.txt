@@ -1298,6 +1298,24 @@
 "Fleet_MemorySyncEnable"
 "Fleet_MemorySyncStatus"
 
+# CLASS: desktop-only-by-nature -- fleet spec 017 T23 member notice acks, 2026-11-13.
+# 2 entries.
+#
+# The member notices read and the memory-access "I have read this" / withdraw
+# (contract-harness-sync §17). The memory-access notice is mounted inside
+# MemorySyncPanel (the boundary-panelled Settings › Sync tab, same disposition
+# as the Fleet_MemorySync* entries above) and its hold lives in the desktop
+# memory sync lane. FleetTelemetryPanel also reads Fleet_MemberNotices to show
+# the Agent Telemetry text; in served mode the read rejects with
+# ServedUnsupportedError and the panel shows no notice and sends no edition,
+# which is exactly the dormant behaviour (no ack is recorded for a text that
+# wasn't shown). Fleet_SetTelemetryConsent itself stays served.
+#
+# Blocker: a served settings surface (none exists for any Settings_Fleet*
+# panel). Dated 2026-11-13. Owner: alec.
+"Fleet_MemberNotices"
+"Fleet_RespondMemberNotice"
+
 # CLASS: desktop-only-by-nature -- ml-producer-01MLPRD01 WP01, 2026-10-09.
 # 3 entries.
 #

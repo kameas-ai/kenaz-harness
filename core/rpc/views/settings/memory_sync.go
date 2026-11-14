@@ -65,6 +65,11 @@ type MemorySyncStatusView struct {
 	// actions — turn off, delete from Fleet — enabled.
 	OrgPaused      bool   `json:"orgPaused"`
 	PausedCategory string `json:"pausedCategory,omitempty"`
+	// NoticeHold: uploads wait until the memory-access notice is read in
+	// this org (legal D168(2)). Never set while no text is registered.
+	// NoticeHoldReason is unread, text_refused or check_failed.
+	NoticeHold       bool   `json:"noticeHold"`
+	NoticeHoldReason string `json:"noticeHoldReason,omitempty"`
 }
 
 // SetMemorySync installs the lane (nil uninstalls).
@@ -94,6 +99,8 @@ func memorySyncView(s fleet.MemorySyncStatus) MemorySyncStatusView {
 		Lane:                  laneToView(s.Lane),
 		OrgPaused:             s.OrgPaused,
 		PausedCategory:        s.PausedCategory,
+		NoticeHold:            s.NoticeHold,
+		NoticeHoldReason:      s.NoticeHoldReason,
 	}
 	if f := s.Fleet; f != nil {
 		if f.Scopes != nil {

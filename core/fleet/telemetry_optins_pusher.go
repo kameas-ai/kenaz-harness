@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // confirmedOptInPushFile is the filename within DataDir/fleet/ that records
@@ -113,12 +115,34 @@ func (p *TelemetryOptInPusher) SetOnPushed(fn func([]TelemetryOptInItem)) {
 //   - PUT succeeds: level is persisted as confirmed and onPushed fires with
 //     the pushed vector.
 func (p *TelemetryOptInPusher) Push(ctx context.Context, level ConsentLevel) error {
+	return p.PushWithNotice(ctx, level, "")
+}
+
+// PushWithNotice is Push for a tier change made while the panel showed the
+// Agent Telemetry notice text Fleet served for noticeEdition
+// (contract-harness-sync §17.2). The edition is re-checked against what Fleet
+// serves now: only while Fleet still serves exactly that edition on the
+// kenaz-harness surface, with a verified hash, does the PUT carry
+// notice_version "kenaz-harness/<edition>". Otherwise (not registered, a
+// refused hash, a lookup failure) the PUT goes without it, which records no
+// ack. The notice never fails or blocks the opt-in itself: opting out is a
+// data right.
+func (p *TelemetryOptInPusher) PushWithNotice(ctx context.Context, level ConsentLevel, noticeEdition string) error {
 	client := p.client()
 	if client == nil {
 		return ErrFleetDisabled
 	}
+	noticeVersion := ""
+	if noticeEdition != "" {
+		v, err := client.ResolveHarnessTelemetryNotice(ctx, noticeEdition)
+		if err != nil {
+			logging.L().Info("fleet.telemetry_optins.notice_not_sent", "edition", noticeEdition, "err", err.Error())
+		} else {
+			noticeVersion = v
+		}
+	}
 	updates := TierOptInUpdates(level)
-	if err := client.PutTelemetryOptIns(ctx, updates); err != nil {
+	if err := client.PutTelemetryOptInsWithNotice(ctx, updates, noticeVersion); err != nil {
 		return err
 	}
 	if err := p.persistConfirmed(level); err != nil {

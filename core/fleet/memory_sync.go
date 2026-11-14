@@ -328,6 +328,9 @@ type MemorySync struct {
 	// locally (or the process restarts). Deliberately NOT persisted — only
 	// secret_detected earns a durable SyncBlocked (spec: drop and log).
 	skipped map[string]int64
+	// notice is the last memory-access notice hold decision (D168(2),
+	// memory_notice_hold.go), for one account.
+	notice noticeHold
 
 	// runMu guards the loop lifecycle (Start / Stop). cancel and done are
 	// non-nil exactly while the loop goroutine runs; stopped is set by
@@ -708,7 +711,10 @@ func (m *MemorySync) cycle(ctx context.Context) error {
 		// contract order is pull to exhaustion, THEN push.
 		return nil
 	}
-	return m.push(ctx, set)
+	// D168(2): while Fleet serves a memory-access notice this org has not
+	// seen, upserts wait on this device. Forgets still go. With nothing
+	// registered (404) this is always false and push is unchanged.
+	return m.push(ctx, set, m.memoryNoticeHeld(ctx))
 }
 
 // ── HTTP helpers ────────────────────────────────────────────────────────────
@@ -1075,7 +1081,9 @@ type pushEntry struct {
 	demote bool
 }
 
-func (m *MemorySync) push(ctx context.Context, set MemorySyncSettings) error {
+// push sends queued forgets and changed notes. noticeHeld holds every upsert
+// (the notes stay dirty and local, nothing is dropped) while forgets still go.
+func (m *MemorySync) push(ctx context.Context, set MemorySyncSettings, noticeHeld bool) error {
 	scopes := enabledScopes(set)
 	scope, olderOK := m.scope(), m.state().OlderNotesAck
 	forgets := m.cfg.Outbox.PendingFor(scope)
@@ -1086,6 +1094,12 @@ func (m *MemorySync) push(ctx context.Context, set MemorySyncSettings) error {
 	var ids []string
 	m.mu.Lock()
 	for _, c := range all {
+		if noticeHeld && memory.IsSyncScope(c.ScopeKind) {
+			// D168(2): sync-scope upserts wait (the refused-chunk marks stay
+			// as they are). A demotion still goes: leaving sync never waits
+			// (D164, §17.4(3)).
+			continue
+		}
 		if !mayPush(c, scope, olderOK) {
 			continue
 		}
@@ -1456,7 +1470,12 @@ type MemorySyncStatus struct {
 	// InheritedErase, InheritedOptOut: see memSyncState.
 	InheritedErase  bool
 	InheritedOptOut bool
-	Lane            LaneSnapshot
+	// NoticeHold: uploads are waiting until the memory-access notice is seen
+	// in this org (D168(2)); NoticeHoldReason is one of NoticeHold*. Never
+	// set while no memory-access text is registered.
+	NoticeHold       bool
+	NoticeHoldReason string
+	Lane             LaneSnapshot
 }
 
 // Status reads the local state, the lane, and (when entitled) Fleet's
@@ -1479,6 +1498,9 @@ func (m *MemorySync) Status(ctx context.Context) MemorySyncStatus {
 		out.Lane = LaneSnapshot{Status: LaneOff, Reason: "signed_out", LastSuccessAt: out.Lane.LastSuccessAt}
 	}
 	out.LocalErasePending = current && st.LocalErasePending != ""
+	if current {
+		out.NoticeHold, out.NoticeHoldReason = m.noticeHoldFor(st.Account)
+	}
 	if all, err := m.cfg.Store.ListAll(ctx); err == nil {
 		for _, c := range all {
 			if c.Account == memory.AccountUnresolved && memory.IsSyncScope(c.ScopeKind) {
