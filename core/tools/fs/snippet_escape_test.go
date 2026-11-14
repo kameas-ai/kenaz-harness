@@ -22,12 +22,12 @@ func TestFilesystemSnippets_EscapePath(t *testing.T) {
 		allowed []string
 		denied  []string
 	}{
-		{"exact_quote_backslash", buildExactSnippet(OpRead, evil), []string{evil}, []string{"/etc/passwd"}},
-		{"exact_trailing_backslash", buildExactSnippet(OpRead, `/tmp/a\`), []string{`/tmp/a\`}, []string{"/tmp/a"}},
-		{"dir_quote_backslash", buildDirectorySnippet(OpRead, evil), []string{evil + "/f"}, []string{"/etc/passwd"}},
-		{"dir_star", buildDirectorySnippet(OpRead, "/tmp/*"), []string{"/tmp/*/f"}, []string{"/tmp/other/f"}},
-		{"exact_ordinary", buildExactSnippet(OpRead, "/Users/a/docs/x.txt"), []string{"/Users/a/docs/x.txt"}, []string{"/Users/a/docs/y.txt"}},
-		{"dir_ordinary", buildDirectorySnippet(OpRead, "/Users/a/docs"), []string{"/Users/a/docs/x/y"}, []string{"/Users/a/other"}},
+		{"exact_quote_backslash", buildExactSnippet(OpRead, evil, evil), []string{evil}, []string{"/etc/passwd"}},
+		{"exact_trailing_backslash", buildExactSnippet(OpRead, `/tmp/a\`, `/tmp/a\`), []string{`/tmp/a\`}, []string{"/tmp/a"}},
+		{"dir_quote_backslash", buildDirectorySnippet(OpRead, evil, evil), []string{evil + "/f"}, []string{"/etc/passwd"}},
+		{"dir_star", buildDirectorySnippet(OpRead, "/tmp/*", "/tmp/*"), []string{"/tmp/*/f"}, []string{"/tmp/other/f"}},
+		{"exact_ordinary", buildExactSnippet(OpRead, "/Users/a/docs/x.txt", "/Users/a/docs/x.txt"), []string{"/Users/a/docs/x.txt"}, []string{"/Users/a/docs/y.txt"}},
+		{"dir_ordinary", buildDirectorySnippet(OpRead, "/Users/a/docs", "/Users/a/docs"), []string{"/Users/a/docs/x/y"}, []string{"/Users/a/other"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eng, err := cedar.NewEngine(cedar.Options{})
@@ -79,7 +79,7 @@ func TestGate_AllowAlways_UnparseablePathNotPersisted(t *testing.T) {
 		if ents, _ := os.ReadDir(policyDir); len(ents) != 0 {
 			t.Errorf("%q: persisted %d snippet(s); want none", tc.path, len(ents))
 		}
-		if !g.hasTransientGrant(OpRead, tc.path) {
+		if !g.hasTransientGrant(OpRead, tc.path, resolvedOrSelf(tc.path)) {
 			t.Errorf("%q: no transient grant; the in-flight approval was lost", tc.path)
 		}
 		eng, err := cedar.NewEngine(cedar.Options{DataDir: dataDir, LoadFromDisk: true, IncludeEmbedded: true})
@@ -98,9 +98,9 @@ func TestGate_WritePolicySnippet_RejectsInvalidBody(t *testing.T) {
 	dir := t.TempDir()
 	g, _ := newTestGate(PromptAllowExact, cedar.NotApplicable, dir, false)
 	for _, body := range []string{
-		buildExactSnippet(OpRead, "/tmp/x\uFFFD"),
+		buildExactSnippet(OpRead, "/tmp/x\uFFFD", "/tmp/x\uFFFD"),
 		`permit(principal, action, resource == FilesystemOp::"x`,
-		buildExactSnippet(OpRead, "/a") + buildExactSnippet(OpRead, "/b"),
+		buildExactSnippet(OpRead, "/a", "/a") + buildExactSnippet(OpRead, "/b", "/b"),
 	} {
 		if err := g.writePolicySnippet("bad.cedar", body); err == nil {
 			t.Errorf("writePolicySnippet accepted invalid body:\n%s", body)

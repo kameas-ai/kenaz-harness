@@ -576,3 +576,267 @@ func TestE2E3_WorkspaceHomeDoesNotExemptState(t *testing.T) {
 		t.Fatalf("policy dir has %d files after a privileged Allow-always, want 0", len(entries))
 	}
 }
+
+// symlinkOrSkip plants link -> target, skipping where symlinks can't be made.
+func symlinkOrSkip(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+}
+
+// A NEW file behind a planted symlink into the state dir is state. The
+// file does not exist yet, so EvalSymlinks on the whole path fails; the
+// classification must resolve the deepest existing ancestor instead.
+// Exploit shape: bash `ln -s <DataDir>/policy /tmp/pl`, then
+// write_file /tmp/pl/evil.cedar with a Cedar permit.
+func TestGatePrivilege_NewFileBehindSymlinkIntoState(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".kenaz", "harness", "prod")
+	policy := filepath.Join(dataDir, "policy")
+	if err := os.MkdirAll(policy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := t.TempDir()
+	planted := filepath.Join(elsewhere, "pl")
+	symlinkOrSkip(t, policy, planted)
+	hop2 := filepath.Join(elsewhere, "hop2")
+	symlinkOrSkip(t, policy, hop2)
+	hop1 := filepath.Join(elsewhere, "hop1")
+	symlinkOrSkip(t, hop2, hop1)
+	dangling := filepath.Join(elsewhere, "dangling.cedar")
+	symlinkOrSkip(t, filepath.Join(policy, "evil.cedar"), dangling) // target not created yet
+	relDangling := filepath.Join(elsewhere, "rel")
+	rel, err := filepath.Rel(elsewhere, filepath.Join(policy, "missing-dir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, rel, relDangling)
+
+	// A relative dangling link with ".." reached through a symlinked
+	// directory: its target is relative to the directory it really lives
+	// in, not to the lexical path used to reach it.
+	realDir := filepath.Join(home, "a", "b")
+	if err := os.MkdirAll(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	relUp, err := filepath.Rel(realDir, filepath.Join(policy, "missing-dir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, relUp, filepath.Join(realDir, "rl"))
+	viaDir := filepath.Join(t.TempDir(), "ld")
+	symlinkOrSkip(t, realDir, viaDir)
+
+	g := &Gate{opts: GateOptions{StateDirs: HarnessStateDirs(dataDir)}}
+	for name, p := range map[string]string{
+		"relative dangling link reached through a linked dir": filepath.Join(viaDir, "rl", "evil.cedar"),
+		"new file behind a planted link":                      filepath.Join(planted, "evil.cedar"),
+		"new file directly in the state dir":                  filepath.Join(policy, "new.cedar"),
+		"new file behind a link chain":                        filepath.Join(hop1, "evil.cedar"),
+		"dangling link to a new state file":                   dangling,
+		"new file behind a relative dangling link":            filepath.Join(relDangling, "evil.cedar"),
+	} {
+		if pr := g.privilege(p); !pr.inside {
+			t.Errorf("%s (%s): privilege = %+v, want inside", name, p, pr)
+		}
+		if in, _, _ := StateRelation(p, HarnessStateDirs(dataDir), ""); !in {
+			t.Errorf("%s (%s): StateRelation inside=false, want true", name, p)
+		}
+	}
+	// Control: an ordinary new file elsewhere is not state.
+	if pr := g.privilege(filepath.Join(elsewhere, "notes.txt")); pr.inside || pr.dirCoversState {
+		t.Errorf("ordinary new file: privilege = %+v, want none", pr)
+	}
+
+	// End to end at the gate: the prompt carries the privileged banner
+	// and an Allow always is not remembered.
+	rc := newRealChain(t, GateOptions{StateDirs: HarnessStateDirs(dataDir)})
+	ch := rc.evalAsync(OpWrite, filepath.Join(planted, "evil.cedar"))
+	pending := rc.waitPending(t, 1)[0]
+	if !strings.Contains(pending.Surface.FS.Privileged, "harness's own state directory") {
+		t.Fatalf("Privileged = %q, want the state-directory banner", pending.Surface.FS.Privileged)
+	}
+	if err := rc.registry.ResolveScoped(pending.RequestID, cedar.DecisionAllowAlways, cedar.SourceGuest, cedar.ScopeDirectory); err != nil {
+		t.Fatalf("ResolveScoped: %v", err)
+	}
+	mustAllow(t, ch, "privileged write")
+	if entries, _ := os.ReadDir(rc.policyDir); len(entries) != 0 {
+		t.Fatalf("policy dir has %d files after a privileged Allow-always, want 0", len(entries))
+	}
+}
+
+// A symlink INSIDE the fallback workspace that points into the state dir
+// does not carry the workspace exemption: the exemption judges a path by
+// where it really lands.
+func TestGatePrivilege_LinkInFallbackWorkspaceIntoStateIsState(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".kenaz", "harness", "prod")
+	policy := filepath.Join(dataDir, "policy")
+	ws := filepath.Join(dataDir, "agent-workspace")
+	for _, d := range []string{policy, ws} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(ws, "pl")
+	symlinkOrSkip(t, policy, link)
+	g := &Gate{opts: GateOptions{StateDirs: HarnessStateDirs(dataDir), WorkspaceDir: func() string { return ws }}}
+	if pr := g.privilege(filepath.Join(link, "evil.cedar")); !pr.inside {
+		t.Fatalf("link in the workspace into policy: privilege = %+v, want inside", pr)
+	}
+	if in, _, _ := StateRelation(filepath.Join(link, "evil.cedar"), HarnessStateDirs(dataDir), ws); !in {
+		t.Fatal("StateRelation: link in the workspace into policy not classed as state")
+	}
+	// Control: ordinary (new) workspace files stay exempt.
+	if pr := g.privilege(filepath.Join(ws, "proj", "new.txt")); pr.inside || pr.dirCoversState {
+		t.Fatalf("ordinary workspace file: privilege = %+v, want none", pr)
+	}
+}
+
+// A path that cannot be resolved (a symlink loop) is classed as state:
+// where it lands is unknown, so it fails closed.
+func TestGatePrivilege_SymlinkLoopFailsClosed(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".kenaz", "harness", "prod")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	a, b := filepath.Join(work, "a"), filepath.Join(work, "b")
+	symlinkOrSkip(t, b, a)
+	symlinkOrSkip(t, a, b)
+	if _, ok := resolveExisting(filepath.Join(a, "x")); ok {
+		t.Fatal("resolveExisting reported a loop as resolved")
+	}
+	g := &Gate{opts: GateOptions{StateDirs: HarnessStateDirs(dataDir)}}
+	if p := g.privilege(filepath.Join(a, "x.cedar")); !p.inside {
+		t.Fatalf("loop: privilege = %+v, want inside (fail closed)", p)
+	}
+	if in, _, _ := StateRelation(filepath.Join(a, "x.cedar"), HarnessStateDirs(dataDir), ""); !in {
+		t.Fatal("loop: StateRelation inside=false, want true (fail closed)")
+	}
+	// The workspace exemption never applies to an unresolvable path.
+	if inWorkspace(filepath.Join(a, "x"), work) {
+		t.Fatal("loop inside the workspace was exempted")
+	}
+}
+
+// resolveFor: a read follows a leaf link; a write resolves only the
+// parent directory and keeps the leaf (the write replaces the link).
+func TestResolveFor_WriteKeepsLeafReadFollowsIt(t *testing.T) {
+	t.Parallel()
+	work := t.TempDir()
+	realDir := filepath.Join(work, "real")
+	if err := os.MkdirAll(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, target, filepath.Join(realDir, "k"))
+	linkedDir := filepath.Join(work, "ld")
+	symlinkOrSkip(t, realDir, linkedDir)
+
+	rReal, _ := filepath.EvalSymlinks(realDir)
+	rTarget, _ := filepath.EvalSymlinks(target)
+	p := filepath.Join(linkedDir, "k")
+	if got, ok := resolveFor(OpWrite, p); !ok || got != filepath.Join(rReal, "k") {
+		t.Fatalf("resolveFor(write) = %q,%v, want the parent resolved and the leaf kept (%q)", got, ok, filepath.Join(rReal, "k"))
+	}
+	if got, ok := resolveFor(OpRead, p); !ok || got != rTarget {
+		t.Fatalf("resolveFor(read) = %q,%v, want the link followed (%q)", got, ok, rTarget)
+	}
+}
+
+// The prompt for a read through a link to a dangerous path is marked
+// dangerous and says where it points.
+func TestGate_ReadThroughLinkIsDangerousAndShowsTarget(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	// Never created: the link dangles, and resolveExisting follows it.
+	target := filepath.Join(home, ".ssh", "kenaz-test-never-created")
+	link := filepath.Join(t.TempDir(), "k")
+	symlinkOrSkip(t, target, link)
+	g, p := newTestGate(PromptDeny, cedar.NotApplicable, "", false)
+	if _, err := g.Evaluate(context.Background(), OpRead, link); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	seen := p.last
+	if !seen.IsDangerous {
+		t.Fatalf("read through a link into ~/.ssh: surface = %+v, want dangerous", seen)
+	}
+	if seen.ResolvedPath == "" || filepath.Base(seen.ResolvedPath) != "kenaz-test-never-created" {
+		t.Fatalf("ResolvedPath = %q, want the link target", seen.ResolvedPath)
+	}
+}
+
+// A link inside a recipe dir that points out of it is not "inside the
+// recipe dir": recipe_dir_match widens what the default policy permits,
+// so it needs both spellings. Not parallel: recipe dirs are global.
+func TestGate_RecipeDirMatchNeedsTheResolvedLocation(t *testing.T) {
+	prev := RecipeDirs()
+	t.Cleanup(func() { NotifyRecipeDirs(prev) })
+	recipe := t.TempDir()
+	NotifyRecipeDirs([]string{recipe})
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(recipe, "k")
+	symlinkOrSkip(t, outside, link)
+	engine, err := cedar.NewEngine(cedar.Options{DataDir: t.TempDir(), IncludeEmbedded: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &stubPrompter{response: PromptDeny}
+	g := NewGate(GateOptions{Engine: engine, Prompter: p})
+	// Control: a real file in the recipe dir is permitted by policy.
+	inside := filepath.Join(recipe, "ok.txt")
+	if err := os.WriteFile(inside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := g.Evaluate(context.Background(), OpRead, inside); d.Outcome != cedar.Allow {
+		t.Fatalf("control: read in the recipe dir = %s (%s), want Allow by policy", d.Outcome, d.Reason)
+	}
+	d, err := g.Evaluate(context.Background(), OpRead, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Outcome == cedar.Allow {
+		t.Fatalf("read through a recipe-dir link to an outside file was allowed by policy (%s)", d.Reason)
+	}
+}
+
+// Only the benign macOS aliases are folded before the dangerous-tier
+// check: a link to /private/var/db/... stays dangerous, while ordinary
+// /tmp and per-user temp (/var/folders) paths are not.
+func TestGate_DangerousTierAliasFolding(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir() // /var/folders/... on macOS
+	cases := []struct {
+		name, target string
+		dangerous    bool
+	}{
+		{"private_var_db", "/private/var/db/kenaz-test-never-created", true},
+		{"tmp", "/tmp/kenaz-test-never-created", false},
+		{"user_temp", filepath.Join(dir, "plain.txt"), false},
+	}
+	for _, c := range cases {
+		link := filepath.Join(t.TempDir(), "k")
+		symlinkOrSkip(t, c.target, link)
+		g, p := newTestGate(PromptDeny, cedar.NotApplicable, "", false)
+		if _, err := g.Evaluate(context.Background(), OpRead, link); err != nil {
+			t.Fatalf("%s: Evaluate: %v", c.name, err)
+		}
+		if p.last.IsDangerous != c.dangerous {
+			t.Errorf("%s: dangerous = %v, want %v (resolved %q)", c.name, p.last.IsDangerous, c.dangerous, p.last.ResolvedPath)
+		}
+	}
+}

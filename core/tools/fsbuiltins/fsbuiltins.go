@@ -156,24 +156,41 @@ func sessionIDFromCtx(ctx context.Context) string {
 // the call is always permitted (test / nil-gate path). Returns the
 // canonical path on success.
 func gateCheck(ctx context.Context, gate *corefs.Gate, op corefs.Op, rawPath string) (string, error) {
-	canonical, err := corefs.Canonicalize(rawPath)
+	canonical, _, err := gateCheckPath(ctx, gate, op, rawPath)
+	return canonical, err
+}
+
+// gateCheckPath is gateCheck that also returns the path to do I/O on:
+// the location the gate judged (corefs.Gate.EvaluatePath — every link
+// followed for a read; for a write only the parent directory resolved, so
+// a leaf link is replaced, never written through). I/O on it means what
+// is read or written is what was checked: a link retargeted after the
+// check cannot redirect it. With no gate it is the canonical path.
+func gateCheckPath(ctx context.Context, gate *corefs.Gate, op corefs.Op, rawPath string) (canonical, ioPath string, err error) {
+	canonical, err = corefs.Canonicalize(rawPath)
 	if err != nil {
-		return "", fmt.Errorf("invalid path: %w", err)
+		return "", "", fmt.Errorf("invalid path: %w", err)
 	}
 	if gate == nil {
 		// No gate wired — permit unconditionally (test path).
-		return canonical, nil
+		return canonical, canonical, nil
 	}
-	d, err := gate.Evaluate(ctx, op, canonical)
+	d, resolved, err := gate.EvaluatePath(ctx, op, canonical)
 	if err != nil {
-		return "", fmt.Errorf("gate: %w", err)
+		return "", "", fmt.Errorf("gate: %w", err)
 	}
 	// cedar.Allow is the only permitting outcome; Deny and NotApplicable deny.
 	if d.Outcome != cedar.Allow {
-		return "", fmt.Errorf("%w: %s", ErrFSDenied, d.Reason)
+		return "", "", fmt.Errorf("%w: %s", ErrFSDenied, d.Reason)
 	}
-	return canonical, nil
+	if resolved == "" {
+		return "", "", corefs.ErrUnresolvablePath
+	}
+	return canonical, resolved, nil
 }
+
+// ErrEditThroughLink is edit_file's refusal for a path that is a symlink.
+var ErrEditThroughLink = errors.New("this file is a link; edit the file it points to directly")
 
 // errResult returns a json.RawMessage encoding {"error": msg, "is_error": true}.
 func errResult(msg string) json.RawMessage {
@@ -264,12 +281,12 @@ func (t *ReadFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 		return errResult("read_file: path is required"), nil
 	}
 
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpRead, args.Path)
+	canonical, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpRead, args.Path)
 	if err != nil {
 		return errResult("read_file: " + err.Error()), nil
 	}
 
-	f, err := os.Open(canonical)
+	f, err := os.Open(ioPath)
 	if err != nil {
 		return errResult("read_file: " + err.Error()), nil
 	}
@@ -390,10 +407,12 @@ func (t *ListDirTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMe
 		args.MaxEntries = 1000
 	}
 
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpRead, args.Path)
+	_, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpRead, args.Path)
 	if err != nil {
 		return errResult("list_dir: " + err.Error()), nil
 	}
+	// Walk the location the gate judged; entry paths are relative to it.
+	canonical := ioPath
 
 	var entries []dirEntry
 	truncated := false
@@ -530,10 +549,13 @@ func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	// Gate the longest literal prefix of the pattern, not the base
 	// directory it happens to be evaluated from: glob(/home/*) asks to
 	// read /home, not / (E2E-4).
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpRead, root)
+	shown, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpRead, root)
 	if err != nil {
 		return errResult("glob: " + err.Error()), nil
 	}
+	// Walk the location the gate judged; report matches under the path
+	// the caller named.
+	canonical := ioPath
 
 	var matches []string
 	truncated := false
@@ -568,7 +590,7 @@ func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 			return matchErr
 		}
 		if matched {
-			matches = append(matches, path)
+			matches = append(matches, filepath.Join(shown, relPath))
 		}
 		return nil
 	})
@@ -769,9 +791,17 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 		return errResult("grep: invalid pattern: " + err.Error()), nil
 	}
 
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpRead, args.Path)
+	shown, canonical, err := gateCheckPath(ctx, t.gate, corefs.OpRead, args.Path)
 	if err != nil {
 		return errResult("grep: " + err.Error()), nil
+	}
+	// canonical is the location the gate judged (walked and read);
+	// matches are reported under shown, the path the caller named.
+	display := func(p string) string {
+		if rel, err := filepath.Rel(canonical, p); err == nil {
+			return filepath.Join(shown, rel)
+		}
+		return p
 	}
 
 	var matches []grepMatch
@@ -790,7 +820,7 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 			}
 			if re.MatchString(line) {
 				matches = append(matches, grepMatch{
-					File:    filePath,
+					File:    display(filePath),
 					Line:    i + 1,
 					Content: line,
 				})
@@ -903,19 +933,19 @@ func (t *WriteFileTool) Call(ctx context.Context, raw json.RawMessage) (json.Raw
 		args.Mode = 0o644
 	}
 
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpWrite, args.Path)
+	canonical, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpWrite, args.Path)
 	if err != nil {
 		return errResult("write_file: " + err.Error()), nil
 	}
 
-	if err := atomicWrite(canonical, []byte(args.Content), fs.FileMode(args.Mode)); err != nil {
+	if err := atomicWrite(ioPath, []byte(args.Content), fs.FileMode(args.Mode)); err != nil {
 		return errResult("write_file: " + err.Error() + identityHint(err)), nil
 	}
 	// Read the file back through the same path the read tools use. A
 	// write is only reported as done when read_file / list_dir / glob
 	// will find it there (E2E-2): "OK" for a file the associate cannot
 	// then see is the failure mode, not a success.
-	if err := verifyWritten(canonical, int64(len(args.Content))); err != nil {
+	if err := verifyWritten(ioPath, int64(len(args.Content))); err != nil {
 		return errResult("write_file: " + err.Error()), nil
 	}
 
@@ -1064,7 +1094,7 @@ func (t *EditFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 	}
 
 	// Validate path and check write permission.
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpWrite, args.Path)
+	canonical, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpWrite, args.Path)
 	if err != nil {
 		return errResult("edit_file: " + err.Error()), nil
 	}
@@ -1075,10 +1105,26 @@ func (t *EditFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 		return errResult(ErrEditWithoutRead.Error()), nil
 	}
 
-	// Read current content.
-	existing, err := os.ReadFile(canonical)
+	// Never read or write through a link: the gate judged the link's own
+	// location (resolveFor), not wherever it points. The file is opened
+	// without following a leaf link (openNoFollow), and its content and
+	// mode come from that one handle, so a link swapped in after the
+	// gate's check cannot feed another file's content into this edit.
+	f, err := openNoFollow(ioPath)
+	if err != nil {
+		if errors.Is(err, ErrEditThroughLink) {
+			return errResult("edit_file: " + ErrEditThroughLink.Error()), nil
+		}
+		return errResult("edit_file: read: " + err.Error()), nil
+	}
+	existing, err := io.ReadAll(f)
+	info, serr := f.Stat()
+	_ = f.Close()
 	if err != nil {
 		return errResult("edit_file: read: " + err.Error()), nil
+	}
+	if serr != nil {
+		return errResult("edit_file: stat: " + serr.Error()), nil
 	}
 	content := string(existing)
 
@@ -1094,14 +1140,10 @@ func (t *EditFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 	// Apply replacement.
 	newContent := strings.Replace(content, args.OldStr, args.NewStr, 1)
 
-	// Preserve file mode.
-	info, err := os.Stat(canonical)
-	if err != nil {
-		return errResult("edit_file: stat: " + err.Error()), nil
-	}
+	// Preserve file mode (from the opened handle).
 	mode := info.Mode()
 
-	if err := atomicWrite(canonical, []byte(newContent), mode); err != nil {
+	if err := atomicWrite(ioPath, []byte(newContent), mode); err != nil {
 		return errResult("edit_file: " + err.Error()), nil
 	}
 

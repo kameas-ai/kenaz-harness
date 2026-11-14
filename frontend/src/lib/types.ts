@@ -4082,6 +4082,10 @@ export interface PermissionRequest {
       parent_missing?: boolean;
       /** Banner text: the path is, or a directory grant would include, harness state (E2E-3). */
       privileged?: string;
+      /** Where the operation really acts (links resolved); shown when it differs from canonical_path. */
+      resolved_path?: string;
+      /** The path as requested. */
+      canonical_path?: string;
     };
   };
 }

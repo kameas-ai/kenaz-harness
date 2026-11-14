@@ -234,6 +234,13 @@ type FSPromptSurface struct {
 	// credential metadata, the Cedar policy directory (E2E-3). The modal
 	// renders it as a banner; the gate still prompts.
 	Privileged string `json:"privileged,omitempty"`
+	// ResolvedPath is where the operation really acts when the prompt was
+	// raised (a read follows every link; a write resolves only the parent
+	// directory). Clients show it ("Points to: …") when it differs from
+	// CanonicalPath, so a prompt for /tmp/x does not hide that /tmp/x is
+	// a link to ~/.ssh/id_ed25519. It also keys the allow-once cache, so
+	// an Allow once does not follow a link that is later retargeted.
+	ResolvedPath string `json:"resolved_path,omitempty"`
 }
 
 // CredPromptSurface — cred:permission-pending payload.
@@ -284,7 +291,7 @@ func (s PromptSurface) resourceKey() string {
 	case FamilyBash:
 		return "bash::" + s.Bash.Pattern
 	case FamilyFilesystem:
-		return "fs::" + s.FS.Op + "::" + s.FS.CanonicalPath
+		return "fs::" + s.FS.Op + "::" + s.FS.CanonicalPath + "::" + s.FS.ResolvedPath
 	case FamilyCredential:
 		return "cred::" + s.Cred.ProviderID + "::" + s.Cred.Purpose
 	case FamilyTool:

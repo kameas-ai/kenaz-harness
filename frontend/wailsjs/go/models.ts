@@ -1374,6 +1374,7 @@ export namespace cedar {
 	    dangerous: boolean;
 	    parent_missing?: boolean;
 	    privileged?: string;
+	    resolved_path?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new FSPromptSurface(source);
@@ -1386,6 +1387,7 @@ export namespace cedar {
 	        this.dangerous = source["dangerous"];
 	        this.parent_missing = source["parent_missing"];
 	        this.privileged = source["privileged"];
+	        this.resolved_path = source["resolved_path"];
 	    }
 	}
 	export class PolicyEvalError {
