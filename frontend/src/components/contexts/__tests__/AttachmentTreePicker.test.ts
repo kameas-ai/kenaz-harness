@@ -73,6 +73,38 @@ describe('AttachmentTreePicker', () => {
     expect(wrapper.text()).toContain('standalone.md');
   });
 
+  it('never offers a pulled team/org entry for attachment', async () => {
+    const add = vi.fn();
+    const { wrapper } = mountPicker({
+      contexts: {
+        list: async () => ({
+          name: '',
+          path: '',
+          kind: 'folder' as const,
+          children: [
+            { name: 'Deploy', path: 'team/_fleet/6b2f6f0e-0000-4000-8000-0000000000e1', kind: 'file' as const },
+            { name: 'mine.md', path: 'mine.md', kind: 'file' as const },
+          ],
+        }),
+        get: async () => 'teammate text',
+        save: async () => undefined,
+        createFolder: async () => undefined,
+        rename: async () => undefined,
+        delete: async () => undefined,
+        recentlyApplied: async () => [],
+        rootPath: async () => '/fake',
+      },
+      attachments: { add },
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain('mine.md');
+    expect(wrapper.text()).not.toContain('Deploy');
+    expect(
+      wrapper.find('[data-testid="context-node-team/_fleet/6b2f6f0e-0000-4000-8000-0000000000e1"]').exists(),
+    ).toBe(false);
+    expect(add).not.toHaveBeenCalled();
+  });
+
   it('renders the empty-state message when the library has no children', async () => {
     const { wrapper } = mountPicker({
       contexts: {

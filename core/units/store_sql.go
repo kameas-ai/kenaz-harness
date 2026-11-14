@@ -483,7 +483,7 @@ func (s *sqlStore) ListVersions(ctx context.Context, unitID string) ([]UnitVersi
 
 const sqlSelectSyncState = `
     SELECT unit_id, node_id, synced_version, classification, last_synced,
-           synced_server_version, synced_local_version
+           synced_server_version, synced_local_version, server_load_policy
     FROM unit_sync_state
 `
 
@@ -523,19 +523,20 @@ func upsertSyncStateTx(ctx context.Context, tx storage.WriteTx, st SyncState) er
 	_, err := tx.Exec(ctx, `
             INSERT INTO unit_sync_state
                 (unit_id, node_id, synced_version, classification, last_synced,
-                 synced_server_version, synced_local_version)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 synced_server_version, synced_local_version, server_load_policy)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(unit_id) DO UPDATE SET
                 node_id               = excluded.node_id,
                 synced_version        = excluded.synced_version,
                 classification        = excluded.classification,
                 last_synced           = excluded.last_synced,
                 synced_server_version = excluded.synced_server_version,
-                synced_local_version  = excluded.synced_local_version
+                synced_local_version  = excluded.synced_local_version,
+                server_load_policy    = excluded.server_load_policy
         `,
 		st.UnitID, st.NodeID, st.SyncedVersion, st.Classification,
 		st.LastSynced.UnixNano(),
-		st.SyncedServerVersion, st.SyncedLocalVersion,
+		st.SyncedServerVersion, st.SyncedLocalVersion, st.ServerLoadPolicy,
 	)
 	return err
 }
@@ -678,7 +679,7 @@ func scanSyncState(sc interface{ Scan(dest ...any) error }) (SyncState, error) {
 	)
 	if err := sc.Scan(
 		&st.UnitID, &st.NodeID, &st.SyncedVersion, &st.Classification, &lastSyncedNs,
-		&st.SyncedServerVersion, &st.SyncedLocalVersion,
+		&st.SyncedServerVersion, &st.SyncedLocalVersion, &st.ServerLoadPolicy,
 	); err != nil {
 		return SyncState{}, err
 	}

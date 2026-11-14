@@ -68,6 +68,13 @@ type SyncState struct {
 	Classification string
 	// LastSynced is the wall-clock of the last successful sync (UTC).
 	LastSynced time.Time
+	// ServerLoadPolicy is the load_policy Fleet holds for the node, as last
+	// seen: the top-level wire value on every pull (including pulls that
+	// apply nothing), or the wire value sent on a push (after the
+	// non-admin downgrade). "" = not recorded (a row from before
+	// units/1106). Only this — never the local unit's LoadPolicy — makes a
+	// shared unit eager-load: Fleet lets only org admins set "always".
+	ServerLoadPolicy string
 }
 
 // SyncStateStore is the persistence contract for the sync sidecar. It is

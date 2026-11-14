@@ -19,6 +19,15 @@
 // Each lane pulls with ?kind=<its set>; a server that ignores the filter
 // returns everything, so each lane ALSO skips-and-counts nodes of other kinds
 // (never aborting its cursor, never mislisting another lane's nodes).
+//
+// Fleet ruling 2026-11-13 (contract-harness-sync §1.1; the "Context kinds"
+// section of docs/contract-context.md is pending kenaz-fleet #567): a reader must not drop a node whose kind is on Fleet's allowlist
+// but which it does not recognise — it renders it as a doc. The bootstrap
+// and legacy kinds (bootstrapKinds, legacyNodeKinds) are therefore pulled by
+// the Unit lane (unitLanePullKinds) and stored as doc units, with the wire
+// kind kept as a label (metadata "fleet_kind"). A kind is a label, never an
+// instruction: nothing here gives "directive" or "preference" authority.
+// Push is unchanged: the lanes still push only their own kinds.
 package fleet
 
 import (
@@ -38,6 +47,47 @@ var curatedKinds = []string{"glossary", "explanation", "guidance", "procedure"}
 // unitLaneKinds is the Unit lane's node-kind set (pushable unit kinds;
 // artifact is device-local and never on the wire).
 var unitLaneKinds = []string{"root", "doc", "snippet", "tool_output"}
+
+// bootstrapKinds are Fleet's bootstrap node kinds (allowlisted, not tied to
+// a unit_kind). The harness never pushes them; it pulls them as docs.
+var bootstrapKinds = []string{"project", "person", "system", "glossary_term", "work_item", "document"}
+
+// legacyNodeKinds are Fleet's legacy node kinds (allowlisted, not tied to a
+// unit_kind). Pulled as docs; never pushed by the harness.
+var legacyNodeKinds = []string{"fact", "preference", "entity", "directive", "doc-ref"}
+
+// unitLanePullKinds is the Unit lane's PULL filter: its own kinds plus every
+// allowlisted kind no lane recognises (bootstrap + legacy), so those nodes
+// reach the harness and render as docs instead of being filtered out
+// server-side (Fleet ruling 2026-11-13). Push keeps unitLaneKinds.
+var unitLanePullKinds = append(append(append([]string{}, unitLaneKinds...), bootstrapKinds...), legacyNodeKinds...)
+
+// FleetKindMetaKey is the local unit metadata key that keeps the wire kind
+// of a pulled node the harness stores as a doc (a bootstrap or legacy kind).
+// It is a display label only.
+const FleetKindMetaKey = "fleet_kind"
+
+// AllowlistedKind reports whether k is on Fleet's context-kind allowlist
+// (curated + unit + bootstrap + legacy).
+func AllowlistedKind(k string) bool {
+	return inSet(curatedKinds, k) || inSet(unitLaneKinds, k) || inSet(bootstrapKinds, k) || inSet(legacyNodeKinds, k)
+}
+
+// DisplayKind is the kind label shown for a pulled node: the kind itself
+// when it is on Fleet's allowlist, otherwise "doc" (the reader rule).
+func DisplayKind(k string) string {
+	k = strings.TrimSpace(k)
+	if AllowlistedKind(k) {
+		return k
+	}
+	return "doc"
+}
+
+// renderedAsDoc reports whether a pulled kind is allowlisted but outside
+// both lanes' own sets, so the Unit lane stores it as a doc unit.
+func renderedAsDoc(k string) bool {
+	return inSet(bootstrapKinds, k) || inSet(legacyNodeKinds, k)
+}
 
 // curatedUnitKind is the unit_kind every Curated node carries on push.
 const curatedUnitKind = "doc"
@@ -132,6 +182,11 @@ func checkMetadataNotCapability(md json.RawMessage) error {
 
 // unitLaneAccepts reports whether a pulled node belongs to the Unit lane.
 func unitLaneAccepts(n ContextPulledNode) bool {
+	if renderedAsDoc(n.Kind) {
+		// Bootstrap / legacy kinds are not tied to a unit_kind (Fleet lane
+		// rule); only the never-on-Fleet artifact is refused.
+		return n.UnitKind != string(units.KindArtifact)
+	}
 	if !inSet(unitLaneKinds, n.Kind) {
 		return false
 	}

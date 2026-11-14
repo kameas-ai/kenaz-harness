@@ -178,6 +178,15 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 	if c, err := loadUnitCursor(dataDir); err == nil {
 		s.cursor = c
 	}
+	// The cursor was advanced under a narrower pull filter (Fleet ruling
+	// 2026-11-13 widened it to the bootstrap and legacy kinds): those nodes
+	// were filtered out server-side and would never be re-sent past the old
+	// cursor. Re-pull from the start once; applying a known node again is a
+	// no-op (sidecar baselines), so only the missed nodes are created.
+	if s.cursor != "" && loadUnitLaneSig(dataDir) != unitLaneSig() {
+		logging.L().Info("fleet.unit.pull.cursor_reset", "reason", "lane_kind_filter_changed")
+		s.cursor = ""
+	}
 	return s
 }
 
@@ -288,6 +297,7 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 	// response's conflicts / rejections (keyed by wire id) and the sidecar
 	// write resolve back to the local unit.
 	wireOf := make(map[string]string, len(dirty))
+	wirePolicy := make(map[string]string, len(dirty))
 	seenEdge := map[string]bool{}
 	edges := make([]contextEdgeInput, 0)
 	type edgeCand struct {
@@ -322,6 +332,7 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 		}
 		node.ID = s.WireNodeID(ctx, u.ID)
 		wireOf[u.ID] = node.ID
+		wirePolicy[u.ID] = node.LoadPolicy
 		nodes = append(nodes, node)
 		pushed = append(pushed, u)
 
@@ -421,6 +432,9 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 			SyncedLocalVersion:  u.Version,
 			Classification:      classStr,
 			LastSynced:          now,
+			// What Fleet now holds: the wire value sent (a non-admin's
+			// "always" went out as on_demand).
+			ServerLoadPolicy: wirePolicy[u.ID],
 		}); err != nil {
 			return 0, fmt.Errorf("fleet: unit push: sidecar %s: %w", u.ID, err)
 		}
@@ -469,8 +483,9 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	cursor := s.cursor
 	s.mu.RUnlock()
 
-	// The Unit lane pulls only unit kinds (WP03 lane split by kind).
-	urlPath := lanePullPath(unitLaneKinds, cursor)
+	// The Unit lane pulls its own kinds plus the allowlisted kinds no lane
+	// owns (WP03 lane split by kind; Fleet ruling 2026-11-13 reader rule).
+	urlPath := lanePullPath(unitLanePullKinds, cursor)
 
 	resp, err := s.client.Get(ctx, urlPath)
 	if err != nil {
@@ -655,6 +670,7 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 			SyncedServerVersion: n.Version,
 			Classification:      string(n.Classification),
 			LastSynced:          time.Now().UTC(),
+			ServerLoadPolicy:    string(mapped.LoadPolicy),
 		}); cerr != nil {
 			return false, fmt.Errorf("fleet: unit pull: create %s: %w", n.ID, cerr)
 		}
@@ -676,6 +692,13 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 	// 3-way baseline comparison. Each counter space is tracked independently.
 	serverChanged := n.Version > st.SyncedServerVersion
 	localChanged := local.Version > st.SyncedLocalVersion
+
+	// Record the load_policy Fleet holds now, whatever else this pull does
+	// (an admin demotion, or a push that downgraded it, must stop eager
+	// loading even when nothing else is applied). Baselines are untouched.
+	if err := s.refreshServerLoadPolicy(ctx, st, mapped.LoadPolicy); err != nil {
+		return false, err
+	}
 
 	if !serverChanged {
 		// Server hasn't advanced beyond our last sync — nothing to apply.
@@ -714,6 +737,7 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 		SyncedServerVersion: n.Version, // server counter at this pull
 		Classification:      string(n.Classification),
 		LastSynced:          time.Now().UTC(),
+		ServerLoadPolicy:    string(mapped.LoadPolicy),
 	}); err != nil {
 		if errors.Is(err, units.ErrVersionConflict) {
 			latest := local.Version + 1 // at least one local edit raced in
@@ -857,6 +881,19 @@ func (s *UnitSyncer) applyTombstone(ctx context.Context, n ContextPulledNode) (b
 	return true, nil
 }
 
+// refreshServerLoadPolicy records the load_policy Fleet holds for a known
+// node when it differs from the sidecar. Only that field changes.
+func (s *UnitSyncer) refreshServerLoadPolicy(ctx context.Context, st units.SyncState, lp units.LoadPolicy) error {
+	if st.ServerLoadPolicy == string(lp) {
+		return nil
+	}
+	st.ServerLoadPolicy = string(lp)
+	if _, err := s.store.UpsertSyncState(ctx, st); err != nil {
+		return fmt.Errorf("fleet: unit pull: record load policy %s: %w", st.NodeID, err)
+	}
+	return nil
+}
+
 // dropConflictLocked forgets any surfaced conflict for unitID. Caller holds
 // s.mu.
 func (s *UnitSyncer) dropConflictLocked(unitID string) {
@@ -886,6 +923,7 @@ func (s *UnitSyncer) adoptOrphan(ctx context.Context, n ContextPulledNode, exist
 		SyncedServerVersion: n.Version,
 		Classification:      string(n.Classification),
 		LastSynced:          time.Now().UTC(),
+		ServerLoadPolicy:    string(mapped.LoadPolicy),
 	}
 	if existing.Version == 0 {
 		_, _, err := s.store.UpdateWithSyncState(ctx, existing.ID, 0, mapped.Body, mapped.Metadata, base)
@@ -1199,5 +1237,29 @@ func saveUnitCursor(dataDir, cursor string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("fleet: mkdir unit cursor: %w", err)
 	}
-	return atomicWriteFile(unitCursorPath(dataDir), cursor+"\n")
+	if err := atomicWriteFile(unitCursorPath(dataDir), cursor+"\n"); err != nil {
+		return err
+	}
+	// Record the filter the cursor was advanced under (see NewUnitSyncer).
+	return atomicWriteFile(unitLaneSigPath(dataDir), unitLaneSig()+"\n")
+}
+
+// unitLaneSig identifies the Unit lane's pull filter.
+func unitLaneSig() string { return strings.Join(unitLanePullKinds, ",") }
+
+func unitLaneSigPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "unit_cursor_kinds.txt")
+}
+
+// loadUnitLaneSig returns the filter the stored cursor was advanced under,
+// or "" when none was recorded (a cursor from before the record existed).
+func loadUnitLaneSig(dataDir string) string {
+	if dataDir == "" {
+		return unitLaneSig()
+	}
+	b, err := os.ReadFile(unitLaneSigPath(dataDir))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(string(b), "\r\n")
 }

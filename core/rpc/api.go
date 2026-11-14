@@ -1009,6 +1009,10 @@ type API struct {
 	// (unified-context-artifacts-01NCTXU01 / Phase 3)
 	unitSyncer *corefleet.UnitSyncer
 
+	// sharedCtx serves teammates' Fleet context to the model (see
+	// shared_context_wiring.go). Set from the LLM stack; nil-safe.
+	sharedCtx *sharedContextSource
+
 	// unitsMgr is the fleet-free unified Unit store manager. Held so the
 	// fleet view's resolution/enshrine RPCs reach it.
 	unitsMgr *units.Manager
@@ -2744,6 +2748,8 @@ func New(c *core.Core, opts ...Option) *API {
 	a.scheduledRunContainment = NewScheduledRunContainmentRegistry(blockedSink)
 	stack.sessionArm.SetScheduledRunContainment(a.scheduledRunContainment)
 	a.llmAPI = stack.api
+	a.sharedCtx = stack.sharedCtx
+	a.sharedCtx.setUnits(a.unitsMgr)
 	// llm-call-telemetry-01LLMTEL01 WP02: the local model-call store. The
 	// registry is its source for the OpenRouter stats pull
 	// (*llmregistry.Registry implements FetchProviderStats and keeps the
@@ -4558,6 +4564,19 @@ func New(c *core.Core, opts ...Option) *API {
 			ctxSyncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps).
 				WithAuditEmitter(&contextSyncAuditBridge{impl: a.auditImpl})
 			impl.WithSyncer(ctxSyncer)
+			// Teammates' Curated entries become readable by the model
+			// (read_context_file shared=…), framed as data.
+			selfDir := flDataDir
+			a.sharedCtx.setCurated(ctxSyncer.PulledEntries, func() string {
+				if selfDir == "" {
+					return ""
+				}
+				id, err := corefleet.LoadIdentity(selfDir)
+				if err != nil {
+					return ""
+				}
+				return id.UserID
+			})
 			// The enrolled identity supplies the user id (to hide pulled
 			// copies of the user's own entries, review F3) and the team id
 			// a "team"-layer publish lands in.
@@ -6242,6 +6261,12 @@ func (f *keychainForgetter) Forget(ctx context.Context, locator string) error {
 // shared secrets backend is what InstallRecipe writes credentials
 // into so the resolver finds them on the next ResolveEnv).
 type llmStack struct {
+	// sharedCtx serves teammates' Fleet context to the model (the
+	// read_context_file "shared" argument and the always-load block);
+	// New() binds its units store and Curated syncer. nil on the
+	// nil-core chassis.
+	sharedCtx *sharedContextSource
+
 	// loadTools is the shared on-demand tool-exposure core; nil on the
 	// nil-core chassis. toolServers is its server directory and
 	// toolsAudit its late-bound audit sink (see New()).
@@ -6828,12 +6853,23 @@ func newLLMStack(
 	// built-in so the agent can read on-demand files from attached context
 	// modules. Requires both the contexts library AND an attachment manager;
 	// nil-safe: if either is absent the tool is simply not registered.
+	// sharedCtx serves teammates' Fleet context on demand (the tool's
+	// "shared" argument) and the always-load block (attachment resolvers
+	// below). Its sources are bound later in New() (units store, Curated
+	// syncer); sign-in is the settings view's FleetSignedIn.
+	sharedCtx := &sharedContextSource{}
+	if settingsImpl != nil {
+		sharedCtx.signedIn = func(ctx context.Context) bool {
+			ok, err := settingsImpl.FleetSignedIn(ctx)
+			return err == nil && ok
+		}
+	}
 	if attMgr != nil && contextsLib != nil {
 		modSrc := &moduleSourceAdapter{
 			mgr:    attMgr,
 			reader: &sessionProjectReader{mgr: c.SessionManager()},
 		}
-		registerReadContextFileTool(builtinRegistry, contextsLib, modSrc)
+		registerReadContextFileTool(builtinRegistry, contextsLib, modSrc, sharedCtx)
 	}
 	// bashAvail starts on the desktop source (Settings.BashEnabled); New()
 	// switches it to fleet Cedar policy when rpc.WithFleetGatedBash is set
@@ -6849,6 +6885,7 @@ func newLLMStack(
 		attResolver = &attachmentsResolverAdapter{
 			mgr:    attMgr,
 			reader: &sessionProjectReader{mgr: c.SessionManager()},
+			shared: sharedCtx,
 		}
 	}
 	// chatAttResolver is the same bridge, shaped for the chat package's
@@ -6861,6 +6898,7 @@ func newLLMStack(
 		chatAttResolver = &chatAttachmentsResolverAdapter{
 			mgr:    attMgr,
 			reader: &sessionProjectReader{mgr: c.SessionManager()},
+			shared: sharedCtx,
 		}
 	}
 	// Tool discovery wiring — the discoverer projects the same MCP
@@ -7440,6 +7478,7 @@ func newLLMStack(
 		secrets:             secretsBackend,
 		reg:                 reg,
 		builtins:            builtinRegistry,
+		sharedCtx:           sharedCtx,
 		bashAvail:           bashAvail,
 		builtinFilter:       builtinFilter,
 		fsGate:              fsGate,
@@ -9174,6 +9213,9 @@ func (p *thresholdPublisher) Publish(topic string, payload any) {
 type attachmentsResolverAdapter struct {
 	mgr    *coreatt.Manager
 	reader coreatt.SessionProjectReader
+	// shared supplies the framed always-load block of teammates' Fleet
+	// context, prepended as the base system layer. nil = none.
+	shared *sharedContextSource
 }
 
 func (a *attachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID string) ([]llm.ResolvedAttachment, error) {
@@ -9184,7 +9226,10 @@ func (a *attachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID
 	if err != nil {
 		return nil, err
 	}
-	out := make([]llm.ResolvedAttachment, 0, len(rows))
+	out := make([]llm.ResolvedAttachment, 0, len(rows)+1)
+	if block := sharedAlwaysBlock(ctx, a.shared, a.reader, sessionID); block != "" {
+		out = append(out, llm.ResolvedAttachment{Content: block, Kind: "system"})
+	}
 	for _, r := range rows {
 		out = append(out, llm.ResolvedAttachment{
 			Content: r.Content,
@@ -9203,6 +9248,8 @@ func (a *attachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID
 type chatAttachmentsResolverAdapter struct {
 	mgr    *coreatt.Manager
 	reader coreatt.SessionProjectReader
+	// shared: see attachmentsResolverAdapter.shared.
+	shared *sharedContextSource
 }
 
 func (a *chatAttachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID string) ([]chat.ResolvedAttachment, error) {
@@ -9213,7 +9260,10 @@ func (a *chatAttachmentsResolverAdapter) ListResolved(ctx context.Context, sessi
 	if err != nil {
 		return nil, err
 	}
-	out := make([]chat.ResolvedAttachment, 0, len(rows))
+	out := make([]chat.ResolvedAttachment, 0, len(rows)+1)
+	if block := sharedAlwaysBlock(ctx, a.shared, a.reader, sessionID); block != "" {
+		out = append(out, chat.ResolvedAttachment{Content: block, Kind: "system"})
+	}
 	for _, r := range rows {
 		out = append(out, chat.ResolvedAttachment{
 			Content: r.Content,
