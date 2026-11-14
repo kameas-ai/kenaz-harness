@@ -72,8 +72,8 @@ func sameDirOrBelow(p, dir string) bool {
 	if lexicalWithinOrEqual(p, dir) {
 		return true
 	}
-	rp := resolveExisting(p)
-	if lexicalWithinOrEqual(rp, resolveExisting(dir)) {
+	rp := resolvedOrSelf(p)
+	if lexicalWithinOrEqual(rp, resolvedOrSelf(dir)) {
 		return true
 	}
 	di, err := os.Stat(dir)
@@ -94,8 +94,11 @@ func inWorkspace(p, ws string) bool {
 	if p == "" || ws == "" {
 		return false
 	}
-	rp := resolveExisting(p)
-	if isWithinOrEqual(rp, resolveExisting(ws)) {
+	rp, ok := resolveExisting(p)
+	if !ok {
+		return false // unresolvable: never exempt
+	}
+	if isWithinOrEqual(rp, resolvedOrSelf(ws)) {
 		return true
 	}
 	wi, err := os.Stat(ws)
@@ -115,9 +118,13 @@ const maxSymlinkHops = 40
 // exist — the very case of a file about to be written — so a new file
 // behind a planted link (/tmp/pl -> <DataDir>/policy, then
 // write_file /tmp/pl/evil.cedar) used to be judged by its lexical
-// location. A dangling link is followed too: writing through one creates
-// its target. Falls back to the cleaned p when nothing resolves.
-func resolveExisting(p string) string {
+// location. A dangling link is followed too, so the path is judged by
+// the location the link names (open(2) with O_CREAT would create that
+// target; write_file's rename replaces the link instead, but the
+// classification must not depend on which writer runs). ok is false when
+// p cannot be resolved — a symlink loop, or more than maxSymlinkHops
+// links — and callers must then fail closed.
+func resolveExisting(p string) (resolved string, ok bool) {
 	p = filepath.Clean(p)
 	for hop := 0; hop < maxSymlinkHops; hop++ {
 		cur := p
@@ -128,19 +135,19 @@ func resolveExisting(p string) string {
 			}
 			parent := filepath.Dir(cur)
 			if parent == cur {
-				return p
+				return p, true // nothing on the path exists: nothing to resolve
 			}
 			tail = append([]string{filepath.Base(cur)}, tail...)
 			cur = parent
 		}
 		if r, err := filepath.EvalSymlinks(cur); err == nil {
-			return filepath.Join(append([]string{r}, tail...)...)
+			return filepath.Join(append([]string{r}, tail...)...), true
 		}
 		// cur exists but does not resolve: its parent does (Lstat walked
-		// through it), so cur is a dangling (or looping) link. Follow it.
+		// through it), so cur is a dangling or looping link. Follow it.
 		target, err := os.Readlink(cur)
 		if err != nil {
-			return filepath.Join(append([]string{cur}, tail...)...)
+			return filepath.Join(append([]string{cur}, tail...)...), false
 		}
 		if !filepath.IsAbs(target) {
 			base := filepath.Dir(cur)
@@ -151,7 +158,14 @@ func resolveExisting(p string) string {
 		}
 		p = filepath.Join(append([]string{target}, tail...)...)
 	}
-	return p
+	return p, false
+}
+
+// resolvedOrSelf is resolveExisting's path, ignoring ok — for the
+// comparisons whose fail-closed handling is done by the caller.
+func resolvedOrSelf(p string) string {
+	r, _ := resolveExisting(p)
+	return r
 }
 
 func sameFileAncestorOf(p string, di os.FileInfo) bool {
@@ -181,7 +195,13 @@ func sameDirStrictlyBelow(p, dir string) bool {
 // state dir (workspace = HOME, state = HOME/.kenaz/harness/prod) exempts
 // nothing — before this, a path in <DataDir>/policy was "in the
 // workspace" and lost every E2E-3 protection.
+//
+// A path that cannot be resolved (a symlink loop, too many hops) is
+// treated as state: where it lands is unknown, so fail closed.
 func insideState(canonical, root, ws string) bool {
+	if _, ok := resolveExisting(canonical); !ok {
+		return true
+	}
 	if !sameDirOrBelow(canonical, root) {
 		return false
 	}

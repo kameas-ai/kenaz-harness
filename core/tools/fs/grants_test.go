@@ -695,3 +695,32 @@ func TestGatePrivilege_LinkInFallbackWorkspaceIntoStateIsState(t *testing.T) {
 		t.Fatalf("ordinary workspace file: privilege = %+v, want none", pr)
 	}
 }
+
+// A path that cannot be resolved (a symlink loop) is classed as state:
+// where it lands is unknown, so it fails closed.
+func TestGatePrivilege_SymlinkLoopFailsClosed(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".kenaz", "harness", "prod")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	a, b := filepath.Join(work, "a"), filepath.Join(work, "b")
+	symlinkOrSkip(t, b, a)
+	symlinkOrSkip(t, a, b)
+	if _, ok := resolveExisting(filepath.Join(a, "x")); ok {
+		t.Fatal("resolveExisting reported a loop as resolved")
+	}
+	g := &Gate{opts: GateOptions{StateDirs: HarnessStateDirs(dataDir)}}
+	if p := g.privilege(filepath.Join(a, "x.cedar")); !p.inside {
+		t.Fatalf("loop: privilege = %+v, want inside (fail closed)", p)
+	}
+	if in, _, _ := StateRelation(filepath.Join(a, "x.cedar"), HarnessStateDirs(dataDir), ""); !in {
+		t.Fatal("loop: StateRelation inside=false, want true (fail closed)")
+	}
+	// The workspace exemption never applies to an unresolvable path.
+	if inWorkspace(filepath.Join(a, "x"), work) {
+		t.Fatal("loop inside the workspace was exempted")
+	}
+}
