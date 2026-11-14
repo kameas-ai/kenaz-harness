@@ -234,11 +234,13 @@ type FSPromptSurface struct {
 	// credential metadata, the Cedar policy directory (E2E-3). The modal
 	// renders it as a banner; the gate still prompts.
 	Privileged string `json:"privileged,omitempty"`
-	// ResolvedPath is where CanonicalPath really landed when the prompt
-	// was raised (symlinks of its existing prefix resolved). Not sent to
-	// clients; it only keys the allow-once cache, so an Allow once given
-	// on a symlinked path does not follow the link once it is retargeted.
-	ResolvedPath string `json:"-"`
+	// ResolvedPath is where the operation really acts when the prompt was
+	// raised (a read follows every link; a write resolves only the parent
+	// directory). Clients show it ("Points to: …") when it differs from
+	// CanonicalPath, so a prompt for /tmp/x does not hide that /tmp/x is
+	// a link to ~/.ssh/id_ed25519. It also keys the allow-once cache, so
+	// an Allow once does not follow a link that is later retargeted.
+	ResolvedPath string `json:"resolved_path,omitempty"`
 }
 
 // CredPromptSurface — cred:permission-pending payload.

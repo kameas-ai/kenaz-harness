@@ -83,6 +83,15 @@ watch(
 
 const privileged = computed(() => head.value?.surface?.fs?.privileged ?? '');
 
+// The path is a link (or sits under one): say where it really points, so
+// "write /tmp/x" cannot hide that /tmp/x is ~/.ssh/authorized_keys.
+const pointsTo = computed(() => {
+  const fs = head.value?.surface?.fs;
+  const resolved = fs?.resolved_path ?? '';
+  if (!resolved || resolved === fs?.canonical_path) return '';
+  return resolved;
+});
+
 const wireScope = computed(() => {
   if (grantScope.value !== 'directory') return 'exact';
   return head.value?.op === 'write' && alsoAllowReads.value ? 'directory_rw' : 'directory';
@@ -122,6 +131,15 @@ defineExpose({ queue, reconcile });
       data-testid="fs-recipe-dir-add-notice"
     >
       The model is requesting expanded filesystem access to this directory.
+    </p>
+
+    <!-- Link target: the path really acts somewhere else -->
+    <p
+      v-if="pointsTo"
+      class="mt-2 font-ui text-[12px] text-ink-muted break-all"
+      data-testid="fs-points-to"
+    >
+      Points to: <span class="font-mono text-ink">{{ pointsTo }}</span>
     </p>
 
     <!-- Harness-state warning (E2E-3) -->
