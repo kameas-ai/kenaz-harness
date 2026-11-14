@@ -2077,6 +2077,22 @@ export namespace contexts {
 	        this.rank = source["rank"];
 	    }
 	}
+	export class ContextShareStateView {
+	    node_id: string;
+	    layer: string;
+	    team_id?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContextShareStateView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.node_id = source["node_id"];
+	        this.layer = source["layer"];
+	        this.team_id = source["team_id"];
+	    }
+	}
 	export class ContextSyncStatusView {
 	    cursor: string;
 	    // Go type: time

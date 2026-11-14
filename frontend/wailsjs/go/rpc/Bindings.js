@@ -442,6 +442,10 @@ export function Contexts_ContextSearch(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Contexts_ContextSearch'](arg1, arg2, arg3);
 }
 
+export function Contexts_ContextShareStates(arg1) {
+  return window['go']['rpc']['Bindings']['Contexts_ContextShareStates'](arg1);
+}
+
 export function Contexts_ContextSyncStatus() {
   return window['go']['rpc']['Bindings']['Contexts_ContextSyncStatus']();
 }

@@ -4581,6 +4581,9 @@ func New(c *core.Core, opts ...Option) *API {
 			// copies of the user's own entries, review F3) and the team id
 			// a "team"-layer publish lands in.
 			impl.WithSelfIdentityFromDataDir(flDataDir)
+			// Where each entry was last shared, so a re-share starts on its
+			// current team, not the org root (spec 018 H-1 review).
+			impl.WithShareLedgerDir(flDataDir)
 
 			// FR-012: wire the library merger so each successful PullDelta
 			// applies team/org entries to the local context library. The

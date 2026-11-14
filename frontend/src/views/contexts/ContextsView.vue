@@ -83,6 +83,7 @@ import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.v
 import type {
   ContextNode,
   ContextSyncStatusView,
+  ContextShareStateView,
   ContextPublishResult,
   ContextPromoteResult,
   ContextSearchHitView,
@@ -96,7 +97,13 @@ import ContextHealthCard from '@/components/context/ContextHealthCard.vue';
 import FolderShareDialog from './FolderShareDialog.vue';
 import { contextEntryTitle, contextNodeID, type FolderBatchMode } from './folderBatch';
 import TeamPicker from '@/components/fleet/TeamPicker.vue';
-import { pickInitialTeam, useFleetTeams } from '@/lib/fleetTeams';
+import {
+  initialShareTeam,
+  pickableTeams,
+  readShareStates,
+  shareMoveWarning,
+  useFleetTeams,
+} from '@/lib/fleetTeams';
 
 const props = defineProps<{
   /**
@@ -165,13 +172,28 @@ const showPublishConfirm = ref(false);
 const publishLayer = ref<'team' | 'org'>('team');
 /**
  * The caller's teams as a tree and the one a "team" share goes to, by id
- * (kenaz-fleet spec 018 H-1). Loaded when the share dialog opens. The
- * dialog starts on the enrolled identity's team, which is where a team
- * share went before the picker existed.
+ * (kenaz-fleet spec 018 H-1). Loaded fresh each time the share dialog opens
+ * (this view is kept alive across account switches). Fleet overwrites an
+ * entry's team on re-share, so the dialog starts on the team the entry is
+ * shared with now (the local share record); a never-shared entry starts on
+ * the enrolled identity's team. Until both reads finish there is no picker
+ * and "Yes, share" is disabled.
  */
 const fleetTeams = useFleetTeams(client);
-const publishTeams = fleetTeams.teams;
+const publishTeams = computed(() => pickableTeams(fleetTeams.teams.value));
 const publishTeamId = ref('');
+const publishPrior = ref<ContextShareStateView | null>(null);
+const publishReady = ref(false);
+let publishOpenSeq = 0;
+/** Plain warning when the chosen audience moves the entry off its current team. */
+const publishMoveWarning = computed(() =>
+  publishReady.value
+    ? shareMoveWarning(fleetTeams.teams.value, publishPrior.value, {
+        layer: publishLayer.value,
+        teamId: publishTeamId.value,
+      })
+    : null,
+);
 /** Result of the most recent publish call (shown inline). */
 const publishResult = ref<ContextPublishResult | null>(null);
 /** Error string from the last publish call. */
@@ -333,13 +355,26 @@ function openPublishConfirm() {
   publishError.value = null;
   publishResult.value = null;
   publishLayer.value = 'team';
-  publishTeamId.value = pickInitialTeam(publishTeams.value, fleetSessionStore.identity.value?.teamId);
+  // Never show or send a previous account's teams: start empty each time.
+  fleetTeams.reset();
+  publishTeamId.value = '';
+  publishPrior.value = null;
+  publishReady.value = false;
   showPublishConfirm.value = true;
-  void fleetTeams.load().then(() => {
-    // Keep a choice the user already made if it is still one of their teams.
-    if (!publishTeams.value.some((t) => t.id === publishTeamId.value)) {
-      publishTeamId.value = pickInitialTeam(publishTeams.value, fleetSessionStore.identity.value?.teamId);
-    }
+  const seq = ++publishOpenSeq;
+  const nodeID = selectedNodeID.value;
+  const prior = readShareStates(client, [nodeID]).then(
+    (states) => states.find((st) => st.node_id === nodeID) ?? null,
+  );
+  void Promise.all([fleetTeams.load(), prior]).then(([, p]) => {
+    if (seq !== publishOpenSeq) return; // the dialog was reopened meanwhile
+    publishPrior.value = p;
+    publishTeamId.value = initialShareTeam(
+      publishTeams.value,
+      p?.layer === 'team' ? p.team_id : undefined,
+      fleetSessionStore.identity.value?.teamId,
+    );
+    publishReady.value = true;
   });
 }
 
@@ -355,13 +390,21 @@ function openPublishConfirm() {
  * the requested layer.
  */
 async function confirmPublish() {
+  // Not before the team list and the entry's share record are read: a click
+  // then could move a team-shared entry to the org root.
+  if (!publishReady.value) return;
   showPublishConfirm.value = false;
   if (!selectedPath.value || !previewContent.value) return;
   publishLoading.value = true;
   publishError.value = null;
   publishResult.value = null;
   try {
-    const teamID = publishLayer.value === 'team' ? publishTeamId.value : '';
+    // With no team list, a re-share stays on the entry's current team rather
+    // than falling back to the enrolled (root) team.
+    const prior = publishPrior.value;
+    const fallback = prior?.layer === 'team' ? prior.team_id ?? '' : '';
+    const teamID =
+      publishLayer.value === 'team' ? (publishTeams.value.length > 0 ? publishTeamId.value : fallback) : '';
     const result = await client.contexts.publish({
       node_id: selectedNodeID.value,
       layer: publishLayer.value,
@@ -926,7 +969,7 @@ onBeforeUnmount(() => {
             />
             <span>Share to team</span>
           </label>
-          <div v-if="publishLayer === 'team' && publishTeams.length > 0" class="pl-6">
+          <div v-if="publishReady && publishLayer === 'team' && publishTeams.length > 0" class="pl-6">
             <TeamPicker
               v-model="publishTeamId"
               :teams="publishTeams"
@@ -951,6 +994,14 @@ onBeforeUnmount(() => {
             Only an org admin or owner can publish org-wide.
           </p>
         </fieldset>
+        <p
+          v-if="publishMoveWarning"
+          class="font-ui text-[12px] text-signal-warning leading-relaxed mb-4"
+          role="alert"
+          data-testid="context-publish-move-warning"
+        >
+          {{ publishMoveWarning }}
+        </p>
         <div class="flex justify-end gap-3">
           <button
             type="button"
@@ -964,6 +1015,7 @@ onBeforeUnmount(() => {
             type="button"
             class="font-ui text-[12px] text-accent hover:text-accent-muted px-3 py-1.5 rounded-md bg-accent/10 hover:bg-accent/20"
             data-testid="context-publish-confirm-ok"
+            :disabled="!publishReady"
             @click="confirmPublish"
           >
             Yes, share

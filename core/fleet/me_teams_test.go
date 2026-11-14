@@ -302,3 +302,37 @@ func TestGetMeTeams_NopClient(t *testing.T) {
 		t.Fatalf("nop client err = %v", err)
 	}
 }
+
+func TestOrderTeamTree_OrphanAttachesToClosestListedAncestor(t *testing.T) {
+	// Engineering > Backend > Databases > Postgres. The caller is in
+	// Engineering and Postgres only: Postgres's parent (Databases) and
+	// grandparent (Backend) are not listed, so it attaches to Engineering,
+	// the closest listed ancestor on its path.
+	teams := []MeTeam{
+		{ID: "t-root", Name: "Everyone", IsDefault: true},
+		{ID: "t-pg", Name: "Postgres", ParentTeamID: strp("t-db"), Path: []string{"t-eng", "t-backend", "t-db"}},
+		{ID: "t-eng", Name: "Engineering"},
+		// No listed ancestor on the path at all: directly under the root.
+		{ID: "t-ops", Name: "Ops", ParentTeamID: strp("t-x"), Path: []string{"t-y", "t-x"}},
+		// A path naming the team itself or the root is ignored.
+		{ID: "t-odd", Name: "Odd", ParentTeamID: strp("t-z"), Path: []string{"t-root", "t-odd"}},
+	}
+	assertRows(t, OrderTeamTree(teams), []treeRow{
+		{"t-root", 0, ""},
+		{"t-eng", 1, "t-root"},
+		{"t-pg", 2, "t-eng"},
+		{"t-ops", 1, "t-root"},
+		{"t-odd", 1, "t-root"},
+	})
+}
+
+func TestOrderTeamTree_OnlyRootIsDefault(t *testing.T) {
+	teams := []MeTeam{
+		{ID: "t-root", Name: "Everyone", IsDefault: true},
+		{ID: "t-dup", Name: "Also default", IsDefault: true},
+	}
+	got := OrderTeamTree(teams)
+	if !got[0].IsDefault || got[1].IsDefault {
+		t.Fatalf("IsDefault = %v, %v; want only the root", got[0].IsDefault, got[1].IsDefault)
+	}
+}

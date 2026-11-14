@@ -34,6 +34,12 @@ const INDENT_PX = 14;
       <span class="team-tree__name">{{ team.name }}</span>
       <span v-if="team.is_default" class="team-tree__tag" data-testid="fleet-team-root">Org root</span>
       <span v-if="team.role === 'lead'" class="team-tree__tag" data-testid="fleet-team-lead">Lead</span>
+      <span
+        v-if="team.membership === 'inherited'"
+        class="team-tree__tag"
+        title="You can read this team's shared context through a team you are in. You can't share to it."
+        data-testid="fleet-team-inherited"
+      >Inherited</span>
     </li>
   </ul>
 </template>

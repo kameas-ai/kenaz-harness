@@ -791,6 +791,13 @@ func (b *Bindings) Contexts_ContextPublish(req contextsview.ContextPublishReques
 	return b.api.Contexts().Context_Publish(b.ctx(), req)
 }
 
+// Contexts_ContextShareStates returns where this device last shared each of
+// the given local context node ids (kenaz-fleet spec 018 H-1).
+func (b *Bindings) Contexts_ContextShareStates(nodeIDs []string) ([]contextsview.ContextShareStateView, error) {
+	defer sentry.WrapBinding("Contexts_ContextShareStates")()
+	return b.api.Contexts().Context_ShareStates(b.ctx(), nodeIDs)
+}
+
 // Contexts_ContextPromote elevates a team_shared context entry to org_shared
 // on the fleet server. Requires CapSharedTeamGraph.
 // (fleet-context-graph-sync-01NDFSEX17 WP06)

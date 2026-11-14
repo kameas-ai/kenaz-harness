@@ -8,6 +8,12 @@ import TeamTreeList from '@/components/fleet/TeamTreeList.vue';
 import TeamPicker from '@/components/fleet/TeamPicker.vue';
 import {
   ORG_ROOT_PREFIX,
+  folderInitialTeam,
+  folderShareMoveWarning,
+  initialShareTeam,
+  pickableTeams,
+  readShareStates,
+  shareMoveWarning,
   pickInitialTeam,
   teamDepth,
   teamOptionLabel,
@@ -144,5 +150,52 @@ describe('fleetTeams helpers', () => {
     await pending;
     expect(h.teams.value).toEqual([]);
     expect(h.loaded.value).toBe(false);
+  });
+});
+
+describe('share target helpers (spec 018 H-1 review)', () => {
+  const team = (id: string) => ({ node_id: 'n', layer: 'team' as const, team_id: id });
+
+  it('pickableTeams drops inherited teams only', () => {
+    const withInherited = [...TREE, { id: 'inh', name: 'X', is_default: false, tree_depth: 1, membership: 'inherited' }];
+    expect(pickableTeams(withInherited).map((t) => t.id)).toEqual(TREE.map((t) => t.id));
+  });
+
+  it('initialShareTeam prefers the entry\'s current team, then the enrolled team', () => {
+    expect(initialShareTeam(TREE, 'plat-a', 'eng-id')).toBe('plat-a');
+    expect(initialShareTeam(TREE, 'gone', 'eng-id')).toBe('eng-id');
+    expect(initialShareTeam(TREE, undefined, undefined)).toBe('root-id');
+  });
+
+  it('folderInitialTeam uses the one common team, else the enrolled team', () => {
+    expect(folderInitialTeam(TREE, [team('plat-a'), team('plat-a')], 'eng-id')).toBe('plat-a');
+    expect(folderInitialTeam(TREE, [team('plat-a'), team('plat-b')], 'eng-id')).toBe('eng-id');
+    expect(folderInitialTeam(TREE, [], 'eng-id')).toBe('eng-id');
+  });
+
+  it('shareMoveWarning only fires when the entry would move', () => {
+    expect(shareMoveWarning(TREE, null, { layer: 'team', teamId: 'root-id' })).toBeNull();
+    expect(shareMoveWarning(TREE, team('plat-a'), { layer: 'team', teamId: 'plat-a' })).toBeNull();
+    expect(shareMoveWarning(TREE, { node_id: 'n', layer: 'org' }, { layer: 'team', teamId: 'eng-id' })).toBeNull();
+    expect(shareMoveWarning(TREE, team('gone'), { layer: 'team', teamId: 'root-id' })).toBe(
+      'This file is shared with a team. Sharing it with Everyone makes it visible to your whole organisation.',
+    );
+  });
+
+  it('folderShareMoveWarning counts the entries that move', () => {
+    expect(folderShareMoveWarning(TREE, [team('plat-a')], { layer: 'team', teamId: 'plat-a' })).toBeNull();
+    expect(folderShareMoveWarning(TREE, [team('plat-a'), team('db-id')], { layer: 'org', teamId: '' })).toBe(
+      '2 of these files are shared with a different team. Publishing org-wide makes them visible to your whole organisation.',
+    );
+    expect(folderShareMoveWarning(TREE, [team('plat-a')], { layer: 'team', teamId: 'eng-id' })).toBe(
+      '1 of these files is shared with a different team. Sharing with Engineering moves it there instead.',
+    );
+  });
+
+  it('readShareStates reads failures as no record', async () => {
+    const bad = { contexts: { shareStates: () => { throw new Error('x'); } } } as unknown as HarnessClient;
+    expect(await readShareStates(bad, ['a'])).toEqual([]);
+    const missing = { contexts: {} } as unknown as HarnessClient;
+    expect(await readShareStates(missing, ['a'])).toEqual([]);
   });
 });

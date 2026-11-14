@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import AccountPanel from '@/views/settings/AccountPanel.vue';
 import { createFakeHarnessClient, fakeFleetSession } from '@/lib/harnessClient';
-import { _resetFleetSessionForTest } from '@/lib/fleetSession';
+import { _resetFleetSessionForTest, applyFleetSession } from '@/lib/fleetSession';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { FleetIdentity, FleetProfileInfo, FleetSessionView } from '@/lib/types';
 
@@ -549,5 +549,36 @@ describe('AccountPanel team tree (spec 018 H-1)', () => {
     await flushPromises();
     expect(wrapper.find('[data-testid="fleet-team-tree"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="identity-team"]').text()).toBe('Engineering');
+  });
+});
+
+describe('AccountPanel team tree across accounts (spec 018 H-1 review)', () => {
+  beforeEach(() => _resetFleetSessionForTest());
+
+  it('drops the previous account\'s teams as soon as the account changes', async () => {
+    let call = 0;
+    const fleetTeams = vi.fn(() =>
+      ++call === 1
+        ? Promise.resolve([
+            { id: 'root-a', name: 'Everyone', is_default: true, tree_depth: 0 },
+            { id: 'team-a', name: 'Alpha', is_default: false, parent_team_id: 'root-a', tree_depth: 1, membership: 'inherited' },
+          ])
+        : new Promise<never>(() => {}),
+    );
+    const client = buildClient(session('signed_in'), { fleetTeams });
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="fleet-team-tree-row"]')).toHaveLength(2);
+    // An inherited team stays in the Account tree, labelled.
+    expect(wrapper.find('[data-team-id="team-a"] [data-testid="fleet-team-inherited"]').exists()).toBe(true);
+
+    applyFleetSession(
+      session('signed_in', prodProfile, { identity: { ...mockIdentity, userId: 'user-2', orgId: '43' } }),
+    );
+    await flushPromises();
+    expect(fleetTeams).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[data-testid="fleet-team-tree"]').exists()).toBe(false);
   });
 });

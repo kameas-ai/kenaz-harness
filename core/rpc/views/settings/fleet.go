@@ -2448,10 +2448,12 @@ func (a *API) FleetTeams(ctx context.Context) ([]FleetTeamView, error) {
 func fleetTeamsToView(entries []fleet.TeamTreeEntry) []FleetTeamView {
 	out := make([]FleetTeamView, 0, len(entries))
 	for _, e := range entries {
+		// Only the drawn root is the default team; a non-root entry that
+		// also claimed is_default is shown as an ordinary team.
 		out = append(out, FleetTeamView{
 			ID:           e.ID,
 			Name:         e.Name,
-			IsDefault:    e.IsDefault,
+			IsDefault:    e.IsDefault && e.TreeDepth == 0 && e.TreeParentID == "",
 			Role:         e.Role,
 			ParentTeamID: e.TreeParentID,
 			TreeDepth:    e.TreeDepth,

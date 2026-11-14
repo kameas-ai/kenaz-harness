@@ -900,6 +900,18 @@ export interface ContextPushConflict {
   client_version: number;
 }
 
+/**
+ * ContextShareStateView — where this device last shared a context entry
+ * (kenaz-fleet spec 018 H-1). Mirrors core/rpc/views/contexts.ContextShareStateView.
+ */
+export interface ContextShareStateView {
+  /** The LOCAL id, as published. */
+  node_id: string;
+  layer: 'team' | 'org';
+  /** The team a "team" share went to. */
+  team_id?: string;
+}
+
 export interface ContextPublishResult {
   accepted_nodes: number;
   accepted_edges: number;

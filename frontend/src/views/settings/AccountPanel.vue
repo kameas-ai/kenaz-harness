@@ -69,8 +69,9 @@ const teams = fleetTeams.teams;
 watch(
   () => [isSignedIn.value, identity.value?.userId ?? '', identity.value?.orgId ?? ''] as const,
   ([signedIn]) => {
+    // Never keep showing the previous account's teams while the new ones load.
+    fleetTeams.reset();
     if (signedIn) void fleetTeams.load();
-    else fleetTeams.reset();
   },
   { immediate: true },
 );

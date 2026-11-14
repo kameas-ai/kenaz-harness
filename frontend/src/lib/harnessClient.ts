@@ -524,6 +524,7 @@ interface WailsBindingsLike {
   Contexts_RootPath(): Promise<string>;
   Contexts_ContextPublish(req: ContextPublishRequest): Promise<ContextPublishResult>;
   Contexts_ContextPromote(nodeID: string): Promise<ContextPromoteResult>;
+  Contexts_ContextShareStates(nodeIDs: string[]): Promise<import('./types').ContextShareStateView[]>;
   Contexts_ContextSyncStatus(): Promise<ContextSyncStatusView>;
   // A-14 Tier 1: bound in bindings.go / Bindings.d.ts already; this
   // declaration was the missing type-safety site (controls-and-readouts
@@ -2233,6 +2234,12 @@ export interface ContextsClient {
   publish(req: ContextPublishRequest): Promise<ContextPublishResult>;
   /** Elevate a team_shared entry to org_shared on the fleet server. */
   promote(nodeID: string): Promise<ContextPromoteResult>;
+  /**
+   * Where this device last shared each of the given local node ids (layer,
+   * and team id for a team share), for the signed-in fleet user. Never-shared
+   * ids are omitted (kenaz-fleet spec 018 H-1).
+   */
+  shareStates(nodeIDs: string[]): Promise<import('./types').ContextShareStateView[]>;
   /** Return a snapshot of the fleet context-graph syncer state. */
   syncStatus(): Promise<ContextSyncStatusView>;
   /**
@@ -4421,7 +4428,7 @@ const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
   'Workflow_ListJobs', 'Trust_ListSecretReferences', 'Context_List', 'Contexts_RecentlyApplied',
   'Contexts_ContextSearch', 'Bundle_List', 'Trust_ListAnchors', 'CedarPolicy_ListPolicies',
   'CedarPolicy_RecentDecisions', 'Permissions_ListGrants', 'Permissions_ListPending', 'Audit_ListEntries',
-  'Audit_Filter', 'Audit_ListSavedQueries', 'Logs_Tail', 'Settings_FleetTelemetryOptIns', 'Settings_FleetTeams',
+  'Audit_Filter', 'Audit_ListSavedQueries', 'Logs_Tail', 'Settings_FleetTelemetryOptIns', 'Settings_FleetTeams', 'Contexts_ContextShareStates',
   'Memory_ListChunks', 'Memory_JournalTail', 'Memory_NarrativeFailedList', 'Memory_EmbeddingProbe',
   'Projects_List', 'Projects_ListSessions', 'Documents_List', 'Artifacts_List', 'Attachments_List',
   'Attachments_ListResolved', 'Hooks_List', 'Hooks_AvailableBuiltins', 'Tools_ListRecipes',
@@ -4751,6 +4758,7 @@ export function createHarnessClient(): HarnessClient {
       rootPath: () => b().Contexts_RootPath(),
       publish: (req: ContextPublishRequest) => b().Contexts_ContextPublish(req),
       promote: (nodeID: string) => b().Contexts_ContextPromote(nodeID),
+      shareStates: (nodeIDs: string[]) => b().Contexts_ContextShareStates(nodeIDs),
       syncStatus: () => b().Contexts_ContextSyncStatus(),
       search: (query, teamID, limit) =>
         b().Contexts_ContextSearch(query, teamID, limit),
@@ -6297,6 +6305,7 @@ export function createFakeHarnessClient(
         updated_node_id: _nodeID,
         new_classification: 'org_shared' as const,
       }),
+      shareStates: async (_nodeIDs: string[]): Promise<import('./types').ContextShareStateView[]> => [],
       syncStatus: async () => ({
         cursor: '',
         last_pull_at: undefined,

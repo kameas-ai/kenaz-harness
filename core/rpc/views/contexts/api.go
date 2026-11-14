@@ -87,6 +87,13 @@ type ContextsAPI interface {
 	// Requires CapSharedTeamGraph. Returns ErrCapabilityNotInTier when absent.
 	Context_Promote(ctx context.Context, nodeID string) (ContextPromoteResult, error)
 
+	// Context_ShareStates returns where this device last shared each of the
+	// given LOCAL node ids (layer, and team id for a team share), for the
+	// signed-in fleet user, so the share dialogs start on the entry's
+	// current team rather than the org root (kenaz-fleet spec 018 H-1).
+	// Never-shared ids are omitted. Empty, no error, when fleet is not wired.
+	Context_ShareStates(ctx context.Context, nodeIDs []string) ([]ContextShareStateView, error)
+
 	// Context_SyncStatus returns a snapshot of the context graph syncer state:
 	// cursor, last pull time, error strings, pull count, and team cap enabled.
 	// Always returns a non-error result; sync problems are surfaced in the struct.
@@ -160,6 +167,16 @@ type ContextPublishResult struct {
 	// or "org". The frontend uses this, not the request layer, when telling
 	// the user where the entry went.
 	EffectiveLayer string `json:"effective_layer"`
+}
+
+// ContextShareStateView is where an entry was last shared from this device.
+type ContextShareStateView struct {
+	// NodeID is the LOCAL id, as passed to Context_ShareStates.
+	NodeID string `json:"node_id"`
+	// Layer is "team" or "org".
+	Layer string `json:"layer"`
+	// TeamID is the team a "team" share went to.
+	TeamID string `json:"team_id,omitempty"`
 }
 
 // ContextPromoteResult is the response from Context_Promote.

@@ -46,7 +46,8 @@ func TestFleetTeams_TreeFromMe(t *testing.T) {
 			{"id":"t-root","name":"Everyone","is_default":true,"role":"member","parent_team_id":null,"depth":0,"path":[]},
 			{"id":"t-backend","name":"Backend","role":"member","parent_team_id":"t-eng","depth":2,"path":["t-eng"]},
 			{"id":"t-eng","name":"Engineering","role":"lead","parent_team_id":null,"depth":1,"path":[]},
-			{"id":"t-ops","name":"Ops","role":"member","parent_team_id":"t-elsewhere","depth":2,"path":["t-elsewhere"]}
+			{"id":"t-ops","name":"Ops","role":"member","parent_team_id":"t-elsewhere","depth":2,"path":["t-elsewhere"]},
+			{"id":"t-dup","name":"Dup","is_default":true,"role":"member","parent_team_id":null,"depth":1,"path":[]}
 		]}`))
 	}))
 	t.Cleanup(srv.Close)
@@ -74,6 +75,8 @@ func TestFleetTeams_TreeFromMe(t *testing.T) {
 		{ID: "t-backend", Name: "Backend", Role: "member", ParentTeamID: "t-eng", TreeDepth: 2},
 		// Parent not among the caller's teams: drawn directly under the root.
 		{ID: "t-ops", Name: "Ops", Role: "member", ParentTeamID: "t-root", TreeDepth: 1},
+		// A second is_default claimant is an ordinary team.
+		{ID: "t-dup", Name: "Dup", Role: "member", ParentTeamID: "t-root", TreeDepth: 1},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %+v, want %+v", got, want)
@@ -82,5 +85,17 @@ func TestFleetTeams_TreeFromMe(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("row %d = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// TestFleetTeamsToView_OnlyRootIsDefault: a non-root row never reaches the UI
+// marked as the org root, even if an entry upstream still claims it.
+func TestFleetTeamsToView_OnlyRootIsDefault(t *testing.T) {
+	got := fleetTeamsToView([]fleet.TeamTreeEntry{
+		{MeTeam: fleet.MeTeam{ID: "r", IsDefault: true}, TreeDepth: 0},
+		{MeTeam: fleet.MeTeam{ID: "d", IsDefault: true}, TreeParentID: "r", TreeDepth: 1},
+	})
+	if !got[0].IsDefault || got[1].IsDefault {
+		t.Fatalf("IsDefault = %v, %v; want only the root", got[0].IsDefault, got[1].IsDefault)
 	}
 }

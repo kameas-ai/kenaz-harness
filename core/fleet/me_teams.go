@@ -119,11 +119,13 @@ type TeamTreeEntry struct {
 //
 //   - The default team (is_default) is the root and comes first. If
 //     several entries claim it, the first wins and the rest are ordinary
-//     teams.
-//   - A team is drawn under its stored parent only when that parent is in
-//     the list (the caller need not be a member of their team's ancestors;
-//     such a team is drawn directly under the root). A parent naming the
-//     team itself or the root is treated as "directly under the root".
+//     teams (IsDefault cleared).
+//   - A team is drawn under its stored parent when that parent is in the
+//     list. The caller need not be a member of their team's ancestors: then
+//     `path` is walked from the nearest ancestor upward and the team is
+//     drawn under the closest listed one, else directly under the root. A
+//     parent naming the team itself or the root means "directly under the
+//     root".
 //   - Siblings keep served order.
 //   - Cycles cannot hang or drop anything: a parent cycle is cut at its
 //     member that comes first in served order, which is drawn as a
@@ -154,17 +156,27 @@ func OrderTeamTree(teams []MeTeam) []TeamTreeEntry {
 		}
 	}
 
-	// Resolved parent per team: in the list, not itself, not the root.
+	// Resolved parent per team: in the list, not itself, not the root. When
+	// the stored parent is not one of the caller's teams, walk `path` from
+	// the nearest ancestor upward and attach to the closest one that is.
+	listed := func(id, self string) bool { return id != "" && id != self && id != rootID && seen[id] }
 	parent := make(map[string]string, len(list))
 	for _, t := range list {
 		if t.ID == rootID || t.ParentTeamID == nil {
 			continue
 		}
-		p := *t.ParentTeamID
-		if p == "" || p == t.ID || p == rootID || !seen[p] {
+		if p := *t.ParentTeamID; p == rootID || p == t.ID {
+			continue
+		} else if listed(p, t.ID) {
+			parent[t.ID] = p
 			continue
 		}
-		parent[t.ID] = p
+		for i := len(t.Path) - 1; i >= 0; i-- {
+			if listed(t.Path[i], t.ID) {
+				parent[t.ID] = t.Path[i]
+				break
+			}
+		}
 	}
 
 	children := make(map[string][]string, len(list))
@@ -186,7 +198,10 @@ func OrderTeamTree(teams []MeTeam) []TeamTreeEntry {
 			return
 		}
 		placed[id] = true
-		out = append(out, TeamTreeEntry{MeTeam: byID[id], TreeParentID: treeParent, TreeDepth: depth})
+		t := byID[id]
+		// Only the root is the default team; a second claimant is ordinary.
+		t.IsDefault = id == rootID
+		out = append(out, TeamTreeEntry{MeTeam: t, TreeParentID: treeParent, TreeDepth: depth})
 		for _, c := range children[id] {
 			walk(c, id, depth+1)
 		}
