@@ -1723,6 +1723,7 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 		s.FleetDeviceNameHidden = cur.FleetDeviceNameHidden
 		s.FleetDeviceNameUseComputerName = cur.FleetDeviceNameUseComputerName
 		s.FleetDeviceNameCustom = cur.FleetDeviceNameCustom
+		s.FleetDeviceNameNeutral = cur.FleetDeviceNameNeutral
 		*cur = s
 		return nil
 	}); err != nil {

@@ -6462,6 +6462,7 @@ export function createFakeHarnessClient(
       getFleetDeviceName: async () => ({
         share: true,
         useComputerName: false,
+        useNeutralName: false,
         customName: '',
         computerName: '',
         defaultName: '',

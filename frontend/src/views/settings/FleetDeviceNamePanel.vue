@@ -8,22 +8,24 @@
  * Settings_Get/SetFleetDeviceName:
  *   - "Share this device's name with your organization" (default on). Off
  *     sends no name, and the name Fleet has is cleared.
- *   - Which name: a neutral "<OS> device <4 hex>" (default, relay parity
- *     with legal D58), this computer's own name, or a custom name.
+ *   - Which name: this computer's own name (the default), a neutral
+ *     "<OS> device <4 hex>", or a custom name. With no usable computer
+ *     name (empty, or generic like "localhost") the neutral name is sent.
  */
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { FleetDeviceNameSettings } from '@/lib/types';
+import { notifyFleetDeviceNameChanged } from '@/lib/fleetDeviceName';
 
 const client = useHarnessClient();
 
-type Mode = 'default' | 'computer' | 'custom';
+type Mode = 'computer' | 'neutral' | 'custom';
 
 const loaded = ref(false);
 const saving = ref(false);
 const errorMsg = ref('');
 const share = ref(true);
-const mode = ref<Mode>('default');
+const mode = ref<Mode>('computer');
 const customInput = ref('');
 const computerName = ref('');
 const defaultName = ref('');
@@ -33,7 +35,13 @@ const maxLength = ref(64);
 function apply(dn: FleetDeviceNameSettings) {
   share.value = dn.share;
   customInput.value = dn.customName;
-  mode.value = dn.customName ? 'custom' : dn.useComputerName ? 'computer' : 'default';
+  // No explicit choice = the default: the computer's name, or the neutral
+  // name when this computer has no usable one.
+  mode.value = dn.customName
+    ? 'custom'
+    : dn.useNeutralName || !dn.computerName
+      ? 'neutral'
+      : 'computer';
   computerName.value = dn.computerName;
   defaultName.value = dn.defaultName;
   effectiveName.value = dn.effectiveName;
@@ -49,7 +57,7 @@ onMounted(async () => {
   }
 });
 
-const defaultLabel = computed(() => defaultName.value || 'chosen when you sign in');
+const neutralLabel = computed(() => defaultName.value || 'chosen when you sign in');
 
 /** Truncate to max code points (Fleet counts runes, not UTF-16 units). */
 function capRunes(v: string, max: number): string {
@@ -69,7 +77,8 @@ function onCustomInput(e: Event) {
  *   - 'share': always saved — turning sharing off must never be swallowed.
  *   - 'mode': picking "A name I choose" with nothing typed yet is not a
  *     choice to save (the stored name stays until a name is typed).
- *   - 'custom': an emptied custom field falls back to the neutral name.
+ *   - 'custom': an emptied custom field falls back to the default (this
+ *     computer's name).
  */
 async function save(source: 'share' | 'mode' | 'custom') {
   const custom = capRunes(customInput.value.trim(), maxLength.value);
@@ -80,6 +89,7 @@ async function save(source: 'share' | 'mode' | 'custom') {
     await client.settings.setFleetDeviceName({
       share: share.value,
       useComputerName: mode.value === 'computer',
+      useNeutralName: mode.value === 'neutral',
       customName: mode.value === 'custom' ? custom : '',
       computerName: '',
       defaultName: '',
@@ -87,6 +97,7 @@ async function save(source: 'share' | 'mode' | 'custom') {
       maxLength: 0,
     });
     apply(await client.settings.getFleetDeviceName());
+    notifyFleetDeviceNameChanged();
   } catch (err) {
     errorMsg.value = String(err);
   } finally {
@@ -109,26 +120,20 @@ async function save(source: 'share' | 'mode' | 'custom') {
         <span>
           <span class="text-sm text-ink font-medium">Share this device's name with your organization</span>
           <span class="block text-xs text-ink-muted">
-            Your organization's Fleet admins see this name for this device, so they can tell your
-            devices apart. When this is off, no name is sent and the one Fleet has is removed.
+            <template v-if="computerName">
+              By default your organization's Fleet admins see this computer's name for this device, so
+              they can tell your devices apart. You can share a neutral name or one you choose instead.
+            </template>
+            <template v-else>
+              By default your organization's Fleet admins see a neutral name for this device, because
+              this computer's name isn't available. You can share a name you choose instead.
+            </template>
+            When this is off, no name is sent and the one Fleet has is removed.
           </span>
         </span>
       </label>
 
       <div v-if="share" class="space-y-2 pl-6" role="radiogroup" aria-label="Name to share">
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input
-            v-model="mode"
-            type="radio"
-            value="default"
-            data-testid="fleet-device-name-mode-default"
-            @change="save('mode')"
-          />
-          <span class="text-sm text-ink">
-            A neutral name
-            <span class="text-ink-muted" data-testid="fleet-device-name-default">({{ defaultLabel }})</span>
-          </span>
-        </label>
         <label class="flex items-center gap-2" :class="computerName ? 'cursor-pointer' : 'opacity-60'">
           <input
             v-model="mode"
@@ -139,9 +144,22 @@ async function save(source: 'share' | 'mode' | 'custom') {
             @change="save('mode')"
           />
           <span class="text-sm text-ink">
-            This computer's name
+            This computer's name<span v-if="computerName" class="text-ink-muted">, the default</span>
             <span v-if="computerName" class="text-ink-muted" data-testid="fleet-device-name-computer">({{ computerName }})</span>
             <span v-else class="text-ink-muted">(not available)</span>
+          </span>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input
+            v-model="mode"
+            type="radio"
+            value="neutral"
+            data-testid="fleet-device-name-mode-neutral"
+            @change="save('mode')"
+          />
+          <span class="text-sm text-ink">
+            A neutral name
+            <span class="text-ink-muted" data-testid="fleet-device-name-neutral">({{ neutralLabel }})</span>
           </span>
         </label>
         <label class="flex items-center gap-2 cursor-pointer">
@@ -165,7 +183,8 @@ async function save(source: 'share' | 'mode' | 'custom') {
           @change="save('custom')"
         />
         <p v-if="mode === 'custom'" class="ml-6 text-xs text-ink-muted">
-          Up to {{ maxLength }} characters. Leave it empty to use the neutral name.
+          Up to {{ maxLength }} characters. Leave it empty to use
+          {{ computerName ? "this computer's name" : "the neutral name, because this computer's name isn't available" }}.
         </p>
       </div>
 
@@ -173,7 +192,7 @@ async function save(source: 'share' | 'mode' | 'custom') {
         <template v-if="share && effectiveName">
           Shown to your organization as <span class="text-ink font-medium">{{ effectiveName }}</span>.
         </template>
-        <template v-else-if="share">A neutral name is shared once you sign in.</template>
+        <template v-else-if="share">A name is shared once you sign in.</template>
         <template v-else>No device name is shared.</template>
       </p>
     </fieldset>

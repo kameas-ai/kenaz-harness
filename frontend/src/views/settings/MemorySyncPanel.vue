@@ -3,8 +3,10 @@
  * MemorySyncPanel — Settings → Sync → "Learned memory across devices"
  * (memory-sync-01MEMSY01 WP08, Fleet contract H9).
  *
- * Opt-in, user-private sync of learned memory (global + long-term scopes)
- * between the user's own devices. The whole section is hidden unless the
+ * Opt-in sync of learned memory (global + long-term scopes) between the
+ * user's own devices. Synced notes are server-readable (encrypted in
+ * transit and at rest, not end-to-end); the disclosure says who can read
+ * them. The whole section is hidden unless the
  * memory_sync capability is present; it is off until the user accepts the
  * disclosure. Disabling keeps Fleet's copy unless the user also asks to
  * delete it, which needs the literal confirmation "forget-all".
@@ -267,7 +269,27 @@ async function confirmDisable() {
           Fleet and to your other signed-in devices, so they follow you.
         </p>
         <ul class="list-disc pl-5 space-y-0.5">
-          <li>Private to you: no admin, teammate or Kenaz staff view exists.</li>
+          <li data-testid="memory-sync-disclosure-view">
+            Only you can view your synced notes in Fleet today. Kameas staff have no view of note
+            content in the product.
+          </li>
+          <li data-testid="memory-sync-disclosure-storage">
+            They're stored on Kameas servers in a form Kameas can read. They're encrypted in transit
+            and at rest, but not end-to-end, and our systems read them to keep your devices in sync.
+          </li>
+          <li data-testid="memory-sync-disclosure-org">
+            Your organization's admins and team leads can't read them unless your organization turns
+            that on and you first acknowledge a notice. Only notes synced after that point would be
+            readable, and you'd be able to see who read them.
+          </li>
+          <li data-testid="memory-sync-disclosure-connector">
+            If your organization enables the Kameas connector and you opt in, apps you connect to it
+            can read and update these notes.
+          </li>
+          <li data-testid="memory-sync-disclosure-leave">
+            If you leave or are removed from your organization, your synced notes are deleted from
+            Fleet.
+          </li>
           <li>Session memory never leaves this device. Project memory does not sync yet.</li>
           <li>
             Memory text, titles, pins and file paths are sent; embeddings are not (each device

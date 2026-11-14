@@ -3,7 +3,9 @@
 // Learned-memory sync client (memory-sync-01MEMSY01 WP07; Fleet contract
 // docs/contract-harness-memory.md, live on fleet main since #183 / 0113).
 // A user's global + long_term memory follows them across their own
-// enrolled devices: opt-in, user-private, erasable.
+// enrolled devices: opt-in and erasable. Synced notes are server-readable
+// (encrypted in transit and at rest, not end-to-end); only the member can
+// view them in Fleet today.
 //
 // One cycle = pull (to exhaustion, bounded) → push (forgets first, then
 // dirty chunks, ≤100 items per request). Pull before push so a push's

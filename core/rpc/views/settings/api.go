@@ -989,10 +989,17 @@ type Settings struct {
 	// your organization" (default on = false here). When true the enroll
 	// body carries no device name (`hostname`), which also clears the name
 	// Fleet stored (the enroll upsert rewrites it). Fleet ER-43.
-	// FleetDeviceNameUseComputerName sends this computer's own name
-	// (macOS Computer Name, Windows COMPUTERNAME, Linux hostname) instead
-	// of the neutral "<OS> device <4 hex>" default (relay parity, legal
-	// D58). FleetDeviceNameCustom, when non-empty, overrides both.
+	// By default (no choice stored) the name is this computer's own name
+	// (macOS Computer Name, Windows COMPUTERNAME, else the short hostname),
+	// falling back to the neutral "<OS> device <4 hex>" label when that is
+	// empty or generic. FleetDeviceNameUseComputerName records an explicit
+	// choice of the computer's name (same result as the default; an older
+	// harness, whose default was neutral, still honours it).
+	// FleetDeviceNameNeutral records an explicit choice of the neutral
+	// label; false means the member never chose it, which is how "never
+	// chosen" (moves to the computer-name default) is told apart from
+	// "chose neutral" (kept). FleetDeviceNameCustom, when non-empty,
+	// overrides the others.
 	// Read on every enroll by API.fleetDeviceName (wired as the
 	// fleet.Client device-name source in SetFleetClient). Written only by
 	// SetFleetDeviceName: a whole-settings Set keeps the stored values.
@@ -1000,6 +1007,7 @@ type Settings struct {
 	FleetDeviceNameHidden          bool   `json:"fleetDeviceNameHidden,omitempty"`
 	FleetDeviceNameUseComputerName bool   `json:"fleetDeviceNameUseComputerName,omitempty"`
 	FleetDeviceNameCustom          string `json:"fleetDeviceNameCustom,omitempty"`
+	FleetDeviceNameNeutral         bool   `json:"fleetDeviceNameNeutral,omitempty"`
 
 	// gates:settings-struct-end — keep this marker the LAST line of the
 	// struct and add new fields ABOVE it. scripts/ci/gates_can_fail_test.go
@@ -1036,9 +1044,14 @@ type FleetDeviceNameSettings struct {
 	// Share is "Share this device's name with your organization" (default
 	// true). Off = no name is sent and Fleet's stored name is cleared.
 	Share bool `json:"share"`
-	// UseComputerName sends this computer's own name instead of the
-	// neutral default.
+	// UseComputerName is an explicit choice of this computer's own name.
+	// Neither this nor UseNeutralName set = the default, which is also the
+	// computer's name (the neutral label when it is unavailable).
 	UseComputerName bool `json:"useComputerName"`
+	// UseNeutralName is an explicit choice of the neutral
+	// "<OS> device <4 hex>" label instead of the computer's name. Ignored
+	// when UseComputerName is set.
+	UseNeutralName bool `json:"useNeutralName"`
 	// CustomName, when non-empty, is sent instead (sanitised, at most
 	// MaxLength characters).
 	CustomName string `json:"customName"`

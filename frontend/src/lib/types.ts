@@ -222,8 +222,14 @@ export interface ModelCallTelemetrySettings {
 export interface FleetDeviceNameSettings {
   /** "Share this device's name with your organization" — default true. */
   share: boolean;
-  /** Send this computer's own name instead of the neutral default. */
+  /**
+   * Explicit choice of this computer's own name. Neither this nor
+   * useNeutralName = the default, which is also the computer's name (the
+   * neutral name when it is unavailable).
+   */
   useComputerName: boolean;
+  /** Explicit choice of the neutral "<OS> device <4 hex>" name. */
+  useNeutralName: boolean;
   /** When non-empty, sent instead (sanitised, at most maxLength). */
   customName: string;
   /** Read-only: this computer's name as it would be sent. */

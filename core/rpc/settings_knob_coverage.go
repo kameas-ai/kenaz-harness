@@ -361,8 +361,14 @@ func init() {
 	knobcoverage.Register[settings.Settings](
 		"FleetDeviceNameUseComputerName",
 		"same source (API.fleetDeviceName → fleet.ResolveDeviceName): true "+
-			"sends this computer's name instead of the neutral "+
-			"\"<OS> device <4 hex>\" default in the enroll `hostname` "+
+			"is an explicit choice of this computer's name (also the default) "+
+			"and overrides FleetDeviceNameNeutral in the enroll `hostname` "+
+			"(TestFleetDeviceName_SettingReachesEnrollBody).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"FleetDeviceNameNeutral",
+		"same source: true sends the neutral \"<OS> device <4 hex>\" label "+
+			"instead of the computer-name default in the enroll `hostname` "+
 			"(TestFleetDeviceName_SettingReachesEnrollBody).",
 	)
 	knobcoverage.Register[settings.Settings](

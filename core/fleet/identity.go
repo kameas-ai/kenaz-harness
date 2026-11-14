@@ -121,10 +121,12 @@ var ErrEnrollTokenChanged = errors.New("fleet: tokens changed during enroll; try
 //
 // Hostname is NOT the OS hostname: it is the member-controlled device
 // display name Fleet shows admins as "Device name" (device_name.go; Fleet
-// ER-43, relay parity with legal D58). By default a neutral
-// "<OS> device <4 hex>"; the computer's own name only when the member
-// chooses it; omitted when the member turns sharing off, which clears it
-// on Fleet (the enroll upsert rewrites the column).
+// ER-43). By default the computer's name is shared (macOS Computer Name,
+// Windows COMPUTERNAME, else the short hostname), or a neutral
+// "<OS> device <4 hex>" when that is empty or generic; the member can
+// choose the neutral label or a custom name instead; omitted when the
+// member turns sharing off, which clears it on Fleet (the enroll upsert
+// rewrites the column).
 type enrollRequest struct {
 	NodeID           string `json:"node_id"`
 	Platform         string `json:"platform"`

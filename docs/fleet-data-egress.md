@@ -97,10 +97,13 @@ only, `in_vm` / `vm_id` / `host_node_id`.
 **Device name (`hostname` field):** a display name your org admins see as
 "Device name" on Fleet's Hosts page. Controlled in Settings → Account →
 Device name ("Share this device's name with your organization", default
-on). By default it is a neutral `"<OS> device <4 hex>"` label derived from
-the node id; the computer's own name (macOS Computer Name, Windows
-`COMPUTERNAME`, Linux hostname) is sent only when you choose it, and a
-custom name overrides both. Sanitised (no control or invisible
+on). By default the computer's name is shared (macOS Computer Name,
+Windows `COMPUTERNAME`, otherwise the short hostname). When that name is
+empty, unreadable or generic (for example `localhost` inside a Workbench
+VM), a neutral `"<OS> device <4 hex>"` label derived from the node id is
+sent instead. You can choose the neutral label or a custom name instead of
+the computer's name. The served / in-VM harness, which has no settings
+panel, uses the same default. Sanitised (no control or invisible
 characters) and capped at 64 characters. Turning sharing off omits the
 field, which clears the stored name on the next enroll.
 
