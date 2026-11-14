@@ -33,6 +33,21 @@ func reauthRefusedPath(dataDir string) string {
 	return filepath.Join(dataDir, "fleet", reauthRefusedFileName)
 }
 
+// ReauthRefusedPath is the persisted refusal file (removed on sign-out).
+func ReauthRefusedPath(dataDir string) string { return reauthRefusedPath(dataDir) }
+
+// ContextSharesPath is the contexts view's share ledger file (where this
+// device last shared each Curated entry); here so sign-out can remove it.
+func ContextSharesPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "context_shares.json")
+}
+
+// AccountScopedFiles are the per-account local records sign-out removes:
+// the share ledger, the pulled location index and the step-up refusal.
+func AccountScopedFiles(dataDir string) []string {
+	return []string{ContextSharesPath(dataDir), PulledLocationsPath(dataDir), ReauthRefusedPath(dataDir)}
+}
+
 func readReauthRefusal(dataDir string) (persistedReauthRefusal, bool) {
 	b, err := os.ReadFile(reauthRefusedPath(dataDir))
 	if err != nil {

@@ -110,6 +110,19 @@ func TestShareLedger_ConflictAndRejectionRecordNothing(t *testing.T) {
 		t.Fatalf("conflicted publish recorded %+v", got)
 	}
 
+	// Accepted count >= 1 (another node in the batch went through) but
+	// THIS node conflicted: still no record.
+	push.set(http.StatusOK, func(id string) map[string]any {
+		return map[string]any{"accepted_nodes": 1, "accepted_edges": 0,
+			"conflicts": []any{map[string]any{"node_id": id, "server_version": 3, "client_version": 1}}}
+	})
+	if _, err := api.Context_Publish(ctx, publishReq("notes/conflict-accepted.md", "team", "team-backend")); err != nil {
+		t.Fatalf("conflicted (accepted>0) publish: %v", err)
+	}
+	if got := shareStates(t, api, "notes/conflict-accepted.md"); len(got) != 0 {
+		t.Fatalf("a conflicted node with accepted_nodes>0 was recorded: %+v", got)
+	}
+
 	// Per-item rejection of the node itself.
 	push.set(http.StatusOK, func(id string) map[string]any {
 		return map[string]any{"accepted_nodes": 0, "accepted_edges": 0, "conflicts": []any{},
@@ -198,5 +211,29 @@ func TestShareLedger_CorruptFileMovedAside(t *testing.T) {
 	}
 	if got := shareStates(t, api, "notes/a.md"); len(got) != 1 || got[0].TeamID != "team-backend" {
 		t.Fatalf("new ledger = %+v", got)
+	}
+}
+
+// Sign-out removes the ledger file; the in-process ledger then forgets too
+// (it reloads when the file changes), and a later share does not write the
+// old records back.
+func TestShareLedger_RemovedFileIsForgotten(t *testing.T) {
+	user := "user-a"
+	api, _, dataDir := ledgerRig(t, &user)
+	ctx := context.Background()
+	if _, err := api.Context_Publish(ctx, publishReq("notes/a.md", "team", "team-backend")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dataDir, "fleet", "context_shares.json")); err != nil {
+		t.Fatal(err)
+	}
+	if got := shareStates(t, api, "notes/a.md"); len(got) != 0 {
+		t.Fatalf("after removal = %+v", got)
+	}
+	if _, err := api.Context_Publish(ctx, publishReq("notes/b.md", "team", "team-backend")); err != nil {
+		t.Fatal(err)
+	}
+	if got := shareStates(t, api, "notes/a.md", "notes/b.md"); len(got) != 1 || got[0].NodeID != "notes/b.md" {
+		t.Fatalf("after a new share = %+v, want only b", got)
 	}
 }

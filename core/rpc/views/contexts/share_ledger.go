@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	fleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
@@ -47,6 +48,9 @@ type shareLedger struct {
 	path   string
 	loaded bool
 	recs   map[string]shareRecord
+	// stamp is the file's size and mtime when recs was read; a different
+	// stamp (rewritten, or removed on sign-out) reloads.
+	stamp string
 }
 
 func newShareLedger(path string) *shareLedger {
@@ -55,22 +59,36 @@ func newShareLedger(path string) *shareLedger {
 
 // shareLedgerPath is the ledger file under a profile data dir.
 func shareLedgerPath(dataDir string) string {
-	return filepath.Join(dataDir, "fleet", "context_shares.json")
+	return fleet.ContextSharesPath(dataDir)
 }
 
-// loadLocked reads the file once. A missing file is an empty ledger. A
+func fileStamp(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d", fi.Size(), fi.ModTime().UnixNano())
+}
+
+// loadLocked reads the file, again whenever it changed on disk (so a
+// sign-out that removes it really forgets it). A missing file is an empty
+// ledger. A
 // malformed one is treated as empty and moved aside to
 // <file>.corrupt-<unix-nanos> so the next share does not overwrite what
 // may still be recoverable by hand.
 func (l *shareLedger) loadLocked() {
-	if l.loaded {
-		return
-	}
-	l.loaded = true
-	l.recs = map[string]shareRecord{}
 	if l.path == "" {
+		if !l.loaded {
+			l.loaded, l.recs = true, map[string]shareRecord{}
+		}
 		return
 	}
+	stamp := fileStamp(l.path)
+	if l.loaded && stamp == l.stamp {
+		return
+	}
+	l.loaded, l.stamp = true, stamp
+	l.recs = map[string]shareRecord{}
 	raw, err := os.ReadFile(l.path)
 	if err != nil {
 		return
@@ -82,6 +100,7 @@ func (l *shareLedger) loadLocked() {
 			logging.L().Warn("contexts.share_ledger.corrupt_move_failed", "err", rerr.Error())
 		} else {
 			logging.L().Warn("contexts.share_ledger.corrupt_moved_aside", "file", filepath.Base(aside))
+			l.stamp = ""
 		}
 		return
 	}
@@ -132,5 +151,6 @@ func (l *shareLedger) put(wireID string, r shareRecord) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("contexts: share ledger persist: %w", err)
 	}
+	l.stamp = fileStamp(l.path)
 	return nil
 }
