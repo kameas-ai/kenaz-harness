@@ -24,6 +24,13 @@ func TestPulledSharedSource_NeverAttached(t *testing.T) {
 		"library:/team/_fleet/x",
 		"module:team/_fleet",
 		"module:org/_fleet/sub",
+		// Non-canonical spellings of the same path (normalised first).
+		"library:team/./_fleet/x",
+		"library:team//_fleet/x",
+		"library:./team/_fleet/x",
+		"library:team/../team/_fleet/x",
+		"library:team\\_fleet\\x",
+		"module:org//_fleet",
 	} {
 		if !attachments.IsPulledSharedSource(src) {
 			t.Errorf("IsPulledSharedSource(%q) = false", src)
@@ -33,7 +40,8 @@ func TestPulledSharedSource_NeverAttached(t *testing.T) {
 			t.Errorf("Add(%q) err = %v, want ErrSharedEntryNotAttachable", src, err)
 		}
 	}
-	for _, src := range []string{"library:team/notes.md", "library:personal/_fleet/x", "library:teams/_fleet/x", "inline:abc", "module:team"} {
+	for _, src := range []string{"library:team/notes.md", "library:personal/_fleet/x", "library:teams/_fleet/x", "inline:abc", "module:team",
+		"library:team/_fleetx/a", "library:team/_fleet/../notes.md"} {
 		if attachments.IsPulledSharedSource(src) {
 			t.Errorf("IsPulledSharedSource(%q) = true", src)
 		}

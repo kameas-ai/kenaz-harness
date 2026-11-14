@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -328,10 +329,18 @@ var ErrPulledEntryReadOnly = errors.New("contexts: shared team/org entries are r
 // pulled entry: it would republish their text as the member's own node.
 var ErrPulledEntryNotShareable = errors.New("contexts: an entry shared by a teammate cannot be re-shared or promoted")
 
-// isPulledPath reports whether path is (or is under) a pulled team/org
-// entry path, "<team|org>/_fleet".
-func isPulledPath(path string) bool {
-	parts := strings.SplitN(strings.TrimLeft(path, "/"), "/", 3)
+// normPulledCheckPath normalises a library path for the pulled-entry
+// checks: backslashes become slashes, then path.Clean, then no leading
+// slash — so "team/./_fleet/x", "team//_fleet/x" and "team\\_fleet\\x"
+// cannot slip past a raw string compare.
+func normPulledCheckPath(p string) string {
+	return strings.TrimLeft(path.Clean(strings.ReplaceAll(p, "\\", "/")), "/")
+}
+
+// isPulledPath reports whether p is (or is under) a pulled team/org
+// entry path, "<team|org>/_fleet", after normalisation.
+func isPulledPath(p string) bool {
+	parts := strings.SplitN(normPulledCheckPath(p), "/", 3)
 	return len(parts) >= 2 && (parts[0] == string(contextpack.LayerTeam) || parts[0] == string(contextpack.LayerOrg)) && parts[1] == "_fleet"
 }
 
@@ -362,8 +371,8 @@ var ErrPulledEntryNotFound = errors.New("contexts: shared entry is no longer ava
 
 // pulledEntryPath parses the synthetic path mergePulledEntries gives a
 // pulled entry, "<team|org>/_fleet/<id>", into its layer and id.
-func pulledEntryPath(path string) (contextpack.Layer, string, bool) {
-	parts := strings.Split(path, "/")
+func pulledEntryPath(p string) (contextpack.Layer, string, bool) {
+	parts := strings.Split(normPulledCheckPath(p), "/")
 	if len(parts) != 3 || parts[1] != "_fleet" || parts[2] == "" {
 		return "", "", false
 	}

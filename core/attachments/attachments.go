@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -522,7 +523,9 @@ func IsPulledSharedSource(src string) bool {
 	default:
 		return false
 	}
-	p = strings.TrimLeft(strings.ReplaceAll(p, "\\", "/"), "/")
+	// Normalise before comparing: backslashes to slashes, then path.Clean
+	// (so "team/./_fleet/x" and "team//_fleet/x" are caught too).
+	p = strings.TrimLeft(path.Clean(strings.ReplaceAll(p, "\\", "/")), "/")
 	parts := strings.SplitN(p, "/", 3)
 	return len(parts) >= 2 && (parts[0] == "team" || parts[0] == "org") && parts[1] == "_fleet"
 }
