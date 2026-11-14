@@ -54,13 +54,32 @@ const stepUpClockSkew = time.Minute
 const KeyRegReauthRequired = "reauth_required"
 
 // keyRegReauthCopy is the user-facing copy for KeyRegReauthRequired (shown
-// verbatim by Settings → Account and the shared-sessions inbox).
-const keyRegReauthCopy = "Sign in again to update this device's keys. Until you do, sessions shared with this device may not open here. Go to Settings → Account and choose \"Sign in again\"."
+// verbatim by Settings → Account, which has the button; the shared-sessions
+// inbox adds its own pointer to Settings → Account).
+const keyRegReauthCopy = "Sign in again to update this device's keys. Until you do, sessions shared with this device may not open here."
+
+// KeyRegReauthRefused: a fresh sign-in WAS presented and Fleet still refused
+// the replacement (or the identity provider ignored the request for a fresh
+// sign-in). Signing in again will not help on its own: Fleet requires an amr
+// claim that Zitadel does not emit for SSO-only (external IdP) sessions until
+// a Fleet setting is turned on. Distinct from reauth_required so the UI says
+// "contact your administrator" instead of offering a retry that will fail,
+// and sticky: a later tokenless enroll (app start, identity refresh) does NOT
+// downgrade it. Cleared by a successful registration or a different account.
+const KeyRegReauthRefused = "reauth_refused"
+
+// keyRegRefusedCopy is the user-facing copy for KeyRegReauthRefused.
+const keyRegRefusedCopy = "Your organization's sign-in can't confirm this change yet. Contact your administrator."
 
 // ErrKeysReauthRequired: Fleet refused to replace an active device key
 // without a fresh sign-in. The previous key stays active; the state is
 // recorded in KeyRegistration (status reauth_required).
 var ErrKeysReauthRequired = errors.New("fleet: sign in again to update this device's keys")
+
+// ErrStepUpRefused: a fresh sign-in was presented but cannot confirm the key
+// change (Fleet refused it, or its auth_time is already too old). Wraps
+// ErrKeysReauthRequired. Records status reauth_refused.
+var ErrStepUpRefused = fmt.Errorf("%w: your organization's sign-in can't confirm this change yet", ErrKeysReauthRequired)
 
 // ErrStepUpNoIDToken: the re-authentication returned no ID token (the
 // openid scope missing, or the IdP declined to issue one).
@@ -178,9 +197,11 @@ func (h *stepUpHolder) clear() {
 //
 // The token's sub must match the signed-in access token's sub, else
 // ErrStepUpWrongAccount (Fleet would refuse it anyway; this gives the user a
-// clear reason). The token is held for Fleet's freshness window from its
-// auth_time (or from now when auth_time is absent or the local clock
-// disagrees — Fleet's clock decides), capped by its exp.
+// clear reason). A token whose auth_time is missing or already older than
+// Fleet's freshness window (an IdP that ignored prompt=login / max_age=0) is
+// refused locally — it is bound to fail — with ErrStepUpRefused and status
+// reauth_refused. Otherwise it is held until auth_time + the window, capped
+// by its exp.
 func (c *Client) HoldStepUpToken(idToken string) error {
 	if c == nil || c.isNop {
 		return ErrFleetDisabled
@@ -193,12 +214,15 @@ func (c *Client) HoldStepUpToken(idToken string) error {
 		return ErrStepUpWrongAccount
 	}
 	now := c.stepUp.clock()
-	expires := now.Add(stepUpWindow)
-	if claims.AuthTime > 0 {
-		at := time.Unix(claims.AuthTime, 0)
-		if !at.After(now.Add(stepUpClockSkew)) && now.Sub(at) <= stepUpWindow {
-			expires = at.Add(stepUpWindow)
-		}
+	at := time.Unix(claims.AuthTime, 0)
+	if claims.AuthTime <= 0 || now.Sub(at) > stepUpWindow {
+		c.setReauthRefused()
+		return ErrStepUpRefused
+	}
+	expires := at.Add(stepUpWindow)
+	if at.After(now) {
+		// Local clock behind the IdP's: Fleet's clock decides.
+		expires = now.Add(stepUpWindow)
 	}
 	if claims.Exp > 0 {
 		if exp := time.Unix(claims.Exp, 0); exp.Before(expires) {
@@ -255,15 +279,44 @@ func isReauthRequired(status int, body []byte) bool {
 	return ok && env.Code == "reauth_required"
 }
 
-// setReauthRequired records the recoverable reauth_required state.
-func (c *Client) setReauthRequired() {
+// setReauthRequired records Fleet's refusal to replace a key. sentProof
+// says whether a step-up token was sent with the refused call: then the
+// fresh sign-in itself was refused (reauth_refused). Without one, it is the
+// recoverable reauth_required — unless this same account was already
+// refused after a fresh sign-in, which a tokenless call must not downgrade.
+func (c *Client) setReauthRequired(sentProof bool) {
+	if sentProof {
+		c.setReauthRefused()
+		return
+	}
+	c.keyReg.mu.Lock()
+	sticky := c.keyReg.last.Status == KeyRegReauthRefused &&
+		c.keyReg.refusedFor != "" && c.keyReg.refusedFor == currentSubject()
+	c.keyReg.mu.Unlock()
+	if sticky {
+		return
+	}
 	c.keyReg.set(KeyRegistration{Status: KeyRegReauthRequired, Message: keyRegReauthCopy})
 }
 
-// errReauth wraps ErrKeysReauthRequired with how it arose.
+// setReauthRefused records reauth_refused for the signed-in account.
+func (c *Client) setReauthRefused() {
+	sub := currentSubject()
+	c.keyReg.mu.Lock()
+	defer c.keyReg.mu.Unlock()
+	c.keyReg.last = KeyRegistration{Status: KeyRegReauthRefused, Message: keyRegRefusedCopy, At: time.Now().UTC()}
+	c.keyReg.refusedFor = sub
+}
+
+// currentSubject is the signed-in access token's sub ("" when unknown).
+func currentSubject() string {
+	return ReadTokenState().Claims.Subject
+}
+
+// errReauth is the error for a refused key replacement.
 func errReauth(sentProof bool) error {
 	if sentProof {
-		return fmt.Errorf("%w: fleet did not accept the new sign-in", ErrKeysReauthRequired)
+		return ErrStepUpRefused
 	}
 	return ErrKeysReauthRequired
 }

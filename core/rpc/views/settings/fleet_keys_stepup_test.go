@@ -118,6 +118,16 @@ type keysStepUpRig struct {
 	dataDir string
 	broker  *fakeSessionBroker
 	nodeID  string
+
+	tokMu sync.Mutex
+	tok   string
+}
+
+// signInAs switches the access token's account (the external token source).
+func (r *keysStepUpRig) signInAs(sub string) {
+	r.tokMu.Lock()
+	r.tok = jwtFor(sub, "zitadel-org-1")
+	r.tokMu.Unlock()
 }
 
 func newKeysStepUpRig(t *testing.T) *keysStepUpRig {
@@ -127,8 +137,8 @@ func newKeysStepUpRig(t *testing.T) *keysStepUpRig {
 	}
 	t.Setenv("KENAZ_HARNESS_ENV", "local") // a configured profile
 	r := &keysStepUpRig{fleet: newKeysStepUpFleet(t), dataDir: t.TempDir(), broker: &fakeSessionBroker{}}
-	tok := jwtFor("user-1", "zitadel-org-1")
-	fleet.SetExternalTokenSource(func() string { return tok })
+	r.signInAs("user-1")
+	fleet.SetExternalTokenSource(func() string { r.tokMu.Lock(); defer r.tokMu.Unlock(); return r.tok })
 	t.Cleanup(func() { fleet.SetExternalTokenSource(nil) })
 	if err := fleet.StoreContextSeed(make([]byte, 32)); err != nil {
 		t.Fatal(err)
@@ -215,8 +225,8 @@ func TestFleetDeviceKeysReauth_StillRefused_NoLoop(t *testing.T) {
 		return idTokenFor("user-1", time.Now()), nil
 	})
 	err := r.api.FleetDeviceKeysReauth(context.Background())
-	if !errors.Is(err, fleet.ErrKeysReauthRequired) {
-		t.Fatalf("err = %v, want ErrKeysReauthRequired", err)
+	if !errors.Is(err, fleet.ErrStepUpRefused) {
+		t.Fatalf("err = %v, want ErrStepUpRefused", err)
 	}
 	if n := flows.Load(); n != 1 {
 		t.Fatalf("browser flows = %d, want exactly 1", n)
@@ -224,8 +234,71 @@ func TestFleetDeviceKeysReauth_StillRefused_NoLoop(t *testing.T) {
 	if n := len(r.fleet.puts()); n != 2 {
 		t.Fatalf("PUTs = %d, want 2 (refused + one retry)", n)
 	}
+	dk := snap(t, r.api).DeviceKeys
+	if dk == nil || dk.Status != fleet.KeyRegReauthRefused || dk.Message != "Your organization's sign-in can't confirm this change yet. Contact your administrator." {
+		t.Fatalf("deviceKeys = %+v, want reauth_refused with the admin copy", dk)
+	}
+
+	// Survives a following tokenless enroll (app start / identity refresh).
+	if _, err := r.api.FleetRefreshIdentity(context.Background()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if dk := snap(t, r.api).DeviceKeys; dk == nil || dk.Status != fleet.KeyRegReauthRefused {
+		t.Fatalf("a tokenless enroll downgraded the refused state: %+v", dk)
+	}
+
+	// Cleared on a successful registration (e.g. once Fleet's setting is on).
+	tok := idTokenFor("user-1", time.Now())
+	r.fleet.setAccept(tok)
+	r.setFlow(func(context.Context, fleet.EnvProfile) (string, error) { return tok, nil })
+	if err := r.api.FleetDeviceKeysReauth(context.Background()); err != nil {
+		t.Fatalf("retry after the fix: %v", err)
+	}
+	if dk := snap(t, r.api).DeviceKeys; dk == nil || dk.Status != fleet.KeyRegRegistered {
+		t.Fatalf("deviceKeys = %+v, want registered", dk)
+	}
+}
+
+// reauth_refused belongs to the account that was refused: after signing in
+// as someone else it is gone, and that account starts from its own state.
+func TestFleetDeviceKeysReauth_Refused_ClearedOnAccountSwitch(t *testing.T) {
+	r := newKeysStepUpRig(t)
+	r.refuse(t)
+	r.fleet.setAccept("a-different-token")
+	r.setFlow(func(context.Context, fleet.EnvProfile) (string, error) {
+		return idTokenFor("user-1", time.Now()), nil
+	})
+	if err := r.api.FleetDeviceKeysReauth(context.Background()); !errors.Is(err, fleet.ErrStepUpRefused) {
+		t.Fatalf("err = %v", err)
+	}
+	r.signInAs("user-2")
+	if dk := snap(t, r.api).DeviceKeys; dk != nil {
+		t.Fatalf("another account's refusal leaked to the new account: %+v", dk)
+	}
+	if _, err := r.api.FleetRefreshIdentity(context.Background()); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
 	if dk := snap(t, r.api).DeviceKeys; dk == nil || dk.Status != fleet.KeyRegReauthRequired {
-		t.Fatalf("deviceKeys = %+v, want reauth_required still visible", dk)
+		t.Fatalf("new account deviceKeys = %+v, want its own reauth_required", dk)
+	}
+}
+
+// An IdP that ignored the fresh-sign-in request (old auth_time) is refused
+// locally with the admin copy; nothing is sent.
+func TestFleetDeviceKeysReauth_StaleSignIn_RefusedLocally(t *testing.T) {
+	r := newKeysStepUpRig(t)
+	r.refuse(t)
+	r.setFlow(func(context.Context, fleet.EnvProfile) (string, error) {
+		return idTokenFor("user-1", time.Now().Add(-30*time.Minute)), nil
+	})
+	if err := r.api.FleetDeviceKeysReauth(context.Background()); !errors.Is(err, fleet.ErrStepUpRefused) {
+		t.Fatalf("err = %v, want ErrStepUpRefused", err)
+	}
+	if n := len(r.fleet.puts()); n != 1 {
+		t.Fatalf("PUTs = %d, want only the original", n)
+	}
+	if dk := snap(t, r.api).DeviceKeys; dk == nil || dk.Status != fleet.KeyRegReauthRefused {
+		t.Fatalf("deviceKeys = %+v, want reauth_refused", dk)
 	}
 }
 

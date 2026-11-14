@@ -201,14 +201,113 @@ func TestRegisterDeviceKeys_RefusedToken_IsDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := c.RegisterDeviceKeys(t.Context(), "node-1")
-	if !errors.Is(err, ErrKeysReauthRequired) || !strings.Contains(err.Error(), "did not accept") {
-		t.Fatalf("err = %v", err)
+	if !errors.Is(err, ErrStepUpRefused) || !errors.Is(err, ErrKeysReauthRequired) {
+		t.Fatalf("err = %v, want ErrStepUpRefused (wrapping ErrKeysReauthRequired)", err)
 	}
 	if c.heldStepUpToken() != "" {
 		t.Fatal("a refused step-up token must be dropped")
 	}
-	if c.KeyRegistration().Status != KeyRegReauthRequired {
-		t.Fatalf("state = %+v", c.KeyRegistration())
+	kr := c.KeyRegistration()
+	if kr.Status != KeyRegReauthRefused || !strings.Contains(kr.Message, "Contact your administrator") {
+		t.Fatalf("state = %+v, want reauth_refused with the admin copy", kr)
+	}
+	// Sticky: a later tokenless refusal (app start, identity refresh)
+	// does not downgrade it to plain reauth_required.
+	if _, err := c.RefreshIdentity(t.Context(), "node-1", "darwin", "0.99.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RegisterDeviceKeys(t.Context(), "node-1"); !errors.Is(err, ErrKeysReauthRequired) {
+		t.Fatal(err)
+	}
+	if kr := c.KeyRegistration(); kr.Status != KeyRegReauthRefused {
+		t.Fatalf("tokenless calls downgraded the refused state: %+v", kr)
+	}
+	// Signed in as someone else: the refusal no longer applies.
+	stubTokens(t, TokenSet{AccessToken: stepUpJWT(t, map[string]any{"sub": "user-2"}), RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
+	if kr := c.KeyRegistration(); kr.Status != "" {
+		t.Fatalf("another account's refusal leaked: %+v", kr)
+	}
+	if err := c.RegisterDeviceKeys(t.Context(), "node-1"); !errors.Is(err, ErrKeysReauthRequired) || errors.Is(err, ErrStepUpRefused) {
+		t.Fatalf("err = %v", err)
+	}
+	if kr := c.KeyRegistration(); kr.Status != KeyRegReauthRequired {
+		t.Fatalf("new account state = %+v, want plain reauth_required", kr)
+	}
+}
+
+// An IdP that ignored prompt=login / max_age=0 returns an old auth_time:
+// refused locally (bound to fail), nothing sent, admin copy shown.
+func TestHoldStepUpToken_StaleAuthTime_RefusedLocally(t *testing.T) {
+	f := newStepUpFleet(t)
+	c := stepUpClient(t, f)
+	for name, tok := range map[string]string{
+		"stale":        stepUpIDToken(t, "user-1", time.Now().Add(-11*time.Minute)),
+		"no auth_time": stepUpJWT(t, map[string]any{"sub": "user-1", "exp": time.Now().Add(time.Hour).Unix()}),
+	} {
+		if err := c.HoldStepUpToken(tok); !errors.Is(err, ErrStepUpRefused) {
+			t.Fatalf("%s: err = %v, want ErrStepUpRefused", name, err)
+		}
+		if c.heldStepUpToken() != "" {
+			t.Fatalf("%s: token held", name)
+		}
+		if kr := c.KeyRegistration(); kr.Status != KeyRegReauthRefused {
+			t.Fatalf("%s: state = %+v", name, kr)
+		}
+	}
+	if n := len(f.snapshot()); n != 0 {
+		t.Fatalf("requests = %d, want none", n)
+	}
+	// A successful registration clears it.
+	tok := stepUpIDToken(t, "user-1", time.Now())
+	f.accept(tok)
+	if err := c.HoldStepUpToken(tok); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RegisterDeviceKeys(t.Context(), "node-1"); err != nil {
+		t.Fatal(err)
+	}
+	if kr := c.KeyRegistration(); kr.Status != KeyRegRegistered {
+		t.Fatalf("state after success = %+v", kr)
+	}
+}
+
+// The regular sign-in flow is unchanged: no max_age / prompt, and it keeps
+// offline_access (refresh tokens).
+func TestDeviceCodeFlow_AuthorizeURL_NoStepUpParams(t *testing.T) {
+	urls := make(chan string, 1)
+	prev := openBrowserFn
+	openBrowserFn = func(raw string) error { urls <- raw; return nil } // never a real browser
+	t.Cleanup(func() { openBrowserFn = prev })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := DeviceCodeFlow(ctx, EnvProfile{
+			Name: EnvLocal, ZitadelIssuer: "http://127.0.0.1:1", NativeClientID: "test",
+			FleetBaseURL: "http://127.0.0.1:1", OIDCScopes: DefaultOIDCScopes,
+		})
+		done <- err
+	}()
+	var raw string
+	select {
+	case raw = <-urls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("browser never opened")
+	}
+	cancel()
+	<-done
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	if _, ok := q["max_age"]; ok {
+		t.Fatal("sign-in must not send max_age")
+	}
+	if _, ok := q["prompt"]; ok {
+		t.Fatal("sign-in must not send prompt")
+	}
+	if !strings.Contains(" "+q.Get("scope")+" ", " offline_access ") {
+		t.Fatalf("sign-in must keep offline_access: scope=%q", q.Get("scope"))
 	}
 }
 

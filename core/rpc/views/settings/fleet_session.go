@@ -80,7 +80,8 @@ const fleetNodeRemovedCopy = "This device was removed from your organization by 
 type FleetDeviceKeysView struct {
 	// Status is registered | too_many_devices | invalid_key | unavailable |
 	// reauth_required (replacing the active key needs a fresh sign-in:
-	// FleetDeviceKeysReauth).
+	// FleetDeviceKeysReauth) | reauth_refused (a fresh sign-in was refused:
+	// contact the administrator).
 	Status string `json:"status"`
 	// Message is human copy for a non-registered status.
 	Message string `json:"message,omitempty"`

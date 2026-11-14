@@ -85,6 +85,9 @@ type KeyRegistration struct {
 type keyRegState struct {
 	mu   sync.Mutex
 	last KeyRegistration
+	// refusedFor is the account (access-token sub) a reauth_refused
+	// outcome belongs to; it means nothing for any other account.
+	refusedFor string
 }
 
 func (s *keyRegState) set(r KeyRegistration) {
@@ -92,6 +95,7 @@ func (s *keyRegState) set(r KeyRegistration) {
 	defer s.mu.Unlock()
 	r.At = time.Now().UTC()
 	s.last = r
+	s.refusedFor = ""
 }
 
 func (s *keyRegState) get() KeyRegistration {
@@ -106,7 +110,18 @@ func (c *Client) KeyRegistration() KeyRegistration {
 	if c == nil {
 		return KeyRegistration{}
 	}
-	return c.keyReg.get()
+	kr := c.keyReg.get()
+	if kr.Status == KeyRegReauthRefused {
+		c.keyReg.mu.Lock()
+		owner := c.keyReg.refusedFor
+		c.keyReg.mu.Unlock()
+		if cur := currentSubject(); owner != "" && cur != owner {
+			// Refused for another account (signed in as someone else
+			// since): unknown until this account's next enroll.
+			return KeyRegistration{}
+		}
+	}
+	return kr
 }
 
 // ErrNodeRemoved is returned by enroll and PUT keys when fleet answers 403
@@ -278,7 +293,7 @@ func (c *Client) RegisterDeviceKeys(ctx context.Context, nodeID string) error {
 		if stepUp != "" {
 			c.ClearStepUpToken()
 		}
-		c.setReauthRequired()
+		c.setReauthRequired(stepUp != "")
 		logging.L().Warn("fleet.device_keys.reauth_required", "via", "put", "step_up_sent", stepUp != "")
 		return errReauth(stepUp != "")
 	}

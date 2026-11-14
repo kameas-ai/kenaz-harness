@@ -5175,7 +5175,8 @@ export interface FleetDeviceKeysView {
   /**
    * registered | too_many_devices | invalid_key | unavailable |
    * reauth_required (kenaz-fleet ER-40: replacing this device's active key
-   * needs a fresh sign-in — settings.fleetDeviceKeysReauth()).
+   * needs a fresh sign-in — settings.fleetDeviceKeysReauth()) |
+   * reauth_refused (a fresh sign-in was refused: contact the administrator).
    */
   status: string;
   /** Human copy when this device cannot receive shared sessions. */

@@ -16,6 +16,11 @@ package settings
 //  3. the key registration is retried exactly ONCE, carrying the token;
 //  4. the token is dropped, whatever the outcome.
 //
+// If Fleet refuses even the fresh sign-in (SSO-only sessions carry no amr
+// until a Fleet setting is on), or the IdP ignored the fresh-sign-in request,
+// the state becomes reauth_refused: "contact your administrator", sticky
+// across later tokenless enrolls for the same account.
+//
 // Nothing here starts a browser on its own: only the user's click does, so
 // a refusal can never loop. A cancel or failure leaves the reauth_required
 // state in the snapshot (visible, recoverable), never silently cleared.
@@ -110,11 +115,17 @@ func (a *API) runKeysStepUp(ctx context.Context) error {
 	if nodeID == "" {
 		// Never enrolled on this install: enroll registers the keys and
 		// carries the held token.
-		_, err := a.fleetEnroll(ctx)
-		return err
+		if _, err := a.fleetEnroll(ctx); err != nil {
+			return err
+		}
+		if c.KeyRegistration().Status == fleet.KeyRegReauthRefused {
+			return fleet.ErrStepUpRefused
+		}
+		return nil
 	}
-	// One retry, never more: a second refusal returns
-	// ErrKeysReauthRequired and leaves the state visible.
+	// One retry, never more: a refusal of the fresh sign-in returns
+	// ErrStepUpRefused and records the sticky reauth_refused state ("contact
+	// your administrator"), never a prompt to keep retrying.
 	err = c.RegisterDeviceKeys(ctx, nodeID)
 	switch {
 	case err == nil:

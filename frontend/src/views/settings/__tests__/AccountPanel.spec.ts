@@ -361,7 +361,23 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
     });
     await flushPromises();
     expect(wrapper.find('[data-testid="identity-device-fingerprint"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="error-msg"]').text()).toContain('too many devices');
+    expect(wrapper.find('[data-testid="device-keys-msg"]').text()).toContain('too many devices');
+  });
+
+  it('shows the device-keys reason even while the session is degraded', async () => {
+    const msg = "This device can't receive shared sessions: too many devices.";
+    const client = buildClient(
+      session('degraded', prodProfile, {
+        reason: 'fleet_unreachable',
+        deviceKeys: { status: 'too_many_devices', message: msg },
+      } as Partial<FleetSessionView>),
+    );
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="error-msg"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="device-keys-msg"]').text()).toContain('too many devices');
   });
 
   // kenaz-fleet ER-40: Fleet kept the old key; replacing it needs a fresh
@@ -378,8 +394,9 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
         global: { provide: { [HarnessClientKey as symbol]: client } },
       });
       await flushPromises();
-      expect(wrapper.find('[data-testid="error-msg"]').text()).toContain('Sign in again to update');
+      expect(wrapper.find('[data-testid="device-keys-msg"]').text()).toContain('Sign in again to update');
       expect(wrapper.find('[data-testid="keys-reauth-btn"]').text()).toBe('Sign in again');
+      expect(wrapper.find('[data-testid="keys-reauth-btn"]').classes()).toContain('btn-primary');
       expect(wrapper.find('[data-testid="identity-device-fingerprint"]').exists()).toBe(false);
     });
 
@@ -431,14 +448,23 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
       expect(wrapper.find('[data-testid="keys-reauth-cancel-btn"]').exists()).toBe(false);
       expect(wrapper.find('[data-testid="keys-reauth-btn"]').text()).toBe('Sign in again');
       // The recoverable state stays visible; a cancel is not an error.
-      expect(wrapper.find('[data-testid="error-msg"]').text()).toContain('Sign in again to update');
+      expect(wrapper.find('[data-testid="device-keys-msg"]').text()).toContain('Sign in again to update');
+      expect(wrapper.find('[data-testid="error-msg"]').exists()).toBe(false);
     });
 
-    it('a refused retry shows a plain error and does not retry by itself', async () => {
+    it('a refused fresh sign-in shows the admin copy and a secondary Try again, no temporary error', async () => {
+      const refusedCopy = "Your organization's sign-in can't confirm this change yet. Contact your administrator.";
+      let current = reauthSession();
       const reauth = vi.fn(async () => {
-        throw new Error("fleet: sign in again to update this device's keys: fleet did not accept the new sign-in");
+        current = session('signed_in', prodProfile, { deviceKeys: { status: 'reauth_refused', message: refusedCopy } });
+        throw new Error(
+          "fleet: sign in again to update this device's keys: your organization's sign-in can't confirm this change yet",
+        );
       });
-      const client = buildClient(reauthSession(), { fleetDeviceKeysReauth: reauth });
+      const client = buildClient(current, {
+        fleetSession: vi.fn(async () => current),
+        fleetDeviceKeysReauth: reauth,
+      });
       const wrapper = mount(AccountPanel, {
         global: { provide: { [HarnessClientKey as symbol]: client } },
       });
@@ -446,8 +472,42 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
       await wrapper.find('[data-testid="keys-reauth-btn"]').trigger('click');
       await flushPromises();
       expect(reauth).toHaveBeenCalledOnce();
-      expect(wrapper.find('[data-testid="error-msg"]').text()).toContain("Fleet didn't accept the new sign-in");
-      expect(wrapper.find('[data-testid="keys-reauth-btn"]').exists()).toBe(true);
+      expect(wrapper.find('[data-testid="device-keys-msg"]').text()).toBe(refusedCopy);
+      expect(wrapper.find('[data-testid="error-msg"]').exists()).toBe(false);
+      const btn = wrapper.find('[data-testid="keys-reauth-btn"]');
+      expect(btn.text()).toBe('Try again');
+      expect(btn.classes()).toContain('btn-secondary');
+    });
+
+    it('reauth_refused on mount (persists across remounts) shows the admin copy', async () => {
+      const refusedCopy = "Your organization's sign-in can't confirm this change yet. Contact your administrator.";
+      const client = buildClient(
+        session('signed_in', prodProfile, { deviceKeys: { status: 'reauth_refused', message: refusedCopy } }),
+      );
+      const wrapper = mount(AccountPanel, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      expect(wrapper.find('[data-testid="device-keys-msg"]').text()).toBe(refusedCopy);
+      expect(wrapper.find('[data-testid="keys-reauth-btn"]').text()).toBe('Try again');
+    });
+
+    it('shows only one sign-in button when the session also needs a new sign-in', async () => {
+      const client = buildClient(
+        session('degraded', prodProfile, {
+          reason: 'needs_reauth',
+          deviceKeys: { status: 'reauth_required', message: reauthMsg },
+        } as Partial<FleetSessionView>),
+      );
+      const wrapper = mount(AccountPanel, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      expect(wrapper.find('[data-testid="reauth-btn"]').exists()).toBe(true);
+      expect(wrapper.find('[data-testid="keys-reauth-btn"]').exists()).toBe(false);
+      // Both explanations still show.
+      expect(wrapper.find('[data-testid="error-msg"]').text()).toContain('sign in again');
+      expect(wrapper.find('[data-testid="device-keys-msg"]').text()).toContain('Sign in again to update');
     });
   });
 });

@@ -374,7 +374,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 			if reqStepUp != "" {
 				c.ClearStepUpToken()
 			}
-			c.setReauthRequired()
+			c.setReauthRequired(reqStepUp != "")
 			logging.L().Warn("fleet.device_keys.reauth_required", "via", "enroll", "step_up_sent", reqStepUp != "")
 		case km.body.HandoffPublicKey != "":
 			c.keyReg.set(KeyRegistration{Status: KeyRegRegistered,
