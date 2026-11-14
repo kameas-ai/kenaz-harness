@@ -309,15 +309,20 @@ func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) 
 		// AND, so it can only narrow. A grant on proj otherwise covered
 		// read_file proj/s with s -> ~/Documents/secret.txt. A grant that
 		// binds resolved_path already proved the resolved location, so it
-		// is told apart by re-evaluating with resolved_path cleared: if the
-		// Allow survives, it never looked at where the path lands.
+		// is told apart by re-evaluating with resolved_path cleared: unless
+		// that pass is NotApplicable, the Allow never depended on where the
+		// path lands.
 		if d.Outcome == cedar.Allow && rd.Outcome != cedar.Allow {
 			lattrs := make(map[cedarlib.String]cedarlib.Value, len(attrs))
 			for k, v := range attrs {
 				lattrs[k] = v
 			}
 			lattrs[cedarlib.String(cedar.CtxKeyResolvedPath)] = cedarlib.String("")
-			if ld := g.opts.Engine.Evaluate(ctx, cedar.UserUID(), action, resource, lattrs); ld.Outcome == cedar.Allow {
+			// Only a cleared pass that is exactly NotApplicable proves the
+			// Allow depended on resolved_path. Anything else — Allow, or a
+			// Deny from a policy that keys on an empty resolved_path —
+			// proves nothing about where the path lands, so ask.
+			if ld := g.opts.Engine.Evaluate(ctx, cedar.UserUID(), action, resource, lattrs); ld.Outcome != cedar.NotApplicable {
 				d.Outcome = cedar.NotApplicable
 				d.Reason = "the allow covers " + canonical + ", not " + resolved + " where it points"
 			}

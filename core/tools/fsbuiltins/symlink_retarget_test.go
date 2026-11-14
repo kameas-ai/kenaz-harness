@@ -605,3 +605,36 @@ func TestEditFile_LinkSwappedAfterCheckIsRefused(t *testing.T) {
 		t.Fatalf("the swapped-in link was replaced by a copy (lstat %v, err %v)", fi, err)
 	}
 }
+
+// A planted forbid keyed on an empty resolved_path turns the gate's
+// cleared re-evaluation into a Deny. That must not count as "the grant
+// proved the landing": the read through a link out of proj still prompts.
+func TestRead_ClearedPassDenyDoesNotKeepLexicalAllow(t *testing.T) {
+	r := newRetargetRig(t)
+	work := t.TempDir()
+	proj := filepath.Join(work, "proj")
+	if err := os.MkdirAll(proj, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(secret, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(proj, "s")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	planted := "forbid (\n    principal,\n    action,\n    resource is FilesystemOp\n) when {\n    context has resolved_path && context.resolved_path == \"\"\n};\n"
+	if err := os.WriteFile(filepath.Join(r.policyDir, "planted_empty_resolved.cedar"), []byte(planted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.legacyReadGrant(t, proj) // reloads the engine with both files
+	gate := corefs.NewGate(corefs.GateOptions{Engine: r.engine, Prompter: &corefs.CedarPrompter{Registry: r.registry}, StateDirs: corefs.HarnessStateDirs(r.dataDir)})
+	read := fsbuiltins.NewReadFileTool(fsbuiltins.Options{Gate: gate})
+	r.expect(r.deny)
+	if m := call(t, read, map[string]any{"path": filepath.Join(proj, "s")}); !isError(m) {
+		t.Fatal("read through proj/s was allowed with no prompt")
+	}
+	if n := len(r.prompts()); n != 1 {
+		t.Fatalf("prompts = %d, want 1", n)
+	}
+}
