@@ -492,3 +492,77 @@ func TestReadWrite_IOUsesTheCheckedLocation(t *testing.T) {
 		t.Fatalf("write followed the link swapped after the check (stat err=%v)", err)
 	}
 }
+
+// legacyReadGrant writes an old-format (canonical_path only) read grant on
+// dir and reloads the engine.
+func (r *retargetRig) legacyReadGrant(t *testing.T, dir string) {
+	t.Helper()
+	body := "permit (\n    principal == User::\"local\",\n    action == Action::\"read_filesystem\",\n    resource is FilesystemOp\n) when {\n    context.canonical_path == " +
+		cedar.QuoteString(dir) + " ||\n    context.canonical_path like " + cedar.QuoteLikePrefix(dir+"/") + "\n};\n"
+	if err := os.WriteFile(filepath.Join(r.policyDir, "fs_allow_read_legacy_dir.cedar"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.engine.Reload(context.Background()); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+}
+
+// An old-format grant on proj covers the lexical path only: a read through
+// a link in proj that lands outside it must prompt (with "Points to"),
+// while a link that lands inside proj is still covered.
+func TestRead_LegacyGrantDoesNotCoverLinksOutOfTheDir(t *testing.T) {
+	r := newRetargetRig(t)
+	work := t.TempDir()
+	proj := filepath.Join(work, "proj")
+	docs := filepath.Join(t.TempDir(), "Documents")
+	for _, d := range []string{proj, docs} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	secret := filepath.Join(docs, "secret.txt")
+	inside := filepath.Join(proj, "real.txt")
+	for _, f := range []string{secret, inside} {
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for link, target := range map[string]string{"s": secret, "d": docs, "in": inside} {
+		if err := os.Symlink(target, filepath.Join(proj, link)); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+	}
+	r.legacyReadGrant(t, proj)
+	gate := corefs.NewGate(corefs.GateOptions{Engine: r.engine, Prompter: &corefs.CedarPrompter{Registry: r.registry}, StateDirs: corefs.HarnessStateDirs(r.dataDir)})
+	read := fsbuiltins.NewReadFileTool(fsbuiltins.Options{Gate: gate})
+	list := fsbuiltins.NewListDirTool(fsbuiltins.Options{Gate: gate})
+
+	// Covered: a real file and a link that lands inside proj.
+	for _, p := range []string{inside, filepath.Join(proj, "in")} {
+		if m := call(t, read, map[string]any{"path": p}); isError(m) {
+			t.Fatalf("read %s under the grant: %v", p, m["error"])
+		}
+	}
+	if n := len(r.prompts()); n != 0 {
+		t.Fatalf("prompts = %d, want 0 for paths the grant really covers", n)
+	}
+
+	// Not covered: links that land outside proj.
+	r.expect(r.deny)
+	if m := call(t, read, map[string]any{"path": filepath.Join(proj, "s")}); !isError(m) {
+		t.Fatal("read_file through proj/s -> Documents/secret.txt was allowed by the proj grant")
+	}
+	r.expect(r.deny)
+	if m := call(t, list, map[string]any{"path": filepath.Join(proj, "d")}); !isError(m) {
+		t.Fatal("list_dir through proj/d -> Documents was allowed by the proj grant")
+	}
+	ps := r.prompts()
+	if len(ps) != 2 {
+		t.Fatalf("prompts = %d, want 2", len(ps))
+	}
+	for _, p := range ps {
+		if p.Surface.FS.ResolvedPath == "" {
+			t.Errorf("prompt for %s has no Points to", p.Surface.FS.CanonicalPath)
+		}
+	}
+}

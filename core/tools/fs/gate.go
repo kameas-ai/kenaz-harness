@@ -258,9 +258,10 @@ func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) 
 	}
 
 	// Dangerous tier: dangerous if either spelling is (a planted link to
-	// ~/.ssh/x is ~/.ssh/x). The resolved form is compared with the macOS
-	// /private aliases folded back (unaliasDarwin), or every /tmp and
-	// /var/folders path would read as the /private/var system tree.
+	// ~/.ssh/x is ~/.ssh/x). The resolved form has only the benign macOS
+	// aliases folded back (unaliasDarwin: temp dirs, /home), or every /tmp
+	// and /var/folders path would read as the /private/var system tree; a
+	// link into /private/var/db is still judged as /private/var/db.
 	rcmp := unaliasDarwin(resolved)
 	dangerous, dangerCopy := IsDangerousPath(canonical)
 	if !dangerous && rcmp != canonical {
@@ -298,9 +299,28 @@ func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) 
 			cedarlib.String(cedar.CtxKeyRecipeDirMatch): cedarlib.Boolean(recipeDirMatch),
 			cedarlib.String(cedar.CtxKeyDangerousTier):  cedarlib.Boolean(dangerous),
 		}
-		if rd := g.opts.Engine.Evaluate(ctx, cedar.UserUID(), action, cedar.FilesystemOpUID(rcmp), rattrs); rd.Outcome == cedar.Deny {
+		rd := g.opts.Engine.Evaluate(ctx, cedar.UserUID(), action, cedar.FilesystemOpUID(rcmp), rattrs)
+		if rd.Outcome == cedar.Deny {
 			rd.Reason = "the path points to " + resolved + ": " + rd.Reason
 			return rd, nil
+		}
+		// An Allow that matched only the lexical path (an old-format grant,
+		// a broad policy) must also hold where the path really lands — an
+		// AND, so it can only narrow. A grant on proj otherwise covered
+		// read_file proj/s with s -> ~/Documents/secret.txt. A grant that
+		// binds resolved_path already proved the resolved location, so it
+		// is told apart by re-evaluating with resolved_path cleared: if the
+		// Allow survives, it never looked at where the path lands.
+		if d.Outcome == cedar.Allow && rd.Outcome != cedar.Allow {
+			lattrs := make(map[cedarlib.String]cedarlib.Value, len(attrs))
+			for k, v := range attrs {
+				lattrs[k] = v
+			}
+			lattrs[cedarlib.String(cedar.CtxKeyResolvedPath)] = cedarlib.String("")
+			if ld := g.opts.Engine.Evaluate(ctx, cedar.UserUID(), action, resource, lattrs); ld.Outcome == cedar.Allow {
+				d.Outcome = cedar.NotApplicable
+				d.Reason = "the allow covers " + canonical + ", not " + resolved + " where it points"
+			}
 		}
 	}
 
@@ -568,9 +588,9 @@ func (g *Gate) writePolicySnippet(name, body string) error {
 }
 
 // shownResolved is the prompt's "Points to" path: resolved when op really
-// acts somewhere other than canonical, "" when they differ only by the
-// macOS /private alias (every /tmp and /var/folders path would otherwise
-// show a link that the person never made).
+// acts somewhere other than canonical, "" when they differ only by a
+// benign macOS alias (unaliasDarwin; every /tmp and /var/folders path
+// would otherwise show a link that the person never made).
 func shownResolved(canonical, resolved string) string {
 	if resolved == canonical || unaliasDarwin(resolved) == canonical {
 		return ""
