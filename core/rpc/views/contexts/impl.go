@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"runtime"
 	"strings"
 	"time"
 
@@ -341,7 +342,17 @@ func normPulledCheckPath(p string) string {
 // entry path, "<team|org>/_fleet", after normalisation.
 func isPulledPath(p string) bool {
 	parts := strings.SplitN(normPulledCheckPath(p), "/", 3)
-	return len(parts) >= 2 && (parts[0] == string(contextpack.LayerTeam) || parts[0] == string(contextpack.LayerOrg)) && parts[1] == "_fleet"
+	return len(parts) >= 2 && (segEq(parts[0], string(contextpack.LayerTeam)) || segEq(parts[0], string(contextpack.LayerOrg))) && segEq(parts[1], "_fleet")
+}
+
+// segEq compares a path segment the way the library's filesystem does:
+// case-insensitively on darwin and windows (where "Team/_FLEET" is the same
+// folder as "team/_fleet"), exactly elsewhere.
+func segEq(a, b string) bool {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // refusePulled refuses a publish / promote whose local id is a pulled
@@ -627,18 +638,20 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 // published) is shared now, for the signed-in fleet user, so the share
 // dialogs start on that team and warn before widening it.
 //
-// Sources, in order (kenaz-fleet spec 018 H-1; Fleet sends team_id on
-// every pulled node):
-//  1. Fleet's own answer for a node the member owns, from the pulled index
-//     (fleet.PulledShareLocations, persisted across restarts): the node
-//     this install pushed for the path (same wire id), else exactly one own
-//     node with the same title (shared from another device or the plugin).
-//  2. The local share ledger (where this device last shared it).
+// Sources (kenaz-fleet spec 018 H-1; Fleet sends team_id on every pulled
+// node), newest first:
+//   - Fleet's row for the EXACT node this install pushed for the path (the
+//     same wire id) from the own-node location index
+//     (fleet.PulledShareLocations, persisted across restarts);
+//   - the local share ledger (where this device last shared it).
 //
-// When Fleet's answer and the ledger disagree, Fleet's wins (it is newer)
-// and the ledger is updated to match. Entries with neither are omitted;
-// the dialogs then fall back to the enrolled team. Returns an empty list
-// (no error) when fleet is not wired or no fleet user is known.
+// Nothing else: wire ids are salted per install, so a same-named file
+// shared from another device is a different node and says nothing about
+// this one. When Fleet's row is newer than the ledger record it wins and
+// the ledger is corrected; an older row never overrides the ledger. Entries
+// with neither are omitted (the dialogs fall back to the enrolled team).
+// Returns an empty list (no error) when fleet is not wired or no fleet
+// user is known.
 func (a *API) Context_ShareStates(_ context.Context, nodeIDs []string) ([]ContextShareStateView, error) {
 	out := []ContextShareStateView{}
 	if a == nil || a.syncer == nil {
@@ -648,21 +661,22 @@ func (a *API) Context_ShareStates(_ context.Context, nodeIDs []string) ([]Contex
 	if user == "" {
 		return out, nil
 	}
-	byID, byTitle := ownPulledLocations(a.syncer.PulledShareLocations(), user)
+	byID := ownPulledLocations(a.syncer.PulledShareLocations(), user)
 	for _, id := range nodeIDs {
 		if id == "" {
 			continue
 		}
 		wireID := a.syncer.WireNodeID(id)
 		rec, hasRec := a.ledger().get(wireID, user)
-		if loc, ok := pulledLocationFor(byID, byTitle, wireID, localEntryTitle(id)); ok {
+		loc, hasLoc := byID[wireID]
+		if hasLoc && (!hasRec || loc.UpdatedAt.After(rec.SharedAt)) {
 			view := ContextShareStateView{NodeID: id, Layer: string(loc.Layer)}
 			if loc.Layer == contextpack.LayerTeam {
 				view.TeamID = loc.TeamID
 			}
 			if hasRec && (rec.Layer != view.Layer || rec.TeamID != view.TeamID) {
 				if err := a.ledger().put(wireID, shareRecord{
-					UserID: user, Layer: view.Layer, TeamID: view.TeamID, SharedAt: time.Now().UTC(),
+					UserID: user, Layer: view.Layer, TeamID: view.TeamID, SharedAt: loc.UpdatedAt,
 				}); err != nil {
 					logging.L().Warn("contexts.share_states.ledger_update_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
 				}
@@ -688,39 +702,16 @@ func usablePulledLocation(l fleet.PulledShareLocation) bool {
 	return false
 }
 
-// ownPulledLocations indexes user's own usable pulled locations by wire id
-// and by title key.
-func ownPulledLocations(locs []fleet.PulledShareLocation, user string) (map[string]fleet.PulledShareLocation, map[string][]fleet.PulledShareLocation) {
+// ownPulledLocations indexes user's own usable location rows by wire id.
+func ownPulledLocations(locs []fleet.PulledShareLocation, user string) map[string]fleet.PulledShareLocation {
 	byID := map[string]fleet.PulledShareLocation{}
-	byTitle := map[string][]fleet.PulledShareLocation{}
 	for _, l := range locs {
 		if l.OwnerUserID == "" || !strings.EqualFold(l.OwnerUserID, user) || !usablePulledLocation(l) {
 			continue
 		}
 		byID[l.NodeID] = l
-		byTitle[l.TitleKey] = append(byTitle[l.TitleKey], l)
 	}
-	return byID, byTitle
-}
-
-// pulledLocationFor is Fleet's answer for a local entry: the node with its
-// wire id, else the one own node with its title. Several own nodes with
-// the same title in different places are ambiguous: no answer.
-func pulledLocationFor(byID map[string]fleet.PulledShareLocation, byTitle map[string][]fleet.PulledShareLocation, wireID, title string) (fleet.PulledShareLocation, bool) {
-	if l, ok := byID[wireID]; ok {
-		return l, true
-	}
-	cands := byTitle[fleet.CuratedTitleKey(title)]
-	if len(cands) == 0 {
-		return fleet.PulledShareLocation{}, false
-	}
-	first := cands[0]
-	for _, c := range cands[1:] {
-		if c.Layer != first.Layer || c.TeamID != first.TeamID {
-			return fleet.PulledShareLocation{}, false
-		}
-	}
-	return first, true
+	return byID
 }
 
 // Context_SyncStatus returns a read-only snapshot of the context-graph

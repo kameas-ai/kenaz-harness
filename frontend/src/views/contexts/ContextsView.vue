@@ -176,8 +176,8 @@ const publishLayer = ref<'team' | 'org'>('team');
  * (kenaz-fleet spec 018 H-1). Loaded fresh each time the share dialog opens
  * (this view is kept alive across account switches). Fleet overwrites an
  * entry's team on re-share, so the dialog starts on the team the entry is
- * shared with now (Fleet's team_id for an own pulled node, else the local
- * share record; Context_ShareStates); a never-shared entry starts on
+ * shared with now (Fleet's team_id for the node this install pushed, else the
+ * local share record; Context_ShareStates); a never-shared entry starts on
  * the enrolled identity's team. Until both reads finish there is no picker
  * and "Yes, share" is disabled.
  */

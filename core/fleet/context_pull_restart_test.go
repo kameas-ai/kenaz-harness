@@ -97,7 +97,8 @@ func TestContextPull_FullPullPrunesLocationIndex(t *testing.T) {
 	stubTokens(t, TokenSet{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
 	dataDir := t.TempDir()
 	newSyncer := func() *ContextGraphSyncer {
-		return NewContextGraphSyncer(makeTestClient(t, hs.URL), dataDir, makeCapPollerWithTeamCap(t))
+		return NewContextGraphSyncer(makeTestClient(t, hs.URL), dataDir, makeCapPollerWithTeamCap(t)).
+			WithSelfUserID(func() string { return "user-a" })
 	}
 	ctx := context.Background()
 	if _, err := newSyncer().PullDelta(ctx); err != nil {

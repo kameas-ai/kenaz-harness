@@ -79,7 +79,8 @@ func (r *pulledRig) open(t *testing.T) (*corefleet.ContextGraphSyncer, *contexts
 	poller.ForceSetCurrentForTesting(corefleet.Capabilities{
 		Tier: "enterprise", Enabled: map[corefleet.Capability]bool{corefleet.CapSharedTeamGraph: true}, FetchedAt: time.Now(),
 	})
-	syncer := corefleet.NewContextGraphSyncer(client, r.syncerDir, poller)
+	syncer := corefleet.NewContextGraphSyncer(client, r.syncerDir, poller).
+		WithSelfUserID(func() string { return r.user })
 	api := contextsview.New(nil).WithSyncer(syncer).
 		WithSelfUserID(func() string { return r.user }).WithShareLedgerDir(r.ledgerDir)
 	return syncer, api
@@ -94,69 +95,139 @@ func pull(t *testing.T, s *corefleet.ContextGraphSyncer) {
 
 const otherDeviceNode = "6b2f6f0e-0000-4000-8000-0000000000b1"
 
-// Shared to Backend from another device: no local ledger entry, yet the
-// dialog's state says Backend — and still does after a restart.
-func TestShareStates_OwnNodeFromAnotherDevice(t *testing.T) {
+func nodeAt(n map[string]any, updated string) map[string]any {
+	n["updated_at"] = updated
+	return n
+}
+
+// Fleet moved THIS install's node (same wire id) to Backend from the
+// dashboard: no local ledger entry, the state says Backend, after a
+// restart too, and never for another account.
+func TestShareStates_ExactWireIDNode(t *testing.T) {
 	r := newPulledRig(t)
-	r.srv.setNodes(curatedNode(otherDeviceNode, "user-a", "notes", "team_shared", "be-id"))
 	syncer, api := r.open(t)
+	r.srv.setNodes(curatedNode(syncer.WireNodeID("docs/notes.md"), "user-a", "notes", "team_shared", "be-id"))
 	pull(t, syncer)
 
 	want := contextsview.ContextShareStateView{NodeID: "docs/notes.md", Layer: "team", TeamID: "be-id"}
 	if got := shareStates(t, api, "docs/notes.md", "docs/other.md"); len(got) != 1 || got[0] != want {
 		t.Fatalf("share states = %+v, want [%+v]", got, want)
 	}
-
-	// Restart: nothing pulled yet this process, the index answers.
-	_, api2 := r.open(t)
+	_, api2 := r.open(t) // restart, nothing pulled yet
 	if got := shareStates(t, api2, "docs/notes.md"); len(got) != 1 || got[0] != want {
 		t.Fatalf("after restart = %+v, want [%+v]", got, want)
 	}
-
-	// Signed in as someone else: not theirs.
 	r.user = "user-b"
 	if got := shareStates(t, api2, "docs/notes.md"); len(got) != 0 {
 		t.Fatalf("other account sees %+v", got)
 	}
 }
 
-// Fleet and the ledger disagree: Fleet wins, and the ledger is corrected.
-func TestShareStates_PulledBeatsLedgerAndUpdatesIt(t *testing.T) {
+// (a) A same-named file shared from ANOTHER device is a different node
+// (wire ids are salted per install): a never-shared projB/CLAUDE.md gets no
+// team from projA/CLAUDE.md there.
+func TestShareStates_SameTitleFromAnotherDeviceSaysNothing(t *testing.T) {
+	r := newPulledRig(t)
+	r.srv.setNodes(curatedNode(otherDeviceNode, "user-a", "CLAUDE", "team_shared", "be-id"))
+	syncer, api := r.open(t)
+	pull(t, syncer)
+	if got := shareStates(t, api, "projB/CLAUDE.md"); len(got) != 0 {
+		t.Fatalf("share states = %+v, want none (a different node)", got)
+	}
+}
+
+// (b) A fresh publish to Frontend is never rewritten to Backend by another
+// device's same-named node.
+func TestShareStates_FreshPublishNotRewrittenByTitle(t *testing.T) {
 	r := newPulledRig(t)
 	syncer, api := r.open(t)
-	ctx := context.Background()
-	if _, err := api.Context_Publish(ctx, publishReq("notes.md", "team", "eng-id")); err != nil {
+	if _, err := api.Context_Publish(context.Background(), publishReq("notes.md", "team", "fe-id")); err != nil {
 		t.Fatal(err)
 	}
-	// Fleet now holds this install's node on Backend (moved elsewhere).
-	r.srv.setNodes(curatedNode(syncer.WireNodeID("notes.md"), "user-a", "notes", "team_shared", "be-id"))
+	r.srv.setNodes(curatedNode(otherDeviceNode, "user-a", "notes", "team_shared", "be-id"))
+	pull(t, syncer)
+	if got := shareStates(t, api, "notes.md"); len(got) != 1 || got[0].TeamID != "fe-id" {
+		t.Fatalf("share states = %+v, want fe-id", got)
+	}
+	r.syncerDirIndexGone(t)
+	_, ledgerOnly := r.open(t)
+	if got := shareStates(t, ledgerOnly, "notes.md"); len(got) != 1 || got[0].TeamID != "fe-id" {
+		t.Fatalf("ledger = %+v, want fe-id (not rewritten)", got)
+	}
+}
+
+// (c) Right after a publish, a stale pulled row for the same node does not
+// override the share that was just made (the accepted push updates the row,
+// and an older row never beats a newer ledger record).
+func TestShareStates_StaleRowDoesNotBeatFreshPublish(t *testing.T) {
+	r := newPulledRig(t)
+	syncer, api := r.open(t)
+	wire := syncer.WireNodeID("notes.md")
+	r.srv.setNodes(nodeAt(curatedNode(wire, "user-a", "notes", "team_shared", "be-id"), "2026-11-01T00:00:00Z"))
+	pull(t, syncer)
+	if got := shareStates(t, api, "notes.md"); len(got) != 1 || got[0].TeamID != "be-id" {
+		t.Fatalf("setup = %+v", got)
+	}
+	if _, err := api.Context_Publish(context.Background(), publishReq("notes.md", "team", "fe-id")); err != nil {
+		t.Fatal(err)
+	}
+	if got := shareStates(t, api, "notes.md"); len(got) != 1 || got[0].TeamID != "fe-id" {
+		t.Fatalf("right after publish = %+v, want fe-id", got)
+	}
+	// The same stale row arriving again (a re-pull) still loses to the
+	// newer ledger record.
+	pull(t, syncer)
+	if got := shareStates(t, api, "notes.md"); len(got) != 1 || got[0].TeamID != "fe-id" {
+		t.Fatalf("after a stale re-pull = %+v, want fe-id", got)
+	}
+	// Next launch: the index is rebuilt from a pull whose row for this node
+	// is OLDER than the ledger record. The ledger wins and is not rewritten.
+	r.syncerDirIndexGone(t)
+	s2, api2 := r.open(t)
+	pull(t, s2)
+	if got := shareStates(t, api2, "notes.md"); len(got) != 1 || got[0].TeamID != "fe-id" {
+		t.Fatalf("older row vs newer ledger = %+v, want fe-id", got)
+	}
+}
+
+// A NEWER Fleet row (moved on the dashboard after this device shared it)
+// wins and corrects the ledger.
+func TestShareStates_NewerRowBeatsLedgerAndUpdatesIt(t *testing.T) {
+	r := newPulledRig(t)
+	syncer, api := r.open(t)
+	if _, err := api.Context_Publish(context.Background(), publishReq("notes.md", "team", "eng-id")); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
+	r.srv.setNodes(nodeAt(curatedNode(syncer.WireNodeID("notes.md"), "user-a", "notes", "team_shared", "be-id"), future))
 	pull(t, syncer)
 	if got := shareStates(t, api, "notes.md"); len(got) != 1 || got[0].TeamID != "be-id" {
 		t.Fatalf("share states = %+v, want be-id from Fleet", got)
 	}
-	// The ledger alone (same install, pulled index gone) now says Backend too.
-	if err := os.Remove(filepath.Join(r.syncerDir, "fleet", "context_pulled_locations.json")); err != nil {
-		t.Fatalf("pulled index not persisted: %v", err)
-	}
+	r.syncerDirIndexGone(t)
 	_, ledgerOnly := r.open(t)
 	if got := shareStates(t, ledgerOnly, "notes.md"); len(got) != 1 || got[0].TeamID != "be-id" {
 		t.Fatalf("ledger after correction = %+v, want be-id", got)
 	}
 }
 
-// A teammate's same-titled node, and an ambiguous pair of own nodes, say
-// nothing: the ledger (or the enrolled team) decides.
-func TestShareStates_IgnoresOthersAndAmbiguous(t *testing.T) {
+func (r *pulledRig) syncerDirIndexGone(t *testing.T) {
+	t.Helper()
+	if err := os.Remove(filepath.Join(r.syncerDir, "fleet", "context_pulled_locations.json")); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+// Teammates' nodes say nothing, even on this install's wire id.
+func TestShareStates_IgnoresOthers(t *testing.T) {
 	r := newPulledRig(t)
-	r.srv.setNodes(
-		curatedNode("6b2f6f0e-0000-4000-8000-0000000000c1", "user-z", "notes", "team_shared", "be-id"),
-		curatedNode("6b2f6f0e-0000-4000-8000-0000000000c2", "user-a", "plan", "team_shared", "be-id"),
-		curatedNode("6b2f6f0e-0000-4000-8000-0000000000c3", "user-a", "plan", "team_shared", "eng-id"),
-		curatedNode("6b2f6f0e-0000-4000-8000-0000000000c4", "user-a", "wide", "org_shared", "root-id"),
-	)
 	syncer, api := r.open(t)
+	r.srv.setNodes(
+		curatedNode(syncer.WireNodeID("notes.md"), "user-z", "notes", "team_shared", "be-id"),
+		curatedNode(syncer.WireNodeID("wide.md"), "user-a", "wide", "org_shared", "root-id"),
+	)
 	pull(t, syncer)
-	got := shareStates(t, api, "notes.md", "plan.md", "wide.md")
+	got := shareStates(t, api, "notes.md", "wide.md")
 	if len(got) != 1 || got[0] != (contextsview.ContextShareStateView{NodeID: "wide.md", Layer: "org"}) {
 		t.Fatalf("share states = %+v, want only wide.md as org", got)
 	}

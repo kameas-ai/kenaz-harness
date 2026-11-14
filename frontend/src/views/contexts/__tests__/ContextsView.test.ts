@@ -2018,9 +2018,9 @@ describe('ContextsView share target (spec 018 H-1 review)', () => {
     expect(w.find('[data-testid=context-publish-move-warning]').text()).toContain('Publishing it org-wide');
   });
 
-  it('an entry shared to Backend from another device starts on Backend and warns before Everyone', async () => {
-    // No local share record: the backend answers from Fleet's pulled
-    // team_id (Context_ShareStates), so the state reads the same here.
+  it('an entry Fleet holds on Backend starts on Backend and warns before Everyone', async () => {
+    // E.g. moved on the dashboard: the backend answers from Fleet's team_id
+    // for this install's own node (same wire id; Context_ShareStates).
     const { w } = await open({
       teamId: 'root-id',
       shareStates: async (ids) =>

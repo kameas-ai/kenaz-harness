@@ -42,6 +42,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -327,6 +328,13 @@ type ContextGraphSyncer struct {
 	// locations is where Fleet holds each pulled node (layer, team_id),
 	// persisted across restarts (context_pulled_locations.go).
 	locations map[string]PulledShareLocation
+	// locationsFor is the account the location rows belong to.
+	locationsFor string
+	// pulledFor is the account the pulled cache and cursor belong to; a
+	// different signed-in account restarts with a full pull.
+	pulledFor string
+	// selfUserID overrides the signed-in user id source (tests).
+	selfUserID func() string
 	// cursor is the RFC3339Nano timestamp for the next pull call. In
 	// memory only: each process starts with a full pull (see
 	// NewContextGraphSyncer).
@@ -408,7 +416,7 @@ func NewContextGraphSyncer(client *Client, dataDir string, caps *CapabilityPolle
 	// The location index (context_pulled_locations.go) is kept from the
 	// last run so share dialogs have Fleet's answer before the full pull
 	// ends; the full pull confirms or prunes it.
-	s.locations = loadPulledLocations(dataDir)
+	s.locationsFor, s.locations = loadPulledLocations(dataDir)
 	return s
 }
 
@@ -646,6 +654,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		}
 	}
 
+	pushSelf := s.selfID()
 	s.mu.Lock()
 	s.lastPushErr = ""
 	if len(result.Rejected) > 0 {
@@ -661,6 +670,20 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		s.lastConflicts = append([]ContextPushConflict(nil), result.Conflicts...)
 	} else {
 		s.lastConflicts = nil
+	}
+	// An accepted push moves the node: record where it is now, so the
+	// share dialogs never read a stale pulled row right after a publish.
+	if result.AcceptedNodes > 0 && pushSelf != "" && !pushConflicted(result.Conflicts, wireID) {
+		if layer, ok := LayerForClassification(classification); ok {
+			s.adoptLocationsOwnerLocked(pushSelf)
+			team := ""
+			if entry.TeamID != nil {
+				team = *entry.TeamID
+			}
+			if s.putLocationLocked(wireID, PulledShareLocation{Layer: layer, TeamID: team, UpdatedAt: time.Now().UTC()}) {
+				s.savePulledLocationsLocked()
+			}
+		}
 	}
 	// fleet-welcome-01NWEL01 context_synced seam: capture the hook and mark
 	// it fired (under the lock for the once-guard), then invoke it outside the
@@ -706,9 +729,22 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 		return 0, nil // capability absent → local-only, no error
 	}
 
-	s.mu.RLock()
+	self := s.selfID()
+	s.mu.Lock()
+	if self != "" && s.pulledFor != "" && !strings.EqualFold(self, s.pulledFor) {
+		// Another account signed in within this process: its entitled
+		// graph differs, so drop the cache and start a full pull.
+		logging.L().Info("fleet.context.pull.account_changed_full_pull")
+		s.cursor, s.pulled, s.pulledEdges, s.sweepSeen = "", nil, nil, nil
+	}
+	if self != "" {
+		s.pulledFor = self
+		if s.adoptLocationsOwnerLocked(self) {
+			s.savePulledLocationsLocked()
+		}
+	}
 	cursor := s.cursor
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	// The Curated lane pulls only Curated kinds (WP03 lane split by kind).
 	urlPath := lanePullPath(curatedKinds, cursor)
@@ -790,7 +826,7 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 			}
 			continue // skip unknown classifications
 		}
-		if s.recordPulledLocationLocked(n, layer) {
+		if s.recordPulledLocationLocked(n, layer, self) {
 			locationsChanged = true
 		}
 		entry := ContextNodeEntry{
@@ -912,6 +948,16 @@ func (s *ContextGraphSyncer) WireNodeID(localID string) string {
 		return ""
 	}
 	return s.ids.For(WireLaneCurated, localID)
+}
+
+// pushConflicted reports whether conflicts include wireID.
+func pushConflicted(conflicts []ContextPushConflict, wireID string) bool {
+	for _, c := range conflicts {
+		if c.NodeID == wireID {
+			return true
+		}
+	}
+	return false
 }
 
 // teamIDPtr returns a *string for a non-empty team_id string.
@@ -1375,6 +1421,7 @@ func (s *ContextGraphSyncer) ResetCursor() {
 	s.pulledEdges = nil
 	s.locations = map[string]PulledShareLocation{}
 	s.sweepSeen = nil
+	s.pulledFor = ""
 	s.pullCount = 0
 	s.mu.Unlock()
 	if s.dataDir != "" {
