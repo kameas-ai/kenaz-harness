@@ -2016,6 +2016,37 @@ type SettingsAPI interface {
 	// store and refreshes the local cache.
 	// (harness-fleet-sync-activation-01NSYNC01 gap #4)
 	FleetSetTelemetryOptIn(ctx context.Context, class string, optedIn bool) error
+
+	// FleetTeams returns the caller's teams from Fleet's GET /api/v1/me as
+	// a tree (kenaz-fleet spec 018 H-1): parent before children, the
+	// default team first as the org root, each entry carrying the indent
+	// level it is drawn at. Keyed by team id. An older Fleet without the
+	// tree fields yields a flat list. Returns fleet.ErrFleetDisabled when
+	// fleet is not wired.
+	FleetTeams(ctx context.Context) ([]FleetTeamView, error)
+}
+
+// FleetTeamView is one of the caller's teams, placed in the team tree
+// (kenaz-fleet spec 018 FR-2). ID is the key; Name and Slug are labels and
+// are shown as Fleet serves them. A team is never put on telemetry.
+type FleetTeamView struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// IsDefault marks the org's default team, the root of the tree.
+	IsDefault bool `json:"is_default"`
+	// Role is the caller's role on the team ("member" | "lead"); empty on
+	// an older Fleet.
+	Role string `json:"role,omitempty"`
+	// ParentTeamID is the team this one is drawn under ("" for the root
+	// and for the top of a list with no root). A stored parent the caller
+	// is not a member of is not in the list, so such a team is drawn
+	// directly under the root.
+	ParentTeamID string `json:"parent_team_id,omitempty"`
+	// TreeDepth is the indent level: 0 for the root, 1 directly under it.
+	TreeDepth int `json:"tree_depth"`
+	// Slug and Membership are announced by spec 018 but not served yet.
+	Slug       string `json:"slug,omitempty"`
+	Membership string `json:"membership,omitempty"`
 }
 
 // CapabilitiesView is the wire-safe projection of fleet.Capabilities.

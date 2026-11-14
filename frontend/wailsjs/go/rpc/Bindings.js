@@ -442,6 +442,10 @@ export function Contexts_ContextSearch(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Contexts_ContextSearch'](arg1, arg2, arg3);
 }
 
+export function Contexts_ContextShareStates(arg1) {
+  return window['go']['rpc']['Bindings']['Contexts_ContextShareStates'](arg1);
+}
+
 export function Contexts_ContextSyncStatus() {
   return window['go']['rpc']['Bindings']['Contexts_ContextSyncStatus']();
 }
@@ -1452,6 +1456,10 @@ export function Settings_FleetSignInCancel() {
 
 export function Settings_FleetSignOut() {
   return window['go']['rpc']['Bindings']['Settings_FleetSignOut']();
+}
+
+export function Settings_FleetTeams() {
+  return window['go']['rpc']['Bindings']['Settings_FleetTeams']();
 }
 
 export function Settings_FleetTelemetryOptIns() {

@@ -286,6 +286,8 @@ export function Contexts_ContextPublish(arg1:contexts.ContextPublishRequest):Pro
 
 export function Contexts_ContextSearch(arg1:string,arg2:string,arg3:number):Promise<Array<contexts.ContextSearchHitView>>;
 
+export function Contexts_ContextShareStates(arg1:Array<string>):Promise<Array<contexts.ContextShareStateView>>;
+
 export function Contexts_ContextSyncStatus():Promise<contexts.ContextSyncStatusView>;
 
 export function Contexts_CreateFolder(arg1:string):Promise<void>;
@@ -791,6 +793,8 @@ export function Settings_FleetSignIn():Promise<settings.FleetIdentity>;
 export function Settings_FleetSignInCancel():Promise<void>;
 
 export function Settings_FleetSignOut():Promise<void>;
+
+export function Settings_FleetTeams():Promise<Array<settings.FleetTeamView>>;
 
 export function Settings_FleetTelemetryOptIns():Promise<Array<settings.TelemetryOptInView>>;
 

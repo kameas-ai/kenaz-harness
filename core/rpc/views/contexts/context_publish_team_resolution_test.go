@@ -73,6 +73,14 @@ func (s *fakePushServer) snapshot() pushedRequest {
 // forced on (mirrors setupUnpublishTest in core/rpc/views/catalog/impl_test.go).
 func setupPublishTest(t *testing.T) (*contextsview.API, *fakePushServer) {
 	t.Helper()
+	syncer, fake := setupPublishSyncer(t)
+	return contextsview.New(nil).WithSyncer(syncer), fake
+}
+
+// setupPublishSyncer is setupPublishTest's syncer, for tests that build
+// more than one API over the same syncer.
+func setupPublishSyncer(t *testing.T) (*corefleet.ContextGraphSyncer, *fakePushServer) {
+	t.Helper()
 	fake := &fakePushServer{}
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
@@ -97,8 +105,7 @@ func setupPublishTest(t *testing.T) (*contextsview.API, *fakePushServer) {
 		FetchedAt: time.Now(),
 	})
 	syncer := corefleet.NewContextGraphSyncer(client, t.TempDir(), poller)
-	api := contextsview.New(nil).WithSyncer(syncer)
-	return api, fake
+	return syncer, fake
 }
 
 // A "team" publish with no team_id and no identity source is refused before

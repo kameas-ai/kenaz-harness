@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
@@ -63,6 +64,34 @@ type API struct {
 	// unknown / teamless) — the team a "team"-layer publish lands in when
 	// the request names none.
 	selfTeamID func() string
+	// shares records where this device last shared each entry, so the share
+	// dialogs start there instead of on the enrolled (root) team.
+	shares *shareLedger
+}
+
+// WithShareLedgerDir keeps the per-entry share record under dataDir
+// (<dataDir>/fleet/context_shares.json). An empty dataDir keeps it in
+// memory only.
+func (a *API) WithShareLedgerDir(dataDir string) *API {
+	path := ""
+	if dataDir != "" {
+		path = shareLedgerPath(dataDir)
+	}
+	a.shares = newShareLedger(path)
+	return a
+}
+
+// ledger returns the share ledger (in memory until WithShareLedgerDir).
+// Set at construction, never lazily, so concurrent bindings never race on it.
+func (a *API) ledger() *shareLedger {
+	return a.shares
+}
+
+func (a *API) currentUserID() string {
+	if a.selfUserID == nil {
+		return ""
+	}
+	return a.selfUserID()
 }
 
 // WithSelfUserID wires the signed-in fleet user id source (review F3).
@@ -114,7 +143,7 @@ var ErrInvalidModule = errors.New("contexts: directory has no root file (context
 // ErrLibraryUnavailable so the frontend renders an empty state instead
 // of a confusing "not wired" error from the chassis stub.
 func New(lib Library) *API {
-	return &API{lib: lib}
+	return &API{lib: lib, shares: newShareLedger("")}
 }
 
 // WithSyncer wires the fleet context-graph syncer. Safe to call once
@@ -446,9 +475,10 @@ func toWire(in corecontexts.Node) Node {
 // rejected with ErrPersonalLayerNotSyncable.
 // Requires a wired ContextGraphSyncer; returns ErrFleetDisabled otherwise.
 //
-// Team resolution for a "team"-layer request, in order: req.TeamID; else
-// the enrolled fleet identity's team_id (selfTeamID — the UI has no team
-// picker); else ErrNoTeam and nothing is sent. A team request never widens
+// Team resolution for a "team"-layer request, in order: req.TeamID (the
+// share dialogs' team picker, kenaz-fleet spec 018 H-1); else the enrolled
+// fleet identity's team_id (selfTeamID, used when the picker had no team
+// list); else ErrNoTeam and nothing is sent. A team request never widens
 // to "org": org-wide is the member's explicit choice, and Fleet allows it
 // only for admins and owners.
 func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (ContextPublishResult, error) {
@@ -509,6 +539,15 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		)
 		return ContextPublishResult{}, fmt.Errorf("contexts: publish: %w", err)
 	}
+	if result.AcceptedNodes > 0 {
+		rec := shareRecord{UserID: a.currentUserID(), Layer: string(layer), SharedAt: time.Now().UTC()}
+		if layer == contextpack.LayerTeam {
+			rec.TeamID = teamID
+		}
+		if err := a.ledger().put(wireID, rec); err != nil {
+			logging.L().Warn("contexts.publish.share_record_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
+		}
+	}
 	logging.L().Info("contexts.publish.done",
 		"node_id", wireID,
 		"effective_layer", string(layer),
@@ -548,10 +587,38 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 		"node_id", result.Node.ID,
 		"new_classification", string(result.Node.Classification),
 	)
+	if err := a.ledger().put(a.syncer.WireNodeID(nodeID), shareRecord{
+		UserID: a.currentUserID(), Layer: string(contextpack.LayerOrg), SharedAt: time.Now().UTC(),
+	}); err != nil {
+		logging.L().Warn("contexts.promote.share_record_failed", "node_id", result.Node.ID, "err", fleet.LogSafeErr(err))
+	}
 	return ContextPromoteResult{
 		UpdatedNodeID:     result.Node.ID,
 		NewClassification: string(result.Node.Classification),
 	}, nil
+}
+
+// Context_ShareStates returns where this device last shared each of
+// nodeIDs (LOCAL ids, as published), for the signed-in fleet user. Entries
+// never shared from here, or shared by another account, are omitted.
+// Returns an empty list (no error) when fleet is not wired.
+func (a *API) Context_ShareStates(_ context.Context, nodeIDs []string) ([]ContextShareStateView, error) {
+	out := []ContextShareStateView{}
+	if a == nil || a.syncer == nil {
+		return out, nil
+	}
+	user := a.currentUserID()
+	for _, id := range nodeIDs {
+		if id == "" {
+			continue
+		}
+		rec, ok := a.ledger().get(a.syncer.WireNodeID(id), user)
+		if !ok {
+			continue
+		}
+		out = append(out, ContextShareStateView{NodeID: id, Layer: rec.Layer, TeamID: rec.TeamID})
+	}
+	return out, nil
 }
 
 // Context_SyncStatus returns a read-only snapshot of the context-graph

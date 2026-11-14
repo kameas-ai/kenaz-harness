@@ -2429,6 +2429,41 @@ func (a *API) FleetSetTelemetryOptIn(ctx context.Context, class string, optedIn 
 	return nil
 }
 
+// FleetTeams reads the caller's teams from GET /api/v1/me and lays them
+// out as a tree (kenaz-fleet spec 018 H-1). It is read live on each call:
+// the list is small and a team can be added, renamed or moved at any time.
+// Returns fleet.ErrFleetDisabled when fleet is not wired.
+func (a *API) FleetTeams(ctx context.Context) ([]FleetTeamView, error) {
+	c := a.fleetClient()
+	if c == nil || fleet.Disabled() {
+		return nil, fleet.ErrFleetDisabled
+	}
+	teams, err := c.GetMeTeams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return fleetTeamsToView(fleet.OrderTeamTree(teams)), nil
+}
+
+func fleetTeamsToView(entries []fleet.TeamTreeEntry) []FleetTeamView {
+	out := make([]FleetTeamView, 0, len(entries))
+	for _, e := range entries {
+		// Only the drawn root is the default team; a non-root entry that
+		// also claimed is_default is shown as an ordinary team.
+		out = append(out, FleetTeamView{
+			ID:           e.ID,
+			Name:         e.Name,
+			IsDefault:    e.IsDefault && e.TreeDepth == 0 && e.TreeParentID == "",
+			Role:         e.Role,
+			ParentTeamID: e.TreeParentID,
+			TreeDepth:    e.TreeDepth,
+			Slug:         e.Slug,
+			Membership:   e.Membership,
+		})
+	}
+	return out
+}
+
 func telemetryOptInsToView(items []fleet.TelemetryOptInItem) []TelemetryOptInView {
 	out := make([]TelemetryOptInView, 0, len(items))
 	for _, it := range items {

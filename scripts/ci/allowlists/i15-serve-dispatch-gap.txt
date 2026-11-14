@@ -1316,6 +1316,22 @@
 "Fleet_MemberNotices"
 "Fleet_RespondMemberNotice"
 
+# CLASS: desktop-only-by-nature -- fleet spec 018 H-1 team tree, 2026-11-13.
+# 2 entries.
+#
+# The caller's Fleet teams as a tree (GET /api/v1/me teams[]), and where
+# this device last shared each context entry (the local share ledger the
+# share dialogs start from). Callers: the Account panel (SettingsView,
+# boundary-panelled NotAvailableInServedMode in served mode) and the
+# Contexts share dialogs, whose publish binding (Contexts_ContextPublish)
+# is itself unserved above. A served caller gets ServedUnsupportedError and
+# the picker is simply not shown; nothing is shared without it there.
+#
+# Blocker: a served settings surface (none exists for any Settings_Fleet*
+# panel) and a served context publish. Dated 2026-11-13. Owner: alec.
+"Contexts_ContextShareStates"
+"Settings_FleetTeams"
+
 # CLASS: desktop-only-by-nature -- ml-producer-01MLPRD01 WP01, 2026-10-09.
 # 3 entries.
 #

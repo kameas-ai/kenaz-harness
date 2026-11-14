@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import AccountPanel from '@/views/settings/AccountPanel.vue';
 import { createFakeHarnessClient, fakeFleetSession } from '@/lib/harnessClient';
-import { _resetFleetSessionForTest } from '@/lib/fleetSession';
+import { _resetFleetSessionForTest, applyFleetSession } from '@/lib/fleetSession';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { FleetIdentity, FleetProfileInfo, FleetSessionView } from '@/lib/types';
 
@@ -509,5 +509,76 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
       expect(wrapper.find('[data-testid="error-msg"]').text()).toContain('sign in again');
       expect(wrapper.find('[data-testid="device-keys-msg"]').text()).toContain('Sign in again to update');
     });
+  });
+});
+
+// ── Team tree (kenaz-fleet spec 018 H-1) ───────────────────────────────────
+
+describe('AccountPanel team tree (spec 018 H-1)', () => {
+  beforeEach(() => _resetFleetSessionForTest());
+
+  it('shows the caller\'s teams as a tree, root first, keyed by id', async () => {
+    const fleetTeams = vi.fn(async () => [
+      { id: 'root-id', name: 'Everyone', is_default: true, tree_depth: 0 },
+      { id: 'eng-id', name: 'Engineering', is_default: false, parent_team_id: 'root-id', tree_depth: 1 },
+      { id: 'be-id', name: 'Backend', is_default: false, parent_team_id: 'eng-id', tree_depth: 2 },
+    ]);
+    const client = buildClient(session('signed_in'), { fleetTeams });
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(fleetTeams).toHaveBeenCalled();
+    const rows = wrapper.findAll('[data-testid="fleet-team-tree-row"]');
+    expect(rows.map((r) => r.attributes('data-team-id'))).toEqual(['root-id', 'eng-id', 'be-id']);
+    expect(rows.map((r) => r.attributes('data-depth'))).toEqual(['0', '1', '2']);
+    expect(rows[0].find('[data-testid="fleet-team-root"]').exists()).toBe(true);
+    // The tree replaces the single enrolled-team row.
+    expect(wrapper.find('[data-testid="identity-team"]').exists()).toBe(false);
+  });
+
+  it('falls back to the enrolled team row when the team list is unavailable', async () => {
+    const client = buildClient(session('signed_in'), {
+      fleetTeams: vi.fn(async () => {
+        throw new Error('older Fleet');
+      }),
+    });
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="fleet-team-tree"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="identity-team"]').text()).toBe('Engineering');
+  });
+});
+
+describe('AccountPanel team tree across accounts (spec 018 H-1 review)', () => {
+  beforeEach(() => _resetFleetSessionForTest());
+
+  it('drops the previous account\'s teams as soon as the account changes', async () => {
+    let call = 0;
+    const fleetTeams = vi.fn(() =>
+      ++call === 1
+        ? Promise.resolve([
+            { id: 'root-a', name: 'Everyone', is_default: true, tree_depth: 0 },
+            { id: 'team-a', name: 'Alpha', is_default: false, parent_team_id: 'root-a', tree_depth: 1, membership: 'inherited' },
+          ])
+        : new Promise<never>(() => {}),
+    );
+    const client = buildClient(session('signed_in'), { fleetTeams });
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="fleet-team-tree-row"]')).toHaveLength(2);
+    // An inherited team stays in the Account tree, labelled.
+    expect(wrapper.find('[data-team-id="team-a"] [data-testid="fleet-team-inherited"]').exists()).toBe(true);
+
+    applyFleetSession(
+      session('signed_in', prodProfile, { identity: { ...mockIdentity, userId: 'user-2', orgId: '43' } }),
+    );
+    await flushPromises();
+    expect(fleetTeams).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[data-testid="fleet-team-tree"]').exists()).toBe(false);
   });
 });

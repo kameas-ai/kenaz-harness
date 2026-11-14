@@ -56,10 +56,12 @@
  *
  * Publish layer:
  *   - The publish confirm dialog offers an explicit "team" vs. "org"
- *     choice (`publishLayer`), and `confirmPublish` never sends a team_id —
- *     there is no team picker. The backend resolves a "team" request to
- *     the enrolled fleet identity's team_id (Context_Publish in
- *     core/rpc/views/contexts/impl.go); a teamless identity gets an error
+ *     choice (`publishLayer`). For "team" it shows the caller's teams as a
+ *     tree (kenaz-fleet spec 018 H-1) and sends the chosen team's id. When
+ *     the team list is unavailable no team_id is sent and the backend
+ *     resolves a "team" request to the enrolled fleet identity's team_id
+ *     (Context_Publish in core/rpc/views/contexts/impl.go); a teamless
+ *     identity gets an error
  *     and nothing is shared. "org" is disabled for a known non-admin because
  *     Fleet allows it only for admins and owners.
  *     `publishResult.effective_layer` states where the entry went.
@@ -81,6 +83,7 @@ import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.v
 import type {
   ContextNode,
   ContextSyncStatusView,
+  ContextShareStateView,
   ContextPublishResult,
   ContextPromoteResult,
   ContextSearchHitView,
@@ -93,6 +96,14 @@ import ContextRecent from './ContextRecent.vue';
 import ContextHealthCard from '@/components/context/ContextHealthCard.vue';
 import FolderShareDialog from './FolderShareDialog.vue';
 import { contextEntryTitle, contextNodeID, type FolderBatchMode } from './folderBatch';
+import TeamPicker from '@/components/fleet/TeamPicker.vue';
+import {
+  initialShareTeam,
+  pickableTeams,
+  readShareStates,
+  shareMoveWarning,
+  useFleetTeams,
+} from '@/lib/fleetTeams';
 
 const props = defineProps<{
   /**
@@ -156,9 +167,33 @@ const syncStatus = ref<ContextSyncStatusView | null>(null);
 const showPublishConfirm = ref(false);
 /**
  * publishLayer is the user's deliberate layer choice in the confirm
- * dialog — "team" (default) or "org". There is no team picker.
+ * dialog — "team" (default) or "org".
  */
 const publishLayer = ref<'team' | 'org'>('team');
+/**
+ * The caller's teams as a tree and the one a "team" share goes to, by id
+ * (kenaz-fleet spec 018 H-1). Loaded fresh each time the share dialog opens
+ * (this view is kept alive across account switches). Fleet overwrites an
+ * entry's team on re-share, so the dialog starts on the team the entry is
+ * shared with now (the local share record); a never-shared entry starts on
+ * the enrolled identity's team. Until both reads finish there is no picker
+ * and "Yes, share" is disabled.
+ */
+const fleetTeams = useFleetTeams(client);
+const publishTeams = computed(() => pickableTeams(fleetTeams.teams.value));
+const publishTeamId = ref('');
+const publishPrior = ref<ContextShareStateView | null>(null);
+const publishReady = ref(false);
+let publishOpenSeq = 0;
+/** Plain warning when the chosen audience moves the entry off its current team. */
+const publishMoveWarning = computed(() =>
+  publishReady.value
+    ? shareMoveWarning(fleetTeams.teams.value, publishPrior.value, {
+        layer: publishLayer.value,
+        teamId: publishTeamId.value,
+      })
+    : null,
+);
 /** Result of the most recent publish call (shown inline). */
 const publishResult = ref<ContextPublishResult | null>(null);
 /** Error string from the last publish call. */
@@ -320,26 +355,56 @@ function openPublishConfirm() {
   publishError.value = null;
   publishResult.value = null;
   publishLayer.value = 'team';
+  // Never show or send a previous account's teams: start empty each time.
+  fleetTeams.reset();
+  publishTeamId.value = '';
+  publishPrior.value = null;
+  publishReady.value = false;
   showPublishConfirm.value = true;
+  const seq = ++publishOpenSeq;
+  const nodeID = selectedNodeID.value;
+  const prior = readShareStates(client, [nodeID]).then(
+    (states) => states.find((st) => st.node_id === nodeID) ?? null,
+  );
+  void Promise.all([fleetTeams.load(), prior]).then(([, p]) => {
+    if (seq !== publishOpenSeq) return; // the dialog was reopened meanwhile
+    publishPrior.value = p;
+    publishTeamId.value = initialShareTeam(
+      publishTeams.value,
+      p?.layer === 'team' ? p.team_id : undefined,
+      fleetSessionStore.identity.value?.teamId,
+    );
+    publishReady.value = true;
+  });
 }
 
 /**
  * confirmPublish — the user clicked "Yes, share" in the confirm dialog.
  * Calls client.contexts.publish with the selected file's metadata and the
  * user's chosen layer. The nodeID is derived from the path (stable
- * cross-session). No team_id is ever sent — there is no team picker;
- * the backend uses the enrolled identity's team, and refuses a "team"
- * request for a teamless identity. `result.effective_layer` is
+ * cross-session). A "team" share sends the picked team's id; with no team
+ * list (older Fleet, read failed) none is sent and the backend uses the
+ * enrolled identity's team, refusing a "team" request for a teamless
+ * identity. `result.effective_layer` is
  * always what actually happened and is what gets shown to the user, not
  * the requested layer.
  */
 async function confirmPublish() {
+  // Not before the team list and the entry's share record are read: a click
+  // then could move a team-shared entry to the org root.
+  if (!publishReady.value) return;
   showPublishConfirm.value = false;
   if (!selectedPath.value || !previewContent.value) return;
   publishLoading.value = true;
   publishError.value = null;
   publishResult.value = null;
   try {
+    // With no team list, a re-share stays on the entry's current team rather
+    // than falling back to the enrolled (root) team.
+    const prior = publishPrior.value;
+    const fallback = prior?.layer === 'team' ? prior.team_id ?? '' : '';
+    const teamID =
+      publishLayer.value === 'team' ? (publishTeams.value.length > 0 ? publishTeamId.value : fallback) : '';
     const result = await client.contexts.publish({
       node_id: selectedNodeID.value,
       layer: publishLayer.value,
@@ -347,6 +412,7 @@ async function confirmPublish() {
       title: contextEntryTitle(selectedPath.value),
       body: previewContent.value,
       version: 1,
+      ...(teamID ? { team_id: teamID } : {}),
     });
     publishResult.value = result;
     // Reload sync status to show updated pull count.
@@ -889,7 +955,7 @@ onBeforeUnmount(() => {
           layers.
         </p>
         <!-- Layer choice — "org" is an explicit option, disabled for a known
-             non-admin. There is no team picker. -->
+             non-admin. "team" picks one of the caller's teams, by id. -->
         <fieldset class="flex flex-col gap-2 mb-4" data-testid="context-publish-layer-choice">
           <legend class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle mb-1">
             Visibility
@@ -903,6 +969,13 @@ onBeforeUnmount(() => {
             />
             <span>Share to team</span>
           </label>
+          <div v-if="publishReady && publishLayer === 'team' && publishTeams.length > 0" class="pl-6">
+            <TeamPicker
+              v-model="publishTeamId"
+              :teams="publishTeams"
+              testid="context-publish-team-picker"
+            />
+          </div>
           <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
             <input
               v-model="publishLayer"
@@ -921,6 +994,14 @@ onBeforeUnmount(() => {
             Only an org admin or owner can publish org-wide.
           </p>
         </fieldset>
+        <p
+          v-if="publishMoveWarning"
+          class="font-ui text-[12px] text-signal-warning leading-relaxed mb-4"
+          role="alert"
+          data-testid="context-publish-move-warning"
+        >
+          {{ publishMoveWarning }}
+        </p>
         <div class="flex justify-end gap-3">
           <button
             type="button"
@@ -934,6 +1015,7 @@ onBeforeUnmount(() => {
             type="button"
             class="font-ui text-[12px] text-accent hover:text-accent-muted px-3 py-1.5 rounded-md bg-accent/10 hover:bg-accent/20"
             data-testid="context-publish-confirm-ok"
+            :disabled="!publishReady"
             @click="confirmPublish"
           >
             Yes, share

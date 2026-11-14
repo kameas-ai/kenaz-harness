@@ -19,7 +19,16 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import type { ContextNode } from '@/lib/types';
+import { useFleetSession } from '@/lib/fleetSession';
+import {
+  folderInitialTeam,
+  folderShareMoveWarning,
+  pickableTeams,
+  readShareStates,
+  useFleetTeams,
+} from '@/lib/fleetTeams';
+import TeamPicker from '@/components/fleet/TeamPicker.vue';
+import type { ContextNode, ContextShareStateView } from '@/lib/types';
 import {
   buildBatchEntries,
   contextEntryTitle,
@@ -56,6 +65,50 @@ const entries = ref<BatchEntry[]>(buildBatchEntries(props.folder, props.mode));
 
 const stopRequested = ref(false);
 const layer = ref<'team' | 'org'>('team');
+/**
+ * The caller's teams as a tree and the one a "team" share goes to, by id
+ * (kenaz-fleet spec 018 H-1). Fleet overwrites an entry's team on re-share,
+ * so the dialog reads where each entry is shared now (the local share
+ * record): it starts on their one common team if they have one, and warns
+ * when the chosen audience moves any of them. Until both reads finish there
+ * is no picker and Share is disabled. With no team list (older Fleet, read
+ * failed) each entry is re-shared to its own recorded team, and a
+ * never-shared entry sends no team_id (the backend's enrolled team).
+ */
+const fleetSession = useFleetSession(client);
+const fleetTeams = useFleetTeams(client);
+const teams = computed(() => pickableTeams(fleetTeams.teams.value));
+const teamId = ref('');
+const priors = ref<ContextShareStateView[]>([]);
+const teamsReady = ref(props.mode !== 'share');
+if (props.mode === 'share') {
+  const ids = entries.value.map((e) => contextNodeID(e.path));
+  const states = readShareStates(client, ids);
+  void Promise.all([fleetTeams.load(), states]).then(([, st]) => {
+    priors.value = st;
+    teamId.value = folderInitialTeam(teams.value, eligiblePriors(), fleetSession.identity.value?.teamId);
+    teamsReady.value = true;
+  });
+}
+/** Share records of the entries currently checked for this batch. */
+function eligiblePriors(): ContextShareStateView[] {
+  const checked = new Set(
+    entries.value.filter((e) => e.checked && e.ineligible === null).map((e) => contextNodeID(e.path)),
+  );
+  return priors.value.filter((p) => checked.has(p.node_id));
+}
+function priorTeamFor(path: string): string {
+  const p = priors.value.find((x) => x.node_id === contextNodeID(path));
+  return p?.layer === 'team' ? p.team_id ?? '' : '';
+}
+const moveWarning = computed(() =>
+  props.mode === 'share' && teamsReady.value && phase.value === 'select'
+    ? folderShareMoveWarning(fleetTeams.teams.value, eligiblePriors(), {
+        layer: layer.value,
+        teamId: teamId.value,
+      })
+    : null,
+);
 // A session refresh can demote an admin while the dialog is open.
 watch(
   () => props.orgPublishBlocked,
@@ -81,6 +134,8 @@ function toggleAll(on: boolean) {
 async function shareOne(e: BatchEntry): Promise<string | { skipped: string }> {
   const body = await staged('read failed', () => client.contexts.get(e.path));
   if (!body) return { skipped: 'Empty file — nothing to share.' };
+  const team =
+    layer.value === 'team' ? (teams.value.length > 0 ? teamId.value : priorTeamFor(e.path)) : '';
   const res = await staged('publish rejected', () =>
     client.contexts.publish({
       node_id: contextNodeID(e.path),
@@ -89,6 +144,7 @@ async function shareOne(e: BatchEntry): Promise<string | { skipped: string }> {
       title: contextEntryTitle(e.path),
       body,
       version: 1,
+      ...(team ? { team_id: team } : {}),
     }),
   );
   const where = res.effective_layer === 'org' ? 'your organisation' : 'your team';
@@ -107,7 +163,7 @@ async function promoteOne(e: BatchEntry): Promise<string> {
 }
 
 async function confirm() {
-  if (disabled.value || phase.value !== 'select' || selectedCount.value === 0) return;
+  if (disabled.value || phase.value !== 'select' || selectedCount.value === 0 || !teamsReady.value) return;
   phase.value = 'running';
   stopRequested.value = false;
   for (const e of entries.value) {
@@ -216,6 +272,9 @@ const statusClass: Record<BatchEntry['status'], string> = {
           <input v-model="layer" type="radio" value="team" data-testid="folder-share-layer-team" />
           <span>Share to team</span>
         </label>
+        <div v-if="teamsReady && layer === 'team' && teams.length > 0" class="pl-6">
+          <TeamPicker v-model="teamId" :teams="teams" testid="folder-share-team-picker" />
+        </div>
         <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
           <input
             v-model="layer"
@@ -234,6 +293,14 @@ const statusClass: Record<BatchEntry['status'], string> = {
           Only an org admin or owner can publish org-wide.
         </p>
       </fieldset>
+      <p
+        v-if="moveWarning"
+        class="font-ui text-[12px] text-signal-warning leading-relaxed mb-3"
+        role="alert"
+        data-testid="folder-share-move-warning"
+      >
+        {{ moveWarning }}
+      </p>
 
       <div class="flex items-center gap-3 mb-1 font-ui text-[11px] text-ink-muted">
         <span class="flex-1">{{ entries.length }} file{{ entries.length === 1 ? '' : 's' }} · {{ selectedCount }} selected</span>
@@ -337,7 +404,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
           v-if="phase !== 'finished'"
           type="button"
           class="font-ui text-[12px] text-accent hover:text-accent-muted px-3 py-1.5 rounded-md bg-accent/10 hover:bg-accent/20 disabled:opacity-50"
-          :disabled="disabled || phase !== 'select' || selectedCount === 0"
+          :disabled="disabled || phase !== 'select' || selectedCount === 0 || !teamsReady"
           data-testid="folder-share-confirm"
           @click="confirm"
         >
