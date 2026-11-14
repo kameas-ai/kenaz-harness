@@ -65,7 +65,9 @@ const keyRegReauthCopy = "Sign in again to update this device's keys. Until you 
 // a Fleet setting is turned on. Distinct from reauth_required so the UI says
 // "contact your administrator" instead of offering a retry that will fail,
 // and sticky: a later tokenless enroll (app start, identity refresh) does NOT
-// downgrade it. Cleared by a successful registration or a different account.
+// downgrade it, including after a restart (persisted per account,
+// device_keys_refused.go). Cleared by a successful registration or a
+// different account.
 const KeyRegReauthRefused = "reauth_refused"
 
 // keyRegRefusedCopy is the user-facing copy for KeyRegReauthRefused.
@@ -289,6 +291,8 @@ func (c *Client) setReauthRequired(sentProof bool) {
 		c.setReauthRefused()
 		return
 	}
+	// After a restart the refusal comes from disk (device_keys_refused.go).
+	c.loadPersistedRefusal()
 	c.keyReg.mu.Lock()
 	sticky := c.keyReg.last.Status == KeyRegReauthRefused &&
 		c.keyReg.refusedFor != "" && c.keyReg.refusedFor == currentSubject()
@@ -296,16 +300,20 @@ func (c *Client) setReauthRequired(sentProof bool) {
 	if sticky {
 		return
 	}
-	c.keyReg.set(KeyRegistration{Status: KeyRegReauthRequired, Message: keyRegReauthCopy})
+	c.setKeyReg(KeyRegistration{Status: KeyRegReauthRequired, Message: keyRegReauthCopy})
 }
 
-// setReauthRefused records reauth_refused for the signed-in account.
+// setReauthRefused records reauth_refused for the signed-in account, in
+// memory and on disk (so a restart keeps it; device_keys_refused.go).
 func (c *Client) setReauthRefused() {
+	c.loadPersistedRefusal()
 	sub := currentSubject()
+	at := time.Now().UTC()
 	c.keyReg.mu.Lock()
-	defer c.keyReg.mu.Unlock()
-	c.keyReg.last = KeyRegistration{Status: KeyRegReauthRefused, Message: keyRegRefusedCopy, At: time.Now().UTC()}
+	c.keyReg.last = KeyRegistration{Status: KeyRegReauthRefused, Message: keyRegRefusedCopy, At: at}
 	c.keyReg.refusedFor = sub
+	c.keyReg.mu.Unlock()
+	c.persistReauthRefused(sub, at)
 }
 
 // currentSubject is the signed-in access token's sub ("" when unknown).
