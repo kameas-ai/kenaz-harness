@@ -389,3 +389,73 @@ func drainOne(ch <-chan string) {
 	default:
 	}
 }
+
+// blockingDispatcher parks every dispatch until its ctx is cancelled —
+// the shape of a live dispatch waiting on its run's terminal event.
+type blockingDispatcher struct {
+	entered chan struct{}
+}
+
+func (b *blockingDispatcher) DispatchChatRun(ctx context.Context, job scheduler.Job, now time.Time) (scheduler.ChatRunHistoryRecord, error) {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	ended := time.Now().UTC()
+	return scheduler.ChatRunHistoryRecord{
+		Status:    "failed",
+		StartedAt: now,
+		EndedAt:   &ended,
+		Error:     "cancelled: " + ctx.Err().Error(),
+	}, nil
+}
+
+// TestChatCronEngine_StopWaitsForInFlightFire: Stop must cancel a fire
+// that is mid-dispatch and not return until that fire's history write is
+// done, so the owner can close storage right after. Before the fix, Stop
+// returned immediately and the fire goroutine's AppendHistory raced the
+// DB Close (seen as a -race flake in RegisterAndFire's cleanup).
+func TestChatCronEngine_StopWaitsForInFlightFire(t *testing.T) {
+	store := openTestChatStore(t)
+	mustCreateRow(t, store, "cr-block", "* * * * * *", true)
+
+	disp := &blockingDispatcher{entered: make(chan struct{}, 1)}
+	ctx := context.Background()
+	engine, err := scheduler.NewChatCronEngine(ctx, scheduler.ChatCronEngineConfig{
+		Store:      store,
+		Dispatcher: disp,
+	})
+	if err != nil {
+		t.Fatalf("NewChatCronEngine: %v", err)
+	}
+	engine.Start()
+
+	select {
+	case <-disp.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for a fire to enter the dispatcher")
+	}
+
+	stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := engine.StopContext(stopCtx); err != nil {
+		t.Fatalf("StopContext: %v (in-flight fire did not finish)", err)
+	}
+	if engine.Started() {
+		t.Fatal("engine still reports started after Stop")
+	}
+
+	// Stop has returned, so the cancelled fire's history row must
+	// already be persisted — no polling.
+	hist, err := store.History(ctx, "cr-block", 10)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(hist) == 0 {
+		t.Fatal("no history row persisted by the time Stop returned")
+	}
+	if hist[0].Status != "failed" {
+		t.Errorf("history status=%q, want failed (cancelled by Stop)", hist[0].Status)
+	}
+}

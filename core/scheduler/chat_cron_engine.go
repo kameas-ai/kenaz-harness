@@ -122,6 +122,70 @@ type ChatCronEngine struct {
 	dispatch ChatRunDispatcher
 	cedar    cedar.Gate
 	started  bool
+
+	// fireCtx is the context every fire goroutine runs under. Start
+	// creates it and Stop cancels it, so a dispatch still waiting on its
+	// run's terminal event returns promptly instead of holding Stop for
+	// the dispatcher's own (minutes-long) timeout. Guarded by mu.
+	fireCtx    context.Context
+	fireCancel context.CancelFunc
+
+	// fires counts the fire goroutines (cron ticks and one-shot timers)
+	// that may still touch the store. Stop waits for it so no fire can
+	// write after the caller closes storage — before this, Stop returned
+	// while a tick's AppendHistory was still running and the owner's
+	// Close raced it (TestChatCronEngine_RegisterAndFire under -race).
+	fires fireTracker
+}
+
+// DefaultChatCronStopTimeout bounds how long Stop waits for in-flight
+// fires to finish. StopContext takes an explicit bound instead.
+const DefaultChatCronStopTimeout = 30 * time.Second
+
+// fireTracker counts in-flight fire goroutines. Not a sync.WaitGroup: a
+// later Start can begin a new fire while an earlier Stop is still
+// waiting, and a WaitGroup forbids an Add from zero concurrent with Wait
+// (same reasoning as core/rpc/views/agentgraph/chat/run_drain.go). The
+// zero value is ready to use.
+type fireTracker struct {
+	mu   sync.Mutex
+	n    int
+	idle chan struct{} // closed when n returns to 0; nil while n == 0
+}
+
+func (t *fireTracker) add() {
+	t.mu.Lock()
+	if t.n == 0 {
+		t.idle = make(chan struct{})
+	}
+	t.n++
+	t.mu.Unlock()
+}
+
+func (t *fireTracker) done() {
+	t.mu.Lock()
+	t.n--
+	if t.n == 0 {
+		close(t.idle)
+		t.idle = nil
+	}
+	t.mu.Unlock()
+}
+
+// wait blocks until no fire is in flight or ctx ends.
+func (t *fireTracker) wait(ctx context.Context) error {
+	t.mu.Lock()
+	ch := t.idle
+	t.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // NewChatCronEngine constructs a ChatCronEngine and reloads enabled rows
@@ -363,6 +427,7 @@ func (e *ChatCronEngine) Start() {
 	}
 	e.c.Start()
 	e.started = true
+	e.fireCtx, e.fireCancel = context.WithCancel(context.Background())
 	for id, ent := range e.entries {
 		if ent.kind == TriggerKindOnce && ent.timer == nil {
 			ent.timer = e.armOnceLocked(id, ent.runAt)
@@ -370,27 +435,58 @@ func (e *ChatCronEngine) Start() {
 	}
 }
 
-// Stop halts cron dispatch AND stops every armed one-shot timer. In-flight
-// fires (already executing when Stop is called) are not interrupted —
-// time.Timer.Stop cannot cancel a callback already running, matching the
-// cron engine's own "in-flight fires are not interrupted" contract.
+// Stop halts cron dispatch, stops every armed one-shot timer, refuses
+// any fire that has not yet begun, cancels the context of fires already
+// running, and waits — bounded by DefaultChatCronStopTimeout — for those
+// fires to finish. When Stop returns (without a timeout) no fire
+// goroutine can touch the store, so the caller may close storage.
 // Entries survive Stop with timer reset to nil, so a later Start()
 // re-arms them (mirrors robfig/cron's own Stop-then-Start resumption for
 // entries added via AddFunc).
 func (e *ChatCronEngine) Stop() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.started {
-		return
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultChatCronStopTimeout)
+	defer cancel()
+	if err := e.StopContext(ctx); err != nil {
+		slog.Warn("scheduler.chat_cron.stop_drain_incomplete", "error", err.Error())
 	}
-	e.c.Stop()
-	e.started = false
-	for _, ent := range e.entries {
-		if ent.kind == TriggerKindOnce && ent.timer != nil {
-			ent.timer.Stop()
-			ent.timer = nil
+}
+
+// StopContext is Stop with an explicit bound on the wait for in-flight
+// fires. It returns ctx.Err() if fires were still running when ctx
+// ended. Idempotent: calling it on a stopped engine still waits for any
+// fire left over from an earlier, timed-out stop.
+func (e *ChatCronEngine) StopContext(ctx context.Context) error {
+	e.mu.Lock()
+	if e.started {
+		e.c.Stop()
+		e.started = false
+		if e.fireCancel != nil {
+			e.fireCancel()
+		}
+		for _, ent := range e.entries {
+			if ent.kind == TriggerKindOnce && ent.timer != nil {
+				ent.timer.Stop()
+				ent.timer = nil
+			}
 		}
 	}
+	e.mu.Unlock()
+	return e.fires.wait(ctx)
+}
+
+// beginFire registers one fire goroutine and returns its context, or
+// ok=false when the engine is stopped (a cron tick or timer callback
+// that raced Stop must not start). Registration happens under e.mu, so
+// it is atomic with Stop's refusal: once Stop has released the lock,
+// every fire it must wait for is already counted.
+func (e *ChatCronEngine) beginFire() (context.Context, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if !e.started {
+		return nil, false
+	}
+	e.fires.add()
+	return e.fireCtx, true
 }
 
 // Started reports whether Start has been called (and Stop has not
@@ -425,8 +521,13 @@ func (e *ChatCronEngine) dispatcherSnapshot() ChatRunDispatcher {
 // fire is the cron callback — runs in the cron goroutine, so it must not
 // block the cron engine. Dispatches asynchronously.
 func (e *ChatCronEngine) fire(id string) {
+	ctx, ok := e.beginFire()
+	if !ok {
+		return
+	}
 	go func() {
-		_, _ = e.fireSync(context.Background(), id)
+		defer e.fires.done()
+		_, _ = e.fireSync(ctx, id)
 	}()
 }
 
@@ -444,11 +545,21 @@ func (e *ChatCronEngine) fire(id string) {
 // RunAt is deliberately left untouched — the history row plus
 // Enabled=false together are the durable proof it already fired, not a
 // cleared RunAt (spec.md §5.7 "sets enabled = 0").
+//
+// A timer that fires after Stop does nothing: the entry stays registered
+// and the next Start re-arms it (a past runAt fires immediately).
 func (e *ChatCronEngine) fireOnce(id string) {
-	ctx := context.Background()
+	ctx, ok := e.beginFire()
+	if !ok {
+		return
+	}
+	defer e.fires.done()
 	_, _ = e.fireSync(ctx, id)
 	if e.store != nil {
-		if err := e.store.SetEnabled(ctx, id, false); err != nil && !errors.Is(err, ErrChatRunNotFound) {
+		// WithoutCancel: the attempt was made, so it is used up even when
+		// Stop cancelled it mid-dispatch — otherwise the next boot would
+		// fire it again.
+		if err := e.store.SetEnabled(context.WithoutCancel(ctx), id, false); err != nil && !errors.Is(err, ErrChatRunNotFound) {
 			slog.WarnContext(ctx, "scheduler.chat_cron.once_disable_failed",
 				"chat_run_id", id, "error", err.Error())
 		}
@@ -541,7 +652,9 @@ func (e *ChatCronEngine) fireSync(ctx context.Context, id string) (ChatRunHistor
 	hist.ID = newChatHistoryID()
 	hist.ChatRunID = id
 
-	if perr := e.store.AppendHistory(ctx, hist); perr != nil {
+	// WithoutCancel: a fire that Stop cancelled mid-dispatch still
+	// records its (cancelled) outcome; Stop waits for this write.
+	if perr := e.store.AppendHistory(context.WithoutCancel(ctx), hist); perr != nil {
 		slog.WarnContext(ctx, "scheduler.chat_cron.append_history_failed",
 			"chat_run_id", id, "error", perr.Error())
 	}
