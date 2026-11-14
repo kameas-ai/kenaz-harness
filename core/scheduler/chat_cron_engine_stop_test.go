@@ -8,6 +8,7 @@ package scheduler_test
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -185,6 +186,9 @@ func TestChatCronEngine_OnceStoppedBeforeRunStartStaysEnabled(t *testing.T) {
 	if len(h) != 1 || h[0].Status != scheduler.ChatRunStatusSkipped {
 		t.Fatalf("history = %+v, want one skipped row", h)
 	}
+	if want := "It will run the next time the app starts."; !strings.HasSuffix(h[0].Error, want) {
+		t.Fatalf("skipped reason = %q, want it to end %q", h[0].Error, want)
+	}
 	mustEnabled(t, store, "once-pre", true)
 
 	engine.Start()
@@ -287,4 +291,25 @@ func TestChatCronEngine_FireAfterStopIsRefusedAndReArmed(t *testing.T) {
 		t.Fatal("re-armed one-shot did not fire after Start")
 	}
 	waitOnceSettled(t, store, engine, "once-late")
+}
+
+// A recurring schedule stopped before its run started is not re-fired at
+// start; its skipped row says it waits for its next scheduled time.
+func TestChatCronEngine_CronStoppedBeforeRunStartSaysNextScheduledTime(t *testing.T) {
+	store := openTestChatStore(t)
+	mustCreateRow(t, store, "cron-pre", "* * * * * *", true)
+	disp := &reportingDispatcher{blockFirst: true, entered: make(chan struct{}, 4)}
+	engine := newOnceEngine(t, store, disp)
+	engine.Start()
+	waitSignal(t, disp.entered, "the dispatch")
+	mustStop(t, engine)
+
+	h := historyOf(t, store, "cron-pre")
+	if len(h) != 1 || h[0].Status != scheduler.ChatRunStatusSkipped {
+		t.Fatalf("history = %+v, want one skipped row", h)
+	}
+	if want := "It will run at its next scheduled time."; !strings.HasSuffix(h[0].Error, want) {
+		t.Fatalf("skipped reason = %q, want it to end %q", h[0].Error, want)
+	}
+	mustEnabled(t, store, "cron-pre", true)
 }

@@ -576,6 +576,17 @@ func (e *ChatCronEngine) fireOnce(id string) {
 	e.unregister(id)
 }
 
+// skippedAtStopReason is the history text for a fire that engine Stop
+// (app quit) cancelled before its run started. A one-shot stays enabled
+// and fires on the next start; a cron schedule simply waits for its next
+// tick — it is not re-fired at start.
+func skippedAtStopReason(kind string) string {
+	if kind == TriggerKindOnce {
+		return "The app was closing before this run started. It will run the next time the app starts."
+	}
+	return "The app was closing before this run started. It will run at its next scheduled time."
+}
+
 // fireSync dispatches one chat run and appends the outcome to history.
 // Exported at package scope (lower-case: test-only via the scheduler_test
 // package, which is in-package for this file's tests) so tests can await
@@ -674,7 +685,7 @@ func (e *ChatCronEngine) fireSync(ctx context.Context, id string) (hist ChatRunH
 				Status:    ChatRunStatusSkipped,
 				StartedAt: now,
 				EndedAt:   &ended,
-				Error:     "the app was shutting down before this run started; it runs on the next start",
+				Error:     skippedAtStopReason(rec.EffectiveTriggerKind()),
 			}
 		}
 	} else {
