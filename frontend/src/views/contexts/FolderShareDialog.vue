@@ -69,8 +69,8 @@ const layer = ref<'team' | 'org'>('team');
 /**
  * The caller's teams as a tree and the one a "team" share goes to, by id
  * (kenaz-fleet spec 018 H-1). Fleet overwrites an entry's team on re-share,
- * so the dialog reads where each entry is shared now (the local share
- * record): it starts on their one common team if they have one, and warns
+ * so the dialog reads where each entry is shared now (Fleet's team_id for
+ * an own pulled node, else the local share record): it starts on their one common team if they have one, and warns
  * when the chosen audience moves any of them. Until both reads finish there
  * is no picker and Share is disabled. With no team list (older Fleet, read
  * failed) each entry is re-shared to its own recorded team, and a

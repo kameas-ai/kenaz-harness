@@ -319,6 +319,9 @@ type ContextGraphSyncer struct {
 	pulled  []ContextNodeEntry
 	// pulledEdges is the in-memory cache of edges received from fleet.
 	pulledEdges []ContextEdgeEntry
+	// locations is where Fleet holds each pulled node (layer, team_id),
+	// persisted across restarts (context_pulled_locations.go).
+	locations map[string]PulledShareLocation
 	// cursor is the RFC3339Nano timestamp for the next pull call.
 	cursor  string
 	// lastPullAt is the wall-clock time of the last successful pull.
@@ -385,6 +388,7 @@ func NewContextGraphSyncer(client *Client, dataDir string, caps *CapabilityPolle
 	if c, err := loadContextCursor(dataDir); err == nil {
 		s.cursor = c
 	}
+	s.locations = loadPulledLocations(dataDir)
 	return s
 }
 
@@ -735,17 +739,29 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	locationsChanged := false
 	for _, n := range pullResp.Nodes {
 		// Another lane's node (unit kinds, bootstrap taxonomy, anything a
 		// server that ignores ?kind= sends): skip and count — never list it
 		// under Knowledge › Curated (audit §0-E).
 		if !curatedLaneAccepts(n) {
 			s.skippedUnknownKinds++
+			if _, had := s.locations[n.ID]; had {
+				delete(s.locations, n.ID) // moved to another lane
+				locationsChanged = true
+			}
 			continue
 		}
 		layer, ok := LayerForClassification(n.Classification)
 		if !ok {
+			if _, had := s.locations[n.ID]; had {
+				delete(s.locations, n.ID)
+				locationsChanged = true
+			}
 			continue // skip unknown classifications
+		}
+		if s.recordPulledLocationLocked(n, layer) {
+			locationsChanged = true
 		}
 		entry := ContextNodeEntry{
 			ID:             n.ID,
@@ -770,6 +786,10 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 			entry.Title, entry.Body, entry.Metadata = "", "", nil
 		}
 		s.upsertPulledLocked(entry)
+	}
+
+	if locationsChanged {
+		s.savePulledLocationsLocked()
 	}
 
 	// Merge edges.
@@ -1316,10 +1336,12 @@ func (s *ContextGraphSyncer) ResetCursor() {
 	s.cursor = ""
 	s.pulled = nil
 	s.pulledEdges = nil
+	s.locations = map[string]PulledShareLocation{}
 	s.pullCount = 0
 	s.mu.Unlock()
 	if s.dataDir != "" {
 		_ = os.Remove(contextCursorPath(s.dataDir))
+		_ = os.Remove(pulledLocationsPath(s.dataDir))
 	}
 }
 

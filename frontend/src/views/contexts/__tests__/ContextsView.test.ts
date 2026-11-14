@@ -2018,6 +2018,22 @@ describe('ContextsView share target (spec 018 H-1 review)', () => {
     expect(w.find('[data-testid=context-publish-move-warning]').text()).toContain('Publishing it org-wide');
   });
 
+  it('an entry shared to Backend from another device starts on Backend and warns before Everyone', async () => {
+    // No local share record: the backend answers from Fleet's pulled
+    // team_id (Context_ShareStates), so the state reads the same here.
+    const { w } = await open({
+      teamId: 'root-id',
+      shareStates: async (ids) =>
+        ids.map((id) => ({ node_id: id, layer: 'team' as const, team_id: 'be-id' })),
+    });
+    expect(pickerValue(w)).toBe('be-id');
+    expect(w.find('[data-testid=context-publish-move-warning]').exists()).toBe(false);
+    await w.find('[data-testid=context-publish-team-picker]').setValue('root-id');
+    expect(w.find('[data-testid=context-publish-move-warning]').text()).toBe(
+      'This file is shared with Backend. Sharing it with Everyone makes it visible to your whole organisation.',
+    );
+  });
+
   it('never offers an inherited team as a share target', async () => {
     const { w } = await open({});
     const ids = w.findAll('[data-testid=context-publish-team-picker] option').map((o) => o.attributes('value'));

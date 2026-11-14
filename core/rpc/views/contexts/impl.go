@@ -623,27 +623,104 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 	}, nil
 }
 
-// Context_ShareStates returns where this device last shared each of
-// nodeIDs (LOCAL ids, as published), for the signed-in fleet user. Entries
-// never shared from here, or shared by another account, are omitted.
-// Returns an empty list (no error) when fleet is not wired.
+// Context_ShareStates returns where each of nodeIDs (LOCAL ids, as
+// published) is shared now, for the signed-in fleet user, so the share
+// dialogs start on that team and warn before widening it.
+//
+// Sources, in order (kenaz-fleet spec 018 H-1; Fleet sends team_id on
+// every pulled node):
+//  1. Fleet's own answer for a node the member owns, from the pulled index
+//     (fleet.PulledShareLocations, persisted across restarts): the node
+//     this install pushed for the path (same wire id), else exactly one own
+//     node with the same title (shared from another device or the plugin).
+//  2. The local share ledger (where this device last shared it).
+//
+// When Fleet's answer and the ledger disagree, Fleet's wins (it is newer)
+// and the ledger is updated to match. Entries with neither are omitted;
+// the dialogs then fall back to the enrolled team. Returns an empty list
+// (no error) when fleet is not wired or no fleet user is known.
 func (a *API) Context_ShareStates(_ context.Context, nodeIDs []string) ([]ContextShareStateView, error) {
 	out := []ContextShareStateView{}
 	if a == nil || a.syncer == nil {
 		return out, nil
 	}
 	user := a.currentUserID()
+	if user == "" {
+		return out, nil
+	}
+	byID, byTitle := ownPulledLocations(a.syncer.PulledShareLocations(), user)
 	for _, id := range nodeIDs {
 		if id == "" {
 			continue
 		}
-		rec, ok := a.ledger().get(a.syncer.WireNodeID(id), user)
-		if !ok {
+		wireID := a.syncer.WireNodeID(id)
+		rec, hasRec := a.ledger().get(wireID, user)
+		if loc, ok := pulledLocationFor(byID, byTitle, wireID, localEntryTitle(id)); ok {
+			view := ContextShareStateView{NodeID: id, Layer: string(loc.Layer)}
+			if loc.Layer == contextpack.LayerTeam {
+				view.TeamID = loc.TeamID
+			}
+			if hasRec && (rec.Layer != view.Layer || rec.TeamID != view.TeamID) {
+				if err := a.ledger().put(wireID, shareRecord{
+					UserID: user, Layer: view.Layer, TeamID: view.TeamID, SharedAt: time.Now().UTC(),
+				}); err != nil {
+					logging.L().Warn("contexts.share_states.ledger_update_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
+				}
+			}
+			out = append(out, view)
 			continue
 		}
-		out = append(out, ContextShareStateView{NodeID: id, Layer: rec.Layer, TeamID: rec.TeamID})
+		if hasRec {
+			out = append(out, ContextShareStateView{NodeID: id, Layer: rec.Layer, TeamID: rec.TeamID})
+		}
 	}
 	return out, nil
+}
+
+// usablePulledLocation: a team node needs its team_id to say anything.
+func usablePulledLocation(l fleet.PulledShareLocation) bool {
+	switch l.Layer {
+	case contextpack.LayerTeam:
+		return l.TeamID != ""
+	case contextpack.LayerOrg:
+		return true
+	}
+	return false
+}
+
+// ownPulledLocations indexes user's own usable pulled locations by wire id
+// and by title key.
+func ownPulledLocations(locs []fleet.PulledShareLocation, user string) (map[string]fleet.PulledShareLocation, map[string][]fleet.PulledShareLocation) {
+	byID := map[string]fleet.PulledShareLocation{}
+	byTitle := map[string][]fleet.PulledShareLocation{}
+	for _, l := range locs {
+		if l.OwnerUserID == "" || !strings.EqualFold(l.OwnerUserID, user) || !usablePulledLocation(l) {
+			continue
+		}
+		byID[l.NodeID] = l
+		byTitle[l.TitleKey] = append(byTitle[l.TitleKey], l)
+	}
+	return byID, byTitle
+}
+
+// pulledLocationFor is Fleet's answer for a local entry: the node with its
+// wire id, else the one own node with its title. Several own nodes with
+// the same title in different places are ambiguous: no answer.
+func pulledLocationFor(byID map[string]fleet.PulledShareLocation, byTitle map[string][]fleet.PulledShareLocation, wireID, title string) (fleet.PulledShareLocation, bool) {
+	if l, ok := byID[wireID]; ok {
+		return l, true
+	}
+	cands := byTitle[fleet.CuratedTitleKey(title)]
+	if len(cands) == 0 {
+		return fleet.PulledShareLocation{}, false
+	}
+	first := cands[0]
+	for _, c := range cands[1:] {
+		if c.Layer != first.Layer || c.TeamID != first.TeamID {
+			return fleet.PulledShareLocation{}, false
+		}
+	}
+	return first, true
 }
 
 // Context_SyncStatus returns a read-only snapshot of the context-graph
