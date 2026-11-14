@@ -17,17 +17,27 @@ type grant struct {
 	op   Op
 	path string
 	dir  bool
+	// resolved is path's resolved location when the grant was given
+	// (resolveExisting). The persisted policy binds it as well, so the
+	// grant does not follow a symlink that is retargeted later.
+	resolved string
 }
 
-// covers reports whether g permits op on canonical.
+// covers reports whether g permits op on canonical, judged like the
+// persisted policy: on the lexical path and on where it really lands.
 func (g grant) covers(op Op, canonical string) bool {
 	if g.op != op {
 		return false
 	}
-	if !g.dir {
-		return canonical == g.path
+	rc, ok := resolveExisting(canonical)
+	if !ok {
+		return false
 	}
-	return canonical == g.path || isWithin(canonical, g.path)
+	if !g.dir {
+		return canonical == g.path && rc == g.resolved
+	}
+	return (canonical == g.path || isWithin(canonical, g.path)) &&
+		(rc == g.resolved || isWithin(rc, g.resolved))
 }
 
 // isWithin reports whether p sits strictly below dir.
@@ -331,19 +341,24 @@ func (g *Gate) grantsFor(op Op, canonical string, resp PromptResponse) (grants [
 		if !cedar.PersistableFamilyID(dir) {
 			return nil, "directory cannot be persisted"
 		}
-		grants = append(grants, grant{op: op, path: dir, dir: true})
+		rdir, ok := resolveExisting(dir)
+		if !ok || !cedar.PersistableFamilyID(rdir) {
+			return nil, "directory cannot be persisted"
+		}
+		grants = append(grants, grant{op: op, path: dir, dir: true, resolved: rdir})
 		if resp == PromptAllowDirectoryReadWrite && op == OpWrite {
-			grants = append(grants, grant{op: OpRead, path: dir, dir: true})
+			grants = append(grants, grant{op: OpRead, path: dir, dir: true, resolved: rdir})
 		}
 		return grants, ""
 	case PromptAllowExact:
 	default:
 		return nil, "unknown grant scope"
 	}
-	if !cedar.PersistableFamilyID(canonical) {
+	rc, ok := resolveExisting(canonical)
+	if !ok || !cedar.PersistableFamilyID(canonical) || !cedar.PersistableFamilyID(rc) {
 		return nil, "path cannot be persisted"
 	}
-	return []grant{{op: op, path: canonical}}, note
+	return []grant{{op: op, path: canonical, resolved: rc}}, note
 }
 
 // persist writes one snippet per grant, then reloads the engine so the
@@ -358,9 +373,9 @@ func (g *Gate) persist(ctx context.Context, grants []grant) error {
 	for _, gr := range grants {
 		var name, body string
 		if gr.dir {
-			name, body = snippetName(gr.op, gr.path, "dir"), buildDirectorySnippet(gr.op, gr.path)
+			name, body = snippetName(gr.op, gr.path, "dir"), buildDirectorySnippet(gr.op, gr.path, gr.resolved)
 		} else {
-			name, body = snippetName(gr.op, gr.path, "path"), buildExactSnippet(gr.op, gr.path)
+			name, body = snippetName(gr.op, gr.path, "path"), buildExactSnippet(gr.op, gr.path, gr.resolved)
 		}
 		if err := g.writePolicySnippet(name, body); err != nil {
 			return err

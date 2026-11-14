@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,6 +70,9 @@ type PromptSurface struct {
 	// path is (or a directory grant here would include) the harness's own
 	// state directory (E2E-3). See GateOptions.StateDirs.
 	Privileged string
+	// ResolvedPath is where CanonicalPath really lands (symlinks of its
+	// existing prefix resolved); it keys the registry's allow-once cache.
+	ResolvedPath string
 }
 
 // Prompter is the interface the gate calls to surface an interactive
@@ -176,6 +180,9 @@ type Gate struct {
 type transientKey struct {
 	op   Op
 	path string
+	// resolved is where path landed when the grant was given: a link
+	// retargeted since then no longer matches.
+	resolved string
 }
 
 // transientGrantTTL is how long a PromptAllowOnce grant persists in the
@@ -206,10 +213,41 @@ func NewGate(opts GateOptions) *Gate {
 // snippet to PolicyDir (if configured); the write is best-effort and
 // does not fail the Allow decision.
 func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decision, error) {
+	d, _, err := g.EvaluatePath(ctx, op, rawPath)
+	return d, err
+}
+
+// ErrUnresolvablePath is returned by EvaluatePath's caller-facing helpers
+// when a path cannot be resolved (a symlink loop or too many links).
+var ErrUnresolvablePath = errors.New("fs: path cannot be resolved (symlink loop or too many links)")
+
+// EvaluatePath is Evaluate that also returns where the path really lands
+// (its existing prefix with symlinks resolved): the location the policy,
+// grants and harness-state check were judged on. A caller that does I/O
+// after an Allow should use it, so a link retargeted between the check
+// and the write cannot redirect the write. ok is false when the path
+// could not be resolved; the decision then never auto-allows (the path
+// is classed as harness state), and a writer should refuse.
+func (g *Gate) EvaluatePath(ctx context.Context, op Op, rawPath string) (d cedar.Decision, resolved string, err error) {
 	canonical, err := Canonicalize(rawPath)
 	if err != nil {
-		return cedar.Decision{}, err
+		return cedar.Decision{}, "", err
 	}
+	resolved, ok := resolveExisting(canonical)
+	d, err = g.evaluate(ctx, op, canonical, resolved)
+	if err == nil && !ok {
+		resolved = ""
+	}
+	return d, resolved, err
+}
+
+func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) (cedar.Decision, error) {
+
+	// resolved is where the path really lands (symlinks of its existing
+	// prefix resolved). Remembered grants bind it, transient grants key
+	// on it, and the state check judges it. An unresolvable path (a link
+	// loop) keeps its partial form; privilege() classes it as state.
+	priv := g.privilege(canonical)
 
 	// Dangerous-tier classification.
 	dangerous, dangerCopy := IsDangerousPath(canonical)
@@ -218,6 +256,7 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 	recipeDirMatch := IsInsideRecipeDir(canonical)
 	attrs := map[cedarlib.String]cedarlib.Value{
 		cedarlib.String(cedar.CtxKeyCanonicalPath):  cedarlib.String(canonical),
+		cedarlib.String(cedar.CtxKeyResolvedPath):   cedarlib.String(resolved),
 		cedarlib.String(cedar.CtxKeyRecipeDirMatch): cedarlib.Boolean(recipeDirMatch),
 		cedarlib.String(cedar.CtxKeyDangerousTier):  cedarlib.Boolean(dangerous),
 	}
@@ -229,6 +268,15 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 
 	resource := cedar.FilesystemOpUID(canonical)
 	d := g.opts.Engine.Evaluate(ctx, cedar.UserUID(), action, resource, attrs)
+
+	// A policy or remembered-grant Allow never authorises harness state
+	// on its own (E2E-3): the grant may predate a retargeted link (a
+	// grant on /tmp/pl, then ln -sfn <DataDir>/policy /tmp/pl), or the
+	// policy may simply be broad. Ask, with the privileged banner.
+	if d.Outcome == cedar.Allow && priv.inside {
+		d.Outcome = cedar.NotApplicable
+		d.Reason = "a policy allow does not cover the harness state directory"
+	}
 
 	switch d.Outcome {
 	case cedar.Allow:
@@ -246,13 +294,12 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 		// here is safe by construction, not merely convenient.
 		//
 		// Check transient cache first.
-		if g.hasTransientGrant(op, canonical) {
+		if g.hasTransientGrant(op, canonical, resolved) {
 			d.Outcome = cedar.Allow
 			d.Reason = "transient grant (allow-once)"
 			return d, nil
 		}
 		// Invoke the interactive prompt.
-		priv := g.privilege(canonical)
 		surface := PromptSurface{
 			Op:                op,
 			CanonicalPath:     canonical,
@@ -261,6 +308,7 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 			IsInsideRecipeDir: recipeDirMatch,
 			ParentMissing:     op == OpWrite && parentMissing(canonical),
 			Privileged:        priv.copy,
+			ResolvedPath:      resolved,
 		}
 		resp, perr := g.opts.Prompter.Prompt(ctx, surface)
 		if perr != nil {
@@ -277,7 +325,7 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 			return d, nil
 
 		case PromptAllowOnce:
-			g.addTransientGrant(op, canonical)
+			g.addTransientGrant(op, canonical, resolved)
 			d.Outcome = cedar.Allow
 			d.Reason = "user granted allow-once (transient)"
 			return d, nil
@@ -294,7 +342,7 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 				// Nothing persistable (privileged path, or a path a
 				// policy literal cannot carry): this session only, as
 				// Allow once would be.
-				g.addTransientGrant(op, canonical)
+				g.addTransientGrant(op, canonical, resolved)
 				d.Outcome = cedar.Allow
 				d.Reason = "user granted allow-always; " + note + ", granted allow-once (transient)"
 				return d, nil
@@ -302,7 +350,7 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 			if err := g.persist(ctx, grants); err != nil {
 				// The person approved this call; it proceeds. Without a
 				// persisted file the grant cannot outlive this session.
-				g.addTransientGrant(op, canonical)
+				g.addTransientGrant(op, canonical, resolved)
 				d.Outcome = cedar.Allow
 				d.Reason = "user granted allow-always; persisting failed (" + err.Error() + "), granted allow-once (transient)"
 				return d, nil
@@ -320,18 +368,18 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 
 // hasTransientGrant reports whether a non-expired transient grant
 // exists for (op, canonical).
-func (g *Gate) hasTransientGrant(op Op, canonical string) bool {
+func (g *Gate) hasTransientGrant(op Op, canonical, resolved string) bool {
 	g.transientMu.RLock()
-	exp, ok := g.transientGrants[transientKey{op, canonical}]
+	exp, ok := g.transientGrants[transientKey{op, canonical, resolved}]
 	g.transientMu.RUnlock()
 	return ok && time.Now().Before(exp)
 }
 
 // addTransientGrant stores a time-limited transient grant for
 // (op, canonical).
-func (g *Gate) addTransientGrant(op Op, canonical string) {
+func (g *Gate) addTransientGrant(op Op, canonical, resolved string) {
 	g.transientMu.Lock()
-	g.transientGrants[transientKey{op, canonical}] = time.Now().Add(transientGrantTTL)
+	g.transientGrants[transientKey{op, canonical, resolved}] = time.Now().Add(transientGrantTTL)
 	g.transientMu.Unlock()
 }
 
@@ -349,7 +397,7 @@ func (g *Gate) addTransientGrant(op Op, canonical string) {
 // persisted grant in the tree uses — AC-008's "a Cedar snippet
 // permitting Action::write_filesystem for that path" requirement.
 func BuildFilesystemAllowSnippet(op Op, canonicalPath string) (filename, body string) {
-	return snippetName(op, canonicalPath, "path"), buildExactSnippet(op, canonicalPath)
+	return snippetName(op, canonicalPath, "path"), buildExactSnippet(op, canonicalPath, resolvedOrSelf(canonicalPath))
 }
 
 // buildExactSnippet returns the Cedar policy body for an
@@ -359,12 +407,15 @@ func BuildFilesystemAllowSnippet(op Op, canonicalPath string) (filename, body st
 //	    principal == User::"local",
 //	    action == Action::"<action>",
 //	    resource is FilesystemOp
-//	) when { resource.path == "<canonical>" };
+//	) when { context.canonical_path == "<canonical>" &&
+//	         context has resolved_path && context.resolved_path == "<resolved>" };
 //
-// Note: FilesystemOp resources don't have a `.path` attribute in Cedar
-// by default, so we match on the entity id via context.canonical_path
-// which is always populated by the engine's populateFamilyContext.
-func buildExactSnippet(op Op, canonical string) string {
+// FilesystemOp resources don't have a `.path` attribute in Cedar by
+// default, so we match on context.canonical_path, which the engine always
+// populates. The resolved_path clause binds the grant to where the path
+// landed when it was given, so a symlink retargeted afterwards (a grant
+// on /tmp/pl, then ln -sfn <DataDir>/policy /tmp/pl) no longer matches.
+func buildExactSnippet(op Op, canonical, resolved string) string {
 	action := "read_filesystem"
 	if op == OpWrite {
 		action = "write_filesystem"
@@ -375,21 +426,28 @@ func buildExactSnippet(op Op, canonical string) string {
 			"    action == Action::\"%s\",\n"+
 			"    resource is FilesystemOp\n"+
 			") when {\n"+
-			"    context.canonical_path == %s\n"+
+			"    context.canonical_path == %s &&\n"+
+			"    context has resolved_path && context.resolved_path == %s\n"+
 			"};\n",
-		action, cedar.QuoteString(canonical),
+		action, cedar.QuoteString(canonical), cedar.QuoteString(resolved),
 	)
 }
 
 // buildDirectorySnippet returns the Cedar policy body for an
 // "allow this directory and everything below" persistent grant.
 //
-//	permit (...) when { context.canonical_path == "<dir>" ||
-//	                    context.canonical_path like "<dir>/*" };
+//	permit (...) when { (context.canonical_path == "<dir>" ||
+//	                     context.canonical_path like "<dir>/*") &&
+//	                    context has resolved_path &&
+//	                    (context.resolved_path == "<rdir>" ||
+//	                     context.resolved_path like "<rdir>/*") };
 //
 // The directory itself is included: "this directory and below" granted
-// on a write into /p/new must also let list_dir /p/new read it back.
-func buildDirectorySnippet(op Op, dir string) string {
+// on a write into /p/new must also let list_dir /p/new read it back. The
+// resolved clause is buildExactSnippet's: the grant covers the directory
+// the path really named when it was given, not wherever a link points
+// later.
+func buildDirectorySnippet(op Op, dir, rdir string) string {
 	action := "read_filesystem"
 	if op == OpWrite {
 		action = "write_filesystem"
@@ -399,16 +457,21 @@ func buildDirectorySnippet(op Op, dir string) string {
 	// and control characters as in QuoteString, plus a literal `*` in
 	// the directory name, which would otherwise widen the grant.
 	prefix := strings.TrimSuffix(dir, "/") + "/"
+	rprefix := strings.TrimSuffix(rdir, "/") + "/"
 	return fmt.Sprintf(
 		"permit (\n"+
 			"    principal == User::\"local\",\n"+
 			"    action == Action::\"%s\",\n"+
 			"    resource is FilesystemOp\n"+
 			") when {\n"+
-			"    context.canonical_path == %s ||\n"+
-			"    context.canonical_path like %s\n"+
+			"    (context.canonical_path == %s ||\n"+
+			"    context.canonical_path like %s) &&\n"+
+			"    context has resolved_path &&\n"+
+			"    (context.resolved_path == %s ||\n"+
+			"    context.resolved_path like %s)\n"+
 			"};\n",
 		action, cedar.QuoteString(strings.TrimSuffix(dir, "/")), cedar.QuoteLikePrefix(prefix),
+		cedar.QuoteString(strings.TrimSuffix(rdir, "/")), cedar.QuoteLikePrefix(rprefix),
 	)
 }
 
