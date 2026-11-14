@@ -37,6 +37,16 @@ describe('served client: fleet telemetry', () => {
     expect(calls[0]).toEqual({ method: 'Fleet_SetTelemetryConsent', params: { level: 'full' } });
   });
 
+  it('carries the shown Agent Telemetry notice edition (contract-harness-sync §17.2)', async () => {
+    const calls = captureRPC(null);
+    const { createServedHarnessClient } = await import('@/lib/harnessClient');
+    await createServedHarnessClient({ baseURL: '', token: '' }).fleet.setTelemetryConsent('none', 'agent-telemetry/v4');
+    expect(calls[0]).toEqual({
+      method: 'Fleet_SetTelemetryConsent',
+      params: { level: 'none', noticeEdition: 'agent-telemetry/v4' },
+    });
+  });
+
   it('reads status, including the served-only enroll block', async () => {
     const calls = captureRPC({ wired: true, enroll: { auth_state: 'signed_in' } });
     const { createServedHarnessClient } = await import('@/lib/harnessClient');

@@ -186,6 +186,7 @@ import type {
   FleetProfileInfo,
   FleetSessionView,
   MemorySyncStatus,
+  MemberNotices,
   MLStatus,
   PendingApprovals,
   CapabilitiesView,
@@ -1033,7 +1034,9 @@ interface WailsBindingsLike {
   /** Returns the current fleet telemetry consent level: "none" | "aggregate" | "full". */
   Fleet_GetTelemetryConsent(): Promise<string>;
   /** Persists a new fleet telemetry consent level. Returns an error if the org tier is insufficient. */
-  Fleet_SetTelemetryConsent(level: string): Promise<void>;
+  Fleet_SetTelemetryConsent(level: string, noticeEdition: string): Promise<void>;
+  Fleet_MemberNotices(): Promise<MemberNotices>;
+  Fleet_RespondMemberNotice(family: string, edition: string, textHash: string, action: string): Promise<MemberNotices>;
   Fleet_TelemetryStatus(): Promise<FleetTelemetryStatus>;
   // ── Fleet learned-memory sync (memory-sync-01MEMSY01 WP08) ────────────
   Fleet_MemorySyncStatus(): Promise<MemorySyncStatus>;
@@ -4029,8 +4032,24 @@ export interface FleetClient {
   getTelemetryStatus(): Promise<FleetTelemetryStatus>;
   /** Returns the current fleet telemetry consent level. */
   getTelemetryConsent(): Promise<'none' | 'aggregate' | 'full'>;
-  /** Persists a new consent level. Rejects when the org tier is insufficient. */
-  setTelemetryConsent(level: 'none' | 'aggregate' | 'full'): Promise<void>;
+  /**
+   * Persists a new consent level. Rejects when the org tier is insufficient.
+   * noticeEdition is the Agent Telemetry notice edition shown with the
+   * choice (contract-harness-sync §17.2), omitted when none was shown.
+   */
+  setTelemetryConsent(level: 'none' | 'aggregate' | 'full', noticeEdition?: string): Promise<void>;
+  /**
+   * Notice texts Fleet serves on the kenaz-harness surface, with this
+   * member's read state in the current org. Empty while nothing is registered.
+   */
+  memberNotices(): Promise<MemberNotices>;
+  /** "I have read this" (ack) or withdraw, for the memory-access text shown. */
+  respondMemberNotice(
+    family: string,
+    edition: string,
+    textHash: string,
+    action: 'ack' | 'withdraw',
+  ): Promise<MemberNotices>;
   /** Learned-memory sync panel state (memory-sync-01MEMSY01 WP08). */
   memorySyncStatus(): Promise<MemorySyncStatus>;
   /** Opt in with scopes ⊆ long_term/global and the accepted disclosure version. */
@@ -5168,7 +5187,11 @@ export function createHarnessClient(): HarnessClient {
         b()
           .Fleet_GetTelemetryConsent()
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
-      setTelemetryConsent: (level) => b().Fleet_SetTelemetryConsent(level),
+      setTelemetryConsent: (level, noticeEdition) =>
+        b().Fleet_SetTelemetryConsent(level, noticeEdition ?? ''),
+      memberNotices: () => b().Fleet_MemberNotices(),
+      respondMemberNotice: (family, edition, textHash, action) =>
+        b().Fleet_RespondMemberNotice(family, edition, textHash, action),
       getTelemetryStatus: () => b().Fleet_TelemetryStatus(),
       memorySyncStatus: () => b().Fleet_MemorySyncStatus(),
       memorySyncEnable: (scopes, consentVersion) => b().Fleet_MemorySyncEnable(scopes, consentVersion),
@@ -5838,8 +5861,11 @@ export function createServedHarnessClient(opts?: {
         transport
           .call<string>('Fleet_GetTelemetryConsent')
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
-      setTelemetryConsent: (level) =>
-        transport.call<void>('Fleet_SetTelemetryConsent', { level }),
+      setTelemetryConsent: (level, noticeEdition) =>
+        transport.call<void>(
+          'Fleet_SetTelemetryConsent',
+          noticeEdition ? { level, noticeEdition } : { level },
+        ),
       getTelemetryStatus: () => transport.call<FleetTelemetryStatus>('Fleet_TelemetryStatus'),
     },
 
@@ -7162,6 +7188,8 @@ export function createFakeHarnessClient(
     fleet: {
       getTelemetryConsent: async () => 'none' as const,
       setTelemetryConsent: noop,
+      memberNotices: async () => ({ notices: [] }),
+      respondMemberNotice: async () => ({ notices: [] }),
       memorySyncStatus: async () => fakeMemorySyncStatus(),
       memorySyncEnable: async () => fakeMemorySyncStatus(),
       memorySyncContinueOlderNotes: async () => fakeMemorySyncStatus(),

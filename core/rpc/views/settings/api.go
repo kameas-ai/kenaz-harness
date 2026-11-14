@@ -1882,6 +1882,15 @@ type SettingsAPI interface {
 	// deleteFromFleet it first erases everything on Fleet (forget-all);
 	// confirm must then be exactly "forget-all".
 	FleetMemorySyncDisable(ctx context.Context, deleteFromFleet bool, confirm string) (MemorySyncStatusView, error)
+	// FleetMemberNotices lists the notice texts Fleet serves on the
+	// kenaz-harness surface (memory-access, agent-telemetry) with this
+	// member's read state in their current org (contract-harness-sync §17).
+	// Empty while nothing is registered.
+	FleetMemberNotices(ctx context.Context) (MemberNoticesView, error)
+	// FleetRespondMemberNotice records "I have read this" (action "ack") or a
+	// withdraw for the memory-access text shown (edition + textHash, as
+	// served), then releases the memory push hold.
+	FleetRespondMemberNotice(ctx context.Context, family, edition, textHash, action string) (MemberNoticesView, error)
 	// FleetMLStatus returns the Cloud ML consent panel state: a fresh
 	// GET /me/ml read (ml-producer-01MLPRD01 WP01, spec §5), the rendered
 	// notice, and the producer's shipping status.

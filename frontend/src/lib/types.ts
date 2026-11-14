@@ -4940,6 +4940,37 @@ export interface MemorySyncStatus {
   /** Staff org pause (kenaz-fleet PR 206): show the paused banner, keep data-rights actions. */
   orgPaused?: boolean;
   pausedCategory?: string;
+  /**
+   * Uploads wait until the memory-access notice is read in this org (legal
+   * D168(2)). Never set while Fleet serves no memory-access text.
+   */
+  noticeHold?: boolean;
+  /** unread | text_refused | check_failed */
+  noticeHoldReason?: string;
+}
+
+/**
+ * Mirrors settings.MemberNoticeView — one notice text Fleet serves on the
+ * kenaz-harness surface (contract-harness-sync §17) and this member's read
+ * state for its family in the current org. `text` is shown verbatim.
+ */
+export interface MemberNotice {
+  family: 'memory-access' | 'agent-telemetry' | string;
+  edition: string;
+  text: string;
+  textHash: string;
+  /** Latest row in this org: 'ack', 'withdraw', or '' for none. */
+  action: string;
+  rowEdition: string;
+  acked: boolean;
+  actedAt: string;
+  ackedSince: string;
+}
+
+/** Mirrors settings.MemberNoticesView. `notices` is empty while nothing is registered. */
+export interface MemberNotices {
+  notices: MemberNotice[];
+  stateError?: string;
 }
 
 /**
