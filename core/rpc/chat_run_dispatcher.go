@@ -406,6 +406,18 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		}
 	}
 
+	// The cron engine's Stop (app quit) cancels ctx. Until the prompt is
+	// written nothing has run — the budget pass above is only a summary
+	// call, which is where a quit usually lands — so return here without
+	// marking the run started: the engine records "skipped" and a
+	// one-shot is not used up (scheduler.RunStartReporter).
+	if ctx.Err() != nil {
+		r := skippedRecord(sess.ID, now, fmt.Sprintf("cancelled before the prompt was written: %v", ctx.Err()))
+		r.Model = model
+		budget.apply(&r)
+		return r, nil
+	}
+
 	var containGen uint64
 	if containment.Contained {
 		containGen = d.deps.Containment.Contain(sess.ID, id, containment.Allow)
