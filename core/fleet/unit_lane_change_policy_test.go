@@ -7,9 +7,12 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/units"
 )
 
 func TestUnitPull_LaneSkipClearsStaleAlways(t *testing.T) {
@@ -72,5 +75,44 @@ func TestUnitPull_LaneSkipUnknownNodeNoSidecar(t *testing.T) {
 	}
 	if _, err := m.GetSyncStateByNodeID(context.Background(), id); err == nil {
 		t.Fatal("a skipped, never-seen node got a sidecar")
+	}
+}
+
+// failClearStore fails the sidecar write that clears a load policy.
+type failClearStore struct {
+	*units.Manager
+}
+
+func (f failClearStore) UpsertSyncState(ctx context.Context, st units.SyncState) (units.SyncState, error) {
+	if st.ServerLoadPolicy == "" {
+		return units.SyncState{}, errors.New("disk full")
+	}
+	return f.Manager.UpsertSyncState(ctx, st)
+}
+
+// A failed clear is logged and the pull goes on: the lane's cursor advances
+// (it must never stall on a node it skips anyway).
+func TestUnitPull_LaneSkipClearFailureDoesNotStall(t *testing.T) {
+	const id = "6b2f6f0e-0000-4000-8000-0000000000a3"
+	n := pulledNode(id, "doc", "doc")
+	n.LoadPolicy = "always"
+	srv := &lanePullServer{page: contextPullResponse{Nodes: []ContextPulledNode{n}, Cursor: "c1"}}
+	hs := httptest.NewServer(srv)
+	defer hs.Close()
+	stubTokens(t, TokenSet{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
+	_, m := openUnitSyncSQLite(t)
+	s := NewUnitSyncer(makeTestClient(t, hs.URL), failClearStore{m}, NewUnitMapper(""), makeCapPollerWithTeamCap(t), t.TempDir())
+	ctx := context.Background()
+	if _, err := s.PullDown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	srv.mu.Lock()
+	srv.page.Nodes[0].Version, srv.page.Nodes[0].Kind, srv.page.Nodes[0].UnitKind, srv.page.Cursor = 2, "guidance", "doc", "c2"
+	srv.mu.Unlock()
+	if _, err := s.PullDown(ctx); err != nil {
+		t.Fatalf("a failed clear stalled the pull: %v", err)
+	}
+	if c := s.Status().Cursor; c != "c2" {
+		t.Fatalf("cursor = %q, want c2 (advanced past the page)", c)
 	}
 }

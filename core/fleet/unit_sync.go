@@ -532,9 +532,7 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 			// another lane (re-pushed with a Curated kind, say) must stop
 			// eager-loading here: the sidecar's "always" is no longer what
 			// Fleet holds for a unit.
-			if err := s.clearServerLoadPolicy(ctx, n.ID); err != nil {
-				return applied, err
-			}
+			s.clearServerLoadPolicy(ctx, n.ID)
 			skippedKinds++
 			continue
 		}
@@ -553,9 +551,7 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 				// scope / classification / load policy): a permanent
 				// property of the node, so retrying cannot help. Skip it.
 				logging.L().Warn("fleet.unit.pull.skipped_invalid", "node_id", n.ID, "err", err.Error())
-				if cerr := s.clearServerLoadPolicy(ctx, n.ID); cerr != nil {
-					return applied, cerr
-				}
+				s.clearServerLoadPolicy(ctx, n.ID)
 				skippedInvalid++
 				continue
 			}
@@ -643,7 +639,8 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 	if !ok {
 		// Classification doesn't map locally — skip. A known node must
 		// then stop eager-loading on a stale "always".
-		return false, s.clearServerLoadPolicy(ctx, n.ID)
+		s.clearServerLoadPolicy(ctx, n.ID)
+		return false, nil
 	}
 
 	st, err := s.store.GetSyncStateByNodeID(ctx, n.ID)
@@ -910,26 +907,32 @@ func (s *UnitSyncer) refreshServerLoadPolicy(ctx context.Context, st units.SyncS
 // the Unit lane now skips (another lane's kind, or invalid for the local
 // store), so a stale "always" stops eager-loading it. A node with no
 // sidecar, or none recorded, is left alone. Only that field changes.
-func (s *UnitSyncer) clearServerLoadPolicy(ctx context.Context, nodeID string) error {
+//
+// Best-effort: a storage failure is logged and the pull goes on. The node
+// is skipped either way, so failing here would only stall the lane's
+// cursor on a page it can never apply; the clear is retried the next time
+// Fleet sends the node.
+func (s *UnitSyncer) clearServerLoadPolicy(ctx context.Context, nodeID string) {
 	if nodeID == "" {
-		return nil
+		return
 	}
 	st, err := s.store.GetSyncStateByNodeID(ctx, nodeID)
 	if errors.Is(err, units.ErrSyncStateNotFound) {
-		return nil
+		return
 	}
 	if err != nil {
-		return fmt.Errorf("fleet: unit pull: sidecar lookup %s: %w", nodeID, err)
+		logging.L().Warn("fleet.unit.pull.load_policy_clear_failed", "node_id", nodeID, "err", err.Error())
+		return
 	}
 	if st.ServerLoadPolicy == "" {
-		return nil
+		return
 	}
 	st.ServerLoadPolicy = ""
 	if _, err := s.store.UpsertSyncState(ctx, st); err != nil {
-		return fmt.Errorf("fleet: unit pull: clear load policy %s: %w", nodeID, err)
+		logging.L().Warn("fleet.unit.pull.load_policy_clear_failed", "node_id", nodeID, "err", err.Error())
+		return
 	}
 	logging.L().Info("fleet.unit.pull.load_policy_cleared", "node_id", nodeID)
-	return nil
 }
 
 // dropConflictLocked forgets any surfaced conflict for unitID. Caller holds
