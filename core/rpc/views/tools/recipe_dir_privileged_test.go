@@ -35,7 +35,7 @@ func TestRequestAdditionalAllowedDir_HarnessState(t *testing.T) {
 	}
 
 	t.Run("inside the state directory is refused before any prompt", func(t *testing.T) {
-		reg := cedar.NewRegistry()
+		reg := failOnPrompt(t)
 		granted, _, err := newAPI(reg).RequestAdditionalAllowedDir(context.Background(), "filesystem", filepath.Join(dataDir, "policy"), "workaround")
 		if granted || !errors.Is(err, ErrPrivilegedDir) {
 			t.Fatalf("granted=%v err=%v, want refusal with ErrPrivilegedDir", granted, err)
@@ -66,4 +66,72 @@ func TestRequestAdditionalAllowedDir_HarnessState(t *testing.T) {
 			t.Fatalf("Privileged = %q, want the harness-state label", label)
 		}
 	})
+}
+
+// TestRequestAdditionalAllowedDir_StateBehindSymlink: the requested path
+// is symlink-resolved before the state check, so the state directories
+// must be too. Before the fix the comparison was resolved-vs-unresolved:
+// a DataDir reached through a symlink (and every t.TempDir() on macOS,
+// /var -> /private/var) never matched, and the refusal fell through to an
+// interactive prompt that hung the test for the 5-minute PromptTimeout.
+// The explicit symlink here reproduces that on every platform.
+func TestRequestAdditionalAllowedDir_StateBehindSymlink(t *testing.T) {
+	t.Parallel()
+	real := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(real, ".kenaz", "harness", "prod", "policy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "home-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	dataDir := filepath.Join(link, ".kenaz", "harness", "prod")
+	for _, req := range []string{
+		filepath.Join(dataDir, "policy"),               // through the link
+		filepath.Join(real, ".kenaz", "harness", "prod"), // the real path
+	} {
+		reg := failOnPrompt(t)
+		api := New(Config{
+			Catalog:        fsCatalogMinimal(),
+			Enabled:        installFSRecipe([]string{t.TempDir()}),
+			Pool:           newFakePool(),
+			Secrets:        secrets.NewMemoryBackend(),
+			DataDir:        dataDir,
+			PromptRegistry: reg,
+		})
+		granted, _, err := api.RequestAdditionalAllowedDir(context.Background(), "filesystem", req, "workaround")
+		if granted || !errors.Is(err, ErrPrivilegedDir) {
+			t.Fatalf("%s: granted=%v err=%v, want refusal with ErrPrivilegedDir", req, granted, err)
+		}
+	}
+}
+
+// failOnPrompt returns a registry for a test that must never reach an
+// interactive prompt. If one is enqueued anyway, the test fails at once
+// and the prompt is denied so the call under test returns, instead of
+// blocking for the 5-minute PromptTimeout. The short registry timeout is
+// a second backstop should the watcher miss it.
+func failOnPrompt(t *testing.T) *cedar.Registry {
+	t.Helper()
+	reg := cedar.NewRegistry(cedar.WithTimeout(5 * time.Second))
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	t.Cleanup(func() { close(done); <-stopped })
+	go func() {
+		defer close(stopped)
+		tick := time.NewTicker(2 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+				for _, p := range reg.ListPending() {
+					t.Errorf("unexpected interactive prompt for %+v", p.Surface.FS)
+					_ = reg.Resolve(p.RequestID, cedar.DecisionDeny)
+				}
+			}
+		}
+	}()
+	return reg
 }

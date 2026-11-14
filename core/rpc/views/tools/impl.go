@@ -872,7 +872,23 @@ func (a *API) RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, r
 	// the server rewrite the harness's permissions. A directory that
 	// CONTAINS the state (on a workbench, HOME=/var/lib/kenaz-harness is
 	// exactly that) still prompts, but the prompt says so.
-	inside, contains, stateRoot := corefs.StateRelation(canonical, corefs.HarnessStateDirs(a.cfg.DataDir), a.cfg.WorkspaceDir)
+	//
+	// canonical has its symlinks resolved, so the state directories and
+	// the workspace must be resolved too before comparing: on macOS the
+	// temp and /var trees live behind the /var -> /private/var symlink,
+	// and any DataDir reached through a symlink (a linked ~/.kenaz) has
+	// the same shape. Comparing a resolved path against unresolved roots
+	// never matched, so a path inside the state directory skipped this
+	// refusal and fell through to an interactive prompt.
+	stateDirs := corefs.HarnessStateDirs(a.cfg.DataDir)
+	for i, d := range stateDirs {
+		stateDirs[i] = resolveSymlinksBestEffort(d)
+	}
+	workspace := a.cfg.WorkspaceDir
+	if workspace != "" {
+		workspace = resolveSymlinksBestEffort(workspace)
+	}
+	inside, contains, stateRoot := corefs.StateRelation(canonical, stateDirs, workspace)
 	if inside {
 		return false, canonical, fmt.Errorf("%w: %q is inside the harness state directory %q", ErrPrivilegedDir, canonical, stateRoot)
 	}
@@ -1109,6 +1125,15 @@ func (a *API) restartRecipe(ctx context.Context, recipe recipes.Recipe, updatedC
 		return fmt.Errorf("open server: %w", err)
 	}
 	return nil
+}
+
+// resolveSymlinksBestEffort returns p with its symlinks resolved, or p
+// unchanged when it cannot be resolved.
+func resolveSymlinksBestEffort(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
 }
 
 // ErrPrivilegedDir is returned by RequestAdditionalAllowedDir for a path
