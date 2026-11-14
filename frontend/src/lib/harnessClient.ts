@@ -159,6 +159,7 @@ import type {
   SessionUsage,
   ModelCall,
   ModelCallTelemetrySettings,
+  FleetDeviceNameSettings,
   SettingsResetUnreadableResult,
   MLLocalActivity,
   TurnRun,
@@ -312,6 +313,9 @@ interface WailsBindingsLike {
   Sessions_ModelCalls(id: string, limit: number): Promise<ModelCall[] | null>;
   Settings_GetModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   Settings_SetModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  // ── Fleet ER-43: device display name ────────────────────────────────
+  Settings_GetFleetDeviceName(): Promise<FleetDeviceNameSettings>;
+  Settings_SetFleetDeviceName(dn: FleetDeviceNameSettings): Promise<void>;
   /** "Reset settings" recovery for an unreadable settings.json. Desktop-only. */
   Settings_ResetUnreadable(): Promise<SettingsResetUnreadableResult>;
   // ── ml-producer-01MLPRD01 WP11 ──────────────────────────────────────
@@ -2537,6 +2541,14 @@ export interface SettingsClient {
   getModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   /** Persist them; turning sharing on exports only calls that start afterwards. */
   setModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  /**
+   * The device name Fleet admins see for this install (Fleet ER-43):
+   * share on/off (default on), computer name or custom name. The
+   * read-only fields carry the computer, default and effective names.
+   */
+  getFleetDeviceName(): Promise<FleetDeviceNameSettings>;
+  /** Persist it; when signed in, Fleet sees the change at once. */
+  setFleetDeviceName(dn: FleetDeviceNameSettings): Promise<void>;
   /**
    * Recovery for a settings file that cannot be read: moves it aside to
    * settings.json.corrupt-<UTC timestamp> (returned as backupPath), writes
@@ -4822,6 +4834,8 @@ export function createHarnessClient(): HarnessClient {
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
       getModelCallTelemetry: () => b().Settings_GetModelCallTelemetry(),
       setModelCallTelemetry: (mc) => b().Settings_SetModelCallTelemetry(mc),
+      getFleetDeviceName: () => b().Settings_GetFleetDeviceName(),
+      setFleetDeviceName: (dn) => b().Settings_SetFleetDeviceName(dn),
       resetUnreadable: () => b().Settings_ResetUnreadable(),
       getMLLocalActivity: () => b().Settings_GetMLLocalActivity(),
       setMLLocalActivityRetention: (days) => b().Settings_SetMLLocalActivityRetention(days),
@@ -6400,6 +6414,16 @@ export function createFakeHarnessClient(
         shareWithFleet: false,
       }),
       setModelCallTelemetry: noop,
+      getFleetDeviceName: async () => ({
+        share: true,
+        useComputerName: false,
+        customName: '',
+        computerName: '',
+        defaultName: '',
+        effectiveName: '',
+        maxLength: 64,
+      }),
+      setFleetDeviceName: noop,
       resetUnreadable: async () => ({ backupPath: '' }),
       getMLLocalActivity: async () => fakeMLLocalActivity(),
       setMLLocalActivityRetention: async (days: number) => fakeMLLocalActivity(days),

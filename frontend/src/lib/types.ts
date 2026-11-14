@@ -215,6 +215,28 @@ export interface ModelCallTelemetrySettings {
 }
 
 /**
+ * Settings › Account › Device name (Go settings.FleetDeviceNameSettings,
+ * Fleet ER-43): the name your organization's Fleet admins see for this
+ * device.
+ */
+export interface FleetDeviceNameSettings {
+  /** "Share this device's name with your organization" — default true. */
+  share: boolean;
+  /** Send this computer's own name instead of the neutral default. */
+  useComputerName: boolean;
+  /** When non-empty, sent instead (sanitised, at most maxLength). */
+  customName: string;
+  /** Read-only: this computer's name as it would be sent. */
+  computerName: string;
+  /** Read-only: the neutral "<OS> device <4 hex>" name ('' before sign-in). */
+  defaultName: string;
+  /** Read-only: what the next enroll sends ('' = nothing). */
+  effectiveName: string;
+  /** Read-only: Fleet's limit, in characters. */
+  maxLength: number;
+}
+
+/**
  * The local ML activity store (ml-producer-01MLPRD01 WP11): what Kenaz keeps
  * on this device to power local suggestions (rpc.MLLocalActivityView).
  */

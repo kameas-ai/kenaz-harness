@@ -1510,6 +1510,10 @@ export function Settings_GetFSWriteEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetFSWriteEnabled']();
 }
 
+export function Settings_GetFleetDeviceName() {
+  return window['go']['rpc']['Bindings']['Settings_GetFleetDeviceName']();
+}
+
 export function Settings_GetLocalRuntimeRAMOverrideGB() {
   return window['go']['rpc']['Bindings']['Settings_GetLocalRuntimeRAMOverrideGB']();
 }
@@ -1648,6 +1652,10 @@ export function Settings_SetFSRequestAccessEnabled(arg1) {
 
 export function Settings_SetFSWriteEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetFSWriteEnabled'](arg1);
+}
+
+export function Settings_SetFleetDeviceName(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFleetDeviceName'](arg1);
 }
 
 export function Settings_SetLocalRuntimeRAMOverrideGB(arg1) {

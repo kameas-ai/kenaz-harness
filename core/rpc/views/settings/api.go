@@ -985,6 +985,22 @@ type Settings struct {
 	// Settings_SetMLLocalActivityRetention or a whole-settings Set.
 	MLLocalActivityRetentionDays int `json:"mlLocalActivityRetentionDays,omitempty"`
 
+	// FleetDeviceNameHidden is the inverted "Share this device's name with
+	// your organization" (default on = false here). When true the enroll
+	// body carries no device name (`hostname`), which also clears the name
+	// Fleet stored (the enroll upsert rewrites it). Fleet ER-43.
+	// FleetDeviceNameUseComputerName sends this computer's own name
+	// (macOS Computer Name, Windows COMPUTERNAME, Linux hostname) instead
+	// of the neutral "<OS> device <4 hex>" default (relay parity, legal
+	// D58). FleetDeviceNameCustom, when non-empty, overrides both.
+	// Read on every enroll by API.fleetDeviceName (wired as the
+	// fleet.Client device-name source in SetFleetClient). Written only by
+	// SetFleetDeviceName: a whole-settings Set keeps the stored values.
+	// UI: Settings › Account › Device name.
+	FleetDeviceNameHidden          bool   `json:"fleetDeviceNameHidden,omitempty"`
+	FleetDeviceNameUseComputerName bool   `json:"fleetDeviceNameUseComputerName,omitempty"`
+	FleetDeviceNameCustom          string `json:"fleetDeviceNameCustom,omitempty"`
+
 	// gates:settings-struct-end — keep this marker the LAST line of the
 	// struct and add new fields ABOVE it. scripts/ci/gates_can_fail_test.go
 	// plants a probe field here, so it no longer re-anchors on whichever
@@ -1012,6 +1028,31 @@ type ModelCallTelemetrySettings struct {
 	// ShareWithFleet is "Share model-call telemetry with Fleet" (default
 	// false).
 	ShareWithFleet bool `json:"shareWithFleet"`
+}
+
+// FleetDeviceNameSettings is the wire shape of Settings › Account › Device
+// name: the device display name sent to Fleet on enroll (Fleet ER-43).
+type FleetDeviceNameSettings struct {
+	// Share is "Share this device's name with your organization" (default
+	// true). Off = no name is sent and Fleet's stored name is cleared.
+	Share bool `json:"share"`
+	// UseComputerName sends this computer's own name instead of the
+	// neutral default.
+	UseComputerName bool `json:"useComputerName"`
+	// CustomName, when non-empty, is sent instead (sanitised, at most
+	// MaxLength characters).
+	CustomName string `json:"customName"`
+
+	// Read-only (ignored by SetFleetDeviceName):
+	// ComputerName is this computer's own name as it would be sent.
+	ComputerName string `json:"computerName"`
+	// DefaultName is the neutral "<OS> device <4 hex>" name ("" before
+	// this install has a Fleet node id).
+	DefaultName string `json:"defaultName"`
+	// EffectiveName is what the next enroll sends ("" = nothing).
+	EffectiveName string `json:"effectiveName"`
+	// MaxLength is Fleet's limit on the name, in characters.
+	MaxLength int `json:"maxLength"`
 }
 
 // EffectiveBundleSigningPolicy normalizes BundleSigningPolicy to one of
@@ -1849,6 +1890,12 @@ type SettingsAPI interface {
 	// FleetRefreshIdentity re-calls the fleet enroll endpoint and updates
 	// the cached identity. Returns fleet.ErrNotSignedIn if not signed in.
 	FleetRefreshIdentity(ctx context.Context) (FleetIdentity, error)
+	// GetFleetDeviceName returns the device-name setting with the computer,
+	// default and effective names filled (Fleet ER-43).
+	GetFleetDeviceName(ctx context.Context) (FleetDeviceNameSettings, error)
+	// SetFleetDeviceName persists the device-name setting and, when
+	// enrolled, re-enrolls in the background so Fleet sees the change.
+	SetFleetDeviceName(ctx context.Context, dn FleetDeviceNameSettings) error
 
 	// ReconcileTelemetry brings fleet export in line with the current
 	// (identity, effective consent). Idempotent.

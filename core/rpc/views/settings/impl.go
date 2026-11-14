@@ -1703,6 +1703,9 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 	//     SetModelCallTelemetry (the panel action). A stale copy must not
 	//     turn sharing back on without the user seeing the opt-in text
 	//     (legal D82).
+	//   - The Fleet device-name fields are written only by
+	//     SetFleetDeviceName, so a stale copy cannot turn sharing back on or
+	//     swap the name the org sees.
 	// The keep happens inside Update, under the store lock, so a
 	// confirmation or toggle landing between the read and the write cannot
 	// be reverted. If the stored settings cannot be read the save is
@@ -1714,6 +1717,9 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 		s.ShareModelCallTelemetryWithFleet = cur.ShareModelCallTelemetryWithFleet
 		s.ShareModelCallTelemetryTextRevision = cur.ShareModelCallTelemetryTextRevision
 		s.ShareModelCallTelemetryAcceptedAt = cur.ShareModelCallTelemetryAcceptedAt
+		s.FleetDeviceNameHidden = cur.FleetDeviceNameHidden
+		s.FleetDeviceNameUseComputerName = cur.FleetDeviceNameUseComputerName
+		s.FleetDeviceNameCustom = cur.FleetDeviceNameCustom
 		*cur = s
 		return nil
 	}); err != nil {

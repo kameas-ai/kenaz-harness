@@ -350,6 +350,26 @@ func init() {
 			"as KENAZ_ML_ACTIVITY_RETENTION_DAYS on every spawn "+
 			"(TestMLProducerWiring_SidecarGetsEffectiveRetention).",
 	)
+	// ── Fleet device display name (Fleet ER-43) ──────────────────────
+	knobcoverage.Register[settings.Settings](
+		"FleetDeviceNameHidden",
+		"views/settings SetFleetClient wires API.fleetDeviceName as the "+
+			"fleet.Client device-name source, read on every enroll: true "+
+			"omits the enroll `hostname` field, clearing the name Fleet stores "+
+			"(TestFleetDeviceName_SettingReachesEnrollBody).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"FleetDeviceNameUseComputerName",
+		"same source (API.fleetDeviceName → fleet.ResolveDeviceName): true "+
+			"sends this computer's name instead of the neutral "+
+			"\"<OS> device <4 hex>\" default in the enroll `hostname` "+
+			"(TestFleetDeviceName_SettingReachesEnrollBody).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"FleetDeviceNameCustom",
+		"same source: a non-empty value is the enroll `hostname` sent "+
+			"(TestFleetDeviceName_SettingReachesEnrollBody).",
+	)
 	knobcoverage.Register[settings.Settings](
 		"ShareModelCallTelemetryTextRevision",
 		"views/settings Settings.modelCallSharingEffective: the opt-in "+

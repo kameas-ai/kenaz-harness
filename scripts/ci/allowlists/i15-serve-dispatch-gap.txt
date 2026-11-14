@@ -1395,6 +1395,18 @@
 "Settings_GetModelCallTelemetry"
 "Settings_SetModelCallTelemetry"
 
+# CLASS: boundary-panelled -- fleet ER-43 device display name, 2026-11-13.
+# 2 entries.
+#
+# Settings_GetFleetDeviceName / Settings_SetFleetDeviceName: "Share this
+# device's name with your organization" and the name choice. Their only
+# caller is views/settings/FleetDeviceNamePanel.vue, mounted only in
+# SettingsView's desktop SettingsShell (the Account pane), like
+# ModelCallTelemetryPanel above. A served harness enrolls with the
+# stored (default) choice. Blocker: a served settings surface. Owner: alec.
+"Settings_GetFleetDeviceName"
+"Settings_SetFleetDeviceName"
+
 # CLASS: desktop-only-by-nature -- settings-sync review round, 2026-10-16.
 # 1 entries.
 #

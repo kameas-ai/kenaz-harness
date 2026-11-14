@@ -1510,6 +1510,22 @@ func (b *Bindings) Settings_SetModelCallTelemetry(mc settings.ModelCallTelemetry
 	return b.api.Settings().SetModelCallTelemetry(b.ctx(), mc)
 }
 
+// Settings_GetFleetDeviceName returns Settings › Account › Device name:
+// whether this device's name is shared with the organization (default
+// on), the computer-name / custom-name choice, and the read-only
+// computer, default and effective names (Fleet ER-43).
+func (b *Bindings) Settings_GetFleetDeviceName() (settings.FleetDeviceNameSettings, error) {
+	defer sentry.WrapBinding("Settings_GetFleetDeviceName")()
+	return b.api.Settings().GetFleetDeviceName(b.ctx())
+}
+
+// Settings_SetFleetDeviceName persists the device-name setting and, when
+// enrolled, re-enrolls in the background so Fleet sees the change.
+func (b *Bindings) Settings_SetFleetDeviceName(dn settings.FleetDeviceNameSettings) error {
+	defer sentry.WrapBinding("Settings_SetFleetDeviceName")()
+	return b.api.Settings().SetFleetDeviceName(b.ctx(), dn)
+}
+
 // Settings_GetMLLocalActivity returns the local ML activity store's
 // status (ml-producer-01MLPRD01 WP11): row counts, size on disk,
 // retention, and whether new activity is also being shared with Fleet.
