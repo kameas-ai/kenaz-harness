@@ -792,6 +792,8 @@ export function Settings_FleetSignInCancel():Promise<void>;
 
 export function Settings_FleetSignOut():Promise<void>;
 
+export function Settings_FleetTeams():Promise<Array<settings.FleetTeamView>>;
+
 export function Settings_FleetTelemetryOptIns():Promise<Array<settings.TelemetryOptInView>>;
 
 export function Settings_Get():Promise<settings.Settings>;

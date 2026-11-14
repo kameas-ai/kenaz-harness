@@ -23,7 +23,7 @@
  * open Settings → Account. No fleet affordances appear anywhere else in
  * the UI when the user is signed out.
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { refreshFeatureFlags } from '@/lib/featureFlags';
 import { isUserNotProvisionedError } from '@/lib/errors';
@@ -34,6 +34,8 @@ import {
   useFleetSession,
 } from '@/lib/fleetSession';
 import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
+import TeamTreeList from '@/components/fleet/TeamTreeList.vue';
+import { useFleetTeams } from '@/lib/fleetTeams';
 
 const client = useHarnessClient();
 const fleet = useFleetSession(client);
@@ -55,6 +57,23 @@ const isSignedIn = fleet.signedIn;
 const isDegraded = computed(() => state.value === 'degraded');
 const isSigningIn = computed(() => state.value === 'signing_in');
 const identity = fleet.identity;
+
+/**
+ * The caller's teams as a tree (kenaz-fleet spec 018 H-1), read from Fleet's
+ * /api/v1/me whenever the session becomes usable or the account changes.
+ * Empty (signed out, read failed, older Fleet with no teams) falls back to
+ * the single enrolled team row.
+ */
+const fleetTeams = useFleetTeams(client);
+const teams = fleetTeams.teams;
+watch(
+  () => [isSignedIn.value, identity.value?.userId ?? '', identity.value?.orgId ?? ''] as const,
+  ([signedIn]) => {
+    if (signedIn) void fleetTeams.load();
+    else fleetTeams.reset();
+  },
+  { immediate: true },
+);
 const profile = computed(() => fleet.session.value?.profile ?? null);
 
 const badgeColor = computed(() => profile.value?.badgeColor ?? '');
@@ -461,7 +480,13 @@ async function refreshIdentity() {
           {{ identity.orgName }}
         </span>
       </div>
-      <div v-if="identity?.teamName" class="identity-row">
+      <div v-if="teams.length > 0" class="identity-row identity-row--teams">
+        <span class="identity-label">{{ teams.length === 1 ? 'Team' : 'Teams' }}</span>
+        <div class="identity-value" data-testid="identity-teams">
+          <TeamTreeList :teams="teams" />
+        </div>
+      </div>
+      <div v-else-if="identity?.teamName" class="identity-row">
         <span class="identity-label">Team</span>
         <span class="identity-value" data-testid="identity-team">
           {{ identity.teamName }}
@@ -631,6 +656,15 @@ async function refreshIdentity() {
   align-items: baseline;
   gap: 0.5rem;
   margin-bottom: 0.5rem;
+}
+
+.identity-row--teams {
+  align-items: flex-start;
+}
+
+.identity-row--teams .identity-value {
+  flex: 1;
+  min-width: 0;
 }
 
 .identity-row:last-child {

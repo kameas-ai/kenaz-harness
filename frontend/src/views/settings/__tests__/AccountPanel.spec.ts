@@ -511,3 +511,43 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
     });
   });
 });
+
+// ── Team tree (kenaz-fleet spec 018 H-1) ───────────────────────────────────
+
+describe('AccountPanel team tree (spec 018 H-1)', () => {
+  beforeEach(() => _resetFleetSessionForTest());
+
+  it('shows the caller\'s teams as a tree, root first, keyed by id', async () => {
+    const fleetTeams = vi.fn(async () => [
+      { id: 'root-id', name: 'Everyone', is_default: true, tree_depth: 0 },
+      { id: 'eng-id', name: 'Engineering', is_default: false, parent_team_id: 'root-id', tree_depth: 1 },
+      { id: 'be-id', name: 'Backend', is_default: false, parent_team_id: 'eng-id', tree_depth: 2 },
+    ]);
+    const client = buildClient(session('signed_in'), { fleetTeams });
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(fleetTeams).toHaveBeenCalled();
+    const rows = wrapper.findAll('[data-testid="fleet-team-tree-row"]');
+    expect(rows.map((r) => r.attributes('data-team-id'))).toEqual(['root-id', 'eng-id', 'be-id']);
+    expect(rows.map((r) => r.attributes('data-depth'))).toEqual(['0', '1', '2']);
+    expect(rows[0].find('[data-testid="fleet-team-root"]').exists()).toBe(true);
+    // The tree replaces the single enrolled-team row.
+    expect(wrapper.find('[data-testid="identity-team"]').exists()).toBe(false);
+  });
+
+  it('falls back to the enrolled team row when the team list is unavailable', async () => {
+    const client = buildClient(session('signed_in'), {
+      fleetTeams: vi.fn(async () => {
+        throw new Error('older Fleet');
+      }),
+    });
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="fleet-team-tree"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="identity-team"]').text()).toBe('Engineering');
+  });
+});

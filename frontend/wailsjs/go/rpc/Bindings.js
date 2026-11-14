@@ -1454,6 +1454,10 @@ export function Settings_FleetSignOut() {
   return window['go']['rpc']['Bindings']['Settings_FleetSignOut']();
 }
 
+export function Settings_FleetTeams() {
+  return window['go']['rpc']['Bindings']['Settings_FleetTeams']();
+}
+
 export function Settings_FleetTelemetryOptIns() {
   return window['go']['rpc']['Bindings']['Settings_FleetTelemetryOptIns']();
 }

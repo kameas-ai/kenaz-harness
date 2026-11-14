@@ -1927,6 +1927,13 @@ func (b *Bindings) Settings_FleetTelemetryOptIns() ([]settings.TelemetryOptInVie
 	return b.api.Settings().FleetTelemetryOptIns(b.ctx())
 }
 
+// Settings_FleetTeams returns the caller's Fleet teams as a tree, root
+// first, parent before children, keyed by team id (kenaz-fleet spec 018 H-1).
+func (b *Bindings) Settings_FleetTeams() ([]settings.FleetTeamView, error) {
+	defer sentry.WrapBinding("Settings_FleetTeams")()
+	return b.api.Settings().FleetTeams(b.ctx())
+}
+
 // Settings_FleetSetTelemetryOptIn flips a single telemetry class opt-in in the
 // fleet store (source becomes 'user_self') and refreshes the local cache.
 // (harness-fleet-sync-activation-01NSYNC01 gap #4)

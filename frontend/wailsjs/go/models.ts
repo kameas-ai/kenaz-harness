@@ -8251,6 +8251,32 @@ export namespace settings {
 	
 	
 	
+	export class FleetTeamView {
+	    id: string;
+	    name: string;
+	    is_default: boolean;
+	    role?: string;
+	    parent_team_id?: string;
+	    tree_depth: number;
+	    slug?: string;
+	    membership?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetTeamView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.is_default = source["is_default"];
+	        this.role = source["role"];
+	        this.parent_team_id = source["parent_team_id"];
+	        this.tree_depth = source["tree_depth"];
+	        this.slug = source["slug"];
+	        this.membership = source["membership"];
+	    }
+	}
 	export class FleetTelemetryStatusView {
 	    wired: boolean;
 	    enrolled: boolean;

@@ -1120,6 +1120,8 @@ interface WailsBindingsLike {
   Settings_FleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
   /** Flip a single telemetry class opt-in in the fleet store. */
   Settings_FleetSetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
+  /** The caller's Fleet teams as a tree, root first (kenaz-fleet spec 018 H-1). */
+  Settings_FleetTeams(): Promise<import('./types').FleetTeamView[]>;
 
   // ── Unit sync conflicts (fleet-integrity-observability WP08) ─────────────
   /** Returns the current unit syncer state: pull/push errors, conflict count. */
@@ -2745,6 +2747,13 @@ export interface SettingsClient {
   fleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
   /** Flip a single telemetry class opt-in. */
   setFleetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
+  /**
+   * The caller's Fleet teams from GET /api/v1/me as a tree (kenaz-fleet spec
+   * 018 H-1): the default team first as the org root, parent before
+   * children, each with the indent level it is drawn at. Keyed by id; an
+   * older Fleet without tree fields yields a flat list.
+   */
+  fleetTeams(): Promise<import('./types').FleetTeamView[]>;
 }
 
 /**
@@ -4412,7 +4421,7 @@ const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
   'Workflow_ListJobs', 'Trust_ListSecretReferences', 'Context_List', 'Contexts_RecentlyApplied',
   'Contexts_ContextSearch', 'Bundle_List', 'Trust_ListAnchors', 'CedarPolicy_ListPolicies',
   'CedarPolicy_RecentDecisions', 'Permissions_ListGrants', 'Permissions_ListPending', 'Audit_ListEntries',
-  'Audit_Filter', 'Audit_ListSavedQueries', 'Logs_Tail', 'Settings_FleetTelemetryOptIns',
+  'Audit_Filter', 'Audit_ListSavedQueries', 'Logs_Tail', 'Settings_FleetTelemetryOptIns', 'Settings_FleetTeams',
   'Memory_ListChunks', 'Memory_JournalTail', 'Memory_NarrativeFailedList', 'Memory_EmbeddingProbe',
   'Projects_List', 'Projects_ListSessions', 'Documents_List', 'Artifacts_List', 'Attachments_List',
   'Attachments_ListResolved', 'Hooks_List', 'Hooks_AvailableBuiltins', 'Tools_ListRecipes',
@@ -4912,6 +4921,7 @@ export function createHarnessClient(): HarnessClient {
       fleetTelemetryOptIns: () => b().Settings_FleetTelemetryOptIns(),
       setFleetTelemetryOptIn: (className, optedIn) =>
         b().Settings_FleetSetTelemetryOptIn(className, optedIn),
+      fleetTeams: () => b().Settings_FleetTeams(),
     },
     permissions: {
       listGrants: (family) =>
@@ -6565,6 +6575,7 @@ export function createFakeHarnessClient(
       // fleet-integrity-observability WP09
       fleetTelemetryOptIns: async (): Promise<import('./types').TelemetryOptInView[]> => [],
       setFleetTelemetryOptIn: noop,
+      fleetTeams: async (): Promise<import('./types').FleetTeamView[]> => [],
     },
     permissions: {
       listGrants: async () => [],

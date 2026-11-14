@@ -5326,6 +5326,31 @@ export interface TelemetryOptInView {
   source?: string;
 }
 
+// ── Fleet team tree (kenaz-fleet spec 018 H-1) ──────────────────────────────
+
+/**
+ * FleetTeamView — one of the caller's Fleet teams, placed in the team tree.
+ * Mirrors core/rpc/views/settings.FleetTeamView. `id` is the key; `name`
+ * and `slug` are labels, shown as Fleet serves them. A team is never put
+ * on telemetry.
+ */
+export interface FleetTeamView {
+  id: string;
+  name: string;
+  /** The org's default team: the root of the tree. */
+  is_default: boolean;
+  /** The caller's role on the team ("member" | "lead"); absent on an older Fleet. */
+  role?: string;
+  /** The team this one is drawn under; absent for the root and the top of a rootless list. */
+  parent_team_id?: string;
+  /** Indent level as drawn: 0 for the root, 1 directly under it. */
+  tree_depth: number;
+  /** Announced by spec 018, not served yet. */
+  slug?: string;
+  /** "direct" | "inherited" — announced by spec 018, not served yet. */
+  membership?: string;
+}
+
 // ── Unit sync types (fleet-integrity-observability WP08) ────────────────────
 
 /**

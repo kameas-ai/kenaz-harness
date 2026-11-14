@@ -19,6 +19,9 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useFleetSession } from '@/lib/fleetSession';
+import { pickInitialTeam, useFleetTeams } from '@/lib/fleetTeams';
+import TeamPicker from '@/components/fleet/TeamPicker.vue';
 import type { ContextNode } from '@/lib/types';
 import {
   buildBatchEntries,
@@ -56,6 +59,22 @@ const entries = ref<BatchEntry[]>(buildBatchEntries(props.folder, props.mode));
 
 const stopRequested = ref(false);
 const layer = ref<'team' | 'org'>('team');
+/**
+ * The caller's teams as a tree and the one a "team" share goes to, by id
+ * (kenaz-fleet spec 018 H-1). With no team list (older Fleet, read failed)
+ * no team_id is sent and the backend uses the enrolled identity's team.
+ */
+const fleetSession = useFleetSession(client);
+const fleetTeams = useFleetTeams(client);
+const teams = fleetTeams.teams;
+const teamId = ref('');
+if (props.mode === 'share') {
+  void fleetTeams.load().then(() => {
+    if (!teams.value.some((t) => t.id === teamId.value)) {
+      teamId.value = pickInitialTeam(teams.value, fleetSession.identity.value?.teamId);
+    }
+  });
+}
 // A session refresh can demote an admin while the dialog is open.
 watch(
   () => props.orgPublishBlocked,
@@ -81,6 +100,7 @@ function toggleAll(on: boolean) {
 async function shareOne(e: BatchEntry): Promise<string | { skipped: string }> {
   const body = await staged('read failed', () => client.contexts.get(e.path));
   if (!body) return { skipped: 'Empty file — nothing to share.' };
+  const team = layer.value === 'team' ? teamId.value : '';
   const res = await staged('publish rejected', () =>
     client.contexts.publish({
       node_id: contextNodeID(e.path),
@@ -89,6 +109,7 @@ async function shareOne(e: BatchEntry): Promise<string | { skipped: string }> {
       title: contextEntryTitle(e.path),
       body,
       version: 1,
+      ...(team ? { team_id: team } : {}),
     }),
   );
   const where = res.effective_layer === 'org' ? 'your organisation' : 'your team';
@@ -216,6 +237,9 @@ const statusClass: Record<BatchEntry['status'], string> = {
           <input v-model="layer" type="radio" value="team" data-testid="folder-share-layer-team" />
           <span>Share to team</span>
         </label>
+        <div v-if="layer === 'team' && teams.length > 0" class="pl-6">
+          <TeamPicker v-model="teamId" :teams="teams" testid="folder-share-team-picker" />
+        </div>
         <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
           <input
             v-model="layer"

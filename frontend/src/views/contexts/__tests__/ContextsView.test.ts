@@ -12,6 +12,7 @@ import type {
   ContextPublishResult,
   ContextSearchHitView,
   ContextExportView,
+  FleetTeamView,
 } from '@/lib/types';
 
 function provide(opts: {
@@ -30,6 +31,7 @@ function provide(opts: {
   promoteSpy?: (nodeID: string) => Promise<{ updated_node_id: string; new_classification: 'org_shared' }>;
   searchSpy?: (query: string, teamID: string, limit: number) => Promise<ContextSearchHitView[]>;
   exportSpy?: (teamID: string, format: string) => Promise<ContextExportView>;
+  fleetTeams?: () => Promise<FleetTeamView[]>;
 }) {
   const tree: ContextNode =
     opts.tree ?? { name: '', path: '', kind: 'folder' };
@@ -53,6 +55,7 @@ function provide(opts: {
     // same capability poller.
     settings: {
       ...base.settings,
+      ...(opts.fleetTeams ? { fleetTeams: opts.fleetTeams } : {}),
       fleetSession: async () =>
         fakeFleetSession({
           state: 'signed_in',
@@ -1779,5 +1782,136 @@ describe('ContextsView folder share/promote batch dialog (knowledge-home-01DOGF0
     expect(st('kameas-ai/sub/notes.md')).toBe('not_started');
     expect(w.find('[data-testid=folder-share-summary]').text()).toContain('1 shared, 0 failed, 2 not started (cancelled)');
     w.unmount();
+  });
+});
+
+// ── Team picker (kenaz-fleet spec 018 H-1) ─────────────────────────────────
+
+describe('ContextsView team picker (spec 018 H-1)', () => {
+  // Already in tree order, as Settings_FleetTeams returns it. Two teams share
+  // the name "Platform": only the id tells them apart.
+  const teamTree: FleetTeamView[] = [
+    { id: 'root-id', name: 'Everyone', is_default: true, tree_depth: 0 },
+    { id: 'eng-id', name: 'Engineering', is_default: false, parent_team_id: 'root-id', tree_depth: 1 },
+    { id: 'plat-a', name: 'Platform', is_default: false, parent_team_id: 'eng-id', tree_depth: 2 },
+    { id: 'plat-b', name: 'Platform', is_default: false, parent_team_id: 'root-id', tree_depth: 1 },
+  ];
+  const fileTree: ContextNode = {
+    name: '',
+    path: '',
+    kind: 'folder',
+    children: [{ name: 'notes.md', path: 'notes.md', kind: 'file' }],
+  };
+  const capOn: ContextSyncStatusView = {
+    cursor: '',
+    last_pull_err: '',
+    last_push_err: '',
+    pull_count: 0,
+    team_cap_enabled: true,
+  };
+
+  async function openDialog(fleetTeams: () => Promise<FleetTeamView[]>) {
+    const publishSpy = vi.fn(async (req: ContextPublishRequest) => ({
+      accepted_nodes: 1,
+      accepted_edges: 0,
+      conflicts: [],
+      effective_layer: req.layer,
+    }));
+    const { client } = provide({
+      tree: fileTree,
+      files: { 'notes.md': '# notes' },
+      syncStatus: capOn,
+      roles: ['org_admin'],
+      publishSpy,
+      fleetTeams,
+    });
+    const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+    await flushPromises();
+    await w.find('[data-testid="context-node-notes.md"]').trigger('click');
+    await flushPromises();
+    await w.find('[data-testid=context-publish-btn]').trigger('click');
+    await flushPromises();
+    return { w, publishSpy };
+  }
+
+  it('offers the teams as an indented tree, root first, keyed by id', async () => {
+    const { w } = await openDialog(async () => teamTree);
+    const picker = w.find('[data-testid=context-publish-team-picker]');
+    expect(picker.exists()).toBe(true);
+    const opts = picker.findAll('option');
+    expect(opts.map((o) => o.attributes('value'))).toEqual(['root-id', 'eng-id', 'plat-a', 'plat-b']);
+    expect(opts.map((o) => o.attributes('data-depth'))).toEqual(['0', '1', '2', '1']);
+    expect(opts[0].text()).toBe('Org root: Everyone');
+    // Starts on the enrolled identity's team when it is one of the caller's
+    // teams; here the identity's team (t1) is not, so the root.
+    expect((picker.element as HTMLSelectElement).value).toBe('root-id');
+  });
+
+  it('sends the chosen team id, not its name', async () => {
+    const { w, publishSpy } = await openDialog(async () => teamTree);
+    await w.find('[data-testid=context-publish-team-picker]').setValue('plat-b');
+    await w.find('[data-testid=context-publish-confirm-ok]').trigger('click');
+    await flushPromises();
+    expect(publishSpy).toHaveBeenCalledTimes(1);
+    expect(publishSpy.mock.calls[0][0]).toMatchObject({ layer: 'team', team_id: 'plat-b' });
+  });
+
+  it('sends no team id for an org-wide publish', async () => {
+    const { w, publishSpy } = await openDialog(async () => teamTree);
+    await w.find('[data-testid=context-publish-layer-org]').setValue(true);
+    expect(w.find('[data-testid=context-publish-team-picker]').exists()).toBe(false);
+    await w.find('[data-testid=context-publish-confirm-ok]').trigger('click');
+    await flushPromises();
+    expect(publishSpy.mock.calls[0][0].layer).toBe('org');
+    expect(publishSpy.mock.calls[0][0]).not.toHaveProperty('team_id');
+  });
+
+  it('falls back to the enrolled team (no picker, no team id) when the team list is unavailable', async () => {
+    const { w, publishSpy } = await openDialog(async () => {
+      throw new Error('older Fleet');
+    });
+    expect(w.find('[data-testid=context-publish-team-picker]').exists()).toBe(false);
+    await w.find('[data-testid=context-publish-confirm-ok]').trigger('click');
+    await flushPromises();
+    expect(publishSpy.mock.calls[0][0].layer).toBe('team');
+    expect(publishSpy.mock.calls[0][0]).not.toHaveProperty('team_id');
+  });
+
+  it('the folder share dialog picks a team by id too', async () => {
+    const publishSpy = vi.fn(async (req: ContextPublishRequest) => ({
+      accepted_nodes: 1,
+      accepted_edges: 0,
+      conflicts: [],
+      effective_layer: req.layer,
+    }));
+    const { client } = provide({
+      files: { 'docs/a.md': '# a' },
+      syncStatus: capOn,
+      publishSpy,
+      fleetTeams: async () => teamTree,
+    });
+    const folder: ContextNode = {
+      name: 'docs',
+      path: 'docs',
+      kind: 'folder',
+      children: [{ name: 'a.md', path: 'docs/a.md', kind: 'file', size: 3 }],
+    };
+    const w = mount(FolderShareDialog, {
+      props: { folder, mode: 'share', disabledReason: null },
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const picker = w.find('[data-testid=folder-share-team-picker]');
+    expect(picker.findAll('option').map((o) => o.attributes('value'))).toEqual([
+      'root-id',
+      'eng-id',
+      'plat-a',
+      'plat-b',
+    ]);
+    await picker.setValue('plat-a');
+    await w.find('[data-testid=folder-share-confirm]').trigger('click');
+    await flushPromises();
+    expect(publishSpy).toHaveBeenCalledTimes(1);
+    expect(publishSpy.mock.calls[0][0]).toMatchObject({ layer: 'team', team_id: 'plat-a' });
   });
 });

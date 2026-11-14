@@ -56,10 +56,12 @@
  *
  * Publish layer:
  *   - The publish confirm dialog offers an explicit "team" vs. "org"
- *     choice (`publishLayer`), and `confirmPublish` never sends a team_id —
- *     there is no team picker. The backend resolves a "team" request to
- *     the enrolled fleet identity's team_id (Context_Publish in
- *     core/rpc/views/contexts/impl.go); a teamless identity gets an error
+ *     choice (`publishLayer`). For "team" it shows the caller's teams as a
+ *     tree (kenaz-fleet spec 018 H-1) and sends the chosen team's id. When
+ *     the team list is unavailable no team_id is sent and the backend
+ *     resolves a "team" request to the enrolled fleet identity's team_id
+ *     (Context_Publish in core/rpc/views/contexts/impl.go); a teamless
+ *     identity gets an error
  *     and nothing is shared. "org" is disabled for a known non-admin because
  *     Fleet allows it only for admins and owners.
  *     `publishResult.effective_layer` states where the entry went.
@@ -93,6 +95,8 @@ import ContextRecent from './ContextRecent.vue';
 import ContextHealthCard from '@/components/context/ContextHealthCard.vue';
 import FolderShareDialog from './FolderShareDialog.vue';
 import { contextEntryTitle, contextNodeID, type FolderBatchMode } from './folderBatch';
+import TeamPicker from '@/components/fleet/TeamPicker.vue';
+import { pickInitialTeam, useFleetTeams } from '@/lib/fleetTeams';
 
 const props = defineProps<{
   /**
@@ -156,9 +160,18 @@ const syncStatus = ref<ContextSyncStatusView | null>(null);
 const showPublishConfirm = ref(false);
 /**
  * publishLayer is the user's deliberate layer choice in the confirm
- * dialog — "team" (default) or "org". There is no team picker.
+ * dialog — "team" (default) or "org".
  */
 const publishLayer = ref<'team' | 'org'>('team');
+/**
+ * The caller's teams as a tree and the one a "team" share goes to, by id
+ * (kenaz-fleet spec 018 H-1). Loaded when the share dialog opens. The
+ * dialog starts on the enrolled identity's team, which is where a team
+ * share went before the picker existed.
+ */
+const fleetTeams = useFleetTeams(client);
+const publishTeams = fleetTeams.teams;
+const publishTeamId = ref('');
 /** Result of the most recent publish call (shown inline). */
 const publishResult = ref<ContextPublishResult | null>(null);
 /** Error string from the last publish call. */
@@ -320,16 +333,24 @@ function openPublishConfirm() {
   publishError.value = null;
   publishResult.value = null;
   publishLayer.value = 'team';
+  publishTeamId.value = pickInitialTeam(publishTeams.value, fleetSessionStore.identity.value?.teamId);
   showPublishConfirm.value = true;
+  void fleetTeams.load().then(() => {
+    // Keep a choice the user already made if it is still one of their teams.
+    if (!publishTeams.value.some((t) => t.id === publishTeamId.value)) {
+      publishTeamId.value = pickInitialTeam(publishTeams.value, fleetSessionStore.identity.value?.teamId);
+    }
+  });
 }
 
 /**
  * confirmPublish — the user clicked "Yes, share" in the confirm dialog.
  * Calls client.contexts.publish with the selected file's metadata and the
  * user's chosen layer. The nodeID is derived from the path (stable
- * cross-session). No team_id is ever sent — there is no team picker;
- * the backend uses the enrolled identity's team, and refuses a "team"
- * request for a teamless identity. `result.effective_layer` is
+ * cross-session). A "team" share sends the picked team's id; with no team
+ * list (older Fleet, read failed) none is sent and the backend uses the
+ * enrolled identity's team, refusing a "team" request for a teamless
+ * identity. `result.effective_layer` is
  * always what actually happened and is what gets shown to the user, not
  * the requested layer.
  */
@@ -340,6 +361,7 @@ async function confirmPublish() {
   publishError.value = null;
   publishResult.value = null;
   try {
+    const teamID = publishLayer.value === 'team' ? publishTeamId.value : '';
     const result = await client.contexts.publish({
       node_id: selectedNodeID.value,
       layer: publishLayer.value,
@@ -347,6 +369,7 @@ async function confirmPublish() {
       title: contextEntryTitle(selectedPath.value),
       body: previewContent.value,
       version: 1,
+      ...(teamID ? { team_id: teamID } : {}),
     });
     publishResult.value = result;
     // Reload sync status to show updated pull count.
@@ -889,7 +912,7 @@ onBeforeUnmount(() => {
           layers.
         </p>
         <!-- Layer choice — "org" is an explicit option, disabled for a known
-             non-admin. There is no team picker. -->
+             non-admin. "team" picks one of the caller's teams, by id. -->
         <fieldset class="flex flex-col gap-2 mb-4" data-testid="context-publish-layer-choice">
           <legend class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle mb-1">
             Visibility
@@ -903,6 +926,13 @@ onBeforeUnmount(() => {
             />
             <span>Share to team</span>
           </label>
+          <div v-if="publishLayer === 'team' && publishTeams.length > 0" class="pl-6">
+            <TeamPicker
+              v-model="publishTeamId"
+              :teams="publishTeams"
+              testid="context-publish-team-picker"
+            />
+          </div>
           <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
             <input
               v-model="publishLayer"
