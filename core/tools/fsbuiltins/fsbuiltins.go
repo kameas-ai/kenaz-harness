@@ -156,23 +156,36 @@ func sessionIDFromCtx(ctx context.Context) string {
 // the call is always permitted (test / nil-gate path). Returns the
 // canonical path on success.
 func gateCheck(ctx context.Context, gate *corefs.Gate, op corefs.Op, rawPath string) (string, error) {
-	canonical, err := corefs.Canonicalize(rawPath)
+	canonical, _, err := gateCheckPath(ctx, gate, op, rawPath)
+	return canonical, err
+}
+
+// gateCheckPath is gateCheck that also returns the path to do I/O on:
+// the resolved location the gate judged (see corefs.Gate.EvaluatePath).
+// Writers use it so what is written is what was checked — a symlink
+// retargeted after the check cannot redirect the write into, say, the
+// harness policy directory. With no gate it is the canonical path.
+func gateCheckPath(ctx context.Context, gate *corefs.Gate, op corefs.Op, rawPath string) (canonical, ioPath string, err error) {
+	canonical, err = corefs.Canonicalize(rawPath)
 	if err != nil {
-		return "", fmt.Errorf("invalid path: %w", err)
+		return "", "", fmt.Errorf("invalid path: %w", err)
 	}
 	if gate == nil {
 		// No gate wired — permit unconditionally (test path).
-		return canonical, nil
+		return canonical, canonical, nil
 	}
-	d, err := gate.Evaluate(ctx, op, canonical)
+	d, resolved, err := gate.EvaluatePath(ctx, op, canonical)
 	if err != nil {
-		return "", fmt.Errorf("gate: %w", err)
+		return "", "", fmt.Errorf("gate: %w", err)
 	}
 	// cedar.Allow is the only permitting outcome; Deny and NotApplicable deny.
 	if d.Outcome != cedar.Allow {
-		return "", fmt.Errorf("%w: %s", ErrFSDenied, d.Reason)
+		return "", "", fmt.Errorf("%w: %s", ErrFSDenied, d.Reason)
 	}
-	return canonical, nil
+	if resolved == "" {
+		return "", "", corefs.ErrUnresolvablePath
+	}
+	return canonical, resolved, nil
 }
 
 // errResult returns a json.RawMessage encoding {"error": msg, "is_error": true}.
@@ -903,19 +916,19 @@ func (t *WriteFileTool) Call(ctx context.Context, raw json.RawMessage) (json.Raw
 		args.Mode = 0o644
 	}
 
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpWrite, args.Path)
+	canonical, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpWrite, args.Path)
 	if err != nil {
 		return errResult("write_file: " + err.Error()), nil
 	}
 
-	if err := atomicWrite(canonical, []byte(args.Content), fs.FileMode(args.Mode)); err != nil {
+	if err := atomicWrite(ioPath, []byte(args.Content), fs.FileMode(args.Mode)); err != nil {
 		return errResult("write_file: " + err.Error() + identityHint(err)), nil
 	}
 	// Read the file back through the same path the read tools use. A
 	// write is only reported as done when read_file / list_dir / glob
 	// will find it there (E2E-2): "OK" for a file the associate cannot
 	// then see is the failure mode, not a success.
-	if err := verifyWritten(canonical, int64(len(args.Content))); err != nil {
+	if err := verifyWritten(ioPath, int64(len(args.Content))); err != nil {
 		return errResult("write_file: " + err.Error()), nil
 	}
 
@@ -1064,7 +1077,7 @@ func (t *EditFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 	}
 
 	// Validate path and check write permission.
-	canonical, err := gateCheck(ctx, t.gate, corefs.OpWrite, args.Path)
+	canonical, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpWrite, args.Path)
 	if err != nil {
 		return errResult("edit_file: " + err.Error()), nil
 	}
@@ -1076,7 +1089,7 @@ func (t *EditFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 	}
 
 	// Read current content.
-	existing, err := os.ReadFile(canonical)
+	existing, err := os.ReadFile(ioPath)
 	if err != nil {
 		return errResult("edit_file: read: " + err.Error()), nil
 	}
@@ -1095,13 +1108,13 @@ func (t *EditFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 	newContent := strings.Replace(content, args.OldStr, args.NewStr, 1)
 
 	// Preserve file mode.
-	info, err := os.Stat(canonical)
+	info, err := os.Stat(ioPath)
 	if err != nil {
 		return errResult("edit_file: stat: " + err.Error()), nil
 	}
 	mode := info.Mode()
 
-	if err := atomicWrite(canonical, []byte(newContent), mode); err != nil {
+	if err := atomicWrite(ioPath, []byte(newContent), mode); err != nil {
 		return errResult("edit_file: " + err.Error()), nil
 	}
 

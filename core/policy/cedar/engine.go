@@ -727,6 +727,11 @@ const (
 	// FilesystemOp family.
 	CtxKeyCanonicalPath  = "canonical_path"
 	CtxKeyRecipeDirMatch = "recipe_dir_match"
+	// CtxKeyResolvedPath is canonical_path with the symlinks of its
+	// longest existing prefix resolved (core/tools/fs.Gate). Remembered
+	// grants bind it too, so a grant on a symlinked directory does not
+	// follow the link when it is later retargeted.
+	CtxKeyResolvedPath = "resolved_path"
 
 	// Tool family.
 	CtxKeyToolName         = "tool_name"
@@ -875,6 +880,7 @@ func populateFamilyContext(
 
 	case ActionReadFilesystem, ActionWriteFilesystem:
 		ensure(CtxKeyCanonicalPath, resourceID)
+		ensure(CtxKeyResolvedPath, resourceID)
 		ensureBool(CtxKeyRecipeDirMatch, false)
 		ensureBool(CtxKeyDangerousTier, false)
 

@@ -50,6 +50,7 @@ func (p *CedarPrompter) Prompt(ctx context.Context, s PromptSurface) (PromptResp
 			Dangerous:     s.IsDangerous,
 			ParentMissing: s.ParentMissing,
 			Privileged:    s.Privileged,
+			ResolvedPath:  s.ResolvedPath,
 		},
 		// E-008: fs.PromptSurface additionally carries DangerCopy and
 		// IsInsideRecipeDir; cedar.FSPromptSurface has no home for
