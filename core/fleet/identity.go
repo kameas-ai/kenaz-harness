@@ -117,13 +117,19 @@ var ErrEnrollTokenChanged = errors.New("fleet: tokens changed during enroll; try
 //
 // The node-fact fields (contract §16) are all optional and omitted when
 // unknown: an older Fleet ignores the ones it does not declare, and the
-// pre-existing body (node_id, platform, version, keys) is unchanged. There
-// is deliberately NO `hostname` field: Fleet shows it to admins as the device
-// name, and the harness never collects one.
+// pre-existing body (node_id, platform, version, keys) is unchanged.
+//
+// Hostname is NOT the OS hostname: it is the member-controlled device
+// display name Fleet shows admins as "Device name" (device_name.go; Fleet
+// ER-43, relay parity with legal D58). By default a neutral
+// "<OS> device <4 hex>"; the computer's own name only when the member
+// chooses it; omitted when the member turns sharing off, which clears it
+// on Fleet (the enroll upsert rewrites the column).
 type enrollRequest struct {
 	NodeID           string `json:"node_id"`
 	Platform         string `json:"platform"`
 	Version          string `json:"version"`
+	Hostname         string `json:"hostname,omitempty"`
 	HandoffPublicKey string `json:"handoff_public_key,omitempty"`
 	SigningPublicKey string `json:"signing_public_key,omitempty"`
 
@@ -256,6 +262,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		Version:  version,
 	}
 	reqBody.withNodeFacts(CurrentNodeFacts())
+	reqBody.Hostname = c.deviceNameFor(nodeID)
 	km, kerr := c.localDeviceKeys(nodeID)
 	if kerr != nil {
 		logging.L().Warn("fleet.enroll.handoff_key_unavailable", "err", kerr.Error())

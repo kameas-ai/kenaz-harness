@@ -264,6 +264,9 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 		// before a broker is wired.
 		c.SetSessionBroker(sessionExpiredTap{api: a, inner: a.fleet.lockdownBroker})
 		c.SetAuthOKHook(a.onFleetAuthOK)
+		// The enroll body's device name (Fleet ER-43) is read from the
+		// member's setting on every enroll.
+		c.SetDeviceNameSource(a.fleetDeviceName)
 		if a.fleet.orgPauseHooked != c {
 			a.fleet.orgPauseHooked = c
 			// A refusal observed on any request goroutine — which may hold

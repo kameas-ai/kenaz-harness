@@ -76,6 +76,10 @@ type Client struct {
 	// orgPause is the staff "pause paid features" state this client has
 	// observed (org_paused.go). Mutex-guarded inside.
 	orgPause orgPauseState
+
+	// deviceName is the SetDeviceNameSource callback (device_name.go):
+	// the enroll `hostname` (device display name), "" = omitted.
+	deviceName atomic.Pointer[func(nodeID string) string]
 }
 
 // SetSessionBroker wires the session sink into the client. When set, a

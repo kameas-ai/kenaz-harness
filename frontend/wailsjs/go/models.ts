@@ -7964,6 +7964,30 @@ export namespace settings {
 	        this.handoffFingerprint = source["handoffFingerprint"];
 	    }
 	}
+	export class FleetDeviceNameSettings {
+	    share: boolean;
+	    useComputerName: boolean;
+	    customName: string;
+	    computerName: string;
+	    defaultName: string;
+	    effectiveName: string;
+	    maxLength: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetDeviceNameSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.share = source["share"];
+	        this.useComputerName = source["useComputerName"];
+	        this.customName = source["customName"];
+	        this.computerName = source["computerName"];
+	        this.defaultName = source["defaultName"];
+	        this.effectiveName = source["effectiveName"];
+	        this.maxLength = source["maxLength"];
+	    }
+	}
 	export class FleetHealthView {
 	    configDistributionEnabled: boolean;
 	    configSource: string;
@@ -8765,6 +8789,9 @@ export namespace settings {
 	    settingsSyncUploadsConfirmed?: boolean;
 	    settingsSyncEnabledCategories?: string[];
 	    mlLocalActivityRetentionDays?: number;
+	    fleetDeviceNameHidden?: boolean;
+	    fleetDeviceNameUseComputerName?: boolean;
+	    fleetDeviceNameCustom?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8871,6 +8898,9 @@ export namespace settings {
 	        this.settingsSyncUploadsConfirmed = source["settingsSyncUploadsConfirmed"];
 	        this.settingsSyncEnabledCategories = source["settingsSyncEnabledCategories"];
 	        this.mlLocalActivityRetentionDays = source["mlLocalActivityRetentionDays"];
+	        this.fleetDeviceNameHidden = source["fleetDeviceNameHidden"];
+	        this.fleetDeviceNameUseComputerName = source["fleetDeviceNameUseComputerName"];
+	        this.fleetDeviceNameCustom = source["fleetDeviceNameCustom"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

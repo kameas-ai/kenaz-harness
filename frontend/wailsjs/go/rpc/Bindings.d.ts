@@ -818,6 +818,8 @@ export function Settings_GetFSRequestAccessEnabled():Promise<boolean>;
 
 export function Settings_GetFSWriteEnabled():Promise<boolean>;
 
+export function Settings_GetFleetDeviceName():Promise<settings.FleetDeviceNameSettings>;
+
 export function Settings_GetLocalRuntimeRAMOverrideGB():Promise<number>;
 
 export function Settings_GetMCPAutoRestart():Promise<boolean>;
@@ -887,6 +889,8 @@ export function Settings_SetFSReadEnabled(arg1:boolean):Promise<void>;
 export function Settings_SetFSRequestAccessEnabled(arg1:boolean):Promise<void>;
 
 export function Settings_SetFSWriteEnabled(arg1:boolean):Promise<void>;
+
+export function Settings_SetFleetDeviceName(arg1:settings.FleetDeviceNameSettings):Promise<void>;
 
 export function Settings_SetLocalRuntimeRAMOverrideGB(arg1:number):Promise<void>;
 

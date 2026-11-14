@@ -30,6 +30,7 @@ import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
 import PeersPanel from '@/views/settings/PeersPanel.vue';
 import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
 import ModelCallTelemetryPanel from '@/views/settings/ModelCallTelemetryPanel.vue';
+import FleetDeviceNamePanel from '@/views/settings/FleetDeviceNamePanel.vue';
 // fix/served-agent-profiles-sep17: served workbenches had no route to
 // AgentsView at all (contracts/agents-served-rpc.md) — a served-mode user
 // could not configure named Sonnet/Opus/Fable delegation profiles.
@@ -1183,6 +1184,14 @@ onMounted(() => {
       data-testid="settings-account-pane"
     >
       <AccountPanel />
+      <!-- Fleet ER-43: the device name Fleet admins see, next to the device
+           info above. Desktop-only, like the panels below. -->
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
+          Device name
+        </h2>
+        <FleetDeviceNamePanel />
+      </section>
       <!-- fleet-integrity-observability WP09: telemetry consent control. -->
       <section>
         <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
