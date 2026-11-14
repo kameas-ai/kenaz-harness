@@ -2037,6 +2037,28 @@ describe('ContextsView share target (spec 018 H-1 review)', () => {
     expect(publishSpy.mock.calls[0][0]).toMatchObject({ layer: 'team', team_id: 'be-id' });
   });
 
+  it('with no team list, says a re-share stays on the entry\'s current team', async () => {
+    const noList = async () => {
+      throw new Error('older Fleet');
+    };
+    const shared = async (ids: string[]) =>
+      ids.map((id) => ({ node_id: id, layer: 'team' as const, team_id: 'be-id' }));
+    const { w } = await open({ fleetTeams: noList, shareStates: shared });
+    expect(w.find('[data-testid=context-publish-stays-note]').text()).toBe(
+      "It stays with the team it's shared with now.",
+    );
+    // Org-wide sends no team: no such line.
+    await w.find('[data-testid=context-publish-layer-org]').setValue(true);
+    expect(w.find('[data-testid=context-publish-stays-note]').exists()).toBe(false);
+
+    // Never shared: nothing recorded to stay with.
+    const fresh = await open({ fleetTeams: noList });
+    expect(fresh.w.find('[data-testid=context-publish-stays-note]').exists()).toBe(false);
+    // With a team list the picker shows the team instead.
+    const listed = await open({ shareStates: shared });
+    expect(listed.w.find('[data-testid=context-publish-stays-note]').exists()).toBe(false);
+  });
+
   it('while loading: no picker, and Yes, share does nothing', async () => {
     const { w, publishSpy } = await open({ fleetTeams: () => new Promise(() => {}) });
     expect(w.find('[data-testid=context-publish-team-picker]').exists()).toBe(false);
@@ -2130,6 +2152,26 @@ describe('ContextsView share target (spec 018 H-1 review)', () => {
       expect(w.find('[data-testid=folder-share-move-warning]').text()).toBe(
         '1 of these files is shared with a different team. Sharing with Everyone makes it visible to your whole organisation.',
       );
+    });
+
+    it('with no team list, says re-shared entries stay on their current team', async () => {
+      const noList = async () => {
+        throw new Error('older Fleet');
+      };
+      const { w, publishSpy } = await openFolder({
+        fleetTeams: noList,
+        shareStates: async () => [{ node_id: 'docs/a.md', layer: 'team', team_id: 'be-id' }],
+      });
+      expect(w.find('[data-testid=folder-share-team-picker]').exists()).toBe(false);
+      expect(w.find('[data-testid=folder-share-stays-note]').text()).toBe(
+        "It stays with the team it's shared with now.",
+      );
+      await w.find('[data-testid=folder-share-confirm]').trigger('click');
+      await flushPromises();
+      expect(publishSpy.mock.calls[0][0]).toMatchObject({ team_id: 'be-id' });
+
+      const fresh = await openFolder({ fleetTeams: noList });
+      expect(fresh.w.find('[data-testid=folder-share-stays-note]').exists()).toBe(false);
     });
 
     it('while loading: no picker and Share is disabled', async () => {

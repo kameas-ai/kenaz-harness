@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // shareRecord is where one entry was last shared from this device.
@@ -56,9 +58,10 @@ func shareLedgerPath(dataDir string) string {
 	return filepath.Join(dataDir, "fleet", "context_shares.json")
 }
 
-// loadLocked reads the file once. A missing file is an empty ledger; an
-// unreadable or malformed one is treated as empty for reads and is
-// replaced on the next successful share (it only ever narrows a default).
+// loadLocked reads the file once. A missing file is an empty ledger. A
+// malformed one is treated as empty and moved aside to
+// <file>.corrupt-<unix-nanos> so the next share does not overwrite what
+// may still be recoverable by hand.
 func (l *shareLedger) loadLocked() {
 	if l.loaded {
 		return
@@ -73,7 +76,16 @@ func (l *shareLedger) loadLocked() {
 		return
 	}
 	var f shareLedgerFile
-	if json.Unmarshal(raw, &f) == nil && f.Shares != nil {
+	if json.Unmarshal(raw, &f) != nil {
+		aside := fmt.Sprintf("%s.corrupt-%d", l.path, time.Now().UnixNano())
+		if rerr := os.Rename(l.path, aside); rerr != nil {
+			logging.L().Warn("contexts.share_ledger.corrupt_move_failed", "err", rerr.Error())
+		} else {
+			logging.L().Warn("contexts.share_ledger.corrupt_moved_aside", "file", filepath.Base(aside))
+		}
+		return
+	}
+	if f.Shares != nil {
 		l.recs = f.Shares
 	}
 }
@@ -87,7 +99,7 @@ func (l *shareLedger) get(wireID, userID string) (shareRecord, bool) {
 	defer l.mu.Unlock()
 	l.loadLocked()
 	r, ok := l.recs[wireID]
-	if !ok || r.UserID != userID {
+	if !ok || userID == "" || r.UserID != userID {
 		return shareRecord{}, false
 	}
 	return r, true
@@ -95,7 +107,7 @@ func (l *shareLedger) get(wireID, userID string) (shareRecord, bool) {
 
 // put records a share and persists the ledger.
 func (l *shareLedger) put(wireID string, r shareRecord) error {
-	if l == nil || wireID == "" {
+	if l == nil || wireID == "" || r.UserID == "" {
 		return nil
 	}
 	l.mu.Lock()

@@ -155,6 +155,24 @@ export function folderShareMoveWarning(
   return `${lead} Sharing with ${to} moves ${moving === 1 ? 'it' : 'them'} there instead.`;
 }
 
+/** Shown when, with no team list, a re-share keeps an entry on its recorded team. */
+export const STAYS_WITH_TEAM_NOTE = "It stays with the team it's shared with now.";
+
+/**
+ * staysWithTeamNote — with no team list (older Fleet, the read failed) there
+ * is no picker, and a "team" re-share sends each entry's recorded team. Say
+ * so plainly, so the member is not left guessing where it goes. null when a
+ * picker is shown, the layer is org, or no entry has a recorded team.
+ */
+export function staysWithTeamNote(
+  pickable: readonly FleetTeamView[],
+  priors: readonly (ContextShareStateView | null | undefined)[],
+  layer: 'team' | 'org',
+): string | null {
+  if (pickable.length > 0 || layer !== 'team') return null;
+  return priors.some((p) => p?.layer === 'team' && !!p.team_id) ? STAYS_WITH_TEAM_NOTE : null;
+}
+
 /**
  * readShareStates — where this device last shared each of nodeIDs. Any
  * failure reads as "no record": the dialogs then start as for a new entry.

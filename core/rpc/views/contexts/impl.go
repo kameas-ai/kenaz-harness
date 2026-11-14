@@ -539,8 +539,12 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		)
 		return ContextPublishResult{}, fmt.Errorf("contexts: publish: %w", err)
 	}
-	if result.AcceptedNodes > 0 {
-		rec := shareRecord{UserID: a.currentUserID(), Layer: string(layer), SharedAt: time.Now().UTC()}
+	// Record only a share Fleet actually took: accepted, not conflicted
+	// (a conflict leaves the server copy where it was), and only for a
+	// known fleet user (a record nobody owns could never be read back, or
+	// worse, would match another unknown-user read).
+	if user := a.currentUserID(); user != "" && result.AcceptedNodes > 0 && !conflictedNode(result.Conflicts, wireID) {
+		rec := shareRecord{UserID: user, Layer: string(layer), SharedAt: time.Now().UTC()}
 		if layer == contextpack.LayerTeam {
 			rec.TeamID = teamID
 		}
@@ -561,6 +565,16 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		Conflicts:      result.Conflicts,
 		EffectiveLayer: string(layer),
 	}, nil
+}
+
+// conflictedNode reports whether conflicts include the pushed node.
+func conflictedNode(conflicts []fleet.ContextPushConflict, wireID string) bool {
+	for _, c := range conflicts {
+		if c.NodeID == wireID {
+			return true
+		}
+	}
+	return false
 }
 
 // Context_Promote elevates a team_shared entry to org_shared.
@@ -587,10 +601,12 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 		"node_id", result.Node.ID,
 		"new_classification", string(result.Node.Classification),
 	)
-	if err := a.ledger().put(a.syncer.WireNodeID(nodeID), shareRecord{
-		UserID: a.currentUserID(), Layer: string(contextpack.LayerOrg), SharedAt: time.Now().UTC(),
-	}); err != nil {
-		logging.L().Warn("contexts.promote.share_record_failed", "node_id", result.Node.ID, "err", fleet.LogSafeErr(err))
+	if user := a.currentUserID(); user != "" {
+		if err := a.ledger().put(a.syncer.WireNodeID(nodeID), shareRecord{
+			UserID: user, Layer: string(contextpack.LayerOrg), SharedAt: time.Now().UTC(),
+		}); err != nil {
+			logging.L().Warn("contexts.promote.share_record_failed", "node_id", result.Node.ID, "err", fleet.LogSafeErr(err))
+		}
 	}
 	return ContextPromoteResult{
 		UpdatedNodeID:     result.Node.ID,

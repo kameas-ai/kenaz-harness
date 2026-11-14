@@ -102,6 +102,7 @@ import {
   pickableTeams,
   readShareStates,
   shareMoveWarning,
+  staysWithTeamNote,
   useFleetTeams,
 } from '@/lib/fleetTeams';
 
@@ -193,6 +194,10 @@ const publishMoveWarning = computed(() =>
         teamId: publishTeamId.value,
       })
     : null,
+);
+/** With no team list, says a re-share keeps the entry on its recorded team. */
+const publishStaysNote = computed(() =>
+  publishReady.value ? staysWithTeamNote(publishTeams.value, [publishPrior.value], publishLayer.value) : null,
 );
 /** Result of the most recent publish call (shown inline). */
 const publishResult = ref<ContextPublishResult | null>(null);
@@ -1001,6 +1006,13 @@ onBeforeUnmount(() => {
           data-testid="context-publish-move-warning"
         >
           {{ publishMoveWarning }}
+        </p>
+        <p
+          v-if="publishStaysNote"
+          class="font-ui text-[12px] text-ink-muted leading-relaxed mb-4"
+          data-testid="context-publish-stays-note"
+        >
+          {{ publishStaysNote }}
         </p>
         <div class="flex justify-end gap-3">
           <button

@@ -23,6 +23,7 @@ import { useFleetSession } from '@/lib/fleetSession';
 import {
   folderInitialTeam,
   folderShareMoveWarning,
+  staysWithTeamNote,
   pickableTeams,
   readShareStates,
   useFleetTeams,
@@ -107,6 +108,12 @@ const moveWarning = computed(() =>
         layer: layer.value,
         teamId: teamId.value,
       })
+    : null,
+);
+/** With no team list, says a re-share keeps entries on their recorded team. */
+const staysNote = computed(() =>
+  props.mode === 'share' && teamsReady.value && phase.value === 'select'
+    ? staysWithTeamNote(teams.value, eligiblePriors(), layer.value)
     : null,
 );
 // A session refresh can demote an admin while the dialog is open.
@@ -300,6 +307,13 @@ const statusClass: Record<BatchEntry['status'], string> = {
         data-testid="folder-share-move-warning"
       >
         {{ moveWarning }}
+      </p>
+      <p
+        v-if="staysNote"
+        class="font-ui text-[12px] text-ink-muted leading-relaxed mb-3"
+        data-testid="folder-share-stays-note"
+      >
+        {{ staysNote }}
       </p>
 
       <div class="flex items-center gap-3 mb-1 font-ui text-[11px] text-ink-muted">
