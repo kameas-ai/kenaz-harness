@@ -9,6 +9,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -325,7 +326,10 @@ func TestE2E3_StateDirIsPrivileged(t *testing.T) {
 		_ = rc.registry.ResolveScoped(p.RequestID, cedar.DecisionAllowAlways, cedar.SourceGuest, cedar.ScopeDirectory)
 		mustAllow(t, ch, "narrowed write")
 		entries, _ := os.ReadDir(rc.policyDir)
-		if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), "_path.cedar") {
+		// snippetName's scope is the suffix, or — when the path is long,
+		// as macOS temp dirs are — sits before a hash: fs_allow_write_path_<hash>.
+		if len(entries) != 1 || !(strings.HasSuffix(entries[0].Name(), "_path.cedar") ||
+			strings.HasPrefix(entries[0].Name(), "fs_allow_write_path_")) {
 			t.Fatalf("policy files = %v, want exactly one exact-path grant", entries)
 		}
 		// The state directory is still not writable without a prompt.
@@ -384,5 +388,191 @@ func TestCanonicalize_ExpandsTilde(t *testing.T) {
 	}
 	if got, _ := Canonicalize("~other/x"); strings.HasPrefix(got, home) {
 		t.Errorf("~user form expanded to HOME: %q", got)
+	}
+}
+
+// E2E-3 aliasing: the state classification compares as the filesystem
+// sees paths, not as bytes. A case variant on a case-insensitive volume
+// (APFS, NTFS) names the same state directory.
+func TestStateRelation_CaseVariantIsState(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".kenaz", "harness", "prod")
+	if err := os.MkdirAll(filepath.Join(dataDir, "policy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	variant := filepath.Join(home, ".KENAZ", "harness", "prod", "policy")
+	if _, err := os.Stat(variant); err != nil {
+		t.Skipf("case-sensitive filesystem, no case alias to test: %v", err)
+	}
+	if in, _, _ := StateRelation(variant, HarnessStateDirs(dataDir), ""); !in {
+		t.Fatalf("StateRelation(%s) inside=false, want true (case alias of the state dir)", variant)
+	}
+	g := &Gate{opts: GateOptions{StateDirs: HarnessStateDirs(dataDir)}}
+	if p := g.privilege(filepath.Join(variant, "evil.cedar")); !p.inside {
+		t.Fatalf("gate privilege for a case variant = %+v, want inside", p)
+	}
+}
+
+// A state dir configured through a symlink is still recognised when the
+// path names its real target, and the other way round.
+func TestGatePrivilege_SymlinkAliasesOfStateDir(t *testing.T) {
+	t.Parallel()
+	realHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(realHome, ".kenaz", "harness", "prod", "policy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "home-link")
+	if err := os.Symlink(realHome, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	viaLink := filepath.Join(link, ".kenaz", "harness", "prod")
+	viaReal := filepath.Join(realHome, ".kenaz", "harness", "prod")
+	for _, c := range []struct{ name, stateDir, target string }{
+		{"real target of a linked state dir", viaLink, filepath.Join(viaReal, "policy", "evil.cedar")},
+		{"linked path to a real state dir", viaReal, filepath.Join(viaLink, "policy", "evil.cedar")},
+	} {
+		g := &Gate{opts: GateOptions{StateDirs: HarnessStateDirs(c.stateDir)}}
+		if p := g.privilege(c.target); !p.inside {
+			t.Errorf("%s: privilege = %+v, want inside", c.name, p)
+		}
+		if in, _, _ := StateRelation(c.target, HarnessStateDirs(c.stateDir), ""); !in {
+			t.Errorf("%s: StateRelation inside=false, want true", c.name)
+		}
+	}
+	// A file whose directory contains the state dir, named through the
+	// other alias, still narrows a directory grant (dirCoversState), and
+	// that directory itself "contains" state for recipe_dir_add.
+	g := &Gate{opts: GateOptions{StateDirs: HarnessStateDirs(viaLink)}}
+	if p := g.privilege(filepath.Join(realHome, ".kenaz", "notes.txt")); !p.dirCoversState {
+		t.Errorf("sibling of the state tree via the real path: privilege = %+v, want dirCoversState", p)
+	}
+	if in, con, _ := StateRelation(filepath.Join(realHome, ".kenaz"), HarnessStateDirs(viaLink), ""); in || !con {
+		t.Errorf("ancestor of a linked state dir: StateRelation = (%v,%v), want (false,true)", in, con)
+	}
+}
+
+// Case is folded lexically too on macOS and Windows, so a case variant is
+// state even when nothing exists on disk to compare with os.SameFile.
+func TestStateRelation_CaseFoldedWithoutDisk(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("case is significant on this platform")
+	}
+	roots := []string{"/nonexistent-kz/.kenaz/harness/prod"}
+	if in, _, _ := StateRelation("/NONEXISTENT-KZ/.KENAZ/harness/prod/policy", roots, ""); !in {
+		t.Fatal("case variant not classed as state")
+	}
+}
+
+// The workspace exemption still holds when the workspace is configured
+// through a symlink and the path names its real location under DataDir.
+func TestGatePrivilege_WorkspaceExemptBehindSymlink(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".kenaz", "harness", "prod")
+	ws := filepath.Join(dataDir, "agent-workspace")
+	if err := os.MkdirAll(filepath.Join(ws, "proj"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wsLink := filepath.Join(t.TempDir(), "ws-link")
+	if err := os.Symlink(ws, wsLink); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	target := filepath.Join(ws, "proj", "main.go")
+	g := &Gate{opts: GateOptions{
+		StateDirs:    HarnessStateDirs(dataDir),
+		WorkspaceDir: func() string { return wsLink },
+	}}
+	if p := g.privilege(target); p.inside || p.dirCoversState {
+		t.Fatalf("workspace file behind a symlinked workspace classed privileged: %+v", p)
+	}
+	if in, con, _ := StateRelation(target, HarnessStateDirs(dataDir), wsLink); in || con {
+		t.Fatalf("StateRelation = (%v,%v), want workspace exemption", in, con)
+	}
+	// Control: the same file is state without the exemption.
+	if in, _, _ := StateRelation(target, HarnessStateDirs(dataDir), ""); !in {
+		t.Fatal("control: workspace file under DataDir should be state without the exemption")
+	}
+}
+
+// A workspace that CONTAINS the state dir (workspace = HOME, the usual
+// desktop shape) exempts nothing: the state below it stays state. Only a
+// workspace inside a state dir (the fallback <DataDir>/agent-workspace)
+// exempts its own paths. No disk needed.
+func TestStateRelation_WorkspaceContainingStateExemptsNothing(t *testing.T) {
+	t.Parallel()
+	home := "/nx-home/u"
+	roots := HarnessStateDirs(home + "/.kenaz/harness/prod")
+	cases := []struct {
+		p                string
+		inside, contains bool
+	}{
+		{home + "/.kenaz/harness/prod/policy", true, false},
+		{home + "/.kenaz/harness/prod/data.db", true, false},
+		{home + "/.kenaz/harness/dev", true, false},
+		{home + "/.kenaz", false, true},
+		{home, false, true},
+		{home + "/proj", false, false},
+	}
+	for _, c := range cases {
+		in, con, _ := StateRelation(c.p, roots, home)
+		if in != c.inside || con != c.contains {
+			t.Errorf("StateRelation(%s, ws=HOME) = (%v,%v), want (%v,%v)", c.p, in, con, c.inside, c.contains)
+		}
+	}
+	// The fallback workspace inside DataDir is still exempt.
+	ws := home + "/.kenaz/harness/prod/agent-workspace"
+	if in, con, _ := StateRelation(ws+"/proj/x", roots, ws); in || con {
+		t.Errorf("fallback workspace path = (%v,%v), want exempt", in, con)
+	}
+}
+
+// The workspace exemption does not fold case lexically (the fail-open
+// side): on a path that is not on disk, a case look-alike of the fallback
+// workspace is still state.
+func TestStateRelation_WorkspaceExemptionIsNotCaseFolded(t *testing.T) {
+	t.Parallel()
+	if in, _, _ := StateRelation("/nx-data/WS/x", []string{"/nx-data"}, "/nx-data/ws"); !in {
+		t.Fatal("case look-alike of the workspace was exempted from state")
+	}
+}
+
+// At the gate, with workspace = HOME: a write into the policy dir is
+// labelled privileged and an Allow always is not remembered; a file
+// beside the state tree narrows a directory grant.
+func TestE2E3_WorkspaceHomeDoesNotExemptState(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".kenaz", "harness", "prod")
+	if err := os.MkdirAll(filepath.Join(dataDir, "policy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	g := &Gate{opts: GateOptions{StateDirs: HarnessStateDirs(dataDir), WorkspaceDir: func() string { return home }}}
+	if p := g.privilege(filepath.Join(dataDir, "policy", "evil.cedar")); !p.inside {
+		t.Fatalf("policy file with workspace=HOME: privilege = %+v, want inside", p)
+	}
+	if p := g.privilege(filepath.Join(home, ".kenaz", "notes.txt")); !p.dirCoversState {
+		t.Fatalf("sibling of the state tree with workspace=HOME: privilege = %+v, want dirCoversState", p)
+	}
+	if p := g.privilege(filepath.Join(home, "proj", "main.go")); p.inside || p.dirCoversState {
+		t.Fatalf("ordinary workspace file: privilege = %+v, want none", p)
+	}
+
+	rc := newRealChain(t, GateOptions{
+		StateDirs:    HarnessStateDirs(dataDir),
+		WorkspaceDir: func() string { return home },
+	})
+	ch := rc.evalAsync(OpWrite, filepath.Join(dataDir, "policy", "evil.cedar"))
+	p := rc.waitPending(t, 1)[0]
+	if !strings.Contains(p.Surface.FS.Privileged, "harness's own state directory") {
+		t.Fatalf("Privileged = %q, want the state-directory banner", p.Surface.FS.Privileged)
+	}
+	if err := rc.registry.ResolveScoped(p.RequestID, cedar.DecisionAllowAlways, cedar.SourceGuest, cedar.ScopeDirectory); err != nil {
+		t.Fatalf("ResolveScoped: %v", err)
+	}
+	mustAllow(t, ch, "privileged write")
+	if entries, _ := os.ReadDir(rc.policyDir); len(entries) != 0 {
+		t.Fatalf("policy dir has %d files after a privileged Allow-always, want 0", len(entries))
 	}
 }

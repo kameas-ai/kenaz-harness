@@ -198,11 +198,13 @@ func decodeToolAllowlist(raw string) []string {
 	return out
 }
 
-// ChatRunStatusSkipped is the history Status of a fire that did not run
-// because the schedule's conversation (sessions/0348) still had a turn in
-// flight — the previous run, or one started there by hand. Error carries
-// the reason. Running two turns concurrently in one session is never
-// right, so the fire is recorded and dropped, not queued.
+// ChatRunStatusSkipped is the history Status of a fire that did not run,
+// with the reason in Error: the schedule's conversation (sessions/0348)
+// still had a turn in flight — the previous run, or one started there by
+// hand — or the app was closing (engine Stop) before the run started.
+// Running two turns concurrently in one session is never right, so a busy
+// fire is recorded and dropped, not queued; a one-shot stopped before its
+// run started stays enabled and fires on the next start.
 const ChatRunStatusSkipped = "skipped"
 
 // ChatRunHistoryRecord is one row in scheduled_chat_run_history.

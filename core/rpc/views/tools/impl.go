@@ -872,6 +872,11 @@ func (a *API) RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, r
 	// the server rewrite the harness's permissions. A directory that
 	// CONTAINS the state (on a workbench, HOME=/var/lib/kenaz-harness is
 	// exactly that) still prompts, but the prompt says so.
+	// StateRelation compares as the filesystem sees paths (os.SameFile on
+	// every ancestor, case folded on macOS/Windows): canonical has its
+	// symlinks resolved while HarnessStateDirs is only cleaned lexically,
+	// and a byte compare of the two never matched behind a symlink (every
+	// macOS temp dir) or for a case variant on APFS.
 	inside, contains, stateRoot := corefs.StateRelation(canonical, corefs.HarnessStateDirs(a.cfg.DataDir), a.cfg.WorkspaceDir)
 	if inside {
 		return false, canonical, fmt.Errorf("%w: %q is inside the harness state directory %q", ErrPrivilegedDir, canonical, stateRoot)

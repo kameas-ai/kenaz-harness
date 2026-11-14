@@ -1540,6 +1540,10 @@ func (a *API) Shutdown() {
 	if a.compactionScheduler != nil {
 		a.compactionScheduler.Stop()
 	}
+	// The chat-cron Stop refuses new fires, cancels in-flight dispatches
+	// and waits (bounded) for their history writes, so no fire touches
+	// storage after the caller closes it. The run a dispatch started is
+	// not stopped by this — the chat runner drain below owns that.
 	if a.chatCronEngine != nil {
 		a.chatCronEngine.Stop()
 	}
@@ -1547,8 +1551,8 @@ func (a *API) Shutdown() {
 	// Cancel + drain in-flight chat runs: their exit paths write session
 	// storage, which the caller closes after Shutdown returns (main.go /
 	// serve.ShutdownServedCore: api.Shutdown THEN core shutdown). AFTER
-	// the workflow + chat-cron schedulers stop (neither Stop waits on a
-	// job), so a firing cannot start a run mid-drain; ChatRunner.Shutdown
+	// the workflow + chat-cron schedulers stop (the workflow Stop does not
+	// wait on a job), so a firing cannot start a run mid-drain; ChatRunner.Shutdown
 	// also refuses any later StartStream (chat.ErrRunnerShutdown). Bounded
 	// so a wedged run cannot hang app exit.
 	if a.chatRunner != nil {

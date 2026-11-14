@@ -424,3 +424,20 @@ func TestMemoryRetrieve_FramesNotesAsUntrusted(t *testing.T) {
 		t.Fatalf("pinned manual note should carry no auto label:\n%s", got)
 	}
 }
+
+// A CRLF in recalled content is ONE line break: formatRecall must give
+// exactly one "\n" per source line, never a blank line (a "\r\n" turned
+// into "\n\n" would leave an empty, unindented line between note lines).
+func TestFormatRecall_CRLFIsOneNewline(t *testing.T) {
+	t.Parallel()
+	got := formatRecall("P:", []memory.Snippet{
+		{Content: "first\r\nsecond\r\nthird\r\n", Pinned: true},
+	})
+	want := "P:\n" + RecallTrustNotice + "\n- first\n  second\n  third\n"
+	if got != want {
+		t.Fatalf("formatRecall CRLF:\n got %q\nwant %q", got, want)
+	}
+	if strings.Contains(got, "\n\n") || strings.Contains(got, "\r") {
+		t.Fatalf("blank line or stray CR in recall: %q", got)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -40,10 +41,108 @@ func isWithinOrEqual(p, dir string) bool {
 	return p == dir || isWithin(p, dir)
 }
 
+// foldPathCase is true where the default filesystems are case-insensitive
+// (APFS/HFS+ on macOS, NTFS on Windows): there "~/.KENAZ/harness" names
+// the same directory as "~/.kenaz/harness".
+var foldPathCase = runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+
+// lexicalWithinOrEqual is isWithinOrEqual with case folded where the
+// platform's filesystems fold it.
+func lexicalWithinOrEqual(p, dir string) bool {
+	if !foldPathCase {
+		return isWithinOrEqual(p, dir)
+	}
+	return isWithinOrEqual(strings.ToLower(p), strings.ToLower(dir))
+}
+
+// sameDirOrBelow reports whether p is dir, or sits below it, as the
+// filesystem sees it, for the harness-state classification (E2E-3). A
+// byte-prefix compare alone missed aliases of the same directory: a
+// case variant on a case-insensitive volume, a path through a symlink
+// (on macOS every /var path is /private/var underneath), or a hard link.
+// So besides the (case-folded) lexical compare, every existing ancestor
+// of p is checked with os.SameFile against dir. p itself need not exist
+// (a file about to be written). Only used for state and workspace
+// classification, never to widen a grant.
+func sameDirOrBelow(p, dir string) bool {
+	if p == "" || dir == "" {
+		return false
+	}
+	if lexicalWithinOrEqual(p, dir) {
+		return true
+	}
+	return sameFileAncestor(p, dir)
+}
+
+// inWorkspace is the workspace exemption's compare. It does not fold case
+// lexically — the exemption is the fail-open direction, and a
+// case-sensitive volume on macOS must not exempt a look-alike — but the
+// os.SameFile walk still recognises a real alias (a symlinked workspace,
+// or a case variant on a case-insensitive volume).
+func inWorkspace(p, ws string) bool {
+	if p == "" || ws == "" {
+		return false
+	}
+	return isWithinOrEqual(p, ws) || sameFileAncestor(p, ws)
+}
+
+// sameFileAncestor reports whether p or one of its existing ancestors is
+// the same directory as dir (os.SameFile). When p itself resolves through
+// a symlink, the ancestors of its resolved form are walked too: os.Stat
+// follows the link at p, but p's lexical parents are those of the link,
+// not of its target.
+func sameFileAncestor(p, dir string) bool {
+	di, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	if sameFileAncestorOf(p, di) {
+		return true
+	}
+	if r, err := filepath.EvalSymlinks(p); err == nil && r != filepath.Clean(p) {
+		return sameFileAncestorOf(r, di)
+	}
+	return false
+}
+
+func sameFileAncestorOf(p string, di os.FileInfo) bool {
+	for cur := filepath.Clean(p); ; {
+		if fi, err := os.Stat(cur); err == nil && os.SameFile(fi, di) {
+			return true
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return false
+		}
+		cur = parent
+	}
+}
+
+// sameDirStrictlyBelow reports whether p sits strictly below dir as the
+// filesystem sees it (see sameDirOrBelow).
+func sameDirStrictlyBelow(p, dir string) bool {
+	return sameDirOrBelow(p, dir) && !sameDirOrBelow(dir, p)
+}
+
+// insideState reports whether canonical is harness state under root: it
+// is (or is below) root and the workspace exemption does not apply. The
+// exemption is for the fallback workspace that lives INSIDE a state dir
+// (<DataDir>/agent-workspace on a grant-less workbench): a path in that
+// workspace is the agent's own working area. A workspace that CONTAINS a
+// state dir (workspace = HOME, state = HOME/.kenaz/harness/prod) exempts
+// nothing — before this, a path in <DataDir>/policy was "in the
+// workspace" and lost every E2E-3 protection.
+func insideState(canonical, root, ws string) bool {
+	if !sameDirOrBelow(canonical, root) {
+		return false
+	}
+	return !(ws != "" && sameDirOrBelow(ws, root) && inWorkspace(canonical, ws))
+}
+
 // privilege is the gate's E2E-3 classification of one canonical path.
 type privilege struct {
 	// inside is true when the path IS harness state: inside a StateDir
-	// and not inside the agent workspace.
+	// and not exempted as part of a workspace inside it (insideState).
 	inside bool
 	// dirCoversState is true when the path's parent directory contains a
 	// StateDir, so a "this directory and below" grant would cover state.
@@ -59,11 +158,9 @@ func (g *Gate) privilege(canonical string) privilege {
 	if len(g.opts.StateDirs) == 0 {
 		return privilege{}
 	}
-	if ws := g.workspace(); ws != "" && isWithinOrEqual(canonical, ws) {
-		return privilege{}
-	}
+	ws := g.workspace()
 	for _, root := range g.opts.StateDirs {
-		if isWithinOrEqual(canonical, root) {
+		if insideState(canonical, root, ws) {
 			return privilege{
 				inside: true,
 				root:   root,
@@ -75,7 +172,7 @@ func (g *Gate) privilege(canonical string) privilege {
 	}
 	parent := filepath.Dir(canonical)
 	for _, root := range g.opts.StateDirs {
-		if isWithinOrEqual(root, parent) {
+		if sameDirOrBelow(root, parent) {
 			return privilege{
 				dirCoversState: true,
 				root:           root,
@@ -90,21 +187,29 @@ func (g *Gate) privilege(canonical string) privilege {
 
 // StateRelation classifies canonical against the harness state
 // directories: inside is true when canonical is (or is below) one of
-// stateDirs and not inside workspace; contains is true when canonical is
-// a strict ancestor of one. root names the state directory involved.
+// stateDirs, unless it is in a workspace that itself lies inside that
+// state dir (the fallback workspace; see insideState — a workspace that
+// contains a state dir exempts nothing); contains is true when canonical
+// is a strict ancestor of one. root names the state directory involved.
+// Paths are compared as the filesystem sees them (sameDirOrBelow), so a
+// case variant, a symlinked alias or the real target of a symlinked state
+// directory is classified the same as the spelling in stateDirs.
 // Shared by the fs gate and the recipe_dir_add path
 // (core/rpc/views/tools) so both draw the same line (E2E-3).
 func StateRelation(canonical string, stateDirs []string, workspace string) (inside, contains bool, root string) {
-	if workspace != "" && isWithinOrEqual(canonical, workspace) {
-		return false, false, ""
-	}
 	for _, r := range stateDirs {
-		if isWithinOrEqual(canonical, r) {
+		if insideState(canonical, r, workspace) {
 			return true, false, r
 		}
 	}
 	for _, r := range stateDirs {
-		if isWithin(r, canonical) {
+		if sameDirOrBelow(canonical, r) {
+			// Inside state but exempted: the fallback workspace.
+			return false, false, ""
+		}
+	}
+	for _, r := range stateDirs {
+		if sameDirStrictlyBelow(r, canonical) {
 			return false, true, r
 		}
 	}

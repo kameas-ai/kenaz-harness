@@ -230,6 +230,12 @@ func NewChatRunDispatcher(deps ChatRunDispatcherDeps) *LiveChatRunDispatcher {
 	return &LiveChatRunDispatcher{deps: deps}
 }
 
+// ReportsRunStart implements scheduler.RunStartReporter: DispatchChatRun
+// calls scheduler.MarkRunDispatched just before it appends the prompt.
+func (d *LiveChatRunDispatcher) ReportsRunStart() {}
+
+var _ scheduler.RunStartReporter = (*LiveChatRunDispatcher)(nil)
+
 // DispatchChatRun implements scheduler.ChatRunDispatcher.
 //
 // Every internal failure (session creation, StartStream, an errored or
@@ -400,6 +406,18 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 		}
 	}
 
+	// The cron engine's Stop (app quit) cancels ctx. Until the prompt is
+	// written nothing has run — the budget pass above is only a summary
+	// call, which is where a quit usually lands — so return here without
+	// marking the run started: the engine records "skipped" and a
+	// one-shot is not used up (scheduler.RunStartReporter).
+	if ctx.Err() != nil {
+		r := skippedRecord(sess.ID, now, fmt.Sprintf("cancelled before the prompt was written: %v", ctx.Err()))
+		r.Model = model
+		budget.apply(&r)
+		return r, nil
+	}
+
 	var containGen uint64
 	if containment.Contained {
 		containGen = d.deps.Containment.Contain(sess.ID, id, containment.Allow)
@@ -413,6 +431,12 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	// LLM_StartStream). This append is the turn's ONLY write: the chat
 	// runner never persists a user turn (chat-single-writer-01DOGF0G).
 	// Without it, StartStream runs with no user message at all.
+	//
+	// The prompt row is this fire's first durable effect on the
+	// conversation, so tell the cron engine the run has started: from
+	// here on, a Stop that cancels ctx uses the attempt up instead of
+	// leaving a one-shot to fire again (scheduler.RunStartReporter).
+	scheduler.MarkRunDispatched(ctx)
 	promptMsg, aerr := d.deps.Sessions.AppendMessage(ctx, sess.ID, "user", prompt)
 	if aerr != nil {
 		if containment.Contained {
