@@ -8,6 +8,7 @@ package attachments_test
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/attachments"
@@ -64,5 +65,15 @@ func TestPulledSharedSource_NeverAttached(t *testing.T) {
 	}
 	if _, err := mgr.Refresh(ctx, "planted"); !errors.Is(err, attachments.ErrSharedEntryNotAttachable) {
 		t.Errorf("Refresh err = %v, want ErrSharedEntryNotAttachable", err)
+	}
+}
+
+// On case-insensitive filesystems (darwin, windows) "Team/_FLEET" is the
+// same folder as "team/_fleet", so it is refused there too.
+func TestPulledSharedSource_CaseFolding(t *testing.T) {
+	src := "library:Team/_FLEET/x"
+	want := runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+	if got := attachments.IsPulledSharedSource(src); got != want {
+		t.Fatalf("IsPulledSharedSource(%q) = %v on %s, want %v", src, got, runtime.GOOS, want)
 	}
 }

@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -527,7 +528,16 @@ func IsPulledSharedSource(src string) bool {
 	// (so "team/./_fleet/x" and "team//_fleet/x" are caught too).
 	p = strings.TrimLeft(path.Clean(strings.ReplaceAll(p, "\\", "/")), "/")
 	parts := strings.SplitN(p, "/", 3)
-	return len(parts) >= 2 && (parts[0] == "team" || parts[0] == "org") && parts[1] == "_fleet"
+	return len(parts) >= 2 && (pathSegEq(parts[0], "team") || pathSegEq(parts[0], "org")) && pathSegEq(parts[1], "_fleet")
+}
+
+// pathSegEq compares a library path segment case-insensitively on darwin
+// and windows (case-insensitive filesystems), exactly elsewhere.
+func pathSegEq(a, b string) bool {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // libraryPath returns the path portion of a "library:<path>" source,

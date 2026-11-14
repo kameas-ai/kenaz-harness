@@ -58,7 +58,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/google/uuid"
@@ -171,13 +173,24 @@ func passThroughWireID(localID string) (string, bool) {
 	if IsWireUUID(localID) {
 		return strings.ToLower(localID), true
 	}
-	if i := strings.LastIndex(localID, "/_fleet/"); i >= 0 {
-		tail := localID[i+len("/_fleet/"):]
-		if IsWireUUID(tail) {
-			return strings.ToLower(tail), true
-		}
+	// Only the exact synthetic shape "<team|org>/_fleet/<uuid>" (after
+	// normalising), never "_fleet/<uuid>" anywhere in a longer path: a
+	// member's own "notes/team/_fleet/<uuid>.md"-like path is a file, not
+	// a pulled node.
+	parts := strings.Split(strings.TrimLeft(path.Clean(strings.ReplaceAll(localID, "\\", "/")), "/"), "/")
+	if len(parts) == 3 && (wireSegEq(parts[0], "team") || wireSegEq(parts[0], "org")) && wireSegEq(parts[1], "_fleet") && IsWireUUID(parts[2]) {
+		return strings.ToLower(parts[2]), true
 	}
 	return "", false
+}
+
+// wireSegEq matches the library's filesystem case rules (case-insensitive
+// on darwin and windows).
+func wireSegEq(a, b string) bool {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // IsWireUUID reports whether s is a canonical 36-character UUID — the only

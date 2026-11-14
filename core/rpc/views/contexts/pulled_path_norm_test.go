@@ -7,6 +7,7 @@ package contexts_test
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
@@ -61,5 +62,18 @@ func TestPulledPath_NonCanonicalSpellingsNotShareable(t *testing.T) {
 	}
 	if push.calls != 0 {
 		t.Fatalf("push calls = %d, want none", push.calls)
+	}
+}
+
+func TestPulledPath_CaseFoldingOnCaseInsensitiveFS(t *testing.T) {
+	lib, err := corecontexts.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := contextsview.New(lib)
+	err = api.Save(context.Background(), "Team/_Fleet/x", "edited")
+	refused := errors.Is(err, contextsview.ErrPulledEntryReadOnly)
+	if want := runtime.GOOS == "darwin" || runtime.GOOS == "windows"; refused != want {
+		t.Fatalf("Save(Team/_Fleet/x) refused=%v on %s, want %v (err %v)", refused, runtime.GOOS, want, err)
 	}
 }
