@@ -1828,6 +1828,14 @@ func (b *Bindings) Settings_FleetSignInCancel() error {
 	return b.api.Settings().FleetSignInCancel(b.ctx())
 }
 
+// Settings_FleetDeviceKeysReauth runs the fresh sign-in Fleet requires to
+// replace this device's keys (ER-40) and retries the key update once.
+// Cancel with Settings_FleetSignInCancel.
+func (b *Bindings) Settings_FleetDeviceKeysReauth() error {
+	defer sentry.WrapBinding("Settings_FleetDeviceKeysReauth")()
+	return b.api.Settings().FleetDeviceKeysReauth(b.ctx())
+}
+
 // Settings_FleetSignOut clears tokens and identity cache.
 func (b *Bindings) Settings_FleetSignOut() error {
 	defer sentry.WrapBinding("Settings_FleetSignOut")()

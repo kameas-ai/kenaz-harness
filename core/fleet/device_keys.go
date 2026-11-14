@@ -222,8 +222,11 @@ func isNodeRemoved(status int, body []byte) bool {
 // RegisterDeviceKeys re-registers this device's keys for nodeID via
 // PUT /api/v1/me/nodes/{node_id}/keys — rotation without a full enroll.
 // Called after a recovery-code seed import (the derived handoff key
-// changed). Returns ErrNodeRemoved on 403 node_removed and
-// ErrDeviceKeysRejected (wrapped, with human copy) on 400/409.
+// changed). Returns ErrNodeRemoved on 403 node_removed,
+// ErrDeviceKeysRejected (wrapped, with human copy) on 400/409, and
+// ErrKeysReauthRequired on 403 reauth_required (a replacement without a
+// fresh sign-in; see device_keys_stepup.go). A held step-up token is sent in
+// X-Kenaz-Step-Up-Token.
 func (c *Client) RegisterDeviceKeys(ctx context.Context, nodeID string) error {
 	if c == nil || c.isNop {
 		return ErrFleetDisabled
@@ -240,7 +243,16 @@ func (c *Client) RegisterDeviceKeys(ctx context.Context, nodeID string) error {
 	if err != nil {
 		return fmt.Errorf("fleet: put device keys: marshal: %w", err)
 	}
-	resp, err := c.Put(ctx, "/api/v1/me/nodes/"+url.PathEscape(nodeID)+"/keys", bytes.NewReader(data))
+	// A held step-up token (fresh max_age=0 sign-in) proves the recent
+	// interactive sign-in Fleet requires to REPLACE an active key. It is
+	// sent whenever held; Fleet only checks it when the call replaces.
+	var hdr http.Header
+	stepUp := c.heldStepUpToken()
+	if stepUp != "" {
+		hdr = http.Header{}
+		hdr.Set(StepUpHeader, stepUp)
+	}
+	resp, err := c.doWithHeaders(ctx, http.MethodPut, "/api/v1/me/nodes/"+url.PathEscape(nodeID)+"/keys", hdr, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("fleet: put device keys: %w", err)
 	}
@@ -258,6 +270,17 @@ func (c *Client) RegisterDeviceKeys(ctx context.Context, nodeID string) error {
 	case isNodeRemoved(resp.StatusCode, body):
 		c.keyReg.set(KeyRegistration{Status: "", Message: keyRegNodeGoneCopy})
 		return ErrNodeRemoved
+	case isReauthRequired(resp.StatusCode, body):
+		// Replacing an active key needs a fresh sign-in (ER-40). Nothing
+		// was written; the previous key stays active. A token that was
+		// sent and still refused is useless: drop it so nothing retries
+		// with it. Never refresh-and-retry (a 403, not a 401).
+		if stepUp != "" {
+			c.ClearStepUpToken()
+		}
+		c.setReauthRequired()
+		logging.L().Warn("fleet.device_keys.reauth_required", "via", "put", "step_up_sent", stepUp != "")
+		return errReauth(stepUp != "")
 	}
 	if st, ok := keyRejection(resp.StatusCode, body); ok {
 		c.keyReg.set(KeyRegistration{Status: st, Message: keyRegCopy(st)})

@@ -5172,7 +5172,11 @@ export interface FleetSessionView {
 
 /** Mirrors settings.FleetDeviceKeysView. */
 export interface FleetDeviceKeysView {
-  /** registered | too_many_devices | invalid_key | unavailable */
+  /**
+   * registered | too_many_devices | invalid_key | unavailable |
+   * reauth_required (kenaz-fleet ER-40: replacing this device's active key
+   * needs a fresh sign-in — settings.fleetDeviceKeysReauth()).
+   */
   status: string;
   /** Human copy when this device cannot receive shared sessions. */
   message?: string;

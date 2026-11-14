@@ -173,6 +173,12 @@ type enrollResponse struct {
 	UserID string `json:"user_id,omitempty"`
 	Tier   string `json:"tier,omitempty"`
 
+	// KeysReauthRequired: a key sent with this enroll would have REPLACED
+	// an active key and no fresh sign-in was presented under
+	// FLEET_NODE_KEYS_STEP_UP=enforce. The enroll succeeded and the active
+	// key was kept (fleet contract §10.1, ER-40).
+	KeysReauthRequired bool `json:"keys_reauth_required,omitempty"`
+
 	// UserEmail / UserDisplayName are the keys the fleet enroll response
 	// actually serializes (both omitempty — either may be absent). Before
 	// this was fixed the harness read only `email`/`display_name`, which
@@ -269,7 +275,13 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		return Identity{}, urlErr
 	}
 
-	status, respBody, err := c.postEnroll(ctx, reqURL, &ts, reqBody)
+	// A held step-up token lets this enroll replace an active key (ER-40);
+	// Fleet only evaluates it when the enroll would actually replace one.
+	reqStepUp := ""
+	if !km.body.empty() {
+		reqStepUp = c.heldStepUpToken()
+	}
+	status, respBody, err := c.postEnroll(ctx, reqURL, &ts, reqBody, reqStepUp)
 	if err != nil {
 		return Identity{}, err
 	}
@@ -284,7 +296,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 			c.keyReg.set(KeyRegistration{Status: st, Message: keyRegCopy(st)})
 			keysRejected = true
 			reqBody.HandoffPublicKey, reqBody.SigningPublicKey = "", ""
-			status, respBody, err = c.postEnroll(ctx, reqURL, &ts, reqBody)
+			status, respBody, err = c.postEnroll(ctx, reqURL, &ts, reqBody, "")
 			if err != nil {
 				return Identity{}, err
 			}
@@ -347,8 +359,23 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		return Identity{}, fmt.Errorf("fleet: enroll: status %d: %s", status, respBody)
 	}
 
+	var er enrollResponse
+	if err := json.Unmarshal(respBody, &er); err != nil {
+		logging.L().Error("fleet.enroll.parse_failed", "err", err.Error(), "body_prefix", string(respBody[:min(len(respBody), 200)]))
+		return Identity{}, fmt.Errorf("fleet: parse enroll response: %w", err)
+	}
+
 	if !keysRejected {
 		switch {
+		case er.KeysReauthRequired:
+			// The replacement was skipped and the previous key kept: a
+			// fresh sign-in is needed (recoverable, shown to the user).
+			// A step-up token that was sent and still refused is useless.
+			if reqStepUp != "" {
+				c.ClearStepUpToken()
+			}
+			c.setReauthRequired()
+			logging.L().Warn("fleet.device_keys.reauth_required", "via", "enroll", "step_up_sent", reqStepUp != "")
 		case km.body.HandoffPublicKey != "":
 			c.keyReg.set(KeyRegistration{Status: KeyRegRegistered,
 				HandoffFingerprint: km.handoffFingerprint, SigningFingerprint: km.signingFingerprint})
@@ -356,12 +383,6 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 			c.keyReg.set(KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy,
 				SigningFingerprint: km.signingFingerprint})
 		}
-	}
-
-	var er enrollResponse
-	if err := json.Unmarshal(respBody, &er); err != nil {
-		logging.L().Error("fleet.enroll.parse_failed", "err", err.Error(), "body_prefix", string(respBody[:min(len(respBody), 200)]))
-		return Identity{}, fmt.Errorf("fleet: parse enroll response: %w", err)
 	}
 
 	id := Identity{
@@ -398,7 +419,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 // owns the transport-error mapping, the SPA-HTML fall-through check and the
 // single 401 → refresh → retry (ts is updated in place on refresh so a
 // second postEnroll reuses the renewed token).
-func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, reqBody enrollRequest) (int, []byte, error) {
+func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, reqBody enrollRequest, stepUp string) (int, []byte, error) {
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return 0, nil, fmt.Errorf("fleet: marshal enroll request: %w", err)
@@ -417,6 +438,9 @@ func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, re
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+ts.AccessToken)
+	if stepUp != "" {
+		req.Header.Set(StepUpHeader, stepUp)
+	}
 	setUserAgent(req)
 
 	resp, err := c.httpClient.Do(req)
@@ -493,6 +517,9 @@ func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, re
 		req2, _ := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 		req2.Header.Set("Content-Type", "application/json")
 		req2.Header.Set("Authorization", "Bearer "+newTS.AccessToken)
+		if stepUp != "" {
+			req2.Header.Set(StepUpHeader, stepUp)
+		}
 		setUserAgent(req2)
 		resp2, err2 := c.httpClient.Do(req2)
 		if err2 != nil {

@@ -363,5 +363,91 @@ describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)'
     expect(wrapper.find('[data-testid="identity-device-fingerprint"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="error-msg"]').text()).toContain('too many devices');
   });
-});
 
+  // kenaz-fleet ER-40: Fleet kept the old key; replacing it needs a fresh
+  // sign-in. The panel offers "Sign in again" and retries once (backend).
+  describe('device keys need a fresh sign-in', () => {
+    const reauthMsg =
+      "Sign in again to update this device's keys. Until you do, sessions shared with this device may not open here.";
+    const reauthSession = () =>
+      session('signed_in', prodProfile, { deviceKeys: { status: 'reauth_required', message: reauthMsg } });
+
+    it('shows the message and a Sign in again button', async () => {
+      const client = buildClient(reauthSession(), { fleetDeviceKeysReauth: vi.fn(async () => {}) });
+      const wrapper = mount(AccountPanel, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      expect(wrapper.find('[data-testid="error-msg"]').text()).toContain('Sign in again to update');
+      expect(wrapper.find('[data-testid="keys-reauth-btn"]').text()).toBe('Sign in again');
+      expect(wrapper.find('[data-testid="identity-device-fingerprint"]').exists()).toBe(false);
+    });
+
+    it('click runs the step-up once; success clears the prompt', async () => {
+      let current = reauthSession();
+      const reauth = vi.fn(async () => {
+        current = session('signed_in', prodProfile, {
+          deviceKeys: { status: 'registered', handoffFingerprint: 'sha256:' + 'cd'.repeat(32) },
+        });
+      });
+      const client = buildClient(current, {
+        fleetSession: vi.fn(async () => current),
+        fleetDeviceKeysReauth: reauth,
+      });
+      const wrapper = mount(AccountPanel, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      await wrapper.find('[data-testid="keys-reauth-btn"]').trigger('click');
+      await flushPromises();
+      expect(reauth).toHaveBeenCalledOnce();
+      expect(wrapper.find('[data-testid="keys-reauth-btn"]').exists()).toBe(false);
+      expect(wrapper.find('[data-testid="identity-device-fingerprint"]').exists()).toBe(true);
+    });
+
+    it('cancel keeps the prompt visible and shows no error', async () => {
+      let rejectFlow: (e: Error) => void = () => {};
+      const reauth = vi.fn(
+        () =>
+          new Promise<void>((_, reject) => {
+            rejectFlow = reject;
+          }),
+      );
+      const cancel = vi.fn(async () => rejectFlow(new Error('context canceled')));
+      const client = buildClient(reauthSession(), {
+        fleetDeviceKeysReauth: reauth,
+        fleetSignInCancel: cancel,
+      });
+      const wrapper = mount(AccountPanel, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      await wrapper.find('[data-testid="keys-reauth-btn"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.find('[data-testid="keys-reauth-btn"]').text()).toBe('Waiting for browser…');
+      await wrapper.find('[data-testid="keys-reauth-cancel-btn"]').trigger('click');
+      await flushPromises();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(wrapper.find('[data-testid="keys-reauth-cancel-btn"]').exists()).toBe(false);
+      expect(wrapper.find('[data-testid="keys-reauth-btn"]').text()).toBe('Sign in again');
+      // The recoverable state stays visible; a cancel is not an error.
+      expect(wrapper.find('[data-testid="error-msg"]').text()).toContain('Sign in again to update');
+    });
+
+    it('a refused retry shows a plain error and does not retry by itself', async () => {
+      const reauth = vi.fn(async () => {
+        throw new Error("fleet: sign in again to update this device's keys: fleet did not accept the new sign-in");
+      });
+      const client = buildClient(reauthSession(), { fleetDeviceKeysReauth: reauth });
+      const wrapper = mount(AccountPanel, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      await wrapper.find('[data-testid="keys-reauth-btn"]').trigger('click');
+      await flushPromises();
+      expect(reauth).toHaveBeenCalledOnce();
+      expect(wrapper.find('[data-testid="error-msg"]').text()).toContain("Fleet didn't accept the new sign-in");
+      expect(wrapper.find('[data-testid="keys-reauth-btn"]').exists()).toBe(true);
+    });
+  });
+});

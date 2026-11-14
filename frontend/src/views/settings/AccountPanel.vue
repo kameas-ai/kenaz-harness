@@ -123,6 +123,16 @@ const sessionMessage = computed(() => {
 const needsReauth = computed(
   () => isDegraded.value && fleet.session.value?.reason === 'needs_reauth',
 );
+/**
+ * kenaz-fleet ER-40: Fleet kept this device's previous key because replacing
+ * it needs a fresh sign-in (e.g. after a recovery-code import). Offer
+ * "Sign in again"; the session message explains why.
+ */
+const keysNeedReauth = computed(
+  () => fleet.session.value?.deviceKeys?.status === 'reauth_required',
+);
+/** The device-key step-up is waiting for the browser. */
+const keysReauthing = ref(false);
 const degradedHeadline = computed(() => {
   switch (fleet.session.value?.reason) {
     case 'not_provisioned':
@@ -231,6 +241,46 @@ function humanizeFleetError(raw: string): string {
   }
   // Fall back to the raw error — at least it\'s informative for a developer.
   return raw;
+}
+
+/**
+ * keysReauth runs the fresh sign-in Fleet requires before it replaces this
+ * device's keys, then the key update is retried once (backend). Never
+ * automatic: only this click starts it, so a refusal cannot loop. Cancel
+ * leaves the reauth_required message in place.
+ */
+async function keysReauth() {
+  keysReauthing.value = true;
+  actionError.value = '';
+  try {
+    await client.settings.fleetDeviceKeysReauth();
+  } catch (e: unknown) {
+    if (!isSignInCancelled(e)) {
+      const raw = e instanceof Error ? e.message : String(e ?? '');
+      actionError.value = humanizeKeysReauthError(raw);
+    }
+  } finally {
+    keysReauthing.value = false;
+    await fleet.refresh();
+  }
+}
+
+async function cancelKeysReauth() {
+  try {
+    await client.settings.fleetSignInCancel();
+  } catch {
+    // Nothing in flight: the session snapshot is the truth either way.
+  }
+}
+
+function humanizeKeysReauthError(raw: string): string {
+  if (raw.includes('different account')) {
+    return 'You signed in with a different account. Sign in again with the account this device uses.';
+  }
+  if (raw.includes('did not accept the new sign-in')) {
+    return "Fleet didn't accept the new sign-in, so this device's keys weren't updated. Try again in a moment.";
+  }
+  return humanizeFleetError(raw);
 }
 
 async function signOut() {
@@ -409,6 +459,23 @@ async function refreshIdentity() {
     </div>
 
     <div class="panel-actions">
+      <button
+        v-if="keysNeedReauth"
+        class="btn btn-primary"
+        :disabled="loading || keysReauthing"
+        data-testid="keys-reauth-btn"
+        @click="keysReauth"
+      >
+        {{ keysReauthing ? 'Waiting for browser…' : 'Sign in again' }}
+      </button>
+      <button
+        v-if="keysReauthing"
+        class="btn btn-secondary"
+        data-testid="keys-reauth-cancel-btn"
+        @click="cancelKeysReauth"
+      >
+        Cancel
+      </button>
       <button
         v-if="needsReauth"
         class="btn btn-primary"
