@@ -73,6 +73,7 @@ func TestHarnessTelemetryNoticeVersion_OnlyTheHarnessForm(t *testing.T) {
 type noticeServer struct {
 	mu        sync.Mutex
 	text      *NoticeText // nil = 404 notice_not_registered
+	rawBody   *NoticeText // when set, served instead of text (text still routes)
 	ackStatus int
 	ackCode   string
 	posts     []map[string]string
@@ -88,6 +89,10 @@ func (s *noticeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if s.text == nil || r.URL.Query().Get("family") != s.text.Family ||
 			r.URL.Query().Get("surface") != NoticeSurfaceHarness {
 			writeJSON(w, 404, map[string]any{"code": "notice_not_registered"})
+			return
+		}
+		if s.rawBody != nil {
+			writeJSON(w, 200, s.rawBody)
 			return
 		}
 		writeJSON(w, 200, s.text)
@@ -146,21 +151,29 @@ func TestGetNoticeText_ServedTextVerifiedAndTamperedRefused(t *testing.T) {
 		t.Fatalf("served = %+v", nt)
 	}
 
-	tampered := []func(*NoticeText){
-		func(n *NoticeText) { n.Text += " (edited)" },                                    // bytes changed
-		func(n *NoticeText) { n.TextHash = strings.ToUpper(n.TextHash) },                 // not lowercase hex
-		func(n *NoticeText) { n.Surface = "fleet-dashboard" },                            // another surface's text
-		func(n *NoticeText) { n.Edition = "memory-sync/v4" },                             // another family's edition
-		func(n *NoticeText) { n.Text, n.TextHash = "", NoticeTextHash("") },              // empty
-		func(n *NoticeText) { n.TextHash = NoticeTextHash(testMemoryNoticeText + "\n") }, // trailing byte
+	cases := []struct {
+		name string
+		mut  func(*NoticeText)
+		want error
+	}{
+		// A well-formed notice whose bytes don't hash to text_hash.
+		{"bytes changed", func(n *NoticeText) { n.Text += " (edited)" }, ErrNoticeTextMismatch},
+		{"hash not lowercase hex", func(n *NoticeText) { n.TextHash = strings.ToUpper(n.TextHash) }, ErrNoticeTextMismatch},
+		{"trailing byte", func(n *NoticeText) { n.TextHash = NoticeTextHash(testMemoryNoticeText + "\n") }, ErrNoticeTextMismatch},
+		// Not a notice for this family and surface at all.
+		{"another surface", func(n *NoticeText) { n.Surface = "fleet-dashboard" }, ErrNoticeMalformed},
+		{"another family's edition", func(n *NoticeText) { n.Edition = "memory-sync/v4" }, ErrNoticeMalformed},
+		{"another family", func(n *NoticeText) { n.Family = NoticeFamilyAgentTelemetry }, ErrNoticeMalformed},
+		{"empty text", func(n *NoticeText) { n.Text, n.TextHash = "", NoticeTextHash("") }, ErrNoticeMalformed},
+		{"empty body", func(n *NoticeText) { *n = NoticeText{} }, ErrNoticeMalformed},
 	}
-	for i, mut := range tampered {
+	for _, tc := range cases {
 		bad := testMemoryNotice()
-		mut(bad)
-		bad.Family = NoticeFamilyMemoryAccess
-		ns.set(func(s *noticeServer) { s.text = bad })
-		if _, err := c.GetNoticeText(context.Background(), NoticeFamilyMemoryAccess, ""); !errors.Is(err, ErrNoticeTextMismatch) {
-			t.Errorf("tamper %d: err = %v, want ErrNoticeTextMismatch", i, err)
+		tc.mut(bad)
+		// Route on the asked family; serve the body as given.
+		ns.set(func(s *noticeServer) { s.text, s.rawBody = &NoticeText{Family: NoticeFamilyMemoryAccess}, bad })
+		if _, err := c.GetNoticeText(context.Background(), NoticeFamilyMemoryAccess, ""); !errors.Is(err, tc.want) {
+			t.Errorf("%s: err = %v, want %v", tc.name, err, tc.want)
 		}
 	}
 }
@@ -612,5 +625,71 @@ func TestNoticeHold_DemotionNeverHeld(t *testing.T) {
 	}
 	if w.fleet.live("to-session") != nil || w.fleet.live("to-project") != nil {
 		t.Fatal("a demotion must reach Fleet while the notice hold is on")
+	}
+}
+
+// TestNoticeHold_NonNoticeBodyIsAFailedLookup: a 200 that isn't a notice
+// (`{}` from a proxy, or the wrong family / surface / edition) is a failed
+// lookup, not a registered text: a never-answered account pushes in cycle 1.
+func TestNoticeHold_NonNoticeBodyIsAFailedLookup(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty object":  `{}`,
+		"wrong surface": `{"family":"memory-access","edition":"memory-access/v1","surface":"fleet-dashboard","text":"t","text_hash":"` + NoticeTextHash("t") + `"}`,
+		"wrong family":  `{"family":"agent-telemetry","edition":"agent-telemetry/v4","surface":"kenaz-harness","text":"t","text_hash":"` + NoticeTextHash("t") + `"}`,
+		"wrong edition": `{"family":"memory-access","edition":"memory-sync/v4","surface":"kenaz-harness","text":"t","text_hash":"` + NoticeTextHash("t") + `"}`,
+		"missing text":  `{"family":"memory-access","edition":"memory-access/v1","surface":"kenaz-harness"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newMemWorld(t)
+			w.fleet.setNoticeFailures(200, 0, body)
+			d := w.device("node-1", 0)
+			d.enable()
+			d.add("n", memory.ScopeKindLongTerm, "x")
+			d.sync()
+			if !upsertedIDs(w.fleet)["n"] {
+				t.Fatal("a non-notice 200 on a never-answered account must not hold")
+			}
+		})
+	}
+}
+
+// TestNoticeHold_AckAnsweredAfterAccountSwitchDoesNotReleaseNewAccount: the
+// ack/withdraw answer only invalidates; it never marks an account as having
+// seen the notice. If the account switches between the click and the answer,
+// the new account (never seen to read it) stays held while lookups fail.
+func TestNoticeHold_AckAnsweredAfterAccountSwitchDoesNotReleaseNewAccount(t *testing.T) {
+	w := newMemWorld(t)
+	w.fleet.setNotice(testMemoryNotice())
+	d := w.device("node-1", 0)
+	d.signIn(accountB)
+	d.enable()
+	d.add("b-note", memory.ScopeKindLongTerm, "B's")
+	d.sync() // B: served, unread → held
+	if upsertedIDs(w.fleet)["b-note"] {
+		t.Fatal("setup: B must be held")
+	}
+
+	// A's ack POST is in flight; the profile switches to B before it answers,
+	// and the answer lands while B is current.
+	d.signIn(accountA)
+	nt, err := d.ms.cfg.Client.GetNoticeText(context.Background(), NoticeFamilyMemoryAccess, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ms.cfg.Client.PostNoticeAck(context.Background(), nt, NoticeActionAck); err != nil {
+		t.Fatal(err)
+	}
+	d.signIn(accountB)
+	d.ms.InvalidateNoticeHold() // what the settings view does on the answer
+
+	w.fleet.setNoticeFailures(503, 503, `{"code":"unavailable"}`)
+	d.add("b-note-2", memory.ScopeKindLongTerm, "B's second")
+	d.ms.RunOnce(context.Background())
+	d.ms.RunOnce(context.Background())
+	if pushed := upsertedIDs(w.fleet); pushed["b-note"] || pushed["b-note-2"] {
+		t.Fatal("A's ack answered after a switch released B's hold")
+	}
+	if st := d.ms.Status(context.Background()); !st.NoticeHold {
+		t.Fatal("B must still report the hold")
 	}
 }

@@ -64,6 +64,12 @@ var (
 	// edition shape. The text is refused, never shown.
 	ErrNoticeTextMismatch = errors.New("fleet: served notice text does not match its hash")
 
+	// ErrNoticeMalformed: a 200 body that isn't a notice for the family and
+	// surface asked for (empty or wrong family, surface or edition, no
+	// text — e.g. `{}` from a proxy). Treated as a failed lookup, not as a
+	// registered text.
+	ErrNoticeMalformed = errors.New("fleet: notice-text answer is not a notice")
+
 	// ErrNoticeOrgInactive: an ack was refused because the org's
 	// subscription has lapsed (403 subscription_inactive). A withdraw is
 	// always accepted. A paused org answers OrgPausedError instead.
@@ -111,17 +117,19 @@ func NoticeTextHash(text string) string {
 
 // Verify checks a served text before it is shown: the family and surface are
 // the ones asked for, the edition is in that family, and the text's bytes hash
-// to text_hash exactly. Any failure is ErrNoticeTextMismatch.
+// to text_hash exactly. A body that isn't a notice of this family and surface
+// is ErrNoticeMalformed; a well-formed notice whose bytes don't hash to
+// text_hash is ErrNoticeTextMismatch.
 func (nt NoticeText) Verify(family string) error {
 	switch {
 	case nt.Family != family:
-		return fmt.Errorf("%w: family %q, asked for %q", ErrNoticeTextMismatch, nt.Family, family)
+		return fmt.Errorf("%w: family %q, asked for %q", ErrNoticeMalformed, nt.Family, family)
 	case nt.Surface != NoticeSurfaceHarness:
-		return fmt.Errorf("%w: surface %q", ErrNoticeTextMismatch, nt.Surface)
+		return fmt.Errorf("%w: surface %q", ErrNoticeMalformed, nt.Surface)
 	case !NoticeEditionMeets(nt.Edition, family, 1):
-		return fmt.Errorf("%w: edition %q is not a %s edition", ErrNoticeTextMismatch, nt.Edition, family)
+		return fmt.Errorf("%w: edition %q is not a %s edition", ErrNoticeMalformed, nt.Edition, family)
 	case nt.Text == "":
-		return fmt.Errorf("%w: empty text", ErrNoticeTextMismatch)
+		return fmt.Errorf("%w: empty text", ErrNoticeMalformed)
 	case nt.TextHash != NoticeTextHash(nt.Text):
 		return fmt.Errorf("%w: %s", ErrNoticeTextMismatch, nt.Edition)
 	}
@@ -162,7 +170,7 @@ func (c *Client) GetNoticeText(ctx context.Context, family, edition string) (Not
 		return NoticeText{}, err
 	}
 	if edition != "" && nt.Edition != edition {
-		return NoticeText{}, fmt.Errorf("%w: asked for %s, served %s", ErrNoticeTextMismatch, edition, nt.Edition)
+		return NoticeText{}, fmt.Errorf("%w: asked for %s, served %s", ErrNoticeMalformed, edition, nt.Edition)
 	}
 	return nt, nil
 }

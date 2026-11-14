@@ -175,25 +175,6 @@ func (m *MemorySync) InvalidateNoticeHold() {
 	m.Kick()
 }
 
-// NoticeAnswered records that the signed-in member just acked or withdrew the
-// memory-access notice in their current org (Fleet answered 200/201): the
-// hold is released now, Fleet is asked again next cycle, and a cycle is
-// kicked so held notes go up.
-func (m *MemorySync) NoticeAnswered() {
-	if m == nil {
-		return
-	}
-	id, ok := m.verifiedIdentity()
-	if !ok {
-		m.InvalidateNoticeHold()
-		return
-	}
-	m.mu.Lock()
-	m.notice = noticeHold{account: AccountKey(id), checkedAt: m.now(), served: true, seen: true, recheck: true}
-	m.mu.Unlock()
-	m.Kick()
-}
-
 // noticeHoldFor is the cached decision for account (no request).
 func (m *MemorySync) noticeHoldFor(account string) (held bool, reason string) {
 	m.mu.Lock()
