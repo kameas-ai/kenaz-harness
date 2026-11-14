@@ -24,13 +24,10 @@ type grant struct {
 }
 
 // covers reports whether g permits op on canonical, judged like the
-// persisted policy: on the lexical path and on where it really lands.
-func (g grant) covers(op Op, canonical string) bool {
-	if g.op != op {
-		return false
-	}
-	rc, ok := resolveFor(op, canonical)
-	if !ok {
+// persisted policy: on the lexical path and on rc, where the request was
+// checked to land (its check-time snapshot; "" means unresolvable).
+func (g grant) covers(op Op, canonical, rc string) bool {
+	if g.op != op || rc == "" || g.resolved == "" {
 		return false
 	}
 	if !g.dir {
@@ -345,7 +342,13 @@ func parentMissing(canonical string) bool {
 // persists exactly these grants, and GrantCoverage releases queued
 // requests by exactly these grants, so a queued request is released
 // only if the grant that was written would have permitted it anyway.
-func (g *Gate) grantsFor(op Op, canonical string, resp PromptResponse) (grants []grant, note string) {
+//
+// checked and checkedDir are the check-time resolutions of canonical
+// (resolveFor) and of its directory (cedar.FSPromptSurface.CheckedPath /
+// CheckedDir). They are taken as given and never re-resolved here, so a
+// link retargeted after the check cannot move the grant; "" (the path
+// could not be resolved) persists nothing.
+func (g *Gate) grantsFor(op Op, canonical, checked, checkedDir string, resp PromptResponse) (grants []grant, note string) {
 	priv := g.privilege(canonical)
 	if priv.inside {
 		return nil, "path is inside the harness state directory " + priv.root + " and cannot be remembered"
@@ -360,8 +363,8 @@ func (g *Gate) grantsFor(op Op, canonical string, resp PromptResponse) (grants [
 		if !cedar.PersistableFamilyID(dir) {
 			return nil, "directory cannot be persisted"
 		}
-		rdir, ok := resolveExisting(dir)
-		if !ok || !cedar.PersistableFamilyID(rdir) {
+		rdir := checkedDir
+		if rdir == "" || !cedar.PersistableFamilyID(rdir) {
 			return nil, "directory cannot be persisted"
 		}
 		grants = append(grants, grant{op: op, path: dir, dir: true, resolved: rdir})
@@ -373,8 +376,8 @@ func (g *Gate) grantsFor(op Op, canonical string, resp PromptResponse) (grants [
 	default:
 		return nil, "unknown grant scope"
 	}
-	rc, ok := resolveFor(op, canonical)
-	if !ok || !cedar.PersistableFamilyID(canonical) || !cedar.PersistableFamilyID(rc) {
+	rc := checked
+	if rc == "" || !cedar.PersistableFamilyID(canonical) || !cedar.PersistableFamilyID(rc) {
 		return nil, "path cannot be persisted"
 	}
 	return []grant{{op: op, path: canonical, resolved: rc}}, note
@@ -456,7 +459,9 @@ func (g *Gate) GrantCoverage(granted cedar.PendingRequest, scope cedar.GrantScop
 	if fsSurf.Dangerous && !g.opts.AllowDangerousPersist {
 		return nil
 	}
-	grants, _ := g.grantsFor(op, fsSurf.CanonicalPath, responseForScope(scope))
+	// The grant as persisted: built from the granted request's
+	// check-time snapshot, not from a fresh resolution at release time.
+	grants, _ := g.grantsFor(op, fsSurf.CanonicalPath, fsSurf.CheckedPath, fsSurf.CheckedDir, responseForScope(scope))
 	if len(grants) == 0 {
 		return nil
 	}
@@ -473,7 +478,7 @@ func (g *Gate) GrantCoverage(granted cedar.PendingRequest, scope cedar.GrantScop
 			return false
 		}
 		for _, gr := range grants {
-			if gr.covers(qop, s.CanonicalPath) {
+			if gr.covers(qop, s.CanonicalPath, s.CheckedPath) {
 				return true
 			}
 		}

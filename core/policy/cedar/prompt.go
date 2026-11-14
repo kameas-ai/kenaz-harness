@@ -241,6 +241,15 @@ type FSPromptSurface struct {
 	// a link to ~/.ssh/id_ed25519. It also keys the allow-once cache, so
 	// an Allow once does not follow a link that is later retargeted.
 	ResolvedPath string `json:"resolved_path,omitempty"`
+	// CheckedPath and CheckedDir are where the gate judged the operation
+	// and the directory a "this directory" grant names, both resolved
+	// once, when the prompt was raised. Remembered grants and the release
+	// of queued prompts use these snapshots, never a fresh resolution:
+	// a link retargeted while the prompt is open (or between the answer
+	// and the release) cannot move a grant onto a location the person
+	// was never shown. In-process only; not sent to clients.
+	CheckedPath string `json:"-"`
+	CheckedDir  string `json:"-"`
 }
 
 // CredPromptSurface — cred:permission-pending payload.

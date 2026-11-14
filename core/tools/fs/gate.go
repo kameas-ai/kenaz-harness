@@ -73,6 +73,10 @@ type PromptSurface struct {
 	// ResolvedPath is where CanonicalPath really lands (symlinks of its
 	// existing prefix resolved); it keys the registry's allow-once cache.
 	ResolvedPath string
+	// CheckedPath / CheckedDir are the check-time resolutions grants bind
+	// (see cedar.FSPromptSurface); "" when the path could not be resolved.
+	CheckedPath string
+	CheckedDir  string
 }
 
 // Prompter is the interface the gate calls to surface an interactive
@@ -236,14 +240,14 @@ func (g *Gate) EvaluatePath(ctx context.Context, op Op, rawPath string) (d cedar
 		return cedar.Decision{}, "", err
 	}
 	resolved, ok := resolveFor(op, canonical)
-	d, err = g.evaluate(ctx, op, canonical, resolved)
+	d, err = g.evaluate(ctx, op, canonical, resolved, ok)
 	if err == nil && !ok {
 		resolved = ""
 	}
 	return d, resolved, err
 }
 
-func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) (cedar.Decision, error) {
+func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string, resolvedOK bool) (cedar.Decision, error) {
 
 	// resolved is where op really acts (resolveFor). Remembered grants
 	// bind it, transient grants key on it, and the state, dangerous-tier,
@@ -370,6 +374,14 @@ func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) 
 			Privileged:        priv.copy,
 			ResolvedPath:      shownResolved(canonical, resolved),
 		}
+		// Snapshot what a grant would bind, now, while it matches what
+		// was checked and shown.
+		if resolvedOK {
+			surface.CheckedPath = resolved
+			if rdir, ok := resolveExisting(filepath.Dir(canonical)); ok {
+				surface.CheckedDir = rdir
+			}
+		}
 		resp, perr := g.opts.Prompter.Prompt(ctx, surface)
 		if perr != nil {
 			// Prompt error → deny (fail-safe).
@@ -397,7 +409,7 @@ func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) 
 				d.Reason = "dangerous path: allow-always requires AllowDangerousPersist override"
 				return d, nil
 			}
-			grants, note := g.grantsFor(op, canonical, resp)
+			grants, note := g.grantsFor(op, canonical, surface.CheckedPath, surface.CheckedDir, resp)
 			if len(grants) == 0 {
 				// Nothing persistable (privileged path, or a path a
 				// policy literal cannot carry): this session only, as
