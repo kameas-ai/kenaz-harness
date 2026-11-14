@@ -264,9 +264,17 @@ func (m *UnitMapper) PulledNodeToUnit(n ContextPulledNode) (units.Unit, bool, er
 	if units.Kind(n.Kind) == units.KindArtifact {
 		return units.Unit{}, false, nil
 	}
+	kind := units.Kind(n.Kind)
+	if renderedAsDoc(n.Kind) {
+		// An allowlisted kind no lane owns (bootstrap / legacy): render it
+		// as a doc (Fleet ruling 2026-11-13) and keep the wire kind as a
+		// display label. It is a label only — never an instruction.
+		kind = units.KindDoc
+		cleanMeta = withFleetKindLabel(cleanMeta, n.Kind)
+	}
 	u := units.Unit{
 		ID:             n.ID,
-		Kind:           units.Kind(n.Kind),
+		Kind:           kind,
 		Scope:          scope,
 		ScopeID:        scopeID,
 		Classification: class,
@@ -277,6 +285,24 @@ func (m *UnitMapper) PulledNodeToUnit(n ContextPulledNode) (units.Unit, bool, er
 		Metadata:       cleanMeta,
 	}
 	return u, true, nil
+}
+
+// withFleetKindLabel sets metadata[FleetKindMetaKey] = kind. Non-object
+// metadata is replaced by an object holding only the label.
+func withFleetKindLabel(md json.RawMessage, kind string) json.RawMessage {
+	obj := map[string]json.RawMessage{}
+	if len(md) > 0 {
+		if err := json.Unmarshal(md, &obj); err != nil || obj == nil {
+			obj = map[string]json.RawMessage{}
+		}
+	}
+	kb, _ := json.Marshal(kind)
+	obj[FleetKindMetaKey] = kb
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return md
+	}
+	return out
 }
 
 // foldUnitMetadata merges the caller metadata with the reserved "_unit"

@@ -569,6 +569,19 @@ async function selectFile(path: string) {
   }
 }
 
+/**
+ * A pulled team/org entry lives at the synthetic path
+ * "<team|org>/_fleet/<id>" (core/rpc/views/contexts mergePulledEntries).
+ * It is a teammate's shared context: shown read-only, so no Edit button.
+ */
+function isPulledEntryPath(path: string | null): boolean {
+  return path !== null && /^(team|org)\/_fleet\/[^/]+$/.test(path);
+}
+
+const previewOnSave = computed(() =>
+  isPulledEntryPath(selectedPath.value) ? undefined : savePreview,
+);
+
 async function savePreview(payload: { path: string; content: string }) {
   // Throws on failure — ContextPreview surfaces the error inline.
   await client.contexts.save(payload.path, payload.content);
@@ -1272,7 +1285,7 @@ onBeforeUnmount(() => {
         :content="previewContent"
         :loading="previewLoading"
         :error="previewError"
-        :on-save="savePreview"
+        :on-save="previewOnSave"
       />
 
       <!-- right: recents. Context health moved to a status chip in the

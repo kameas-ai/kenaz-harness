@@ -291,9 +291,42 @@ func mergePulledEntries(root Node, pulled []fleet.ContextNodeEntry) Node {
 	return root
 }
 
+// ErrPulledEntryReadOnly refuses writing to a pulled team/org entry: it is a
+// teammate's shared context, shown read-only.
+var ErrPulledEntryReadOnly = errors.New("contexts: shared team/org entries are read-only")
+
+// ErrPulledEntryNotFound: a "<layer>/_fleet/<id>" path with no live pulled
+// entry (deleted on Fleet, or not pulled yet).
+var ErrPulledEntryNotFound = errors.New("contexts: shared entry is no longer available")
+
+// pulledEntryPath parses the synthetic path mergePulledEntries gives a
+// pulled entry, "<team|org>/_fleet/<id>", into its layer and id.
+func pulledEntryPath(path string) (contextpack.Layer, string, bool) {
+	parts := strings.Split(path, "/")
+	if len(parts) != 3 || parts[1] != "_fleet" || parts[2] == "" {
+		return "", "", false
+	}
+	switch contextpack.Layer(parts[0]) {
+	case contextpack.LayerTeam, contextpack.LayerOrg:
+		return contextpack.Layer(parts[0]), parts[2], true
+	}
+	return "", "", false
+}
+
+// Get reads a library file. A pulled team/org entry ("<layer>/_fleet/<id>",
+// listed by List but never on disk) is served from the pulled cache, so
+// opening it shows its body instead of failing.
 func (a *API) Get(_ context.Context, path string) (string, error) {
 	if a == nil || a.lib == nil {
 		return "", ErrLibraryUnavailable
+	}
+	if layer, id, ok := pulledEntryPath(path); ok && a.syncer != nil {
+		for _, e := range a.syncer.PulledEntries() {
+			if e.ID == id && e.Layer == layer {
+				return e.Body, nil
+			}
+		}
+		return "", ErrPulledEntryNotFound
 	}
 	return a.lib.Get(path)
 }
@@ -301,6 +334,9 @@ func (a *API) Get(_ context.Context, path string) (string, error) {
 func (a *API) Save(_ context.Context, path, content string) error {
 	if a == nil || a.lib == nil {
 		return ErrLibraryUnavailable
+	}
+	if _, _, ok := pulledEntryPath(path); ok {
+		return ErrPulledEntryReadOnly
 	}
 	return a.lib.Save(path, content)
 }
@@ -316,12 +352,18 @@ func (a *API) Rename(_ context.Context, oldPath, newPath string) error {
 	if a == nil || a.lib == nil {
 		return ErrLibraryUnavailable
 	}
+	if _, _, ok := pulledEntryPath(oldPath); ok {
+		return ErrPulledEntryReadOnly
+	}
 	return a.lib.Rename(oldPath, newPath)
 }
 
 func (a *API) Delete(_ context.Context, path string) error {
 	if a == nil || a.lib == nil {
 		return ErrLibraryUnavailable
+	}
+	if _, _, ok := pulledEntryPath(path); ok {
+		return ErrPulledEntryReadOnly
 	}
 	return a.lib.Delete(path)
 }

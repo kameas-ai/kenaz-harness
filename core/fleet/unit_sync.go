@@ -178,6 +178,15 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 	if c, err := loadUnitCursor(dataDir); err == nil {
 		s.cursor = c
 	}
+	// The cursor was advanced under a narrower pull filter (Fleet ruling
+	// 2026-11-13 widened it to the bootstrap and legacy kinds): those nodes
+	// were filtered out server-side and would never be re-sent past the old
+	// cursor. Re-pull from the start once; applying a known node again is a
+	// no-op (sidecar baselines), so only the missed nodes are created.
+	if s.cursor != "" && loadUnitLaneSig(dataDir) != unitLaneSig() {
+		logging.L().Info("fleet.unit.pull.cursor_reset", "reason", "lane_kind_filter_changed")
+		s.cursor = ""
+	}
 	return s
 }
 
@@ -469,8 +478,9 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	cursor := s.cursor
 	s.mu.RUnlock()
 
-	// The Unit lane pulls only unit kinds (WP03 lane split by kind).
-	urlPath := lanePullPath(unitLaneKinds, cursor)
+	// The Unit lane pulls its own kinds plus the allowlisted kinds no lane
+	// owns (WP03 lane split by kind; Fleet ruling 2026-11-13 reader rule).
+	urlPath := lanePullPath(unitLanePullKinds, cursor)
 
 	resp, err := s.client.Get(ctx, urlPath)
 	if err != nil {
@@ -1199,5 +1209,29 @@ func saveUnitCursor(dataDir, cursor string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("fleet: mkdir unit cursor: %w", err)
 	}
-	return atomicWriteFile(unitCursorPath(dataDir), cursor+"\n")
+	if err := atomicWriteFile(unitCursorPath(dataDir), cursor+"\n"); err != nil {
+		return err
+	}
+	// Record the filter the cursor was advanced under (see NewUnitSyncer).
+	return atomicWriteFile(unitLaneSigPath(dataDir), unitLaneSig()+"\n")
+}
+
+// unitLaneSig identifies the Unit lane's pull filter.
+func unitLaneSig() string { return strings.Join(unitLanePullKinds, ",") }
+
+func unitLaneSigPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "unit_cursor_kinds.txt")
+}
+
+// loadUnitLaneSig returns the filter the stored cursor was advanced under,
+// or "" when none was recorded (a cursor from before the record existed).
+func loadUnitLaneSig(dataDir string) string {
+	if dataDir == "" {
+		return unitLaneSig()
+	}
+	b, err := os.ReadFile(unitLaneSigPath(dataDir))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(string(b), "\r\n")
 }

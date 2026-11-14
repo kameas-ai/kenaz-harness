@@ -174,6 +174,38 @@ describe('ContextsView', () => {
     expect(w.text()).toContain('top.md');
   });
 
+  it('opens a pulled team entry read-only (body shown, no Edit)', async () => {
+    const pulled = 'team/_fleet/6b2f6f0e-0000-4000-8000-0000000000e1';
+    const tree: ContextNode = {
+      name: '',
+      path: '',
+      kind: 'folder',
+      // Flat so both rows render without expanding a folder; the paths
+      // are what matter.
+      children: [
+        { name: 'Deploy', path: pulled, kind: 'file' },
+        { name: 'mine.md', path: 'team/mine.md', kind: 'file' },
+      ],
+    };
+    const { client } = provide({
+      tree,
+      files: { [pulled]: 'Use the blue lane.', 'team/mine.md': 'local' },
+    });
+    const w = mount(ContextsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    await w.find(`[data-testid="context-node-${pulled}"]`).trigger('click');
+    await flushPromises();
+    expect(w.text()).toContain('Use the blue lane.');
+    expect(w.find('[data-testid=context-preview-error]').exists()).toBe(false);
+    expect(w.find('[data-testid=context-preview-edit]').exists()).toBe(false);
+
+    await w.find('[data-testid="context-node-team/mine.md"]').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid=context-preview-edit]').exists()).toBe(true);
+  });
+
   it('renders the file content in the preview pane on click', async () => {
     const tree: ContextNode = {
       name: '',
