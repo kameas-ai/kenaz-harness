@@ -87,7 +87,7 @@ func TestRequestAdditionalAllowedDir_StateBehindSymlink(t *testing.T) {
 	}
 	dataDir := filepath.Join(link, ".kenaz", "harness", "prod")
 	for _, req := range []string{
-		filepath.Join(dataDir, "policy"),               // through the link
+		filepath.Join(dataDir, "policy"),                 // through the link
 		filepath.Join(real, ".kenaz", "harness", "prod"), // the real path
 	} {
 		reg := failOnPrompt(t)
@@ -134,4 +134,31 @@ func failOnPrompt(t *testing.T) *cedar.Registry {
 		}
 	}()
 	return reg
+}
+
+// On a case-insensitive volume (macOS APFS, Windows NTFS) a case variant
+// of the state directory is the state directory, and must be refused.
+func TestRequestAdditionalAllowedDir_StateCaseVariant(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".kenaz", "harness", "prod")
+	if err := os.MkdirAll(filepath.Join(dataDir, "policy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	variant := filepath.Join(home, ".KENAZ", "harness", "prod", "policy")
+	if _, err := os.Stat(variant); err != nil {
+		t.Skipf("case-sensitive filesystem, no case alias to test: %v", err)
+	}
+	api := New(Config{
+		Catalog:        fsCatalogMinimal(),
+		Enabled:        installFSRecipe([]string{t.TempDir()}),
+		Pool:           newFakePool(),
+		Secrets:        secrets.NewMemoryBackend(),
+		DataDir:        dataDir,
+		PromptRegistry: failOnPrompt(t),
+	})
+	granted, _, err := api.RequestAdditionalAllowedDir(context.Background(), "filesystem", variant, "workaround")
+	if granted || !errors.Is(err, ErrPrivilegedDir) {
+		t.Fatalf("granted=%v err=%v, want refusal with ErrPrivilegedDir", granted, err)
+	}
 }
