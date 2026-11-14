@@ -1532,9 +1532,12 @@ func defaultSettings() Settings {
 // SettingsStore. Get and Set delegate to LoadAll / SaveAll under
 // the store's own concurrency control.
 type API struct {
-	store           SettingsStore
-	auditSettingsMu sync.Mutex
-	auditSettings   AuditSettings
+	store SettingsStore
+	// deviceNamePushes tracks background device-name re-enrolls
+	// (fleet_device_name.go) so tests can wait for them to finish.
+	deviceNamePushes sync.WaitGroup
+	auditSettingsMu  sync.Mutex
+	auditSettings    AuditSettings
 	// fleet holds the optional fleet client and data dir. Populated via
 	// SetFleetClient during chassis boot; nil when fleet is not wired.
 	fleet *fleetState
