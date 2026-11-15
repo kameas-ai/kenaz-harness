@@ -71,8 +71,8 @@ type MemorySyncStatusView struct {
 	NoticeHold       bool   `json:"noticeHold"`
 	NoticeHoldReason string `json:"noticeHoldReason,omitempty"`
 	// DisclosureAcked: this account has acknowledged the current revision of
-	// the memory-sync disclosure on this device (recorded locally, never sent
-	// to Fleet). While sync is on and this is false the panel shows the
+	// the memory-sync disclosure on this device (also sent to Fleet as a
+	// re-acknowledgement). While sync is on and this is false the panel shows the
 	// one-time "What changed about memory sync" notice. It never gates sync.
 	DisclosureAcked bool `json:"disclosureAcked"`
 	// DisclosureRevision is the disclosure revision this build shows.

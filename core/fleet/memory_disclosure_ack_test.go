@@ -25,9 +25,9 @@ func (f *fakeMemoryFleet) putsAndRequests() (int, int) {
 }
 
 // The re-acknowledgement is recorded per account (org + user) on this device,
-// with the revision and a timestamp; it changes nothing about sync and sends
-// nothing to Fleet; an account switch shows each account its own answer.
-func TestMemoryDisclosureAck_PerAccountAndLocalOnly(t *testing.T) {
+// with the revision and a timestamp; it changes nothing about sync; an account
+// switch shows each account its own answer.
+func TestMemoryDisclosureAck_PerAccount(t *testing.T) {
 	ctx := context.Background()
 	w := newMemWorld(t)
 	w.fleet.enabled = true
@@ -39,12 +39,15 @@ func TestMemoryDisclosureAck_PerAccountAndLocalOnly(t *testing.T) {
 		t.Fatalf("A turned sync on under the old text: want enabled and unacknowledged, got %+v", st)
 	}
 
-	puts, reqs := w.fleet.putsAndRequests()
+	puts, _ := w.fleet.putsAndRequests()
 	if err := d.ms.DismissNotice(ctx, MemoryNoticeDisclosureUpdate); err != nil {
 		t.Fatal(err)
 	}
-	if p, r := w.fleet.putsAndRequests(); p != puts || r != reqs {
-		t.Fatalf("acknowledging sent something to Fleet: puts %d->%d, requests %d->%d", puts, p, reqs, r)
+	if p, _ := w.fleet.putsAndRequests(); p != puts {
+		t.Fatalf("acknowledging changed sync on Fleet: enable/disable PUTs %d->%d", puts, p)
+	}
+	if got := w.fleet.reackLog(); len(got) != 1 {
+		t.Fatalf("re-acknowledgements sent = %d, want 1", len(got))
 	}
 	st := d.ms.state()
 	if st.DisclosureAck == nil || st.DisclosureAck.Revision != MemoryDisclosureRevision ||
@@ -154,14 +157,139 @@ func TestMemoryDisclosureAck_NeedsAnAccount(t *testing.T) {
 	}
 }
 
-// The consent version Fleet receives must not move with the disclosure
-// revision: Fleet keeps one overwritten consent_version column, and a new date
-// could overwrite a member's stored memory-sync/v4 (Fleet, 2026-11-15).
+// The consent version the enable path sends stays put: Fleet asked for the
+// enable path to be unchanged, and the corrected text travels as a
+// re-acknowledgement instead (Fleet, 2026-11-15).
 func TestMemoryConsentVersion_Unchanged(t *testing.T) {
 	if MemoryConsentVersion != "2026-10-07" {
-		t.Fatalf("MemoryConsentVersion = %q; it must stay 2026-10-07 until Fleet keeps a consent history", MemoryConsentVersion)
+		t.Fatalf("MemoryConsentVersion = %q; the enable path must keep sending 2026-10-07", MemoryConsentVersion)
 	}
 	if MemoryDisclosureRevision == MemoryConsentVersion {
-		t.Fatal("the local disclosure revision must be distinct from the consent version sent to Fleet")
+		t.Fatal("the disclosure revision must be distinct from the enable path's consent version")
+	}
+}
+
+func (f *fakeMemoryFleet) reackLog() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]any(nil), f.reacks...)
+}
+
+func (f *fakeMemoryFleet) storedConsent() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.consent
+}
+
+// "I have read this" sends Fleet exactly {consent_version, reacknowledge}
+// once, and Fleet stores the revision over the old date.
+func TestMemoryDisclosureReack_SentToFleetExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-reack", 0)
+	d.signIn(accountA)
+	turnedOnUnderOldText(t, d)
+	if got := w.fleet.storedConsent(); got != MemoryConsentVersion {
+		t.Fatalf("stored consent before = %q", got)
+	}
+	if err := d.ms.DismissNotice(ctx, MemoryNoticeDisclosureUpdate); err != nil {
+		t.Fatal(err)
+	}
+	got := w.fleet.reackLog()
+	if len(got) != 1 {
+		t.Fatalf("re-acknowledgements = %d, want 1", len(got))
+	}
+	if len(got[0]) != 2 || got[0]["consent_version"] != MemoryDisclosureRevision || got[0]["reacknowledge"] != true {
+		t.Fatalf("body = %v, want exactly consent_version=%s and reacknowledge=true", got[0], MemoryDisclosureRevision)
+	}
+	if c := w.fleet.storedConsent(); c != MemoryDisclosureRevision {
+		t.Fatalf("Fleet stored %q, want %q", c, MemoryDisclosureRevision)
+	}
+	if d.ms.state().DisclosureReackPending {
+		t.Fatal("still pending after Fleet stored it")
+	}
+	// Later cycles and a repeat click send nothing more.
+	d.sync()
+	if err := d.ms.DismissNotice(ctx, MemoryNoticeDisclosureUpdate); err != nil {
+		t.Fatal(err)
+	}
+	d.sync()
+	if n := len(w.fleet.reackLog()); n != 1 {
+		t.Fatalf("re-acknowledgements after repeat = %d, want 1", n)
+	}
+}
+
+// A stored memory-sync/vN edition is never sent a date: nothing goes, and the
+// local ack still counts.
+func TestMemoryDisclosureReack_SkippedForEdition(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-reack-v4", 0)
+	d.signIn(accountA)
+	turnedOnUnderOldText(t, d)
+	w.fleet.mu.Lock()
+	w.fleet.consent = "memory-sync/v4"
+	w.fleet.mu.Unlock()
+	if err := d.ms.DismissNotice(ctx, MemoryNoticeDisclosureUpdate); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(w.fleet.reackLog()); n != 0 {
+		t.Fatalf("re-acknowledged over a memory-sync edition (%d sent)", n)
+	}
+	if c := w.fleet.storedConsent(); c != "memory-sync/v4" {
+		t.Fatalf("stored edition changed to %q", c)
+	}
+	if st := d.ms.state(); st.DisclosureReackPending || !d.ms.Status(ctx).DisclosureAcked {
+		t.Fatalf("want acked locally and nothing pending: %+v", st.memSyncAccountState)
+	}
+}
+
+// Sync off on Fleet (turned off on another device): nothing to re-acknowledge.
+func TestMemoryDisclosureReack_SkippedWhenFleetSyncOff(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-reack-off", 0)
+	d.signIn(accountA)
+	turnedOnUnderOldText(t, d)
+	w.fleet.mu.Lock()
+	w.fleet.enabled = false
+	w.fleet.mu.Unlock()
+	if err := d.ms.DismissNotice(ctx, MemoryNoticeDisclosureUpdate); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(w.fleet.reackLog()); n != 0 {
+		t.Fatalf("re-acknowledged while sync is off on Fleet (%d sent)", n)
+	}
+	if d.ms.state().DisclosureReackPending {
+		t.Fatal("left pending with nothing to send")
+	}
+}
+
+// A Fleet failure doesn't fail the click: the ack is recorded, stays pending,
+// and the lane sends it on the next run.
+func TestMemoryDisclosureReack_RetriedByTheLane(t *testing.T) {
+	ctx := context.Background()
+	w := newMemWorld(t)
+	d := w.device("node-reack-retry", 0)
+	d.signIn(accountA)
+	turnedOnUnderOldText(t, d)
+	w.fleet.mu.Lock()
+	w.fleet.failPut = 3 // do() retries 5xx three times
+	w.fleet.mu.Unlock()
+	if err := d.ms.DismissNotice(ctx, MemoryNoticeDisclosureUpdate); err != nil {
+		t.Fatalf("a Fleet failure surfaced to the click: %v", err)
+	}
+	if st := d.ms.state(); !st.DisclosureReackPending || !d.ms.Status(ctx).DisclosureAcked {
+		t.Fatalf("want acked locally and pending: %+v", st.memSyncAccountState)
+	}
+	if c := w.fleet.storedConsent(); c != MemoryConsentVersion {
+		t.Fatalf("stored = %q before the retry", c)
+	}
+	d.sync()
+	if c := w.fleet.storedConsent(); c != MemoryDisclosureRevision {
+		t.Fatalf("the lane did not send the re-acknowledgement: stored %q", c)
+	}
+	if d.ms.state().DisclosureReackPending {
+		t.Fatal("still pending after the lane sent it")
 	}
 }

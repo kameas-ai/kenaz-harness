@@ -66,22 +66,20 @@ const (
 // MemoryConsentVersion is the disclosure version the settings UI shows and
 // sends when enabling (Fleet requires one; it records it with opted_in_at).
 //
-// It deliberately stays "2026-10-07" although the disclosure text was
-// corrected in v0.106.2 (see MemoryDisclosureRevision). Per Fleet's answer of
-// 2026-11-15: consent_version is a single overwritten column with no history,
-// and only memory-sync/vN notice editions gate anything on Fleet. Sending a
-// new date here could overwrite a member's stored memory-sync/v4 and lose it.
-// So the re-acknowledgement of the corrected text is recorded locally only
-// (memSyncAccountState.DisclosureAck) until Fleet adds an append-only consent
-// history.
+// It deliberately stays "2026-10-07" on the enable path although the
+// disclosure text was corrected in v0.106.2 (see MemoryDisclosureRevision):
+// Fleet asked for the enable path to stay unchanged. The corrected text is
+// acknowledged separately with a re-acknowledgement (sendDisclosureReack),
+// which Fleet records in its consent history (Fleet f4772414, 2026-11-15) and
+// which never overwrites a stored memory-sync/vN edition.
 const MemoryConsentVersion = "2026-10-07"
 
 // MemoryDisclosureRevision is the revision of the memory-sync disclosure text
 // the settings panel shows (the v0.106.2 correction: notes are server-readable,
 // org read needs an org switch plus a member notice, connected apps can read
 // them on opt-in, and they are deleted on leaving the org). Members who turned
-// sync on under the earlier text acknowledge it once, locally; it is never sent
-// to Fleet (see MemoryConsentVersion).
+// sync on under the earlier text acknowledge it once. The ack is recorded on
+// this device and sent to Fleet as a re-acknowledgement of this revision.
 const MemoryDisclosureRevision = "2026-11-14"
 
 // MemoryDisclosureAck records that an account acknowledged a revision of the
@@ -209,6 +207,9 @@ type memSettingsUpdate struct {
 	Enabled        *bool     `json:"enabled,omitempty"`
 	Scopes         *[]string `json:"scopes,omitempty"`
 	ConsentVersion string    `json:"consent_version,omitempty"`
+	// Reacknowledge: the member read a corrected disclosure while sync was
+	// already on. Sent only with ConsentVersion and nothing else.
+	Reacknowledge bool `json:"reacknowledge,omitempty"`
 }
 
 type memForgetAllResponse struct {
@@ -295,9 +296,12 @@ type memSyncAccountState struct {
 	// offered on every empty-cursor pull runs once.
 	AppliedErase string `json:"applied_erase,omitempty"`
 	// DisclosureAck: the last memory-sync disclosure revision this account
-	// acknowledged on this device (see MemoryDisclosureRevision). Local only;
-	// parked with the rest of the account's state on an account switch.
+	// acknowledged on this device (see MemoryDisclosureRevision). Parked with
+	// the rest of the account's state on an account switch.
 	DisclosureAck *MemoryDisclosureAck `json:"disclosure_ack,omitempty"`
+	// DisclosureReackPending: the ack has not reached Fleet yet. The lane
+	// retries it until Fleet answers (sendDisclosureReack).
+	DisclosureReackPending bool `json:"disclosure_reack_pending,omitempty"`
 }
 
 // MemorySyncStatePath is the canonical state-file location under dataDir.
@@ -632,6 +636,11 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 	m.mu.Unlock()
 	if m.now().Before(wait) {
 		return
+	}
+	if m.state().DisclosureReackPending {
+		if err := m.sendDisclosureReack(ctx); err != nil {
+			logging.L().Warn("fleet.memory_sync.disclosure_reack_failed", "err", err.Error())
+		}
 	}
 	if err := m.cycle(ctx); err != nil {
 		m.fail(err)
@@ -1660,6 +1669,9 @@ func (m *MemorySync) Enable(ctx context.Context, scopes []string, consentVersion
 		// Turning sync on here means the off-state disclosure, which carries
 		// the current revision, was just read: no re-acknowledgement owed.
 		s.DisclosureAck = &MemoryDisclosureAck{Revision: MemoryDisclosureRevision, At: m.now().UTC()}
+		// The enable just sent a consent version, so a re-ack still waiting
+		// to go would only repeat it.
+		s.DisclosureReackPending = false
 		// A re-enable supersedes any unconfirmed opt-out: without this the
 		// lane's retry PUT enabled=false could overwrite this (or another
 		// device's) re-enable, and Status would stop mirroring Fleet.
@@ -1861,4 +1873,48 @@ func (m *MemorySync) putDisabled(ctx context.Context) error {
 		return err
 	}
 	return m.update(func(s *memSyncState) { s.DisablePending = false })
+}
+
+// sendDisclosureReack tells Fleet the member read the corrected disclosure
+// (MemoryDisclosureRevision) while sync was on, as Fleet specified on
+// 2026-11-15: PUT {consent_version, reacknowledge: true} and nothing else,
+// only when Fleet has sync on and its stored consent_version is a date, not a
+// memory-sync/vN edition. Fleet records it in the member's consent history.
+// DisclosureReackPending is cleared once Fleet has answered for good (stored,
+// kept, sync off, or a refusal a retry can't change); a transport or server
+// failure leaves it for the lane to retry. The local ack stands either way.
+func (m *MemorySync) sendDisclosureReack(ctx context.Context) error {
+	if !m.state().DisclosureReackPending {
+		return nil
+	}
+	done := func() error {
+		return m.update(func(s *memSyncState) { s.DisclosureReackPending = false })
+	}
+	set, err := m.currentSettings(ctx, true)
+	if err != nil {
+		return err
+	}
+	if !set.Enabled || strings.HasPrefix(set.ConsentVersion, "memory-sync/") ||
+		set.ConsentVersion == MemoryDisclosureRevision {
+		return done() // nothing to re-acknowledge, or Fleet keeps its edition
+	}
+	var out MemorySyncSettings
+	err = m.doJSON(ctx, http.MethodPut, "/api/v1/memory/settings",
+		memSettingsUpdate{ConsentVersion: MemoryDisclosureRevision, Reacknowledge: true}, &out)
+	var me *MemorySyncError
+	if errors.As(err, &me) && me.Status/100 == 4 && me.Status != http.StatusTooManyRequests &&
+		me.Status != http.StatusUnauthorized && me.Status != http.StatusForbidden {
+		// 422 memory_sync_off (turned off meanwhile) or 400 (a bug here):
+		// repeating the same request can't succeed.
+		logging.L().Warn("fleet.memory_sync.disclosure_reack_refused", "status", me.Status, "code", me.Code)
+		m.invalidateSettings()
+		return done()
+	}
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.settings, m.settingsAt = &out, m.now()
+	m.mu.Unlock()
+	return done()
 }

@@ -145,8 +145,8 @@ async function dismissNotice(notice: 'inherited_erase' | 'inherited_opt_out' | '
 
 // The corrected disclosure (v0.106.2) only shows while sync is off, so members
 // who turned sync on under the earlier text get it once here. Informational:
-// acknowledging it records a local ack for this account and changes nothing
-// about sync; nothing new is sent to Fleet (see MemoryConsentVersion).
+// acknowledging it records an ack for this account, which is also sent to
+// Fleet as a re-acknowledgement; it changes nothing about sync.
 const showDisclosureUpdate = computed(
   () => !!status.value?.enabled && !status.value?.disclosureAcked,
 );
