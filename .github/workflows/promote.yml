@@ -1,0 +1,306 @@
+name: promote
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Release gate (launch spec L09, Part 1): moves the STABLE update channel.
+#
+# release.yml publishes every prod build to the PRERELEASE channel only: the
+# per-tag prefix s3://<prod bucket>/kenaz-harness/<tag>/ plus the prerelease
+# pointer kenaz-harness/prerelease/manifest.json, and a GitHub Release marked
+# prerelease. Nothing reaches `stable` users (the updater's default channel,
+# the download page, GitHub's releases/latest, scripts/install.sh) until
+# someone dispatches this workflow naming the version.
+#
+#   Promote (after the soak and the macOS + Windows smoke):
+#     gh workflow run promote.yml -R kameas-ai/kenaz-harness --ref main \
+#       -f version=v0.107.0 -f action=promote \
+#       -f smoke_macos='<link or note: OS version, installer file, result>' \
+#       -f smoke_windows='<link or note: OS version, installer file, result>'
+#
+#   Roll back (points stable at an EARLIER version; no soak, no smoke):
+#     gh workflow run promote.yml -R kameas-ai/kenaz-harness --ref main \
+#       -f version=v0.106.3 -f action=rollback -f reason='<why>'
+#
+# Promotion refuses unless:
+#   * the version's per-tag manifest exists in the prod bucket (it was built
+#     and published by release.yml);
+#   * it was published at least STABLE_SOAK_HOURS ago (repo variable; 24 when
+#     unset — the soak the founders set, L09 R3);
+#   * both smoke inputs are filled in. There is no automated installer smoke
+#     on macOS and Windows yet, so the gate records the human witness
+#     (handbook rule: a run, or merged code, to cite) in the run summary and
+#     in kenaz-harness/promotions.json. Replace with an automated smoke when
+#     one exists;
+#   * it is newer than (or equal to, an idempotent re-run) the current stable
+#     version. Moving stable backwards is `action=rollback`.
+#
+# Rollback refuses unless the version is OLDER than current stable and a
+# reason is given. What a rollback does to installs (L09 R4): the updater
+# only offers versions newer than the one running (core/update/service.go
+# isNewer), so pointing stable back stops OFFERING the bad version to anyone
+# who has not taken it. It does NOT downgrade installs that already updated;
+# they stay on the bad version until a newer version is promoted, or the
+# user reinstalls the older one from its release page.
+#
+# Never run by any other workflow. Dispatch only on main.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to make stable, e.g. v0.107.0 (must already be on prerelease)'
+        required: true
+      action:
+        description: 'promote = move stable forward after the soak; rollback = point stable at an earlier version'
+        type: choice
+        options: [promote, rollback]
+        default: promote
+      smoke_macos:
+        description: 'promote: evidence the release smoke passed on macOS (link, or OS version + installer file + result)'
+        required: false
+        default: ''
+      smoke_windows:
+        description: 'promote: evidence the release smoke passed on Windows (link, or OS version + installer file + result)'
+        required: false
+        default: ''
+      reason:
+        description: 'rollback: why (required); promote: optional note'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # flip the GitHub Release's prerelease / latest flags
+  id-token: write   # AWS OIDC
+
+concurrency:
+  group: promote-stable
+  cancel-in-progress: false
+
+env:
+  BUCKET: kameas-ai-prod-releases-use2
+  CF_DIST_ID: ENWB9Y4KGTPFD
+  CDN_BASE: https://downloads.kameas.ai
+
+jobs:
+  promote:
+    name: ${{ inputs.action }} ${{ inputs.version }} → stable
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
+    # Same GitHub Environment as the prod publish, so any protection rules
+    # on it (required reviewers) apply to moving stable too.
+    environment: prod
+    steps:
+      - name: validate inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          ACTION: ${{ inputs.action }}
+          SMOKE_MACOS: ${{ inputs.smoke_macos }}
+          SMOKE_WINDOWS: ${{ inputs.smoke_windows }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::dispatch promote.yml on main (got $GITHUB_REF)"; exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be a stable tag like v1.2.3 (got '$VERSION')"; exit 1
+          fi
+          case "$ACTION" in
+            promote)
+              if [ -z "${SMOKE_MACOS// /}" ] || [ -z "${SMOKE_WINDOWS// /}" ]; then
+                echo "::error::promotion needs the release smoke on macOS AND Windows: fill in smoke_macos and smoke_windows"; exit 1
+              fi ;;
+            rollback)
+              if [ -z "${REASON// /}" ]; then
+                echo "::error::rollback needs a reason"; exit 1
+              fi ;;
+            *) echo "::error::unknown action '$ACTION'"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.DEPLOY_ROLE_ARN_PROD }}
+          aws-region: us-east-2
+
+      - name: Chain-assume AppDeployRole
+        shell: bash
+        env:
+          APPDEPLOY_ROLE_ARN: ${{ vars.APPDEPLOY_ROLE_ARN_PROD }}
+        run: |
+          set -euo pipefail
+          CREDS=$(aws sts assume-role \
+            --role-arn "$APPDEPLOY_ROLE_ARN" \
+            --role-session-name gh-promote-kenaz-harness \
+            --query 'Credentials' --output json)
+          echo "::add-mask::$(echo "$CREDS" | jq -r .AccessKeyId)"
+          echo "::add-mask::$(echo "$CREDS" | jq -r .SecretAccessKey)"
+          echo "::add-mask::$(echo "$CREDS" | jq -r .SessionToken)"
+          {
+            echo "AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r .AccessKeyId)"
+            echo "AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r .SecretAccessKey)"
+            echo "AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r .SessionToken)"
+          } >> "$GITHUB_ENV"
+
+      - name: check the gate
+        id: gate
+        env:
+          VERSION: ${{ inputs.version }}
+          ACTION: ${{ inputs.action }}
+          SOAK_HOURS: ${{ vars.STABLE_SOAK_HOURS || '24' }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/lib/semver.sh
+          TAGM="$RUNNER_TEMP/tag-manifest.json"
+          if ! aws s3 cp "s3://${BUCKET}/kenaz-harness/${VERSION}/manifest.json" "$TAGM" --no-progress; then
+            echo "::error::no s3://${BUCKET}/kenaz-harness/${VERSION}/manifest.json — release.yml has not published $VERSION"; exit 1
+          fi
+          [ "$(jq -r '.version // ""' "$TAGM")" = "$VERSION" ] || {
+            echo "::error::the per-tag manifest for $VERSION names version '$(jq -r '.version // ""' "$TAGM")'"; exit 1; }
+
+          CUR=""
+          if aws s3 cp "s3://${BUCKET}/kenaz-harness/manifest.json" "$RUNNER_TEMP/stable.json" --no-progress 2>"$RUNNER_TEMP/stable.err"; then
+            CUR="$(jq -r '.version // "" | strings' "$RUNNER_TEMP/stable.json" 2>/dev/null || true)"
+          elif ! grep -Eq '\(404\)|NoSuchKey|does not exist|Not Found' "$RUNNER_TEMP/stable.err"; then
+            echo "::error::could not read the current stable pointer:"; sed 's/^/  /' "$RUNNER_TEMP/stable.err"; exit 1
+          fi
+          echo "current=$CUR" >> "$GITHUB_OUTPUT"
+          CMP=""
+          if [ -n "$CUR" ] && semver_valid "$CUR"; then
+            CMP="$(semver_cmp "$VERSION" "$CUR")"
+          fi
+
+          if [ "$ACTION" = promote ]; then
+            if [ "$CMP" = "-1" ]; then
+              echo "::error::$VERSION is older than current stable $CUR. Moving stable backwards is action=rollback."; exit 1
+            fi
+            RELEASED_AT="$(jq -r '.released_at // ""' "$TAGM")"
+            if [ -z "$RELEASED_AT" ]; then
+              echo "::error::the per-tag manifest for $VERSION has no released_at; cannot prove the soak"; exit 1
+            fi
+            AGE_H=$(( ( $(date -u +%s) - $(date -u -d "$RELEASED_AT" +%s) ) / 3600 ))
+            if [ "$AGE_H" -lt "$SOAK_HOURS" ]; then
+              echo "::error::$VERSION was published at $RELEASED_AT, ${AGE_H}h ago; the stable soak is ${SOAK_HOURS}h (repo variable STABLE_SOAK_HOURS)"; exit 1
+            fi
+            echo "Soak OK: $VERSION published $RELEASED_AT (${AGE_H}h ≥ ${SOAK_HOURS}h)."
+          else
+            if [ -z "$CUR" ] || [ "$CMP" != "-1" ]; then
+              echo "::error::rollback must name a version OLDER than current stable (${CUR:-<none>}); got $VERSION"; exit 1
+            fi
+          fi
+          cp "$TAGM" "$RUNNER_TEMP/new-stable.json"
+
+      - name: move the stable pointer
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          aws s3 cp "$RUNNER_TEMP/new-stable.json" "s3://${BUCKET}/kenaz-harness/manifest.json" \
+            --cache-control 'public, max-age=120, must-revalidate' \
+            --content-type 'application/json' \
+            --metadata-directive REPLACE \
+            --no-progress
+          echo "stable → $VERSION"
+
+      - name: record the promotion
+        env:
+          VERSION: ${{ inputs.version }}
+          ACTION: ${{ inputs.action }}
+          FROM: ${{ steps.gate.outputs.current }}
+          SMOKE_MACOS: ${{ inputs.smoke_macos }}
+          SMOKE_WINDOWS: ${{ inputs.smoke_windows }}
+          REASON: ${{ inputs.reason }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          export NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LOG_S3="s3://${BUCKET}/kenaz-harness/promotions.json"
+          aws s3 cp "$LOG_S3" "$RUNNER_TEMP/promotions.json" --no-progress 2>/dev/null \
+            || echo '{"promotions":[]}' > "$RUNNER_TEMP/promotions.json"
+          INDEX_S3="s3://${BUCKET}/kenaz-harness/index.json"
+          aws s3 cp "$INDEX_S3" "$RUNNER_TEMP/index.json" --no-progress 2>/dev/null \
+            || echo '{"updated_at":"","versions":[]}' > "$RUNNER_TEMP/index.json"
+          python3 - <<'PY'
+          import json, os, pathlib
+          tmp = pathlib.Path(os.environ['RUNNER_TEMP'])
+          log = json.loads((tmp / 'promotions.json').read_text() or '{}')
+          entries = log.get('promotions') or []
+          entries.append({
+              'at': os.environ['NOW'],
+              'action': os.environ['ACTION'],
+              'version': os.environ['VERSION'],
+              'from': os.environ.get('FROM', ''),
+              'smoke_macos': os.environ.get('SMOKE_MACOS', ''),
+              'smoke_windows': os.environ.get('SMOKE_WINDOWS', ''),
+              'reason': os.environ.get('REASON', ''),
+              'actor': os.environ.get('ACTOR', ''),
+              'run': os.environ.get('RUN_URL', ''),
+          })
+          (tmp / 'promotions.new.json').write_text(json.dumps({'promotions': entries[-200:]}, indent=2))
+          idx = json.loads((tmp / 'index.json').read_text() or '{}')
+          for v in idx.get('versions') or []:
+              if v.get('tag') == os.environ['VERSION']:
+                  v['channel'] = 'stable'
+          idx['updated_at'] = os.environ['NOW']
+          (tmp / 'index.new.json').write_text(json.dumps(idx, indent=2))
+          PY
+          aws s3 cp "$RUNNER_TEMP/promotions.new.json" "$LOG_S3" \
+            --cache-control 'no-cache' --content-type 'application/json' --metadata-directive REPLACE --no-progress
+          aws s3 cp "$RUNNER_TEMP/index.new.json" "$INDEX_S3" \
+            --cache-control 'public, max-age=120, must-revalidate' --content-type 'application/json' --metadata-directive REPLACE --no-progress
+          {
+            echo "## ${ACTION}: stable → \`${VERSION}\` (was \`${FROM:-none}\`)"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| macOS smoke | ${SMOKE_MACOS:-—} |"
+            echo "| Windows smoke | ${SMOKE_WINDOWS:-—} |"
+            echo "| Reason | ${REASON:-—} |"
+            echo "| By | ${ACTOR} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Invalidate CloudFront
+        run: |
+          set -euo pipefail
+          aws cloudfront create-invalidation --distribution-id "$CF_DIST_ID" \
+            --paths '/kenaz-harness/manifest.json' '/kenaz-harness/index.json' \
+            --query 'Invalidation.Id' --output text
+
+      - name: install gh CLI if missing
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then exit 0; fi
+          GH_VERSION="2.62.0"
+          ARCH="$(uname -m)"
+          case "$ARCH" in
+            x86_64) ARCH=amd64 ;;
+            aarch64|arm64) ARCH=arm64 ;;
+            *) echo "::error::unsupported arch: $ARCH"; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" -o /tmp/gh.tgz
+          tar -xzf /tmp/gh.tgz -C /tmp
+          sudo install -m 755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh
+
+      # GitHub's releases/latest (README download link, scripts/install.sh)
+      # follows stable: the promoted Release becomes a full, latest release.
+      # On rollback the version rolled back FROM goes back to prerelease, so
+      # releases/latest names the rollback target.
+      - name: update GitHub Release flags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          ACTION: ${{ inputs.action }}
+          FROM: ${{ steps.gate.outputs.current }}
+        run: |
+          set -euo pipefail
+          rid() { gh api "repos/$GITHUB_REPOSITORY/releases/tags/$1" --jq .id; }
+          ID="$(rid "$VERSION")"
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$ID" -F prerelease=false -f make_latest=true >/dev/null
+          if [ "$ACTION" = rollback ] && [ -n "$FROM" ] && [ "$FROM" != "$VERSION" ]; then
+            if FID="$(rid "$FROM" 2>/dev/null)"; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$FID" -F prerelease=true -f make_latest=false >/dev/null
+            fi
+          fi
+          echo "GitHub Release $VERSION is now latest."

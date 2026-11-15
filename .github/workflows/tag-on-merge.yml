@@ -14,7 +14,8 @@ name: tag-on-merge
 # v0.45.0) is the source of truth; keep it in sync with the shared one.
 #
 # Cuts a SemVer tag + GitHub Release from the conventional commits merged
-# since the last release, then dispatches release.yml (prod publish).
+# since the last release, then dispatches release.yml (prod build, published
+# to the PRERELEASE channel only; promote.yml moves stable — L09 gate).
 #
 # RELEASE ON MERGE IS OPT-IN (2026-10). Two ways to run:
 #

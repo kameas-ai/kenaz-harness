@@ -502,16 +502,16 @@ func TestService_PrereleaseFallback(t *testing.T) {
 		Version: "v0.4.0",
 		Assets:  []manifestAsset{{Platform: "linux/amd64", URL: "u", Sha256: sha}},
 	})
-	// Stable and prerelease now share the same path
-	// (/kenaz-harness/manifest.json) and differ only by host
-	// (downloads vs stage.downloads). rewriteTransport encodes the
-	// original host into the path so the mux can tell them apart:
-	// the stable host serves 200, the stage host 404 → fallback.
+	// Stable and prerelease share the prod host and differ by path
+	// (kenaz-harness/manifest.json vs kenaz-harness/prerelease/
+	// manifest.json, the L09 release gate). rewriteTransport encodes the
+	// original host into the path: the stable pointer serves 200, the
+	// prerelease pointer 404 (no prerelease published yet) → fallback.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/downloads.kameas.ai/kenaz-harness/manifest.json", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(stableBody)
 	})
-	mux.HandleFunc("/stage.downloads.kameas.ai/kenaz-harness/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/downloads.kameas.ai/kenaz-harness/prerelease/manifest.json", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	})
 	srv := httptest.NewServer(mux)
@@ -751,5 +751,58 @@ func TestNewService_SweepNoStagingDir(t *testing.T) {
 	dataDir := t.TempDir()
 	if _, err := NewService(Config{CurrentVersion: "v0.1.0", DataDir: dataDir}); err != nil {
 		t.Fatalf("NewService on fresh DataDir: %v", err)
+	}
+}
+
+// TestCheckChannel_PrereleaseReadsPrereleasePointer: with the L09 release
+// gate a new release moves only kenaz-harness/prerelease/manifest.json. A
+// prerelease-channel install sees it; a stable-channel install keeps
+// seeing the promoted version.
+func TestCheckChannel_PrereleaseReadsPrereleasePointer(t *testing.T) {
+	_, sha := fakeBinary(t, []byte("x"))
+	body := func(v string) []byte {
+		b, _ := json.Marshal(manifest{
+			Version: v,
+			Assets:  []manifestAsset{{Platform: "linux/amd64", URL: "u", Sha256: sha}},
+		})
+		return b
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/downloads.kameas.ai/kenaz-harness/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body("v0.4.0"))
+	})
+	mux.HandleFunc("/downloads.kameas.ai/kenaz-harness/prerelease/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body("v0.5.0"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc, err := NewService(Config{
+		CurrentVersion: "v0.3.0",
+		DataDir:        t.TempDir(),
+		HTTPClient:     &http.Client{Timeout: 5 * time.Second},
+		Platform:       "linux/amd64",
+		Swapper:        &fakeSwapper{},
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	s := svc.(*service)
+	s.cfg.ManifestURL = ""
+	s.client = &http.Client{Transport: &rewriteTransport{base: srv.URL}, Timeout: 5 * time.Second}
+
+	pre, err := s.checkChannel(context.Background(), "prerelease")
+	if err != nil {
+		t.Fatalf("checkChannel(prerelease): %v", err)
+	}
+	if pre.AvailableVersion != "v0.5.0" {
+		t.Fatalf("prerelease channel offered %q, want v0.5.0 (the prerelease pointer)", pre.AvailableVersion)
+	}
+	st, err := s.checkChannel(context.Background(), "stable")
+	if err != nil {
+		t.Fatalf("checkChannel(stable): %v", err)
+	}
+	if st.AvailableVersion != "v0.4.0" {
+		t.Fatalf("stable channel offered %q, want v0.4.0 (the promoted version)", st.AvailableVersion)
 	}
 }
