@@ -571,6 +571,9 @@ type API struct {
 	logStore     *logstore.Store
 	logsAPI      logsview.LogsAPI
 	settingsImpl *settings.API
+	// policyDefault is the host policy default (launch spec L09):
+	// starter or legacy on the host, workbench when served.
+	policyDefault *policyDefault
 	settingsAPI  settings.SettingsAPI
 	memoryAPI    memoryview.MemoryAPI
 	hooksAPI     hooksview.HooksAPI
@@ -2266,6 +2269,12 @@ func New(c *core.Core, opts ...Option) *API {
 	settingsImpl := settings.NewAPI(settingsStore)
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
+	// Launch spec L09: decide the host policy default before any tool can
+	// run. Served (workbench) mode — the WithFleetGatedBash entry points —
+	// never applies the starter policy.
+	// Under `go test` the decision is not persisted: the store may be the
+	// developer's real settings file (check-tests-are-hermetic.sh).
+	a.policyDefault = newPolicyDefault(settingsImpl.Store(), opt.fleetGatedBash, flag.Lookup("test.v") == nil)
 	// fleet-workbench-next-plan-2026-11-10 B11: model slots. The session
 	// provider a served workbench derives from is its host profile; the
 	// desktop path has none, so nothing is derived there (its slots keep
@@ -2738,6 +2747,15 @@ func New(c *core.Core, opts ...Option) *API {
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, &acpAuditBridge{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions, blockedSink, a.scheduledRunOrigins.Resolve, a.mlProducer)
 	// Served/workbench mode: bash availability follows the org fleet Cedar
 	// policy (WithFleetGatedBash). Set before any turn can list tools.
+	// Launch spec L09: the host starter policy, read live per request.
+	if !opt.fleetGatedBash {
+		if stack.fsGate != nil {
+			stack.fsGate.SetStarterDefaults(a.policyDefault.StarterActive)
+		}
+		if stack.starterNet != nil {
+			stack.starterNet.SetActive(a.policyDefault.StarterActive)
+		}
+	}
 	if opt.fleetGatedBash {
 		stack.bashAvail.useFleetPolicy(a.cedarEngine)
 		logging.L().Info("rpc.builtins.bash_availability", "source", "fleet_policy", "cedar_engine", a.cedarEngine != nil)
@@ -5104,7 +5122,20 @@ func New(c *core.Core, opts ...Option) *API {
 	if c != nil && c.DataDir() != "" && a.settingsImpl != nil && a.settingsImpl.Store() != nil {
 		snippetWriter := cedarpolicyview.NewAPIWithDataDir(nil, c.DataDir())
 		store := a.settingsImpl.Store()
+		pd := a.policyDefault
 		c.SetBashMigrationBootstrap(func(ctx context.Context) error {
+			// Launch spec L09: a fresh install on the starter policy asks
+			// for every shell command, so the historical allowlist (which
+			// includes interpreters and build tools) is not seeded. The
+			// migration exists for installs that relied on that list.
+			if pd.StarterActive() {
+				if done, err := store.LoadBashAllowlistMigrated(); err == nil && !done {
+					if err := store.SavePermissionsMigrationToastShown(true); err != nil {
+						return err
+					}
+					return store.SaveBashAllowlistMigrated(true)
+				}
+			}
 			return corebash.MigrateBashAllowlist(ctx, snippetWriter, store)
 		})
 	}
@@ -6317,6 +6348,9 @@ type llmStack struct {
 	// knowledge-site builder) are bound by the same write policy as
 	// kenaz__write_file instead of constructing a second gate.
 	fsGate *corefs.Gate
+	// starterNet wraps perms with the host starter policy's network leg
+	// (L09); New() wires its SetActive to the policy default.
+	starterNet *toolloop.StarterNetworkResolver
 	// bashStore is the bash tool's per-process output cache. Held so
 	// the agent-graph manager (which constructs its read_bash_output
 	// adapter against the SAME instance) wires both halves of the
@@ -6724,7 +6758,12 @@ func newLLMStack(
 	if settingsImpl != nil {
 		sessionArm.SetKillSwitch(onboardingSettingsDialAdapter{store: settingsImpl.Store()})
 	}
+	// Launch spec L09: the host starter policy's network leg. Inert until
+	// New() installs the policy default (stack.starterNet.SetActive), and
+	// never installed in served mode.
 	perms := toolloop.NewMergedResolver(staticPerms, sessionArm)
+	starterNet := toolloop.NewStarterNetworkResolver(perms)
+	perms = starterNet
 	// WP03 — pre/post-tool-use hooks and audit emission. core/hooks
 	// only exposes pre_send / post_send for chat-pipeline events;
 	// there is no pre_tool_use / post_tool_use surface there yet, so
@@ -7500,6 +7539,7 @@ func newLLMStack(
 		bashAvail:           bashAvail,
 		builtinFilter:       builtinFilter,
 		fsGate:              fsGate,
+		starterNet:          starterNet,
 		bashStore:           bashStore,
 		compactionScheduler: sweepScheduler,
 		compactionLLM:       compactionLLM,
@@ -9189,10 +9229,11 @@ func (p chatPermsAdapter) Resolve(ctx context.Context, sessionID, server, tool s
 		return chat.PermVerdict{}, err
 	}
 	return chat.PermVerdict{
-		Server: res.Server,
-		Tool:   res.Tool,
-		Policy: string(res.Policy),
-		Reason: res.Reason,
+		Server:           res.Server,
+		Tool:             res.Tool,
+		Policy:           string(res.Policy),
+		Reason:           res.Reason,
+		AskDespitePermit: res.AskDespitePermit,
 	}, nil
 }
 

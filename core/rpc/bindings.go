@@ -1369,6 +1369,29 @@ func (b *Bindings) Settings_SetPermissionsMigrationToastShown(shown bool) error 
 	return b.storeFn().SavePermissionsMigrationToastShown(shown)
 }
 
+// Settings_GetPolicyDefault reports the host policy default (launch spec
+// L09): "starter", "legacy" (an install that predates the starter policy
+// and has not accepted it) or "workbench" (served mode, VM-bounded), and
+// whether the first-run notice was answered.
+func (b *Bindings) Settings_GetPolicyDefault() (PolicyDefaultView, error) {
+	defer sentry.WrapBinding("Settings_GetPolicyDefault")()
+	return b.policyDefault().View()
+}
+
+// Settings_SetPolicyDefault switches the host policy default to "starter"
+// or "legacy". It applies to the next request. Refused in served mode.
+func (b *Bindings) Settings_SetPolicyDefault(mode string) error {
+	defer sentry.WrapBinding("Settings_SetPolicyDefault")()
+	return b.policyDefault().Set(mode)
+}
+
+// Settings_DismissPolicyDefaultNotice records that the first-run policy
+// notice was dismissed without changing the default.
+func (b *Bindings) Settings_DismissPolicyDefaultNotice() error {
+	defer sentry.WrapBinding("Settings_DismissPolicyDefaultNotice")()
+	return b.policyDefault().MarkNoticeSeen()
+}
+
 // Settings_GetCedarStrictCredentialMode exposes the WP05
 // credential-gate strictness dial (default false / lenient). When
 // false, NotApplicable Cedar outcomes allow credential access. When

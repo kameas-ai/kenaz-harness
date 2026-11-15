@@ -1483,3 +1483,21 @@
 # Blocker: a served settings surface (none exists for any Settings_Fleet*
 # panel). Dated 2026-11-13. Owner: alec.
 "Settings_FleetDeviceKeysReauth"
+
+# CLASS: desktop-only-by-nature -- launch spec L09 host policy default, 2026-11-15.
+# 3 entries.
+#
+# Settings_GetPolicyDefault / Settings_SetPolicyDefault /
+# Settings_DismissPolicyDefaultNotice: the HOST starter policy (reads and
+# in-workspace edits run; shell, network and writes outside the workspace
+# ask). Served mode is the workbench, where the VM is the boundary and
+# Fleet policy decides (decision D-h), so there is no served policy
+# default to read or change; core/rpc/policy_default.go answers
+# "workbench" and refuses a change if it is ever called there. The only
+# callers, PolicyDefaultNotice.vue and PolicyDefaultSetting.vue, render
+# only when !isServedMode().
+#
+# Blocker: none; desktop-only by design. Dated 2026-11-15. Owner: nick.
+"Settings_DismissPolicyDefaultNotice"
+"Settings_GetPolicyDefault"
+"Settings_SetPolicyDefault"

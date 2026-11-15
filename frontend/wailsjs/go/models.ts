@@ -6659,6 +6659,22 @@ export namespace risk {
 
 export namespace rpc {
 	
+	export class PolicyDefaultView {
+	    mode: string;
+	    noticeSeen: boolean;
+	    upgraded: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PolicyDefaultView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.noticeSeen = source["noticeSeen"];
+	        this.upgraded = source["upgraded"];
+	    }
+	}
 	export class WindowSize {
 	    width: number;
 	    height: number;
@@ -8845,6 +8861,8 @@ export namespace settings {
 	    permissionCacheDangerousOps?: boolean;
 	    bashAllowlistMigrated?: boolean;
 	    permissionsMigrationToastShown?: boolean;
+	    policyDefault?: string;
+	    policyDefaultNoticeSeen?: boolean;
 	    cedarStrictCredentialMode?: boolean;
 	    cedarStrictWorkflowMode?: boolean;
 	    graphAuthoringEnabled?: boolean;
@@ -8955,6 +8973,8 @@ export namespace settings {
 	        this.permissionCacheDangerousOps = source["permissionCacheDangerousOps"];
 	        this.bashAllowlistMigrated = source["bashAllowlistMigrated"];
 	        this.permissionsMigrationToastShown = source["permissionsMigrationToastShown"];
+	        this.policyDefault = source["policyDefault"];
+	        this.policyDefaultNoticeSeen = source["policyDefaultNoticeSeen"];
 	        this.cedarStrictCredentialMode = source["cedarStrictCredentialMode"];
 	        this.cedarStrictWorkflowMode = source["cedarStrictWorkflowMode"];
 	        this.graphAuthoringEnabled = source["graphAuthoringEnabled"];

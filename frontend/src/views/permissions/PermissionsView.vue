@@ -14,6 +14,7 @@ import { computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
 import PermissionDialsPanel from '@/components/settings/PermissionDialsPanel.vue';
+import PolicyDefaultSetting from '@/components/permissions/PolicyDefaultSetting.vue';
 import BashPermissionsPanel from '@/views/settings/BashPermissionsPanel.vue';
 import FilesystemPermissionsPanel from '@/views/settings/FilesystemPermissionsPanel.vue';
 import CredentialPermissionsPanel from '@/views/settings/CredentialPermissionsPanel.vue';
@@ -80,6 +81,8 @@ watch(
     subtitle="Saved “Allow always” grants for bash, filesystem, credentials, and tools. Revoke a row to re-prompt the next time the harness sees that resource."
   >
     <div class="px-6 pt-4 pb-2 border-b border-border-muted">
+      <!-- Launch spec L09: the host policy default. -->
+      <PolicyDefaultSetting class="mb-4" />
       <PermissionDialsPanel />
     </div>
 

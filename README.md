@@ -209,8 +209,27 @@ provider.
 4. Try `/help` in the composer for the slash-command catalog.
 5. Drop a file into the composer to attach it as multimodal context.
 6. **Tools → Enable filesystem MCP** if you want the agent to read your
-   working directory. The Cedar policy gate is default-allow with logging;
-   set `DefaultDeny: true` to flip to fail-closed.
+   working directory.
+
+### Policy defaults
+
+Every tool call is checked against Cedar policy before it runs. What happens
+when no policy you wrote decides a call depends on where the Harness runs:
+
+- **On your computer (starter policy, the default for new installs).** The
+  agent reads files, and edits files inside its workspace, without asking.
+  Shell commands, the built-in web fetch and search tools, and writes
+  outside the workspace ask you first. Harness state, credential folders and
+  system paths always ask. An install that predates the starter policy keeps
+  its earlier behaviour (every file read and write asks; web requests run
+  without asking) until you accept the new default. The first launch says
+  which default is active; change it in **Settings → Permissions**.
+- **Inside a Kenaz workbench.** The virtual machine is the boundary. Shell
+  commands are on unless your organization's Fleet policy turns them off.
+
+A policy you add on the **Policy** page, or your organization's Fleet
+policy, overrides either default. MCP servers you install make their own
+network calls; their tools follow the per-tool permissions you set.
 
 ## Subsystem docs
 

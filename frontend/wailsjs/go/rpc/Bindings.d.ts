@@ -768,6 +768,8 @@ export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
 
 export function Settings_DeleteMLLocalActivity():Promise<rpc.MLLocalActivityView>;
 
+export function Settings_DismissPolicyDefaultNotice():Promise<void>;
+
 export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
 
 export function Settings_FleetConfigPullStatus():Promise<settings.FleetConfigPullStatusView>;
@@ -854,6 +856,8 @@ export function Settings_GetPermissionMode():Promise<string>;
 
 export function Settings_GetPermissionsMigrationToastShown():Promise<boolean>;
 
+export function Settings_GetPolicyDefault():Promise<rpc.PolicyDefaultView>;
+
 export function Settings_GetRiskRaterBenchmark():Promise<risk.RiskRaterBenchmark>;
 
 export function Settings_GetSaveArtifactEnabled():Promise<boolean>;
@@ -925,6 +929,8 @@ export function Settings_SetPermissionCacheDangerousOps(arg1:boolean):Promise<vo
 export function Settings_SetPermissionMode(arg1:string):Promise<void>;
 
 export function Settings_SetPermissionsMigrationToastShown(arg1:boolean):Promise<void>;
+
+export function Settings_SetPolicyDefault(arg1:string):Promise<void>;
 
 export function Settings_SetSaveArtifactEnabled(arg1:boolean):Promise<void>;
 

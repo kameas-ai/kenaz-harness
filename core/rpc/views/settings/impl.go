@@ -1724,6 +1724,10 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 		s.FleetDeviceNameUseComputerName = cur.FleetDeviceNameUseComputerName
 		s.FleetDeviceNameCustom = cur.FleetDeviceNameCustom
 		s.FleetDeviceNameNeutral = cur.FleetDeviceNameNeutral
+		// The policy default changes what an agent may do without
+		// asking, so only its own action writes it (L09 R6).
+		s.PolicyDefault = cur.PolicyDefault
+		s.PolicyDefaultNoticeSeen = cur.PolicyDefaultNoticeSeen
 		*cur = s
 		return nil
 	}); err != nil {
