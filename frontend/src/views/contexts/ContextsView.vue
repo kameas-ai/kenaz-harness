@@ -73,7 +73,7 @@
  *     (folderBatch.ts). The interim per-file-only folder sentence is
  *     retired; a folder gets the same `sharingDisabledReason` as a file.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { Plus, FileText } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -96,6 +96,7 @@ import ContextRecent from './ContextRecent.vue';
 import ContextHealthCard from '@/components/context/ContextHealthCard.vue';
 import FolderShareDialog from './FolderShareDialog.vue';
 import { contextEntryTitle, contextNodeID, type FolderBatchMode } from './folderBatch';
+import { publishOutcome } from './shareOutcome';
 import TeamPicker from '@/components/fleet/TeamPicker.vue';
 import {
   initialShareTeam,
@@ -220,19 +221,17 @@ const publishLoading = ref(false);
  */
 const fleetSessionStore = useFleetSession(client);
 const teamCapEnabled = computed(() => fleetSessionStore.capability('team_graph_sharing'));
-/** Org-wide publishing is admin/owner only on Fleet; unknown roles stay enabled. */
-const orgPublishBlocked = computed(() => isKnownNonAdmin(fleetSessionStore.identity.value?.roles));
-// A session refresh can demote an admin while the dialog is open.
-watch(orgPublishBlocked, (blocked) => {
-  if (blocked) publishLayer.value = 'team';
-});
-/** Every node was refused on version: nothing changed on Fleet. */
-const publishNotUpdated = computed(
-  () =>
-    publishResult.value !== null &&
-    publishResult.value.accepted_nodes === 0 &&
-    (publishResult.value.conflicts?.length ?? 0) > 0,
-);
+/**
+ * A known member (not admin/owner): an org-wide share is admin-governed, so
+ * Fleet opens a merge request for an entry the member already shares with a
+ * team and an admin reviews it (spec 018 H-3, contract §1b). Unknown roles
+ * get no note; Fleet decides either way.
+ */
+const orgNeedsReview = computed(() => isKnownNonAdmin(fleetSessionStore.identity.value?.roles));
+/** The last publish's per-item outcome in plain words (shareOutcome.ts). */
+const publishOutcomeView = computed(() => (publishResult.value ? publishOutcome(publishResult.value) : null));
+/** An org-wide share of the entry waiting for review, from the share record. */
+const publishPendingId = computed(() => publishPrior.value?.pending_merge_request_id ?? '');
 
 /**
  * sharingDisabledReason — why Share… / Promote are disabled, or null when
@@ -988,16 +987,23 @@ onBeforeUnmount(() => {
               type="radio"
               value="org"
               data-testid="context-publish-layer-org"
-              :disabled="orgPublishBlocked"
             />
             <span>Publish org-wide (visible to everyone in your organisation)</span>
           </label>
           <p
-            v-if="orgPublishBlocked"
+            v-if="orgNeedsReview"
             class="font-ui text-[11px] text-ink-muted"
-            data-testid="context-publish-org-admin-only"
+            data-testid="context-publish-org-review-note"
           >
-            Only an org admin or owner can publish org-wide.
+            An org admin reviews org-wide shares. Share the entry with a team first; asking for
+            org-wide then waits for an admin's review.
+          </p>
+          <p
+            v-if="publishPendingId"
+            class="font-ui text-[11px] text-signal-warning"
+            data-testid="context-publish-pending-note"
+          >
+            An org-wide share of this entry is waiting for review (request {{ publishPendingId }}).
           </p>
         </fieldset>
         <p
@@ -1043,28 +1049,39 @@ onBeforeUnmount(() => {
       :folder="folderDialogNode"
       :mode="folderDialogMode"
       :disabled-reason="sharingDisabledReason"
-      :org-publish-blocked="orgPublishBlocked"
+      :org-needs-review="orgNeedsReview"
       @close="closeFolderDialog"
       @finished="loadSyncStatus"
     />
 
-    <!-- Publish result / error toast — states the EFFECTIVE layer, never the
-         requested one, and never reports a refused update as published. -->
+    <!-- Publish result toast — Fleet's per-item outcome (spec 018 H-3):
+         published (to the EFFECTIVE audience, never the requested one),
+         waiting for review, or refused with the reason in plain words. -->
     <div
-      v-if="publishResult"
+      v-if="publishResult && publishOutcomeView"
       class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px]"
-      :class="publishNotUpdated ? 'text-signal-warning' : 'text-signal-success'"
+      :class="{
+        'text-signal-success': publishOutcomeView.tone === 'success',
+        'text-signal-warning': publishOutcomeView.tone === 'warning',
+        'text-signal-danger': publishOutcomeView.tone === 'danger',
+      }"
+      :data-status="publishOutcomeView.status"
       data-testid="context-publish-result"
     >
-      <template v-if="publishNotUpdated">
-        Not updated: Fleet has a newer version of this entry.
-      </template>
-      <template v-else>
-        Published to {{ publishResult.effective_layer === 'org' ? 'your organisation' : 'your team' }}
-        ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
-      </template>
-      <span v-if="!publishNotUpdated && publishResult.conflicts && publishResult.conflicts.length > 0" class="text-signal-warning ml-2">
-        · {{ publishResult.conflicts.length }} version conflict{{ publishResult.conflicts.length === 1 ? '' : 's' }}
+      {{ publishOutcomeView.text }}
+      <span
+        v-if="publishOutcomeView.status === 'published' && publishResult.audience !== 'org' && publishPendingId"
+        class="text-signal-warning ml-2"
+        data-testid="context-publish-still-pending"
+      >
+        · the org-wide request {{ publishPendingId }} is still waiting for review
+      </span>
+      <span
+        v-if="publishResult.superseded_merge_request_id"
+        class="text-ink-muted ml-2"
+        data-testid="context-publish-superseded"
+      >
+        · replaces request {{ publishResult.superseded_merge_request_id }}
       </span>
     </div>
     <div

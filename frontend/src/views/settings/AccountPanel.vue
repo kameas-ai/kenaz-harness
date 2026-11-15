@@ -115,6 +115,12 @@ const sessionMessage = computed(() => {
     if (s.reason === 'not_provisioned') {
       return "You signed in with Zitadel, but this account hasn't finished Fleet signup yet.";
     }
+    if (s.reason === 'node_id_invalid') {
+      // Fleet refused this device's id as invalid, and the new one this app
+      // made for it too (core/fleet enrollRepairingNodeID). Retrying alone
+      // will not help, so automatic retries stop.
+      return "Fleet refused this device's id, even after the app made a new one. Try again later, or ask your administrator.";
+    }
     if (s.reason === 'needs_reauth') {
       return (
         'Your sign-in predates a permission fleet now needs (your organisation claim). ' +
@@ -184,6 +190,8 @@ const degradedHeadline = computed(() => {
       return 'Account setup not finished';
     case 'needs_reauth':
       return 'Update your sign-in to re-enable telemetry export';
+    case 'node_id_invalid':
+      return "Fleet refused this device's id";
     default:
       return 'Not connected to fleet';
   }

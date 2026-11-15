@@ -17,7 +17,7 @@
  * Cancel while running is cancel-safe: the in-flight entry finishes, the
  * rest are marked "not started". The dialog cannot be dismissed mid-entry.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useFleetSession } from '@/lib/fleetSession';
 import {
@@ -40,14 +40,19 @@ import {
   type BatchEntry,
   type FolderBatchMode,
 } from './folderBatch';
+import { publishOutcome } from './shareOutcome';
 
 const props = defineProps<{
   folder: ContextNode;
   mode: FolderBatchMode;
   /** FleetSession-derived reason from ContextsView; non-null disables everything. */
   disabledReason: string | null;
-  /** Known non-admin: Fleet refuses org-wide publishing, so don't offer it. */
-  orgPublishBlocked?: boolean;
+  /**
+   * Known member (not admin/owner): an org-wide share is admin-governed, so
+   * Fleet opens a merge request for an entry already shared with a team
+   * (spec 018 H-3). Shown as a note; Fleet answers per entry.
+   */
+  orgNeedsReview?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -116,13 +121,6 @@ const staysNote = computed(() =>
     ? staysWithTeamNote(teams.value, eligiblePriors(), layer.value)
     : null,
 );
-// A session refresh can demote an admin while the dialog is open.
-watch(
-  () => props.orgPublishBlocked,
-  (blocked) => {
-    if (blocked) layer.value = 'team';
-  },
-);
 
 const folderName = computed(() => props.folder.path.split('/').pop() || 'library root');
 const verb = computed(() => (props.mode === 'share' ? 'Share' : 'Promote'));
@@ -154,14 +152,11 @@ async function shareOne(e: BatchEntry): Promise<string | { skipped: string }> {
       ...(team ? { team_id: team } : {}),
     }),
   );
-  const where = res.effective_layer === 'org' ? 'your organisation' : 'your team';
-  const conflicts = res.conflicts?.length ?? 0;
-  if (res.accepted_nodes === 0 && conflicts > 0) {
-    throw new Error('Not updated: Fleet has a newer version of this entry.');
-  }
-  return conflicts > 0
-    ? `Published to ${where} · ${conflicts} version conflict${conflicts === 1 ? '' : 's'}`
-    : `Published to ${where}`;
+  // Fleet's per-item outcome (spec 018 H-3): a refusal fails the entry
+  // with its reason; waiting for review and published are done.
+  const outcome = publishOutcome(res);
+  if (outcome.status === 'refused') throw new Error(outcome.text);
+  return outcome.text;
 }
 
 async function promoteOne(e: BatchEntry): Promise<string> {
@@ -288,16 +283,16 @@ const statusClass: Record<BatchEntry['status'], string> = {
             type="radio"
             value="org"
             data-testid="folder-share-layer-org"
-            :disabled="orgPublishBlocked"
           />
           <span>Publish org-wide (visible to everyone in your organisation)</span>
         </label>
         <p
-          v-if="orgPublishBlocked"
+          v-if="orgNeedsReview"
           class="font-ui text-[11px] text-ink-muted"
-          data-testid="folder-share-org-admin-only"
+          data-testid="folder-share-org-review-note"
         >
-          Only an org admin or owner can publish org-wide.
+          An org admin reviews org-wide shares: each entry already shared with a team waits for
+          review, and the rest are refused with the reason.
         </p>
       </fieldset>
       <p

@@ -15,6 +15,14 @@ package contexts
 // (a path is user content), and each record names the fleet user that
 // made it so another account signed in on the same profile never inherits
 // it. Nothing here is sent anywhere or put on telemetry.
+//
+// Spec 018 H-3: only a share Fleet reports `published` is recorded in
+// Shares. An org-wide share that Fleet opened as a merge request is kept
+// apart in Pending, by its merge_request_id: Fleet answers the same id for
+// the same content and a new one when the content changes (the old request
+// is then superseded), so the record is replaced and names the id it
+// superseded. A later `published` (or a `previously_rejected` refusal)
+// clears it.
 
 import (
 	"encoding/json"
@@ -41,9 +49,19 @@ type shareRecord struct {
 	Version int `json:"version,omitempty"`
 }
 
+// pendingRecord is an org-wide share waiting for an admin's review.
+type pendingRecord struct {
+	UserID         string `json:"user_id"`
+	MergeRequestID string `json:"merge_request_id"`
+	// SupersededID is the request this one replaced (content changed).
+	SupersededID string    `json:"superseded_id,omitempty"`
+	RequestedAt  time.Time `json:"requested_at"`
+}
+
 type shareLedgerFile struct {
-	Version int                    `json:"version"`
-	Shares  map[string]shareRecord `json:"shares"`
+	Version int                      `json:"version"`
+	Shares  map[string]shareRecord   `json:"shares"`
+	Pending map[string]pendingRecord `json:"pending,omitempty"`
 }
 
 // shareLedger is the on-disk share record. Safe for concurrent use. With
@@ -53,6 +71,8 @@ type shareLedger struct {
 	path   string
 	loaded bool
 	recs   map[string]shareRecord
+	// pending holds org-wide shares waiting for review, by wire id.
+	pending map[string]pendingRecord
 	// stamp is the file's size and mtime when recs was read; a different
 	// stamp (rewritten, or removed on sign-out) reloads.
 	stamp string
@@ -84,7 +104,7 @@ func fileStamp(path string) string {
 func (l *shareLedger) loadLocked() {
 	if l.path == "" {
 		if !l.loaded {
-			l.loaded, l.recs = true, map[string]shareRecord{}
+			l.loaded, l.recs, l.pending = true, map[string]shareRecord{}, map[string]pendingRecord{}
 		}
 		return
 	}
@@ -94,6 +114,7 @@ func (l *shareLedger) loadLocked() {
 	}
 	l.loaded, l.stamp = true, stamp
 	l.recs = map[string]shareRecord{}
+	l.pending = map[string]pendingRecord{}
 	raw, err := os.ReadFile(l.path)
 	if err != nil {
 		return
@@ -111,6 +132,9 @@ func (l *shareLedger) loadLocked() {
 	}
 	if f.Shares != nil {
 		l.recs = f.Shares
+	}
+	if f.Pending != nil {
+		l.pending = f.Pending
 	}
 }
 
@@ -138,10 +162,67 @@ func (l *shareLedger) put(wireID string, r shareRecord) error {
 	defer l.mu.Unlock()
 	l.loadLocked()
 	l.recs[wireID] = r
+	return l.persistLocked()
+}
+
+// getPending returns the pending review record for wireID made by userID.
+func (l *shareLedger) getPending(wireID, userID string) (pendingRecord, bool) {
+	if l == nil || wireID == "" {
+		return pendingRecord{}, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.loadLocked()
+	r, ok := l.pending[wireID]
+	if !ok || userID == "" || r.UserID != userID {
+		return pendingRecord{}, false
+	}
+	return r, true
+}
+
+// putPending records (or replaces) a pending review for wireID. A different
+// merge request id than the stored one means Fleet superseded the old
+// request; the new record names it.
+func (l *shareLedger) putPending(wireID, userID, mergeRequestID string, now time.Time) error {
+	if l == nil || wireID == "" || userID == "" || mergeRequestID == "" {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.loadLocked()
+	prev, had := l.pending[wireID]
+	if had && prev.UserID == userID && prev.MergeRequestID == mergeRequestID {
+		return nil // the same request: Fleet changed nothing
+	}
+	rec := pendingRecord{UserID: userID, MergeRequestID: mergeRequestID, RequestedAt: now}
+	if had && prev.UserID == userID {
+		rec.SupersededID = prev.MergeRequestID
+	}
+	l.pending[wireID] = rec
+	return l.persistLocked()
+}
+
+// clearPending forgets the pending review for wireID.
+func (l *shareLedger) clearPending(wireID string) error {
+	if l == nil || wireID == "" {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.loadLocked()
+	if _, had := l.pending[wireID]; !had {
+		return nil
+	}
+	delete(l.pending, wireID)
+	return l.persistLocked()
+}
+
+// persistLocked writes the ledger (tmp+rename, 0600). Caller holds l.mu.
+func (l *shareLedger) persistLocked() error {
 	if l.path == "" {
 		return nil
 	}
-	data, err := json.Marshal(shareLedgerFile{Version: 1, Shares: l.recs})
+	data, err := json.Marshal(shareLedgerFile{Version: 1, Shares: l.recs, Pending: l.pending})
 	if err != nil {
 		return fmt.Errorf("contexts: share ledger encode: %w", err)
 	}

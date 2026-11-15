@@ -34,6 +34,11 @@ type Node struct {
 	Size     int64     `json:"size,omitempty"`
 	Modified time.Time `json:"modified,omitempty"`
 	Children []Node    `json:"children,omitempty"`
+	// Audience / Governed label a pulled team/org entry as Fleet serves it
+	// (spec 018 FR-6): "team" or "org"; Governed for admin-governed org
+	// content. Empty for local files.
+	Audience string `json:"audience,omitempty"`
+	Governed bool   `json:"governed,omitempty"`
 }
 
 // ContextsAPI is the view-scoped surface backing /contexts.
@@ -167,6 +172,23 @@ type ContextPublishResult struct {
 	// or "org". The frontend uses this, not the request layer, when telling
 	// the user where the entry went.
 	EffectiveLayer string `json:"effective_layer"`
+	// Audience is the explicit audience sent (spec 018 H-3): "team", or
+	// "org" for the whole organisation (the default team, or governed org
+	// content). Empty when none could be sent (the default team was
+	// unknown): the classification alone was sent, as before.
+	Audience string `json:"audience,omitempty"`
+	// Status is Fleet's per-item outcome: "published", "pending_review"
+	// (a merge request waits for an admin) or "refused".
+	Status string `json:"status"`
+	// MergeRequestID names the merge request for "pending_review".
+	MergeRequestID string `json:"merge_request_id,omitempty"`
+	// SupersededMergeRequestID is the earlier request Fleet closed because
+	// the content changed (pending_review only).
+	SupersededMergeRequestID string `json:"superseded_merge_request_id,omitempty"`
+	// Reason is the refusal code as served; ReasonText the same in plain
+	// words (fleet.PushRefusalText).
+	Reason     string `json:"reason,omitempty"`
+	ReasonText string `json:"reason_text,omitempty"`
 }
 
 // ContextShareStateView is where an entry was last shared from this device.
@@ -177,6 +199,9 @@ type ContextShareStateView struct {
 	Layer string `json:"layer"`
 	// TeamID is the team a "team" share went to.
 	TeamID string `json:"team_id,omitempty"`
+	// PendingMergeRequestID is an org-wide share of this entry still
+	// waiting for an admin's review (spec 018 H-3).
+	PendingMergeRequestID string `json:"pending_merge_request_id,omitempty"`
 }
 
 // ContextPromoteResult is the response from Context_Promote.
@@ -185,6 +210,8 @@ type ContextPromoteResult struct {
 	UpdatedNodeID string `json:"updated_node_id"`
 	// NewClassification is always "org_shared" in v0.
 	NewClassification string `json:"new_classification"`
+	// Status is "published" (a promote either publishes or fails).
+	Status string `json:"status"`
 }
 
 // ContextSyncStatusView is the response from Context_SyncStatus.

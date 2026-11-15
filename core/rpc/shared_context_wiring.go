@@ -72,6 +72,42 @@ type sharedContextSource struct {
 	selfUserID func() string
 	// units is the local Unit store holding pulled team / org units.
 	units *units.Manager
+	// unitLabels returns Fleet's audience labels for a unit (spec 018
+	// FR-6); ok=false when none is on record. nil = not wired.
+	unitLabels func(ctx context.Context, unitID string) (audience string, governed, ok bool)
+}
+
+// setUnitLabels wires the Unit lane's audience labels.
+func (s *sharedContextSource) setUnitLabels(f func(ctx context.Context, unitID string) (string, bool, bool)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.unitLabels = f
+	s.mu.Unlock()
+}
+
+// unitAudience labels a unit's audience: Fleet's label when on record,
+// else its classification ("team" / "org").
+func (s *sharedContextSource) unitAudience(ctx context.Context, u units.Unit) string {
+	s.mu.RLock()
+	f := s.unitLabels
+	s.mu.RUnlock()
+	if f != nil {
+		if aud, gov, ok := f(ctx, u.ID); ok {
+			return sharedAudienceLabel(aud, gov)
+		}
+	}
+	return string(u.Classification)
+}
+
+// sharedAudienceLabel renders Fleet's audience for the model: "team",
+// "org", or "org (admin-governed)". Labels only, never an instruction.
+func sharedAudienceLabel(audience string, governed bool) string {
+	if audience == corefleet.AudienceOrg && governed {
+		return "org (admin-governed)"
+	}
+	return audience
 }
 
 // setCurated wires the Curated lane (late: the syncer is built after the
@@ -132,7 +168,9 @@ func (s *sharedContextSource) ListShared(ctx context.Context) ([]sharedctx.Item,
 			return out, err
 		}
 		for _, u := range shared {
-			out = append(out, unitItem(u))
+			it := unitItem(u)
+			it.Audience = s.unitAudience(ctx, u)
+			out = append(out, it)
 		}
 	}
 	return out, nil
@@ -176,7 +214,9 @@ func (s *sharedContextSource) GetShared(ctx context.Context, id string) (sharedc
 		if !isSharedUnit(u) {
 			return sharedctx.Item{}, false, nil
 		}
-		return unitItem(u), true, nil
+		it := unitItem(u)
+		it.Audience = s.unitAudience(ctx, u)
+		return it, true, nil
 	}
 	return sharedctx.Item{}, false, nil
 }
@@ -235,13 +275,13 @@ func (s *sharedContextSource) alwaysBlock(ctx context.Context, sessionID string,
 		}
 		return cands[i].ID < cands[j].ID
 	})
-	return formatAlways(cands)
+	return formatAlways(cands, func(u units.Unit) string { return s.unitAudience(ctx, u) })
 }
 
 // formatAlways applies the eager caps (maxAlwaysItems items, maxAlwaysBytes
 // total, maxAlwaysItemBytes per item; a cut item is marked truncated) and
 // renders the framed block.
-func formatAlways(cands []units.Unit) string {
+func formatAlways(cands []units.Unit, audience func(units.Unit) string) string {
 	var items []sharedctx.Item
 	total := 0
 	for _, u := range cands {
@@ -249,6 +289,9 @@ func formatAlways(cands []units.Unit) string {
 			break
 		}
 		it := unitItem(u)
+		if audience != nil {
+			it.Audience = audience(u)
+		}
 		limit := maxAlwaysItemBytes
 		if rest := maxAlwaysBytes - total; rest < limit {
 			limit = rest
@@ -332,10 +375,19 @@ func curatedItem(e corefleet.ContextNodeEntry, selfID string) sharedctx.Item {
 		ID:       sharedEntryPrefix + e.ID,
 		Title:    e.Title,
 		Kind:     corefleet.DisplayKind(e.Kind),
-		Audience: string(e.Layer),
+		Audience: curatedAudience(e),
 		Author:   author,
 		Body:     e.Body,
 	}
+}
+
+// curatedAudience labels a Curated entry's audience: Fleet's label when
+// served, else its layer (an older Fleet).
+func curatedAudience(e corefleet.ContextNodeEntry) string {
+	if e.Audience == "" {
+		return string(e.Layer)
+	}
+	return sharedAudienceLabel(e.Audience, e.Governed)
 }
 
 // unitItem maps a team / org unit onto a shared item. The local store

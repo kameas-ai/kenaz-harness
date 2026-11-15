@@ -64,6 +64,12 @@ var (
 	ErrContextPushForbidden = errors.New("fleet: the server refused the change")
 	// ErrContextPushRejected — a 200 push whose own node was rejected per-item.
 	ErrContextPushRejected = errors.New("fleet: the server rejected this entry")
+	// ErrContextNodeChanged — 409 node_changed: the entry changed on Fleet
+	// since its version was read (promote with expected_version).
+	ErrContextNodeChanged = errors.New("fleet: this entry changed on Fleet since it was last pulled, so it wasn't promoted. Wait for the next sync and try again")
+	// ErrAudienceTeamNeedsTeam — an explicit "team" audience with no team_id
+	// (Fleet would 400 the batch).
+	ErrAudienceTeamNeedsTeam = errors.New("fleet: a team share needs a team")
 )
 
 // LintFinding is one block-severity secret-lint finding. Field names where
@@ -139,6 +145,8 @@ func (e *ContextPushError) sentinel() error {
 		return ErrMissingNodeReference
 	case "node_not_found":
 		return ErrContextNodeNotFound
+	case "node_changed":
+		return ErrContextNodeChanged
 	}
 	if e.Status == 403 {
 		return ErrContextPushForbidden

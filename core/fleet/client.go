@@ -254,7 +254,7 @@ func (c *Client) RefreshIdentity(ctx context.Context, nodeID, platform, version 
 	// Keyed by account: a sign-in must never join an enroll still running
 	// under the previous account's token and take its answer (legal D164).
 	v, err, _ := c.enrollSF.Do("enroll:"+TokenIdentityKey(), func() (any, error) {
-		return c.enrollIdentity(ctx, nodeID, platform, version)
+		return c.enrollRepairingNodeID(ctx, nodeID, platform, version)
 	})
 	if err != nil {
 		// v is the zero Identity{} on error (enrollIdentity's own contract);

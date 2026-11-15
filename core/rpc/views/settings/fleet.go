@@ -1527,6 +1527,13 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		logging.L().Error("fleet.rpc.enroll.failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}
+	// Enroll may have re-minted a node id Fleet refused as invalid
+	// (fleet.ErrNodeIDInvalid path): what Fleet now knows this device as is
+	// the persisted id, not the one read before the call.
+	if cur := fleet.ReadNodeID(dataDir); cur != "" && cur != nodeID {
+		logging.L().Info("fleet.rpc.enroll.node_id_reminted")
+		nodeID = cur
+	}
 	a.recordEnrollOutcome(&id, nil)
 	logging.L().Info("fleet.rpc.enroll.success",
 		"org_id", id.OrgID,

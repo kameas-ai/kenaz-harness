@@ -10,9 +10,12 @@ package settings
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -45,6 +48,7 @@ func newSessionFleet(t *testing.T) *sessionFleet {
 	mux.HandleFunc("/api/v1/enroll", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Version string `json:"version"`
+			NodeID  string `json:"node_id"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.mu.Lock()
@@ -52,6 +56,12 @@ func newSessionFleet(t *testing.T) *sessionFleet {
 		f.versions = append(f.versions, body.Version)
 		mode, email, name, role := f.mode, f.email, f.name, f.role
 		f.mu.Unlock()
+		if mode == "strict_node_id" && strings.Contains(body.NodeID, " ") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"code":"invalid_request","message":"node_id must be printable ASCII without spaces, at most 128 bytes.","details":{"field":"node_id"}}`))
+			return
+		}
 		switch mode {
 		case "server_error":
 			// A 4xx that is not a sentinel: a plain server-side failure.
@@ -318,6 +328,8 @@ func TestClassifyEnrollError(t *testing.T) {
 		expired bool
 	}{
 		{fleet.ErrUserNotProvisioned, FleetReasonNotProvisioned, false},
+		{fleet.ErrNodeIDInvalid, FleetReasonNodeIDInvalid, false},
+		{fmt.Errorf("wrapped: %w", fleet.ErrNodeIDInvalid), FleetReasonNodeIDInvalid, false},
 		{fleet.ErrFleetUnreachable, FleetReasonNetwork, false},
 		{fleet.ErrTokenExpired, FleetReasonSessionExpired, true},
 		{fleet.ErrNotSignedIn, FleetReasonSessionExpired, true},
@@ -332,6 +344,18 @@ func TestClassifyEnrollError(t *testing.T) {
 	}
 }
 
+// A device id Fleet refuses even after a re-mint stops automatic retries:
+// retrying cannot help (fleet.ErrNodeIDInvalid).
+func TestRecordEnrollOutcome_NodeIDInvalidStopsAutoRetry(t *testing.T) {
+	a := &API{fleet: &fleetState{}}
+	a.recordEnrollOutcome(nil, fleet.ErrNodeIDInvalid)
+	a.fleet.mu.RLock()
+	defer a.fleet.mu.RUnlock()
+	if !a.fleet.sess.autoRetryStopped || a.fleet.sess.reason != FleetReasonNodeIDInvalid || !a.fleet.sess.nextRetryAt.IsZero() {
+		t.Fatalf("session track = %+v", a.fleet.sess)
+	}
+}
+
 func TestEnrollBackoff_BoundedExponential(t *testing.T) {
 	prev := enrollBackoff(1)
 	for i := 2; i < 20; i++ {
@@ -343,5 +367,42 @@ func TestEnrollBackoff_BoundedExponential(t *testing.T) {
 	}
 	if prev > 30*60*1e9 {
 		t.Fatalf("backoff unbounded: %v", prev)
+	}
+}
+
+// A node id Fleet refuses is re-minted inside enroll; the settings view must
+// then remember the NEW id (telemetry machine.id, ML), not the corrupt one
+// it read before the call.
+func TestFleetEnroll_RemintedNodeIDIsTheOneRemembered(t *testing.T) {
+	if fleet.Disabled() {
+		t.Skip("HARNESS_FLEET_DISABLED=1")
+	}
+	r := &sessionRig{fleet: newSessionFleet(t), dataDir: t.TempDir()}
+	fleet.SetExternalTokenSource(r.token)
+	t.Cleanup(func() { fleet.SetExternalTokenSource(nil) })
+	r.api = &API{}
+	r.api.SetFleetClient(fleet.NewClientForTestingWithDataDir(r.fleet.srv.URL, r.dataDir), r.dataDir)
+	t.Cleanup(r.api.StopFleetBackground)
+	r.fleet.setMode("strict_node_id")
+	r.setToken(jwtFor("sub-alice", "zitadel-org-1"))
+	bad := "corrupt node id"
+	if err := os.MkdirAll(filepath.Join(r.dataDir, "fleet"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.dataDir, "fleet", "node_id.txt"), []byte(bad+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.api.FleetRefreshIdentity(context.Background()); err != nil {
+		t.Fatalf("FleetRefreshIdentity: %v", err)
+	}
+	stored := fleet.ReadNodeID(r.dataDir)
+	r.api.fleet.mu.RLock()
+	got := r.api.fleet.enrolledNodeID
+	r.api.fleet.mu.RUnlock()
+	if stored == bad || got != stored {
+		t.Fatalf("enrolledNodeID = %q, persisted = %q; want the re-minted id in both", got, stored)
+	}
+	if r.fleet.calls() != 2 {
+		t.Fatalf("enroll calls = %d, want 2 (one re-mint)", r.fleet.calls())
 	}
 }

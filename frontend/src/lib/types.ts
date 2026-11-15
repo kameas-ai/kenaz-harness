@@ -886,6 +886,13 @@ export interface ContextNode {
   size?: number;
   modified?: string;
   children?: ContextNode[];
+  /**
+   * A pulled team/org entry's audience as Fleet serves it (spec 018 FR-6):
+   * "team" or "org". Absent for local files.
+   */
+  audience?: string;
+  /** True only for admin-governed org content. */
+  governed?: boolean;
 }
 
 // ── Fleet context-graph sync types (fleet-context-graph-sync-01NDFSEX17) ──────
@@ -916,7 +923,12 @@ export interface ContextShareStateView {
   layer: 'team' | 'org';
   /** The team a "team" share went to. */
   team_id?: string;
+  /** An org-wide share of this entry still waiting for an admin's review. */
+  pending_merge_request_id?: string;
 }
+
+/** Fleet's per-item push outcome (spec 018 H-3). */
+export type ContextPushStatus = 'published' | 'pending_review' | 'refused';
 
 export interface ContextPublishResult {
   accepted_nodes: number;
@@ -928,11 +940,23 @@ export interface ContextPublishResult {
    * core/rpc/views/contexts/impl.go).
    */
   effective_layer: 'team' | 'org';
+  /** The explicit audience sent: "team", or "org" (the whole organisation). */
+  audience?: 'team' | 'org' | '';
+  /** Fleet's per-item outcome. Absent from an older backend: derive it. */
+  status?: ContextPushStatus;
+  /** The merge request a pending_review opened (or kept). */
+  merge_request_id?: string;
+  /** The earlier request Fleet superseded because the content changed. */
+  superseded_merge_request_id?: string;
+  /** Refusal code as served, and the same in plain words. */
+  reason?: string;
+  reason_text?: string;
 }
 
 export interface ContextPromoteResult {
   updated_node_id: string;
   new_classification: 'org_shared';
+  status?: 'published';
 }
 
 export interface ContextSyncStatusView {
@@ -5203,7 +5227,7 @@ export interface FleetSyncView {
  */
 export interface FleetSessionView {
   state: FleetSessionState;
-  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled | node_removed */
+  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled | node_removed | node_id_invalid */
   reason?: string;
   /** Raw error text behind `reason` (humanize before showing). */
   message?: string;

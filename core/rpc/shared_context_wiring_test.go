@@ -370,21 +370,71 @@ func TestSharedContext_AlwaysCaps(t *testing.T) {
 	}
 	count := func(block string) int { return strings.Count(block, "\n- Shared item: ") }
 
-	if got := count(formatAlways(mk(20, 10))); got != maxAlwaysItems || maxAlwaysItems != 16 {
+	if got := count(formatAlways(mk(20, 10), nil)); got != maxAlwaysItems || maxAlwaysItems != 16 {
 		t.Errorf("items = %d (cap %d), want 16", got, maxAlwaysItems)
 	}
-	one := formatAlways(mk(1, 10<<10))
+	one := formatAlways(mk(1, 10<<10), nil)
 	if maxAlwaysItemBytes != 8<<10 || !strings.Contains(one, "(content cut to a size limit)") ||
 		strings.Count(one, "Z") != maxAlwaysItemBytes {
 		t.Errorf("per-item cap: %d bytes kept (cap %d)", strings.Count(one, "Z"), maxAlwaysItemBytes)
 	}
-	big := formatAlways(mk(6, 9<<10))
+	big := formatAlways(mk(6, 9<<10), nil)
 	if maxAlwaysBytes != 32<<10 || strings.Count(big, "Z") != maxAlwaysBytes || count(big) != 4 {
 		t.Errorf("total cap: %d bytes in %d items (cap %d)", strings.Count(big, "Z"), count(big), maxAlwaysBytes)
 	}
 	// A partial last item fills to the total cap exactly.
-	mixed := formatAlways(append(mk(3, 9<<10), mk(2, 12<<10)...))
+	mixed := formatAlways(append(mk(3, 9<<10), mk(2, 12<<10)...), nil)
 	if strings.Count(mixed, "Z") != maxAlwaysBytes {
 		t.Errorf("mixed: %d bytes, want %d", strings.Count(mixed, "Z"), maxAlwaysBytes)
+	}
+}
+
+// Spec 018 FR-6: the audience label the model sees is Fleet's served
+// audience ("org" for root-team content too, governed marked), falling back
+// to the layer / classification on an older Fleet. A label, never an
+// instruction.
+func TestSharedContext_AudienceLabels_RealSQLite(t *testing.T) {
+	f := newSharedFixture(t)
+	signed := true
+	src := signedInSource(&signed)
+	src.setUnits(f.mgr)
+	src.setCurated(func() []corefleet.ContextNodeEntry {
+		return []corefleet.ContextNodeEntry{
+			{ID: "r1", Layer: contextpack.LayerTeam, Kind: "guidance", Title: "Root", Body: "b", Audience: "org"},
+			{ID: "g1", Layer: contextpack.LayerOrg, Kind: "guidance", Title: "Gov", Body: "b", Audience: "org", Governed: true},
+			{ID: "o1", Layer: contextpack.LayerTeam, Kind: "guidance", Title: "Old", Body: "b"},
+		}
+	}, func() string { return "" })
+	src.setUnitLabels(func(_ context.Context, unitID string) (string, bool, bool) {
+		if unitID == f.pulledLazy.ID {
+			return "org", true, true
+		}
+		return "", false, false
+	})
+	items, err := src.ListShared(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, it := range items {
+		got[it.ID] = it.Audience
+	}
+	want := map[string]string{
+		"entry:r1":                "org",
+		"entry:g1":                "org (admin-governed)",
+		"entry:o1":                "team",
+		"unit:" + f.pulledLazy.ID: "org (admin-governed)",
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("%s audience = %q, want %q", id, got[id], w)
+		}
+	}
+	if a := got["unit:"+f.pulledAlways.ID]; a != string(f.pulledAlways.Classification) {
+		t.Errorf("unlabelled unit audience = %q, want its classification", a)
+	}
+	block := sharedctx.Format("", items)
+	if !strings.Contains(block, "audience: org (admin-governed)") || !strings.Contains(block, sharedctx.TrustNotice) {
+		t.Fatalf("framing lacks the audience label or the trust notice:\n%s", block)
 	}
 }
