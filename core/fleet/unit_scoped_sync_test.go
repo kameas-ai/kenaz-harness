@@ -474,7 +474,9 @@ func TestUnitScoped_ResetHeldWhileIdentityUnknown(t *testing.T) {
 			t.Fatalf("%s changed while the identity was unknown: %+v %v", id, u, ok)
 		}
 	}
-	if _, ok := loadUnitSnapshotMark(dataDir); !ok {
+	// The reset came while the identity was unknown: the mark names no
+	// account and is adopted by the first known one.
+	if len(loadUnitSnapshotMarks(dataDir)) != 1 {
 		t.Fatal("the snapshot mark was dropped while held")
 	}
 	if s.Status().ResetHeld == 0 {
@@ -489,7 +491,7 @@ func TestUnitScoped_ResetHeldWhileIdentityUnknown(t *testing.T) {
 		t.Fatal("the teammate's unit survived once the identity was known")
 	}
 	assertKeptPersonalWithEdit(t, m, uB)
-	if _, ok := loadUnitSnapshotMark(dataDir); ok {
+	if len(loadUnitSnapshotMarks(dataDir)) != 0 {
 		t.Fatal("mark left after the sweep ran")
 	}
 }
@@ -515,7 +517,7 @@ func TestUnitScoped_ResetNeverSweepsAnotherAccountsUnits(t *testing.T) {
 	if _, err := s.PullDown(context.Background()); err == nil {
 		t.Fatal("want the failed re-snapshot's error")
 	}
-	if mk, ok := loadUnitSnapshotMark(dataDir); !ok || mk.UserID != testMember {
+	if mk, ok := markFor(dataDir, testMember); !ok || mk.UserID != testMember {
 		t.Fatalf("mark = %+v %v, want account A recorded", mk, ok)
 	}
 	// Restart into account B (same org): B's snapshot finishes, but the
@@ -533,7 +535,7 @@ func TestUnitScoped_ResetNeverSweepsAnotherAccountsUnits(t *testing.T) {
 			t.Fatalf("account B's sweep removed account A's unit %s", id)
 		}
 	}
-	if _, ok := loadUnitSnapshotMark(dataDir); !ok {
+	if _, ok := markFor(dataDir, testMember); !ok {
 		t.Fatal("A's mark was dropped under B")
 	}
 	// Even B's own sweep keeps units recorded for A.
@@ -666,5 +668,146 @@ func TestUnitScoped_PushDuringSnapshotIsNotSwept(t *testing.T) {
 	}
 	if _, ok := hasUnit(t, m, uD); ok {
 		t.Fatal("unserved teammate unit survived")
+	}
+}
+
+func markFor(dataDir, user string) (unitSnapshotMark, bool) {
+	m, ok := loadUnitSnapshotMarks(dataDir)[snapshotAccount{UserID: user, OrgID: testOrg}.key()]
+	return m, ok
+}
+
+// ── Delta review (dada4a91): revocation leak and per-account marks ──
+
+// dropVerdictFor in rule order, over real sqlite.
+func TestUnitScoped_DropVerdictRules(t *testing.T) {
+	_, m := openUnitSyncSQLite(t)
+	ctx := context.Background()
+	srv := &scopedPullServer{}
+	srv.answer = resetScript(
+		[]ContextPulledNode{
+			unitNode(uA, "team-a", testAuthor), // teammate's, pulled
+			unitNode(uB, "team-a", testMember), // own, pulled (index author self)
+			unitNode(uC, "team-a", testAuthor), // teammate's, edited locally
+		},
+		map[string]any{"reset_team_ids": []string{"team-a"}},
+		func() (int, any) { return 200, pullBody(nil, "u-2") },
+	)
+	dataDir := t.TempDir()
+	s := unitScopedSyncer(t, m, srv, testMember, dataDir)
+	mustPullDown(t, s)
+	if _, err := m.Update(ctx, uC, "edited here", nil); err != nil {
+		t.Fatal(err)
+	}
+	// uD: a pre-index teammate unit (pulled before the index existed): node
+	// id as its id, a sidecar, no index row, no edits.
+	pre := unitNode(uD, "team-a", testAuthor)
+	mp, _, err := s.mapper.PulledNodeToUnit(pre)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.CreateWithSyncState(ctx, mp, units.SyncState{NodeID: uD, SyncedServerVersion: 1, Classification: "team_shared"}); err != nil {
+		t.Fatal(err)
+	}
+	// A unit created on this device and synced, with no index row (pushed
+	// before the index existed): its ULID differs from its wire node id.
+	local, err := m.Create(ctx, units.Unit{Kind: units.KindDoc, Scope: units.ScopeGlobal, Classification: units.ClassTeam,
+		LoadPolicy: units.LoadOnDemand, Title: "mine", Body: "local words"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const localNode = "6b2f6f0e-0000-4000-8000-0000000028e5"
+	if _, err := m.UpsertSyncState(ctx, units.SyncState{UnitID: local.ID, NodeID: localNode, SyncedServerVersion: 0,
+		SyncedLocalVersion: local.Version, Classification: "team_shared"}); err != nil {
+		t.Fatal(err)
+	}
+	// The local unit lived in the lost team too.
+	s.index.put(localNode, UnitNodeLabels{TeamID: "team-a"})
+	s.index.flush()
+
+	mustPullDown(t, s) // reset naming team-a, then the sweep
+
+	if _, ok := hasUnit(t, m, uA); ok {
+		t.Error("rule 5: a pulled teammate unit with no edits survived the reset (access leak)")
+	}
+	if _, ok := hasUnit(t, m, uD); ok {
+		t.Error("rule 5: a pre-index teammate unit with no edits was kept (access leak)")
+	}
+	if u, ok := hasUnit(t, m, uB); !ok || u.Classification != units.ClassPersonal {
+		t.Errorf("rule 2: own pulled unit = %+v %v, want personal", u, ok)
+	}
+	if u, ok := hasUnit(t, m, uC); !ok || u.Classification != units.ClassPersonal || u.Body != "edited here" {
+		t.Errorf("rule 3: unit with un-pushed edits = %+v %v, want personal with the edit", u, ok)
+	}
+	if u, ok := hasUnit(t, m, local.ID); !ok || u.Classification != units.ClassPersonal || u.Body != "local words" {
+		t.Errorf("rule 4: locally created unit with no index row = %+v %v, want personal", u, ok)
+	}
+}
+
+// B's own reset while A's sweep is held must not overwrite A's mark; each
+// sweep runs only under its own account.
+func TestUnitScoped_SnapshotMarksArePerAccount(t *testing.T) {
+	_, m := openUnitSyncSQLite(t)
+	dataDir := t.TempDir()
+	const userB = "u-account-b"
+	failResnap := true
+	srv := &scopedPullServer{}
+	srv.answer = func(q string, n int) (int, any) {
+		switch {
+		case n == 1: // A's first pull
+			return 200, pullBody([]ContextPulledNode{unitNode(uA, "team-a", testAuthor), unitNode(uC, "team-a", testAuthor)}, "u-1")
+		case strings.Contains(q, "cursor=u-1"), strings.Contains(q, "cursor=b-1"):
+			return 200, map[string]any{"nodes": []any{}, "next_cursor": "start", "reset": true, "reset_reason": ResetLeftTeam}
+		case failResnap:
+			return 500, map[string]any{"code": "boom"}
+		default:
+			// Re-snapshots serve uC only.
+			return 200, pullBody([]ContextPulledNode{unitNode(uC, "team-a", testAuthor)}, "end")
+		}
+	}
+	sA := unitScopedSyncer(t, m, srv, testMember, dataDir)
+	mustPullDown(t, sA)
+	if _, err := sA.PullDown(context.Background()); err == nil {
+		t.Fatal("want A's failed re-snapshot")
+	}
+	if _, ok := markFor(dataDir, testMember); !ok {
+		t.Fatal("A's mark missing")
+	}
+
+	// Restart as B, who then gets a reset of its own and completes it.
+	srv.mu.Lock()
+	failResnap = false
+	srv.mu.Unlock()
+	if err := SaveIdentity(dataDir, Identity{UserID: userB, OrgID: testOrg}); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveUnitPullCursor(dataDir, pullCursor{Kind: pullCursorOpaque, Value: "b-1"}); err != nil {
+		t.Fatal(err)
+	}
+	sB := unitScopedSyncer(t, m, srv, "", dataDir)
+	mustPullDown(t, sB)
+	if _, ok := markFor(dataDir, testMember); !ok {
+		t.Fatal("B's reset overwrote A's pending mark")
+	}
+	if _, ok := markFor(dataDir, userB); ok {
+		t.Fatal("B's finished sweep left its own mark")
+	}
+	if _, ok := hasUnit(t, m, uA); !ok {
+		t.Fatal("B's sweep removed a unit recorded for A")
+	}
+
+	// Back to A: A's held sweep resumes and runs.
+	if err := SaveIdentity(dataDir, Identity{UserID: testMember, OrgID: testOrg}); err != nil {
+		t.Fatal(err)
+	}
+	sA2 := unitScopedSyncer(t, m, srv, "", dataDir)
+	mustPullDown(t, sA2)
+	if _, ok := hasUnit(t, m, uA); ok {
+		t.Fatal("A's resumed sweep did not remove the unit A lost")
+	}
+	if _, ok := hasUnit(t, m, uC); !ok {
+		t.Fatal("re-served unit dropped")
+	}
+	if len(loadUnitSnapshotMarks(dataDir)) != 0 {
+		t.Fatalf("marks left: %+v", loadUnitSnapshotMarks(dataDir))
 	}
 }

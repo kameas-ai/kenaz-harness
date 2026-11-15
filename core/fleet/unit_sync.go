@@ -221,14 +221,8 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 		logging.L().Info("fleet.unit.pull.cursor_reset", "reason", "lane_kind_filter_changed")
 		s.cursor = pullCursor{}
 	}
-	// A reset's re-snapshot that a restart interrupted starts again from
-	// the beginning of the stream, sweep included.
-	if mark, ok := loadUnitSnapshotMark(dataDir); ok {
-		s.cursor = pullCursor{}
-		s.snapshotting, s.snapSweep, s.snapSeen = true, true, map[string]bool{}
-		s.lastResetReason = mark.Reason
-		s.snapAccount = snapshotAccount{UserID: mark.UserID, OrgID: mark.OrgID}
-	}
+	// A reset's re-snapshot that a restart interrupted resumes from the
+	// start of the stream once its account is signed in (resumeMarked).
 	return s
 }
 
@@ -569,6 +563,7 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
+	s.resumeMarked()
 	s.mu.RLock()
 	cursor := s.cursor
 	s.mu.RUnlock()
@@ -823,7 +818,9 @@ func (s *UnitSyncer) beginSnapshot(ctx context.Context, reason string, teamIDs [
 	if s.dataDir != "" {
 		removeUnitCursors(s.dataDir)
 		if reset {
-			if err := saveUnitSnapshotMark(s.dataDir, unitSnapshotMark{Reason: reason, UserID: self.UserID, OrgID: self.OrgID}); err != nil {
+			marks := loadUnitSnapshotMarks(s.dataDir)
+			marks[self.key()] = unitSnapshotMark{Reason: reason, UserID: self.UserID, OrgID: self.OrgID}
+			if err := saveUnitSnapshotMarks(s.dataDir, marks); err != nil {
 				logging.L().Warn("fleet.unit.snapshot_mark_failed", "err", err.Error())
 			}
 		}
@@ -846,6 +843,11 @@ func (s *UnitSyncer) beginSnapshot(ctx context.Context, reason string, teamIDs [
 
 // snapshotAccount names the account a reset re-snapshot belongs to.
 type snapshotAccount struct{ UserID, OrgID string }
+
+// key is the account's key in the mark file ("|" when unknown).
+func (a snapshotAccount) key() string {
+	return strings.ToLower(a.UserID) + "|" + strings.ToLower(a.OrgID)
+}
 
 // selfAccount is the signed-in identity ({} when unknown).
 func (s *UnitSyncer) selfAccount() snapshotAccount {
@@ -899,13 +901,54 @@ func (s *UnitSyncer) finishSnapshot(ctx context.Context) error {
 		}
 	}
 	s.mu.Lock()
+	done := s.snapAccount
 	s.snapshotting, s.snapSweep, s.snapSeen = false, false, nil
 	s.snapAccount = snapshotAccount{}
-	if s.dataDir != "" {
-		_ = os.Remove(unitSnapshotMarkPath(s.dataDir))
+	if sweep && s.dataDir != "" {
+		// Only this account's pending sweep is done; another account's
+		// mark stays for when it signs in again.
+		marks := loadUnitSnapshotMarks(s.dataDir)
+		delete(marks, done.key())
+		delete(marks, snapshotAccount{}.key())
+		if err := saveUnitSnapshotMarks(s.dataDir, marks); err != nil {
+			logging.L().Warn("fleet.unit.snapshot_mark_failed", "err", err.Error())
+		}
 	}
 	s.mu.Unlock()
 	return nil
+}
+
+// resumeMarked restarts, from the start of the stream, a reset
+// re-snapshot that a restart interrupted, once the account it belongs to
+// is signed in. A mark recorded with no account (identity unknown when the
+// reset came, or an unreadable file) is adopted by the first known one.
+// Other accounts' marks wait for them.
+func (s *UnitSyncer) resumeMarked() {
+	if s.dataDir == "" {
+		return
+	}
+	self := s.selfAccount()
+	if self.UserID == "" || self.OrgID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.snapshotting {
+		return
+	}
+	marks := loadUnitSnapshotMarks(s.dataDir)
+	m, ok := marks[self.key()]
+	if !ok {
+		m, ok = marks[snapshotAccount{}.key()]
+	}
+	if !ok {
+		return
+	}
+	s.cursor = pullCursor{}
+	s.snapshotting, s.snapSweep, s.snapSeen = true, true, map[string]bool{}
+	s.snapAccount = self
+	s.lastResetReason = m.Reason
+	logging.L().Info("fleet.unit.pull.reset_resumed", "reason", m.Reason)
 }
 
 // dropUnits removes every synced team / org unit whose node id matches,
@@ -978,15 +1021,17 @@ const (
 )
 
 // dropVerdictFor decides one unit when the member loses access to its node
-// (a reset, its sweep, a withdrawn tombstone). The member's data wins:
+// (a reset, its sweep, a withdrawn tombstone). In order:
 //
-//   - recorded for another account signed in on this profile → keep;
-//   - the member's own (index author == self) → demote;
-//   - no author on record (missing or corrupt index, a unit synced before
-//     the index existed, a withdrawn row, which never names one) → demote;
-//   - carrying un-pushed local edits → demote;
-//   - only a teammate's unit, recorded for this account, with no local
-//     edits, is deleted.
+//  1. recorded for another account signed in on this profile → keep;
+//  2. the member's own (index author == self) → demote to personal;
+//  3. carrying un-pushed local edits → demote;
+//  4. created on this device (its local id is not its node id: a local
+//     unit's ULID never equals the UUID it is pushed under, while a pulled
+//     unit takes the node's id) → demote;
+//  5. otherwise — it arrived by pull, has no local edits, and its author
+//     is someone else or unknown (a pre-index unit, a withdrawn row) →
+//     delete. Access was revoked; keeping it would leak the content.
 //
 // The caller has already held when the identity is unknown.
 func dropVerdictFor(local units.Unit, st units.SyncState, idx *unitIndex, self string) dropVerdict {
@@ -994,10 +1039,13 @@ func dropVerdictFor(local units.Unit, st units.SyncState, idx *unitIndex, self s
 	if l.PulledBy != "" && !strings.EqualFold(l.PulledBy, self) {
 		return dropKeep
 	}
-	if l.OwnerUserID == "" || strings.EqualFold(l.OwnerUserID, self) {
+	if l.OwnerUserID != "" && strings.EqualFold(l.OwnerUserID, self) {
 		return dropDemote
 	}
 	if local.Version > st.SyncedLocalVersion {
+		return dropDemote
+	}
+	if !strings.EqualFold(local.ID, st.NodeID) {
 		return dropDemote
 	}
 	return dropDelete
@@ -1881,51 +1929,78 @@ func removeUnitCursors(dataDir string) {
 	_ = os.Remove(unitCursorV2Path(dataDir))
 }
 
-// unitSnapshotMark records a reset re-snapshot in progress: its reason and
-// the account it belongs to (a restart into another account never sweeps).
+// unitSnapshotMark records a reset re-snapshot in progress for one
+// account: its reason and the account. unit_resnapshot.json holds one per
+// account (several can sign in on a profile), so one account's reset never
+// overwrites another's held sweep.
 type unitSnapshotMark struct {
 	Reason string `json:"reason"`
 	UserID string `json:"user_id,omitempty"`
 	OrgID  string `json:"org_id,omitempty"`
 }
 
+type unitSnapshotMarksFile struct {
+	Version  int                         `json:"version"`
+	Accounts map[string]unitSnapshotMark `json:"accounts"`
+}
+
 func unitSnapshotMarkPath(dataDir string) string {
 	return filepath.Join(dataDir, "fleet", "unit_resnapshot.json")
 }
 
-func saveUnitSnapshotMark(dataDir string, m unitSnapshotMark) error {
+func saveUnitSnapshotMarks(dataDir string, marks map[string]unitSnapshotMark) error {
 	if dataDir == "" {
+		return nil
+	}
+	if len(marks) == 0 {
+		if err := os.Remove(unitSnapshotMarkPath(dataDir)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
 		return err
 	}
-	if m.Reason == "" {
-		m.Reason = "reset"
+	for k, m := range marks {
+		if m.Reason == "" {
+			m.Reason = "reset"
+			marks[k] = m
+		}
 	}
-	b, err := json.Marshal(m)
+	b, err := json.Marshal(unitSnapshotMarksFile{Version: 2, Accounts: marks})
 	if err != nil {
 		return err
 	}
 	return atomicWriteFile(unitSnapshotMarkPath(dataDir), string(b))
 }
 
-// loadUnitSnapshotMark returns the mark; an unreadable one still means a
-// snapshot was in progress, with its account unknown (adopted by the first
-// known identity).
-func loadUnitSnapshotMark(dataDir string) (unitSnapshotMark, bool) {
+// loadUnitSnapshotMarks returns the pending marks by account key. An
+// unreadable file still means a snapshot was in progress, for an unknown
+// account (adopted by the first known identity); a single mark (the shape
+// before per-account marks) is read as that account's.
+func loadUnitSnapshotMarks(dataDir string) map[string]unitSnapshotMark {
+	out := map[string]unitSnapshotMark{}
 	if dataDir == "" {
-		return unitSnapshotMark{}, false
+		return out
 	}
 	b, err := os.ReadFile(unitSnapshotMarkPath(dataDir))
 	if err != nil {
-		return unitSnapshotMark{}, false
+		return out
 	}
-	var m unitSnapshotMark
-	if json.Unmarshal(b, &m) != nil || m.Reason == "" {
-		m = unitSnapshotMark{Reason: "reset"}
+	var f unitSnapshotMarksFile
+	if json.Unmarshal(b, &f) == nil && f.Accounts != nil {
+		for k, m := range f.Accounts {
+			out[k] = m
+		}
+		return out
 	}
-	return m, true
+	var one unitSnapshotMark
+	if json.Unmarshal(b, &one) == nil && one.Reason != "" {
+		out[snapshotAccount{UserID: one.UserID, OrgID: one.OrgID}.key()] = one
+		return out
+	}
+	out[snapshotAccount{}.key()] = unitSnapshotMark{Reason: "reset"}
+	return out
 }
 
 // unitLaneSig identifies the Unit lane's pull filter.
