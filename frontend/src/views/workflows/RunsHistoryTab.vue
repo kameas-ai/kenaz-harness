@@ -131,7 +131,7 @@ function fmtAbsolute(iso: string): string {
     <!-- ── Execution history section ─────────────────────────────── -->
     <section class="mb-8" data-testid="runs-history-section">
       <h3
-        class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3"
+        class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-3"
         data-testid="runs-history-heading"
       >
         Execution History
@@ -193,7 +193,7 @@ function fmtAbsolute(iso: string): string {
                   {{ startedAgo(run.startedAt) }}
                 </span>
                 <span
-                  class="rounded-sm px-1.5 py-0.5 font-ui text-[11px] uppercase tracking-[0.14em]"
+                  class="rounded-sm px-1.5 py-0.5 font-ui text-caption uppercase tracking-eyebrow"
                   :class="statusPillClass(run.status)"
                   :data-testid="`runs-history-pill-${run.runId}`"
                 >
@@ -246,7 +246,7 @@ function fmtAbsolute(iso: string): string {
                     <span class="font-ui text-xs text-ink-muted">({{ step.kind }})</span>
                   </span>
                   <span
-                    class="font-ui text-xs uppercase tracking-[0.14em]"
+                    class="font-ui text-xs uppercase tracking-eyebrow"
                     :class="stepStatusClass(step.status)"
                     :data-testid="`runs-history-step-status-${run.runId}-${step.name}`"
                   >
@@ -264,7 +264,7 @@ function fmtAbsolute(iso: string): string {
                 <!-- Timing -->
                 <div
                   v-if="step.startedAt"
-                  class="mt-0.5 font-ui text-[10px] text-ink-dim"
+                  class="mt-0.5 font-ui text-eyebrow text-ink-dim"
                 >
                   {{ startedAgo(step.startedAt) }}
                   <span v-if="step.finishedAt">
@@ -281,7 +281,7 @@ function fmtAbsolute(iso: string): string {
     <!-- ── Scheduled subsection (FR-003) ─────────────────────────── -->
     <section data-testid="runs-scheduled-section">
       <h3
-        class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3"
+        class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-3"
         data-testid="runs-scheduled-heading"
       >
         Scheduled

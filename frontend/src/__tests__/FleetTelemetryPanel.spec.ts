@@ -216,4 +216,52 @@ describe('FleetTelemetryPanel — status line explains why nothing is reporting'
     expect(w.find('[data-testid="telemetry-status"]').exists()).toBe(false);
     expect(w.find('[data-testid="fleet-telemetry-panel"]').exists()).toBe(true);
   });
+
+  // kenaz-fleet spec 017 T23, contract-harness-sync §17.2: the Agent Telemetry
+  // notice, once Fleet serves one, is shown verbatim and its edition rides the
+  // tier change. While nothing is registered there is no notice and no edition.
+  it('shows no notice and sends no edition while nothing is registered', async () => {
+    const setFn = vi.fn().mockResolvedValue(undefined);
+    const w = await mountPanel(makeClient({ setTelemetryConsent: setFn }));
+    expect(w.find('[data-testid="telemetry-notice"]').exists()).toBe(false);
+    await w.find('input[value="aggregate"]').trigger('change');
+    expect(setFn).toHaveBeenCalledWith('aggregate');
+  });
+
+  it('shows a served notice verbatim and sends its edition with the change', async () => {
+    const text = 'Usage notice.\n\n  Second paragraph, as registered.';
+    const setFn = vi.fn().mockResolvedValue(undefined);
+    const w = await mountPanel(
+      makeClient({
+        setTelemetryConsent: setFn,
+        memberNotices: async () => ({
+          notices: [
+            {
+              family: 'agent-telemetry',
+              edition: 'agent-telemetry/v4',
+              text,
+              textHash: 'a'.repeat(64),
+              action: '',
+              rowEdition: '',
+              acked: false,
+              actedAt: '',
+              ackedSince: '',
+            },
+          ],
+        }),
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(w.find('[data-testid="telemetry-notice-text"]').element.textContent).toBe(text);
+    await w.find('input[value="none"]').trigger('change');
+    expect(setFn).toHaveBeenCalledWith('none', 'agent-telemetry/v4');
+  });
+
+  it('hides the notice when the notices read is unavailable (served mode)', async () => {
+    const w = await mountPanel(
+      makeClient({ memberNotices: async () => { throw new Error('not available in served mode'); } }),
+    );
+    expect(w.find('[data-testid="telemetry-notice"]').exists()).toBe(false);
+    expect(w.find('[data-testid="fleet-telemetry-panel"]').exists()).toBe(true);
+  });
 });

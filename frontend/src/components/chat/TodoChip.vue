@@ -62,7 +62,7 @@ function onClick() {
 <template>
   <button
     type="button"
-    class="inline-flex items-center gap-1.5 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2 hover:text-ink transition-fast"
+    class="inline-flex items-center gap-1.5 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink-muted hover:bg-surface-2 hover:text-ink transition-fast"
     data-testid="todo-chip"
     :aria-label="`Open task list — ${summaryLabel}`"
     @click="onClick"

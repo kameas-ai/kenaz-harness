@@ -16,7 +16,7 @@
  * it's never used directly in templates.
  */
 import { onMounted, ref } from 'vue';
-import { File as FileIcon } from 'lucide-vue-next';
+import { FileText as FileIcon } from '@/shell/icons';
 
 const props = defineProps<{
   path: string;

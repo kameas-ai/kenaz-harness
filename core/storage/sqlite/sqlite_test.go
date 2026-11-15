@@ -318,8 +318,12 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// schedule) one more, hence 72. If another branch also bumped this
 	// pin, the composed value is the SUM of the bumps.
 	// sessions/0349-scheduled-chat-context-budget one more, hence 73.
-	if count != 73 {
-		t.Errorf("ledger count = %d, want 73", count)
+	// units/1106-sync-state-server-load-policy (team-context-in-prompt:
+	// the load_policy Fleet holds, which alone makes a shared unit eager)
+	// one more, hence 74. If another branch also bumped this pin, the
+	// composed value is the SUM of the bumps.
+	if count != 74 {
+		t.Errorf("ledger count = %d, want 74", count)
 	}
 }
 

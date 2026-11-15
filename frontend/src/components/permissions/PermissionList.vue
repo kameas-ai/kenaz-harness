@@ -11,6 +11,7 @@
  *   - family — resource family filter; empty = all families.
  */
 
+import { PERMISSION_FAMILY_ICONS } from '@/shell/icons';
 import { onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { PermissionGrant, PermissionFamily } from '@/lib/types';
@@ -28,13 +29,6 @@ const loading = ref(false);
 const error = ref<string | null>(null);
 const revoking = ref<Set<string>>(new Set());
 
-const FAMILY_ICONS: Record<string, string> = {
-  bash: '⚡',
-  fs: '📁',
-  credential: '🔑',
-  cred: '🔑',
-  tool: '🔧',
-};
 
 /**
  * Derive a human-readable resource label for a grant. For transient
@@ -117,14 +111,14 @@ defineExpose({ refresh, grants });
   <div data-testid="permission-list">
     <div
       v-if="loading"
-      class="font-ui text-[12px] text-ink-muted"
+      class="font-ui text-small text-ink-muted"
       data-testid="permission-list-loading"
     >
       Loading…
     </div>
     <div
       v-else-if="error"
-      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="permission-list-error"
     >
@@ -132,7 +126,7 @@ defineExpose({ refresh, grants });
     </div>
     <p
       v-else-if="grants.length === 0"
-      class="font-ui text-[12px] text-ink-muted"
+      class="font-ui text-small text-ink-muted"
       data-testid="permission-list-empty"
     >
       No saved grants yet. "Allow always" decisions will appear here.
@@ -150,15 +144,20 @@ defineExpose({ refresh, grants });
       >
         <div class="flex items-center gap-2 min-w-0">
           <span
-            class="shrink-0 inline-flex items-center justify-center rounded-sm border border-border-muted bg-surface-2 px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-subtle"
+            class="shrink-0 inline-flex items-center justify-center rounded-sm border border-border-muted bg-surface-2 px-1.5 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
             :title="grant.family"
           >
-            {{ FAMILY_ICONS[grant.family] ?? '🔒' }}
+            <component
+              :is="PERMISSION_FAMILY_ICONS[grant.family] ?? PERMISSION_FAMILY_ICONS.lock"
+              :size="10"
+              class="inline-block mr-1"
+              aria-hidden="true"
+            />
             {{ grant.family }}
           </span>
           <div class="min-w-0 flex-1">
             <div
-              class="font-mono text-[12px] text-ink truncate"
+              class="font-mono text-small text-ink truncate"
               :title="grantLabel(grant)"
               :data-testid="`permission-list-row-label-${grant.id}`"
             >
@@ -166,7 +165,7 @@ defineExpose({ refresh, grants });
             </div>
             <div
               v-if="grantSecondaryLabel(grant)"
-              class="font-mono text-[10px] text-ink-subtle truncate"
+              class="font-mono text-eyebrow text-ink-subtle truncate"
               :title="grantSecondaryLabel(grant)"
             >
               {{ grantSecondaryLabel(grant) }}
@@ -175,7 +174,7 @@ defineExpose({ refresh, grants });
         </div>
         <button
           type="button"
-          class="shrink-0 rounded-sm border border-signal-danger px-2 py-1 font-ui text-[11px] uppercase tracking-[0.14em] text-signal-danger hover:bg-signal-danger hover:text-white disabled:opacity-50 transition-colors"
+          class="shrink-0 rounded-sm border border-signal-danger px-2 py-1 font-ui text-caption uppercase tracking-eyebrow text-signal-danger hover:bg-signal-danger hover:text-white disabled:opacity-50 transition-colors"
           :disabled="revoking.has(grant.id)"
           :data-testid="`permission-revoke-${grant.id}`"
           @click="revoke(grant.id)"

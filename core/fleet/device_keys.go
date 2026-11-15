@@ -85,6 +85,11 @@ type KeyRegistration struct {
 type keyRegState struct {
 	mu   sync.Mutex
 	last KeyRegistration
+	// refusedFor is the account (access-token sub) a reauth_refused
+	// outcome belongs to; it means nothing for any other account.
+	refusedFor string
+	// loadOnce reads the persisted refusal (device_keys_refused.go) once.
+	loadOnce sync.Once
 }
 
 func (s *keyRegState) set(r KeyRegistration) {
@@ -92,6 +97,7 @@ func (s *keyRegState) set(r KeyRegistration) {
 	defer s.mu.Unlock()
 	r.At = time.Now().UTC()
 	s.last = r
+	s.refusedFor = ""
 }
 
 func (s *keyRegState) get() KeyRegistration {
@@ -106,7 +112,19 @@ func (c *Client) KeyRegistration() KeyRegistration {
 	if c == nil {
 		return KeyRegistration{}
 	}
-	return c.keyReg.get()
+	c.loadPersistedRefusal()
+	kr := c.keyReg.get()
+	if kr.Status == KeyRegReauthRefused {
+		c.keyReg.mu.Lock()
+		owner := c.keyReg.refusedFor
+		c.keyReg.mu.Unlock()
+		if cur := currentSubject(); owner != "" && cur != owner {
+			// Refused for another account (signed in as someone else
+			// since): unknown until this account's next enroll.
+			return KeyRegistration{}
+		}
+	}
+	return kr
 }
 
 // ErrNodeRemoved is returned by enroll and PUT keys when fleet answers 403
@@ -222,15 +240,18 @@ func isNodeRemoved(status int, body []byte) bool {
 // RegisterDeviceKeys re-registers this device's keys for nodeID via
 // PUT /api/v1/me/nodes/{node_id}/keys — rotation without a full enroll.
 // Called after a recovery-code seed import (the derived handoff key
-// changed). Returns ErrNodeRemoved on 403 node_removed and
-// ErrDeviceKeysRejected (wrapped, with human copy) on 400/409.
+// changed). Returns ErrNodeRemoved on 403 node_removed,
+// ErrDeviceKeysRejected (wrapped, with human copy) on 400/409, and
+// ErrKeysReauthRequired on 403 reauth_required (a replacement without a
+// fresh sign-in; see device_keys_stepup.go). A held step-up token is sent in
+// X-Kenaz-Step-Up-Token.
 func (c *Client) RegisterDeviceKeys(ctx context.Context, nodeID string) error {
 	if c == nil || c.isNop {
 		return ErrFleetDisabled
 	}
 	km, kerr := c.localDeviceKeys(nodeID)
 	if km.body.empty() {
-		c.keyReg.set(KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy})
+		c.setKeyReg(KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy})
 		if kerr == nil {
 			kerr = ErrHandoffIdentityUnavailable
 		}
@@ -240,7 +261,16 @@ func (c *Client) RegisterDeviceKeys(ctx context.Context, nodeID string) error {
 	if err != nil {
 		return fmt.Errorf("fleet: put device keys: marshal: %w", err)
 	}
-	resp, err := c.Put(ctx, "/api/v1/me/nodes/"+url.PathEscape(nodeID)+"/keys", bytes.NewReader(data))
+	// A held step-up token (fresh max_age=0 sign-in) proves the recent
+	// interactive sign-in Fleet requires to REPLACE an active key. It is
+	// sent whenever held; Fleet only checks it when the call replaces.
+	var hdr http.Header
+	stepUp := c.heldStepUpToken()
+	if stepUp != "" {
+		hdr = http.Header{}
+		hdr.Set(StepUpHeader, stepUp)
+	}
+	resp, err := c.doWithHeaders(ctx, http.MethodPut, "/api/v1/me/nodes/"+url.PathEscape(nodeID)+"/keys", hdr, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("fleet: put device keys: %w", err)
 	}
@@ -252,15 +282,26 @@ func (c *Client) RegisterDeviceKeys(ctx context.Context, nodeID string) error {
 		if kerr != nil {
 			reg = KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy, SigningFingerprint: km.signingFingerprint}
 		}
-		c.keyReg.set(reg)
+		c.setKeyReg(reg)
 		logging.L().Info("fleet.device_keys.registered", "via", "put", "handoff", km.body.HandoffPublicKey != "")
 		return nil
 	case isNodeRemoved(resp.StatusCode, body):
-		c.keyReg.set(KeyRegistration{Status: "", Message: keyRegNodeGoneCopy})
+		c.setKeyReg(KeyRegistration{Status: "", Message: keyRegNodeGoneCopy})
 		return ErrNodeRemoved
+	case isReauthRequired(resp.StatusCode, body):
+		// Replacing an active key needs a fresh sign-in (ER-40). Nothing
+		// was written; the previous key stays active. A token that was
+		// sent and still refused is useless: drop it so nothing retries
+		// with it. Never refresh-and-retry (a 403, not a 401).
+		if stepUp != "" {
+			c.ClearStepUpToken()
+		}
+		c.setReauthRequired(stepUp != "")
+		logging.L().Warn("fleet.device_keys.reauth_required", "via", "put", "step_up_sent", stepUp != "")
+		return errReauth(stepUp != "")
 	}
 	if st, ok := keyRejection(resp.StatusCode, body); ok {
-		c.keyReg.set(KeyRegistration{Status: st, Message: keyRegCopy(st)})
+		c.setKeyReg(KeyRegistration{Status: st, Message: keyRegCopy(st)})
 		return fmt.Errorf("%w: %s", ErrDeviceKeysRejected, keyRegCopy(st))
 	}
 	if env, ok := parseFleetError(body); ok {

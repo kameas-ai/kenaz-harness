@@ -195,7 +195,7 @@ function onDragEnd(evt: DragEvent) {
         </div>
       </div>
       <span
-        class="shrink-0 rounded-sm border border-border-muted bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-muted"
+        class="shrink-0 rounded-sm border border-border-muted bg-surface-2 px-1.5 py-0.5 font-mono text-eyebrow uppercase tracking-eyebrow text-ink-muted"
         :data-testid="`attachment-scope-${attachment.id}`"
       >
         {{ scopeBadge.glyph }}/{{ scopeBadge.label }}
@@ -204,7 +204,7 @@ function onDragEnd(evt: DragEvent) {
         <button
           v-if="isLibrary"
           type="button"
-          class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-[11px] text-ink-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
+          class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-caption text-ink-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
           :disabled="refreshing"
           :data-testid="`attachment-refresh-${attachment.id}`"
           @click="onRefresh"
@@ -213,7 +213,7 @@ function onDragEnd(evt: DragEvent) {
         </button>
         <button
           type="button"
-          class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-[11px] text-ink-muted hover:bg-surface-2 hover:text-signal-danger disabled:opacity-50"
+          class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-caption text-ink-muted hover:bg-surface-2 hover:text-signal-danger disabled:opacity-50"
           :disabled="removing"
           :aria-label="`Remove attachment`"
           :data-testid="`attachment-remove-${attachment.id}`"
@@ -225,17 +225,17 @@ function onDragEnd(evt: DragEvent) {
     </div>
     <div
       v-if="sourceMissing"
-      class="mt-2 flex items-start gap-1.5 rounded-sm border border-signal-warn bg-surface-1 px-2 py-1.5 text-[11px] text-signal-warn"
+      class="mt-2 flex items-start gap-1.5 rounded-sm border border-signal-warn bg-surface-1 px-2 py-1.5 text-caption text-signal-warn"
       role="alert"
       :data-testid="`attachment-source-missing-${attachment.id}`"
     >
-      <AlertTriangle :size="12" class="mt-[1px] shrink-0" />
+      <AlertTriangle :size="12" class="inline-block mt-[1px] shrink-0" />
       <span class="flex-1">
         Source missing — the snapshot is preserved. Detach to remove.
       </span>
       <button
         type="button"
-        class="text-[11px] underline hover:text-ink"
+        class="text-caption underline hover:text-ink"
         :data-testid="`attachment-detach-${attachment.id}`"
         @click="onRemove"
       >
@@ -244,7 +244,7 @@ function onDragEnd(evt: DragEvent) {
     </div>
     <div
       v-else-if="errorMsg"
-      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 text-[11px] text-signal-danger"
+      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 text-caption text-signal-danger"
       role="alert"
       :data-testid="`attachment-error-${attachment.id}`"
     >

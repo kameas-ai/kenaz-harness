@@ -17,6 +17,7 @@
 import { nextTick, ref, computed } from 'vue';
 import { ChevronRight, FileText, Folder, Pencil, Trash2 } from '@/shell/icons';
 import type { ContextNode } from '@/lib/types';
+import { audienceLabel } from './audience';
 
 const props = defineProps<{
   node: ContextNode;
@@ -72,6 +73,8 @@ function onChildDelete(path: string) {
 }
 
 const isFolder = computed(() => props.node.kind === 'folder');
+/** Fleet's audience label for a pulled team/org entry (spec 018 FR-6), as served. */
+const audience = computed(() => audienceLabel(props.node));
 const isSelected = computed(
   () => props.selectedPath === props.node.path && props.node.kind === 'file',
 );
@@ -129,7 +132,7 @@ function onDeleteClick() {
         spellcheck="false"
         autocomplete="off"
         aria-label="Rename"
-        class="min-w-0 flex-1 rounded-sm border border-border-muted bg-surface-1 px-1.5 py-0.5 font-ui text-[12px] text-ink focus:border-accent focus:outline-none"
+        class="min-w-0 flex-1 rounded-sm border border-border-muted bg-surface-1 px-1.5 py-0.5 font-ui text-small text-ink focus:border-accent focus:outline-none"
         :data-testid="`context-rename-input-${node.path}`"
         @keydown.enter.prevent="confirmRename"
         @keydown.esc.prevent="cancelRename"
@@ -163,6 +166,12 @@ function onDeleteClick() {
           <FileText v-else :size="13" />
         </span>
         <span class="truncate">{{ node.name }}</span>
+        <span
+          v-if="audience"
+          class="shrink-0 rounded-sm border border-border-muted px-1 font-ui text-eyebrow text-ink-subtle"
+          :title="`Shared with: ${audience}`"
+          :data-testid="`context-audience-${node.path}`"
+        >{{ audience }}</span>
       </button>
       <span
         class="shrink-0 flex items-center gap-0.5 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100"

@@ -59,7 +59,7 @@ const isBranch = computed(() => !!props.session.parentSessionId);
       <!-- Session name button -->
       <button
         type="button"
-        class="flex flex-1 min-w-0 items-center gap-1 px-1.5 py-1 rounded-sm text-left transition-fast text-[12px] leading-[1.35]"
+        class="flex flex-1 min-w-0 items-center gap-1 px-1.5 py-1 rounded-sm text-left transition-fast text-small leading-[1.35]"
         :class="[
           isActive
             ? 'bg-surface-3 text-ink font-medium'

@@ -122,7 +122,7 @@ const imageSrc = computed<string>(() => {
   >
     <!-- Header bar -->
     <div
-      class="flex items-center gap-2 border-b border-border-muted px-4 py-2 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+      class="flex items-center gap-2 border-b border-border-muted px-4 py-2 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
     >
       <span>Preview</span>
       <span class="rounded-sm bg-surface-1 px-1.5 py-0.5 font-mono text-ink-muted">
@@ -149,7 +149,7 @@ const imageSrc = computed<string>(() => {
       <!-- code -->
       <pre
         v-else-if="kind === 'code'"
-        class="overflow-auto rounded-sm bg-surface-1 p-3 font-mono text-[12px] text-ink"
+        class="overflow-auto rounded-sm bg-surface-1 p-3 font-mono text-small text-ink"
         data-testid="preview-code"
       ><code>{{ content }}</code></pre>
 
@@ -167,7 +167,7 @@ const imageSrc = computed<string>(() => {
         />
         <div
           v-else
-          class="font-ui text-[12px] text-ink-subtle"
+          class="font-ui text-small text-ink-subtle"
         >
           Image unavailable (remote URLs blocked by CSP)
         </div>
@@ -176,7 +176,7 @@ const imageSrc = computed<string>(() => {
       <!-- diff -->
       <pre
         v-else-if="kind === 'diff'"
-        class="overflow-auto rounded-sm bg-surface-1 p-3 font-mono text-[12px]"
+        class="overflow-auto rounded-sm bg-surface-1 p-3 font-mono text-small"
         data-testid="preview-diff"
       ><div
           v-for="(line, i) in diffLines"
@@ -197,7 +197,7 @@ const imageSrc = computed<string>(() => {
       >
         <table
           v-if="tableData"
-          class="w-full border-collapse font-ui text-[12px] text-ink"
+          class="w-full border-collapse font-ui text-small text-ink"
         >
           <thead>
             <tr class="border-b border-border-muted bg-surface-1">
@@ -228,7 +228,7 @@ const imageSrc = computed<string>(() => {
         </table>
         <div
           v-else
-          class="font-ui text-[12px] text-signal-warn"
+          class="font-ui text-small text-signal-warn"
         >
           Invalid table data — expected JSON array of arrays.
         </div>
@@ -237,7 +237,7 @@ const imageSrc = computed<string>(() => {
       <!-- html -->
       <div
         v-else-if="kind === 'html'"
-        class="font-ui text-[13px] text-ink"
+        class="font-ui text-ui text-ink"
         data-testid="preview-html"
         v-html="sanitisedHtml"
       />
@@ -248,7 +248,7 @@ const imageSrc = computed<string>(() => {
         class="flex flex-col items-center justify-center gap-2 text-center"
         data-testid="preview-vue-component"
       >
-        <div class="font-ui text-[12px] text-ink-muted">
+        <div class="font-ui text-small text-ink-muted">
           Vue component preview is available in a future release.
         </div>
       </div>
@@ -256,7 +256,7 @@ const imageSrc = computed<string>(() => {
       <!-- plain (default / fallback) -->
       <pre
         v-else
-        class="overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] text-ink"
+        class="overflow-auto whitespace-pre-wrap break-words font-mono text-small text-ink"
         data-testid="preview-plain"
       >{{ content }}</pre>
     </div>

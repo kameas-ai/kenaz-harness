@@ -40,6 +40,7 @@ import {
   useFleetSession,
 } from '@/lib/fleetSession';
 import { isServedMode } from '@/lib/useServedMode';
+import FleetDeviceNameNotice from '@/components/fleet/FleetDeviceNameNotice.vue';
 import { hostInitials, useHostSession } from '@/lib/hostSession';
 
 const client = useHarnessClient();
@@ -227,13 +228,13 @@ async function handleSignOut() {
         <!-- Trigger glyph: avatar when signed-in, generic icon otherwise. -->
         <span
           v-if="isSignedIn"
-          class="grid h-5 w-5 place-items-center rounded-full bg-accent-dim font-ui text-[10px] font-semibold text-accent"
+          class="grid h-5 w-5 place-items-center rounded-full bg-accent-dim font-ui text-eyebrow font-semibold text-accent"
           aria-hidden="true"
           data-testid="user-menu-avatar"
         >{{ initials }}</span>
         <span
           v-else-if="hostIdentity"
-          class="grid h-5 w-5 place-items-center rounded-full bg-accent-dim font-ui text-[10px] font-semibold text-accent"
+          class="grid h-5 w-5 place-items-center rounded-full bg-accent-dim font-ui text-eyebrow font-semibold text-accent"
           aria-hidden="true"
           data-testid="user-menu-host-avatar"
         >{{ hostAvatar }}</span>
@@ -379,6 +380,7 @@ async function handleSignOut() {
         >
           {{ loading ? 'Opening browser…' : 'Sign in' }}
         </button>
+        <FleetDeviceNameNotice v-if="canSignIn" class="user-menu-sub px-3 pb-1" />
         <button
           v-if="isSignedIn"
           type="button"
@@ -403,7 +405,7 @@ async function handleSignOut() {
         <!-- Sign-out failure inline error (FR-003) -->
         <p
           v-if="signOutError"
-          class="px-2 pb-1 font-ui text-[10px] text-signal-danger"
+          class="px-2 pb-1 font-ui text-eyebrow text-signal-danger"
           role="alert"
           data-testid="sign-out-error"
         >
@@ -416,10 +418,10 @@ async function handleSignOut() {
 
 <style scoped>
 .env-badge {
-  font-size: 0.6rem;
+  font-size: var(--type-tag-size);
   font-weight: 700;
-  padding: 0.05rem 0.3rem;
-  border-radius: 0.2rem;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -446,24 +448,24 @@ async function handleSignOut() {
   border-radius: var(--radius-md);
   box-shadow: 0 6px 18px var(--modal-shadow);
   z-index: 60;
-  padding: 0.25rem;
+  padding: var(--space-4);
 }
 
 .user-menu-header {
-  padding: 0.5rem 0.6rem;
+  padding: var(--space-8) var(--space-10);
 }
 .user-menu-email {
   font-family: var(--font-ui);
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   color: var(--ink);
   font-weight: 500;
   word-break: break-all;
 }
 .user-menu-sub {
   font-family: var(--font-ui);
-  font-size: 0.7rem;
+  font-size: var(--type-caption-size);
   color: var(--ink-muted);
-  margin-top: 0.15rem;
+  margin-top: var(--space-2);
 }
 .user-menu-tier {
   color: var(--accent);
@@ -472,18 +474,18 @@ async function handleSignOut() {
 .user-menu-divider {
   height: 1px;
   background: var(--border);
-  margin: 0.25rem 0;
+  margin: var(--space-4) 0;
 }
 .user-menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: var(--space-8);
   width: 100%;
   text-align: left;
-  padding: 0.4rem 0.6rem;
+  padding: var(--space-6) var(--space-10);
   font-family: var(--font-ui);
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   color: var(--ink);
   background: transparent;
   border: none;
@@ -502,7 +504,7 @@ async function handleSignOut() {
   left: 18px;
   width: 7px;
   height: 7px;
-  border-radius: 9999px;
+  border-radius: var(--radius-pill);
   background: var(--warn);
   border: 1px solid var(--surface-1);
 }
@@ -510,10 +512,10 @@ async function handleSignOut() {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.25rem 0.6rem 0.4rem;
+  gap: var(--space-6);
+  padding: var(--space-4) var(--space-10) var(--space-6);
   font-family: var(--font-ui);
-  font-size: 0.7rem;
+  font-size: var(--type-caption-size);
   color: var(--warn);
 }
 .user-menu-link {

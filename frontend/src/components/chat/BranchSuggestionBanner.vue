@@ -17,6 +17,7 @@
  * echo on the existing chat broker channel — no new RPC layer.
  */
 
+import { GitBranch } from '@/shell/icons';
 import { ref } from 'vue';
 import type { BranchSuggestion, BranchAdvisorDismissScope } from '@/lib/types';
 
@@ -65,7 +66,7 @@ function toggleTooltip() {
     data-testid="branch-suggestion-banner"
   >
     <!-- Icon + label -->
-    <div class="flex-shrink-0 text-accent-strong" aria-hidden="true">⤳</div>
+    <GitBranch :size="14" class="flex-shrink-0 text-ink-muted" aria-hidden="true" />
 
     <div class="flex min-w-0 flex-1 flex-col gap-1">
       <div class="flex items-center gap-1">
@@ -76,7 +77,7 @@ function toggleTooltip() {
         <button
           v-if="suggestion.signals && suggestion.signals.length > 0"
           type="button"
-          class="font-ui text-[11px] text-ink-muted underline-offset-2 hover:underline"
+          class="font-ui text-caption text-ink-muted underline-offset-2 hover:underline"
           :aria-label="'What signals were detected?'"
           data-testid="branch-banner-rationale-trigger"
           @click="toggleTooltip"
@@ -88,7 +89,7 @@ function toggleTooltip() {
       <!-- Signals tooltip (FR-011) -->
       <div
         v-if="tooltipVisible && suggestion.signals && suggestion.signals.length > 0"
-        class="rounded border border-accent-hairline bg-surface-0 px-2 py-1 font-ui text-[11px] text-ink-subtle"
+        class="rounded border border-accent-hairline bg-surface-0 px-2 py-1 font-ui text-caption text-ink-subtle"
         data-testid="branch-banner-rationale"
       >
         {{ suggestion.rationale }}
@@ -98,7 +99,7 @@ function toggleTooltip() {
       <div class="flex flex-wrap gap-2">
         <button
           type="button"
-          class="rounded-md bg-accent-strong px-2.5 py-1 font-ui text-xs text-on-accent"
+          class="rounded-md bg-accent px-2.5 py-1 font-ui text-xs text-surface-0"
           data-testid="branch-banner-branch-off"
           @click="handleBranchOff"
         >

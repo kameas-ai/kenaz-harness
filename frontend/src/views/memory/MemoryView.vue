@@ -32,6 +32,8 @@
  *   - "N narratives unrecoverable" banner when narrativeFailedCount > 0,
  *     with a per-job "Retry" action and a "Retry all" affordance.
  */
+import type { Component } from 'vue';
+import { Brain, Globe, Folder, MessageSquare } from '@/shell/icons';
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
@@ -93,12 +95,12 @@ const chunkTextFilter = ref<string>('');
 const openMenuId = ref<string | null>(null);
 const promote = ref<PromoteState | null>(null);
 
-const filterPills: readonly { id: FilterPill; label: string; glyph: string }[] = [
-  { id: 'all', label: 'All', glyph: '∗' },
-  { id: 'long_term', label: 'Long-term', glyph: '🗄' },
-  { id: 'global', label: 'Global', glyph: '🌐' },
-  { id: 'project', label: 'Project', glyph: '📁' },
-  { id: 'session', label: 'Session', glyph: '💬' },
+const filterPills: readonly { id: FilterPill; label: string; glyph: Component | null }[] = [
+  { id: 'all', label: 'All', glyph: null },
+  { id: 'long_term', label: 'Long-term', glyph: Brain },
+  { id: 'global', label: 'Global', glyph: Globe },
+  { id: 'project', label: 'Project', glyph: Folder },
+  { id: 'session', label: 'Session', glyph: MessageSquare },
 ];
 
 // WP11: text-filtered chunks — filters by substring match on content text.
@@ -533,8 +535,8 @@ function kindLabel(kind: string | undefined): string {
 function kindClass(kind: string | undefined): string {
   switch (kind) {
     case 'narrative_synthesised': return 'text-accent border-accent';
-    case 'narrative_extractive': return 'text-signal-success border-signal-success';
-    case 'narrative_extractive_fallback': return 'text-signal-warning border-signal-warning';
+    case 'narrative_extractive': return 'text-signal-ok-text border-signal-ok';
+    case 'narrative_extractive_fallback': return 'text-signal-warn-text border-signal-warn';
     default: return 'text-ink-dim border-border-muted';
   }
 }
@@ -546,11 +548,11 @@ function shortLabel(chunk: MemoryChunk): string {
   return first.slice(0, 60) + '…';
 }
 
-function scopeGlyph(kind: MemoryScopeKind): string {
-  if (kind === 'long_term') return '🗄';
-  if (kind === 'global') return '🌐';
-  if (kind === 'project') return '📁';
-  return '💬';
+function scopeGlyph(kind: MemoryScopeKind): Component {
+  if (kind === 'long_term') return Brain;
+  if (kind === 'global') return Globe;
+  if (kind === 'project') return Folder;
+  return MessageSquare;
 }
 
 function scopeLabel(kind: MemoryScopeKind): string {
@@ -661,7 +663,7 @@ defineExpose({ refresh });
         role="tab"
         :aria-selected="activeMainTab === tab.id"
         :data-testid="`memory-main-tab-${tab.id}`"
-        class="px-4 py-2 font-ui text-[11px] uppercase tracking-[0.18em] border-b-2 -mb-px transition-colors"
+        class="px-4 py-2 font-ui text-caption uppercase tracking-eyebrow border-b-2 -mb-px transition-colors"
         :class="
           activeMainTab === tab.id
             ? 'border-accent text-accent'
@@ -687,7 +689,7 @@ defineExpose({ refresh });
     >
       <!-- Last retrieval section -->
       <section class="mb-6">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-2">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-2">
           Last turn retrieval
         </h2>
         <div class="mb-3 flex items-center gap-2">
@@ -696,13 +698,13 @@ defineExpose({ refresh });
             type="text"
             aria-label="Session ID for retrieval"
             placeholder="Session ID (leave empty for active session)"
-            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-3 py-1.5 font-mono text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
+            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-3 py-1.5 font-mono text-small text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
             data-testid="memory-retrieval-session-input"
             @keyup.enter="loadRetrieval"
           />
           <button
             type="button"
-            class="px-3 py-1.5 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2 disabled:opacity-50"
+            class="px-3 py-1.5 rounded-sm border border-border-muted font-ui text-caption uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2 disabled:opacity-50"
             :disabled="retrievalLoading"
             data-testid="memory-retrieval-load"
             @click="loadRetrieval"
@@ -712,7 +714,7 @@ defineExpose({ refresh });
         </div>
         <div
           v-if="retrievalError"
-          class="mb-2 rounded-sm border border-signal-danger px-3 py-2 font-ui text-[12px] text-signal-danger"
+          class="mb-2 rounded-sm border border-signal-danger px-3 py-2 font-ui text-small text-signal-danger"
           role="alert"
           data-testid="memory-retrieval-error"
         >
@@ -734,45 +736,45 @@ defineExpose({ refresh });
           v-else-if="retrievalReport && retrievalReport.query"
           data-testid="memory-retrieval-report"
         >
-          <div class="mb-2 font-ui text-[12px]">
+          <div class="mb-2 font-ui text-small">
             <span class="text-ink-dim">Query: </span>
             <span class="font-mono text-ink" data-testid="memory-retrieval-query">{{ retrievalReport.query }}</span>
           </div>
           <!-- Injected chunks -->
           <div class="mb-3">
-            <p class="font-ui text-[10px] uppercase tracking-[0.18em] text-signal-success mb-1">
+            <p class="font-ui text-eyebrow uppercase tracking-eyebrow text-signal-ok-text mb-1">
               Injected into context
             </p>
             <ul class="space-y-1" data-testid="memory-retrieval-injected">
               <li
                 v-for="r in retrievalReport.results.filter(r => r.injected)"
                 :key="r.chunk.id"
-                class="rounded-sm border-l-2 border-signal-success bg-surface-1 px-3 py-2"
+                class="rounded-sm border-l-2 border-signal-ok bg-surface-1 px-3 py-2"
                 :data-testid="`memory-retrieval-injected-${r.chunk.id}`"
               >
                 <div class="flex items-baseline gap-2 mb-1">
-                  <span class="font-mono text-[11px] font-bold text-signal-success">
+                  <span class="font-mono text-caption font-bold text-signal-ok-text">
                     {{ formatSimilarity(r.similarity) }}
                   </span>
                   <span
                     v-if="r.chunk.kind"
-                    class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim"
+                    class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim"
                   >
                     {{ r.chunk.kind }}
                   </span>
                   <span
                     v-if="r.chunk.pinned"
-                    class="font-ui text-[10px] uppercase tracking-[0.18em] text-accent"
+                    class="font-ui text-eyebrow uppercase tracking-eyebrow text-accent"
                     title="Pinned"
                   >★ pinned</span>
                 </div>
-                <p class="font-ui text-[12px] text-ink line-clamp-2">
+                <p class="font-ui text-small text-ink line-clamp-2">
                   {{ r.chunk.content }}
                 </p>
               </li>
               <li
                 v-if="retrievalReport.results.filter(r => r.injected).length === 0"
-                class="font-ui text-[12px] text-ink-dim"
+                class="font-ui text-small text-ink-dim"
               >
                 No chunks were injected.
               </li>
@@ -780,7 +782,7 @@ defineExpose({ refresh });
           </div>
           <!-- Below-threshold chunks -->
           <div>
-            <p class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim mb-1">
+            <p class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim mb-1">
               Below threshold (not injected, threshold {{ formatSimilarity(retrievalReport.threshold) }})
             </p>
             <ul class="space-y-1" data-testid="memory-retrieval-below">
@@ -791,23 +793,23 @@ defineExpose({ refresh });
                 :data-testid="`memory-retrieval-below-${r.chunk.id}`"
               >
                 <div class="flex items-baseline gap-2 mb-1">
-                  <span class="font-mono text-[11px] text-ink-dim">
+                  <span class="font-mono text-caption text-ink-dim">
                     {{ formatSimilarity(r.similarity) }}
                   </span>
                   <span
                     v-if="r.chunk.kind"
-                    class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim"
+                    class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim"
                   >
                     {{ r.chunk.kind }}
                   </span>
                 </div>
-                <p class="font-ui text-[12px] text-ink-dim line-clamp-1">
+                <p class="font-ui text-small text-ink-dim line-clamp-1">
                   {{ r.chunk.content }}
                 </p>
               </li>
               <li
                 v-if="retrievalReport.results.filter(r => !r.injected).length === 0"
-                class="font-ui text-[12px] text-ink-dim"
+                class="font-ui text-small text-ink-dim"
               >
                 All candidates were above the threshold.
               </li>
@@ -818,10 +820,10 @@ defineExpose({ refresh });
 
       <!-- Embedding probe section (§2.2) -->
       <section>
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-2">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-2">
           Embedding probe
         </h2>
-        <p class="font-ui text-[12px] text-ink-dim mb-3">
+        <p class="font-ui text-small text-ink-dim mb-3">
           Enter any text to see which memory chunks it would retrieve, ranked by cosine similarity. Useful for debugging "why didn't the model recall X?"
         </p>
         <div class="mb-3 flex items-center gap-2">
@@ -830,13 +832,13 @@ defineExpose({ refresh });
             type="text"
             aria-label="Memory probe query"
             placeholder="Enter probe query…"
-            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-3 py-1.5 font-mono text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
+            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-3 py-1.5 font-mono text-small text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
             data-testid="memory-probe-input"
             @keyup.enter="runProbe"
           />
           <button
             type="button"
-            class="px-3 py-1.5 rounded-sm border border-accent font-ui text-[11px] uppercase tracking-[0.18em] text-accent hover:bg-surface-2 disabled:opacity-50"
+            class="px-3 py-1.5 rounded-sm border border-accent font-ui text-caption uppercase tracking-eyebrow text-accent hover:bg-surface-2 disabled:opacity-50"
             :disabled="probeLoading || !probeQuery.trim()"
             data-testid="memory-probe-run"
             @click="runProbe"
@@ -846,7 +848,7 @@ defineExpose({ refresh });
         </div>
         <div
           v-if="probeError"
-          class="mb-2 rounded-sm border border-signal-danger px-3 py-2 font-ui text-[12px] text-signal-danger"
+          class="mb-2 rounded-sm border border-signal-danger px-3 py-2 font-ui text-small text-signal-danger"
           role="alert"
           data-testid="memory-probe-error"
         >
@@ -864,24 +866,24 @@ defineExpose({ refresh });
             :data-testid="`memory-probe-result-${r.chunk.id}`"
           >
             <div class="flex items-baseline gap-2 mb-1">
-              <span class="font-mono text-[11px] font-bold text-accent">
+              <span class="font-mono text-caption font-bold text-accent">
                 {{ formatSimilarity(r.similarity) }}
               </span>
               <span
                 v-if="r.chunk.kind"
-                class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim"
+                class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim"
               >
                 {{ r.chunk.kind }}
               </span>
             </div>
-            <p class="font-ui text-[12px] text-ink line-clamp-2">
+            <p class="font-ui text-small text-ink line-clamp-2">
               {{ r.chunk.content }}
             </p>
           </li>
         </ul>
         <div
           v-else-if="!probeLoading && probeQuery.trim() && probeResults.length === 0"
-          class="font-ui text-[12px] text-ink-dim"
+          class="font-ui text-small text-ink-dim"
           data-testid="memory-probe-no-results"
         >
           No matching chunks found. Try a different query or check that embeddings are configured.
@@ -899,7 +901,7 @@ defineExpose({ refresh });
           aria-label="Filter memories by text"
           spellcheck="false"
           autocomplete="off"
-          class="w-full rounded-sm border border-border-muted bg-surface-1 px-3 py-1.5 font-ui text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
+          class="w-full rounded-sm border border-border-muted bg-surface-1 px-3 py-1.5 font-ui text-small text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
           data-testid="memory-text-filter"
         />
       </div>
@@ -918,7 +920,7 @@ defineExpose({ refresh });
           role="tab"
           :aria-selected="activeFilter === pill.id"
           :data-testid="`memory-scope-pill-${pill.id}`"
-          class="px-3 py-1 rounded-sm border text-[11px] uppercase tracking-[0.18em] font-ui"
+          class="px-3 py-1 rounded-sm border text-caption uppercase tracking-eyebrow font-ui"
           :class="
             activeFilter === pill.id
               ? 'border-accent text-accent bg-surface-2'
@@ -926,7 +928,7 @@ defineExpose({ refresh });
           "
           @click="setFilter(pill.id)"
         >
-          <span class="mr-1" aria-hidden="true">{{ pill.glyph }}</span>
+          <component :is="pill.glyph" v-if="pill.glyph" :size="12" class="mr-1 inline-block align-[-2px]" aria-hidden="true" />
           {{ pill.label }}
         </button>
       </div>
@@ -938,7 +940,7 @@ defineExpose({ refresh });
       >
         <button
           type="button"
-          class="px-3 py-1 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2 disabled:opacity-50"
+          class="px-3 py-1 rounded-sm border border-border-muted font-ui text-caption uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2 disabled:opacity-50"
           :disabled="pruneRunning"
           data-testid="memory-prune-now"
           @click="openPrunePreview"
@@ -947,7 +949,7 @@ defineExpose({ refresh });
         </button>
         <span
           v-if="pruneLastResult"
-          class="font-mono text-[11px] text-ink-subtle"
+          class="font-mono text-caption text-ink-subtle"
           data-testid="memory-prune-result"
         >
           {{ pruneLastResult }}
@@ -957,18 +959,18 @@ defineExpose({ refresh });
       <!-- Narrative layer: "N narratives unrecoverable" banner (WP07) -->
       <div
         v-if="narrativeFailedCount > 0"
-        class="mb-3 rounded-md border border-signal-warning bg-surface-1 px-3 py-2 font-ui text-[12px]"
+        class="mb-3 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-small"
         role="alert"
         data-testid="memory-narrative-failed-banner"
       >
         <div class="flex items-center justify-between gap-2">
-          <span class="text-signal-warning">
+          <span class="text-signal-warn-text">
             {{ narrativeFailedCount }} narrative{{ narrativeFailedCount === 1 ? '' : 's' }} unrecoverable — synthesis exhausted all retries.
           </span>
           <div class="flex gap-2">
             <button
               type="button"
-              class="px-2 py-0.5 rounded-sm border border-signal-warning text-[10px] uppercase tracking-[0.18em] text-signal-warning hover:bg-surface-2"
+              class="px-2 py-0.5 rounded-sm border border-signal-warn text-eyebrow uppercase tracking-eyebrow text-signal-warn-text hover:bg-surface-2"
               data-testid="memory-narrative-banner-toggle"
               @click="openNarrativeBanner"
             >
@@ -976,7 +978,7 @@ defineExpose({ refresh });
             </button>
             <button
               type="button"
-              class="px-2 py-0.5 rounded-sm border border-signal-warning text-[10px] uppercase tracking-[0.18em] text-signal-warning hover:bg-surface-2"
+              class="px-2 py-0.5 rounded-sm border border-signal-warn text-eyebrow uppercase tracking-eyebrow text-signal-warn-text hover:bg-surface-2"
               data-testid="memory-narrative-retry-all"
               @click="retryAllNarrativeJobs"
             >
@@ -995,13 +997,13 @@ defineExpose({ refresh });
             :key="job.id"
             class="flex items-center justify-between gap-2 rounded-sm bg-surface-2 px-2 py-1"
           >
-            <span class="font-mono text-[10px] text-ink-dim truncate max-w-[16rem]" :title="job.lastError">
+            <span class="font-mono text-eyebrow text-ink-dim truncate max-w-[16rem]" :title="job.lastError">
               turn {{ job.turnId }} — {{ job.lastError || 'unknown error' }}
             </span>
             <button
               type="button"
               :disabled="narrativeRetrying === job.id"
-              class="px-2 py-0.5 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2 disabled:opacity-50"
+              class="px-2 py-0.5 rounded-sm border border-border-muted text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2 disabled:opacity-50"
               :data-testid="`memory-narrative-retry-${job.id}`"
               @click="retryNarrativeJob(job.id)"
             >
@@ -1013,7 +1015,7 @@ defineExpose({ refresh });
 
       <div
         v-if="error"
-        class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
       >
         {{ error }}
@@ -1021,7 +1023,7 @@ defineExpose({ refresh });
 
       <p
         v-if="linkedChunkMissing"
-        class="mb-3 rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+        class="mb-3 rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-small text-ink-muted"
         role="status"
         data-testid="memory-linked-chunk-missing"
       >
@@ -1031,7 +1033,7 @@ defineExpose({ refresh });
 
       <div
         v-if="loading"
-        class="font-ui text-[12px] text-ink-muted"
+        class="font-ui text-small text-ink-muted"
         role="status"
       >
         Loading memories…
@@ -1043,7 +1045,7 @@ defineExpose({ refresh });
         data-testid="memory-empty-state"
       >
         <p class="font-ui text-sm text-ink">
-          No memories saved yet. Hit the 📌 button on a message to start.
+          No memories saved yet. Use “Remember this message” on a message to start.
         </p>
       </div>
 
@@ -1068,16 +1070,16 @@ defineExpose({ refresh });
         >
           <div class="flex flex-wrap items-baseline gap-3">
             <span
-              class="font-ui text-[10px] uppercase tracking-[0.18em] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim"
+              class="font-ui text-eyebrow uppercase tracking-eyebrow px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim"
               :data-testid="`memory-scope-badge-${chunk.id}`"
             >
-              <span aria-hidden="true">{{ scopeGlyph(chunk.scopeKind) }}</span>
+              <component :is="scopeGlyph(chunk.scopeKind)" class="inline-block" :size="12" aria-hidden="true" />
               {{ scopeLabel(chunk.scopeKind) }}
             </span>
             <!-- Narrative kind badge (WP07) -->
             <span
               v-if="chunk.kind"
-              class="font-ui text-[10px] uppercase tracking-[0.18em] px-1.5 py-0.5 rounded-sm border"
+              class="font-ui text-eyebrow uppercase tracking-eyebrow px-1.5 py-0.5 rounded-sm border"
               :class="kindClass(chunk.kind)"
               :data-testid="`memory-kind-badge-${chunk.id}`"
             >
@@ -1085,24 +1087,24 @@ defineExpose({ refresh });
             </span>
             <span
               v-if="chunk.syncBlocked"
-              class="font-ui text-[10px] uppercase tracking-[0.18em] px-1.5 py-0.5 rounded-sm border text-signal-warn"
+              class="font-ui text-eyebrow uppercase tracking-eyebrow px-1.5 py-0.5 rounded-sm border text-signal-warn"
               :title="`Fleet refused to sync this memory (${chunk.syncBlocked}); it stays on this device only.`"
               :data-testid="`memory-sync-blocked-${chunk.id}`"
             >
               this device only
             </span>
-            <span class="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+            <span class="font-mono text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
               {{ formatTimestamp(chunk.createdAt) }}
             </span>
             <span
               v-if="chunk.sessionId"
-              class="font-mono text-[10px] text-ink-dim"
+              class="font-mono text-eyebrow text-ink-dim"
             >
               session {{ chunk.sessionId }}
             </span>
             <span
               v-if="chunk.sourceTurn"
-              class="font-mono text-[10px] text-ink-dim"
+              class="font-mono text-eyebrow text-ink-dim"
             >
               · {{ chunk.sourceTurn }}
             </span>
@@ -1110,7 +1112,7 @@ defineExpose({ refresh });
               <div class="relative">
                 <button
                   type="button"
-                  class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  class="px-2 py-1 rounded-sm border border-border-muted text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-accent hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   :disabled="promotionTargets(chunk).length === 0"
                   :data-testid="`memory-promote-${chunk.id}`"
                   :aria-haspopup="'menu'"
@@ -1130,18 +1132,18 @@ defineExpose({ refresh });
                     :key="target"
                     type="button"
                     role="menuitem"
-                    class="block w-full px-3 py-1.5 text-left font-ui text-[12px] text-ink hover:bg-surface-2 hover:text-accent"
+                    class="block w-full px-3 py-1.5 text-left font-ui text-small text-ink hover:bg-surface-2 hover:text-accent"
                     :data-testid="`memory-promote-${chunk.id}-${target}`"
                     @click="startPromote(chunk, target)"
                   >
-                    <span class="mr-2" aria-hidden="true">{{ scopeGlyph(target) }}</span>
+                    <component :is="scopeGlyph(target)" :size="12" class="mr-2 inline-block align-[-2px]" aria-hidden="true" />
                     Promote to {{ scopeLabel(target) }}
                   </button>
                 </div>
               </div>
               <button
                 type="button"
-                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2"
+                class="px-2 py-1 rounded-sm border border-border-muted text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-accent hover:bg-surface-2"
                 :data-testid="`memory-pin-${chunk.id}`"
                 @click="togglePin(chunk)"
               >
@@ -1151,7 +1153,7 @@ defineExpose({ refresh });
               <button
                 type="button"
                 :disabled="markingImportant === chunk.id"
-                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2 disabled:opacity-50"
+                class="px-2 py-1 rounded-sm border border-border-muted text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-accent hover:bg-surface-2 disabled:opacity-50"
                 :data-testid="`memory-mark-important-${chunk.id}`"
                 :title="'Boost this memory\'s promotion score'"
                 @click="toggleMarkImportant(chunk)"
@@ -1161,7 +1163,7 @@ defineExpose({ refresh });
               <!-- Provenance (WP08) -->
               <button
                 type="button"
-                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2"
+                class="px-2 py-1 rounded-sm border border-border-muted text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-accent hover:bg-surface-2"
                 :data-testid="`memory-provenance-${chunk.id}`"
                 :title="'View full audit chain for this chunk'"
                 @click="openProvenance(chunk.id)"
@@ -1172,7 +1174,7 @@ defineExpose({ refresh });
               <button
                 type="button"
                 :disabled="resummarizingId === chunk.id"
-                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2 disabled:opacity-50"
+                class="px-2 py-1 rounded-sm border border-border-muted text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-accent hover:bg-surface-2 disabled:opacity-50"
                 :data-testid="`memory-resummarize-${chunk.id}`"
                 :title="'Re-run narrative synthesis on this chunk'"
                 @click="resummarizeChunk(chunk)"
@@ -1182,7 +1184,7 @@ defineExpose({ refresh });
               <!-- Narrative metrics (WP17, C2V-11) -->
               <button
                 type="button"
-                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2"
+                class="px-2 py-1 rounded-sm border border-border-muted text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-accent hover:bg-surface-2"
                 :data-testid="`memory-metrics-${chunk.id}`"
                 :aria-expanded="metricsOpenId === chunk.id"
                 :title="'Show retrieval / citation / pin counters'"
@@ -1192,7 +1194,7 @@ defineExpose({ refresh });
               </button>
               <button
                 type="button"
-                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-signal-danger hover:bg-surface-2"
+                class="px-2 py-1 rounded-sm border border-border-muted text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-signal-danger hover:bg-surface-2"
                 :data-testid="`memory-forget-${chunk.id}`"
                 @click="forget(chunk.id)"
               >
@@ -1207,7 +1209,7 @@ defineExpose({ refresh });
                visible, not a silent no-op. -->
           <p
             v-if="resummarizeErrors[chunk.id]"
-            class="mt-1 font-ui text-[11px] text-signal-danger"
+            class="mt-1 font-ui text-caption text-signal-danger"
             role="alert"
             :data-testid="`memory-resummarize-error-${chunk.id}`"
           >
@@ -1221,14 +1223,14 @@ defineExpose({ refresh });
           >
             <p
               v-if="metricsLoadingId === chunk.id"
-              class="font-ui text-[11px] text-ink-muted"
+              class="font-ui text-caption text-ink-muted"
               role="status"
             >
               Loading metrics…
             </p>
             <p
               v-else-if="metricsErrors[chunk.id]"
-              class="font-ui text-[11px] text-signal-danger"
+              class="font-ui text-caption text-signal-danger"
               role="alert"
               :data-testid="`memory-metrics-error-${chunk.id}`"
             >
@@ -1236,7 +1238,7 @@ defineExpose({ refresh });
             </p>
             <dl
               v-else-if="openMetrics"
-              class="grid gap-x-3 gap-y-0.5 font-mono text-[11px] text-ink-muted"
+              class="grid gap-x-3 gap-y-0.5 font-mono text-caption text-ink-muted"
               style="grid-template-columns: 12ch 1fr"
               :data-testid="`memory-metrics-data-${chunk.id}`"
             >
@@ -1283,26 +1285,26 @@ defineExpose({ refresh });
       <div class="w-[28rem] max-w-[92vw] rounded-md border border-border-muted bg-surface-1 p-4 shadow-lg">
         <h3
           id="memory-promote-title"
-          class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle"
         >
           Promote scope
         </h3>
         <p class="mt-2 font-ui text-sm text-ink">
           Promote
-          <span class="font-mono text-[12px]">{{ shortLabel(promote.chunk) }}</span>
+          <span class="font-mono text-small">{{ shortLabel(promote.chunk) }}</span>
           from {{ scopeLabel(promote.chunk.scopeKind) }} to {{ scopeLabel(promote.target) }}?
           The original entry will be deleted and re-inserted at the new scope.
         </p>
         <p
           v-if="promote.error"
-          class="mt-2 font-ui text-[12px] text-signal-danger"
+          class="mt-2 font-ui text-small text-signal-danger"
           role="alert"
         >
           {{ promote.error }}
         </p>
         <p
           v-if="promote.resolving"
-          class="mt-2 font-ui text-[12px] text-ink-muted"
+          class="mt-2 font-ui text-small text-ink-muted"
           role="status"
         >
           Resolving target scope…
@@ -1310,7 +1312,7 @@ defineExpose({ refresh });
         <div class="mt-4 flex justify-end gap-2">
           <button
             type="button"
-            class="px-3 py-1 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            class="px-3 py-1 rounded-sm border border-border-muted font-ui text-caption uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
             data-testid="memory-promote-cancel"
             @click="cancelPromote"
           >
@@ -1318,7 +1320,7 @@ defineExpose({ refresh });
           </button>
           <button
             type="button"
-            class="px-3 py-1 rounded-sm border border-accent font-ui text-[11px] uppercase tracking-[0.18em] text-accent hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="px-3 py-1 rounded-sm border border-accent font-ui text-caption uppercase tracking-eyebrow text-accent hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="
               promote.resolving ||
               (promote.target === 'project' && promote.newScopeID === '')

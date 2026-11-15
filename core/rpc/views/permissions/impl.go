@@ -100,11 +100,26 @@ var ErrInvalidGrantID = errors.New("permissions: invalid grant id")
 //
 //   - ErrRegistryUnavailable when the registry is not wired.
 //   - cedar.ErrUnknownRequest when the request id has already resolved.
+//
+// decision may carry a grant scope after a colon —
+// "allow_always:directory" / "allow_always:directory_rw" — which is how
+// the filesystem modal's "This directory and below" radio reaches the
+// gate (E2E-1). The suffix rides the existing decision string so both
+// transports (the Wails binding and the served Permissions_Resolve
+// case) carry it without a signature change. A bare decision is the
+// exact scope; an unknown scope is rejected, never widened.
 func (a *API) Resolve(_ context.Context, requestID string, decision Decision) error {
 	if a == nil || a.registry == nil {
 		return ErrRegistryUnavailable
 	}
-	return a.registry.Resolve(requestID, decision)
+	d, scope := SplitScopedDecision(string(decision))
+	return a.registry.ResolveScoped(requestID, d, cedar.SourceGuest, scope)
+}
+
+// SplitScopedDecision splits "<decision>[:<scope>]" into its parts.
+func SplitScopedDecision(s string) (cedar.PromptDecision, cedar.GrantScope) {
+	d, scope, _ := strings.Cut(s, ":")
+	return cedar.PromptDecision(d), cedar.GrantScope(scope)
 }
 
 // ListPending implements PermissionsAPI.ListPending.

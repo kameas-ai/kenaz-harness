@@ -63,12 +63,12 @@ function onClick() {
 <template>
   <button
     type="button"
-    class="inline-flex items-center gap-1.5 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2 hover:text-ink transition-fast"
+    class="inline-flex items-center gap-1.5 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink-muted hover:bg-surface-2 hover:text-ink transition-fast"
     :data-testid="`artifact-chip-${artifact.id}`"
     :aria-label="`Open artifact ${titleLabel}`"
     @click="onClick"
   >
-    <component :is="sourceIcon" :size="12" class="text-accent" aria-hidden="true" />
+    <component :is="sourceIcon" :size="12" class="inline-block text-accent" aria-hidden="true" />
     <span class="font-mono truncate max-w-[28ch]">{{ titleLabel }}</span>
     <span class="text-ink-dim">·</span>
     <span class="font-mono text-ink-dim">{{ sizeLabel }}</span>

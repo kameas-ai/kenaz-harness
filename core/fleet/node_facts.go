@@ -7,8 +7,9 @@ package fleet
 //
 // Nothing here is a hardware or user identifier: arch and a short OS
 // version string, the client kind constant, and — only inside a workbench
-// VM — the ids the Kenaz host hands the guest at boot. No hostname is ever
-// collected (Fleet's `hostname` enroll field is left empty on purpose).
+// VM — the ids the Kenaz host hands the guest at boot. The device display
+// name (enroll `hostname`) is not a node fact: it is the member's setting,
+// resolved per enroll in device_name.go.
 
 import (
 	"os"

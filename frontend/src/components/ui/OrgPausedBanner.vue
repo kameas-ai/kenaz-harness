@@ -32,7 +32,7 @@ const line = computed(() => orgPausedCategoryLine(props.category ?? fleetPausedC
 <template>
   <div
     v-if="visible"
-    class="rounded-sm border border-signal-warn/40 bg-signal-warn/10 px-3 py-2 text-[12px] space-y-0.5"
+    class="rounded-sm border border-signal-warn/40 bg-signal-warn/10 px-3 py-2 text-small space-y-0.5"
     role="status"
     data-testid="org-paused-banner"
   >

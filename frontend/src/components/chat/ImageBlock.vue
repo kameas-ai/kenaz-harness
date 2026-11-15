@@ -73,7 +73,7 @@ function closeLightbox() {
     </button>
     <span
       v-if="dimensionTooltip"
-      class="block text-[10px] text-ink-dim text-center mt-0.5"
+      class="block text-eyebrow text-ink-dim text-center mt-0.5"
       data-testid="image-block-dims"
     >{{ dimensionTooltip }}</span>
     <ImageLightbox

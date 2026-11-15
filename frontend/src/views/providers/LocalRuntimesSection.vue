@@ -88,7 +88,7 @@ onMounted(() => {
     <div class="mb-3 flex items-center justify-between">
       <div>
         <span
-          class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle font-ui"
+          class="text-caption uppercase tracking-eyebrow text-ink-subtle font-ui"
         >
           Detected Local Runtimes
         </span>

@@ -168,7 +168,7 @@ onMounted(async () => {
       <!-- save error banner (from editor) -->
       <div
         v-if="saveError"
-        class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
         data-testid="hooks-settings-save-error"
       >

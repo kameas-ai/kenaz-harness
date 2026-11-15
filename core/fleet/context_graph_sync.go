@@ -42,6 +42,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -124,6 +125,11 @@ type contextNodeInput struct {
 	UnitScope  string `json:"unit_scope,omitempty"`
 	ScopeID    string `json:"scope_id,omitempty"`
 	LoadPolicy string `json:"load_policy,omitempty"`
+	// Audience / Governed are the explicit audience (spec 018 FR-7,
+	// contract §1b): "team" with team_id, or "org" (Governed for
+	// admin-governed org_shared content). Absent = classification only.
+	Audience string `json:"audience,omitempty"`
+	Governed *bool  `json:"governed,omitempty"`
 }
 
 // contextEdgeInput is the client-side push shape for a single edge.
@@ -166,9 +172,16 @@ type ContextPushResult struct {
 	// user or org. Absent on the current server = everything accepted.
 	// Distinct from Conflicts (your own stale version).
 	Rejected []ContextPushRejection `json:"rejected,omitempty"`
+	// Results restates the outcome of every pushed node, in request order
+	// (spec 018 FR-7, contract §1b). Absent on an older Fleet.
+	Results []ContextPushItemResult `json:"results,omitempty"`
 	// WireNodeID is the fleet node UUID the pushed entry was stored under
 	// (harness-side, never decoded from the response — `json:"-"`).
 	WireNodeID string `json:"-"`
+	// Item is the outcome for the pushed entry's own node: Fleet's
+	// results[] row, or one derived from accepted / conflicts / rejected
+	// on an older Fleet (harness-side, `json:"-"`).
+	Item ContextPushItemResult `json:"-"`
 }
 
 // ContextPulledNode is a single node from GET /api/v1/context/pull.
@@ -205,6 +218,17 @@ type ContextPulledNode struct {
 	UnitScope  string `json:"unit_scope,omitempty"`
 	ScopeID    string `json:"scope_id,omitempty"`
 	LoadPolicy string `json:"load_policy,omitempty"`
+	// Audience is who the node is for, as Fleet serves it: "team" or
+	// "org" ("org" covers governed org_shared content AND content shared to
+	// the org's default team). Governed is true only for admin-governed
+	// org_shared content (spec 018 FR-6). Empty on an older Fleet.
+	Audience string `json:"audience,omitempty"`
+	Governed bool   `json:"governed,omitempty"`
+	// Withdrawn marks a tombstone for a node that moved OUT of this
+	// stream's audience (contract §2 "Withdrawn nodes"). It is not a
+	// deletion: drop the working copy and forget its version, never push a
+	// tombstone for it. Served once, per stream.
+	Withdrawn bool `json:"withdrawn,omitempty"`
 }
 
 // ContextPulledEdge is a single edge from the pull response.
@@ -222,19 +246,38 @@ type ContextPulledEdge struct {
 	CreatedAt      string                `json:"created_at"`
 }
 
+// curatedFullPullPage is Fleet's default page size for GET
+// /api/v1/context/pull (the harness sends no limit). A page shorter than this
+// ends a full pull.
+const curatedFullPullPage = 1000
+
 // contextPullResponse is the body from GET /api/v1/context/pull.
 type contextPullResponse struct {
-	Nodes  []ContextPulledNode `json:"nodes"`
-	Edges  []ContextPulledEdge `json:"edges"`
+	Nodes []ContextPulledNode `json:"nodes"`
+	Edges []ContextPulledEdge `json:"edges"`
 	// Cursor is the updated_at of the last returned node (RFC3339Nano).
-	// Empty when no nodes were returned.
+	// Empty when no nodes were returned. Legacy: sent back as since=.
 	Cursor string `json:"cursor,omitempty"`
+	// NextCursor is Fleet's opaque cursor, bound to this filter set and
+	// member; sent back as cursor= (context_pull_stream.go).
+	NextCursor string `json:"next_cursor,omitempty"`
+	// AccessEpoch changes whenever the caller may have lost access. Only
+	// read on a legacy since-stream, where Fleet never sends Reset.
+	AccessEpoch *int64 `json:"access_epoch,omitempty"`
+	// Reset / ResetReason / ResetTeamIDs: the caller lost read access
+	// since the cursor was issued (contract §2 "Loss of access").
+	Reset        bool     `json:"reset,omitempty"`
+	ResetReason  string   `json:"reset_reason,omitempty"`
+	ResetTeamIDs []string `json:"reset_team_ids,omitempty"`
 }
 
 // contextPromoteRequest is the body for POST /api/v1/context/promote.
 type contextPromoteRequest struct {
 	NodeID           string `json:"node_id"`
 	ToClassification string `json:"to_classification"`
+	// ExpectedVersion makes the promote conditional (spec 018 FR-7a): a
+	// different stored version is 409 node_changed and nothing is promoted.
+	ExpectedVersion *int `json:"expected_version,omitempty"`
 }
 
 // ContextPromoteResult is the response from POST /api/v1/context/promote.
@@ -276,6 +319,11 @@ type ContextNodeEntry struct {
 	DeletedAt *string `json:"deleted_at,omitempty"`
 	// OwnerUserID is the fleet user who owns the node (pulled entries only).
 	OwnerUserID string `json:"owner_user_id,omitempty"`
+	// Audience / Governed are Fleet's labels for a pulled node (spec 018
+	// FR-6): "team" or "org"; Governed for admin-governed org content.
+	// Empty Audience = an older Fleet (fall back to Layer).
+	Audience string `json:"audience,omitempty"`
+	Governed bool   `json:"governed,omitempty"`
 }
 
 // ContextSyncStatus classifies the local sync state of an entry.
@@ -319,8 +367,45 @@ type ContextGraphSyncer struct {
 	pulled  []ContextNodeEntry
 	// pulledEdges is the in-memory cache of edges received from fleet.
 	pulledEdges []ContextEdgeEntry
-	// cursor is the RFC3339Nano timestamp for the next pull call.
-	cursor  string
+	// locations is where Fleet holds each pulled node (layer, team_id),
+	// persisted across restarts (context_pulled_locations.go).
+	locations map[string]PulledShareLocation
+	// locationsFor is the account the location rows belong to.
+	locationsFor string
+	// pulledFor is the account the pulled cache and cursor belong to; a
+	// different signed-in account restarts with a full pull.
+	pulledFor string
+	// selfUserID overrides the signed-in user id source (tests).
+	selfUserID func() string
+	// cursor is the position for the next pull call: Fleet's opaque
+	// next_cursor, or a legacy RFC3339Nano since (context_pull_stream.go).
+	// In memory only: each process starts with a full pull (see
+	// NewContextGraphSyncer).
+	cursor pullCursor
+	// snapshotting is true while a re-snapshot (after a reset or a refused
+	// cursor) is pulling every page within the call.
+	snapshotting bool
+	// accessEpoch is the last access_epoch seen (legacy since-stream only).
+	accessEpoch *int64
+	// resetCount / lastResetReason: resets handled (cumulative) and the
+	// latest reason. Never a team id.
+	resetCount      int
+	lastResetReason string
+	// withdrawnApplied counts withdrawn tombstones applied (cumulative).
+	withdrawnApplied int
+	// mergeDirty is set when the cache changed in a way the library merger
+	// must see (new nodes, tombstones, a reset's drops).
+	mergeDirty bool
+	// meTeams overrides the /api/v1/me teams source (tests); the default
+	// team answer is cached per account (DefaultTeamID).
+	meTeams        func(ctx context.Context) ([]MeTeam, error)
+	defaultTeam    string
+	defaultTeamAt  time.Time
+	defaultTeamFor string
+	// sweepSeen holds the node ids seen since the current full pull began
+	// (cursor ""); nil when no full pull is in progress. On the full pull's
+	// last page, location-index rows it did not see are dropped.
+	sweepSeen map[string]bool
 	// lastPullAt is the wall-clock time of the last successful pull.
 	lastPullAt time.Time
 	// lastPullErr is the last pull error string (empty on success).
@@ -381,10 +466,20 @@ func NewContextGraphSyncer(client *Client, dataDir string, caps *CapabilityPolle
 		caps:    caps,
 		ids:     NewWireIDs(dataDir),
 	}
-	// Restore cursor from disk.
-	if c, err := loadContextCursor(dataDir); err == nil {
-		s.cursor = c
+	// The pulled cache lives in memory only (teammates' bodies are never
+	// written to disk), so every process starts with a FULL pull that
+	// rebuilds it: no cursor is restored. Before this, the cursor was
+	// persisted while the cache was not, so after a restart pulled entries
+	// vanished until they changed on Fleet. Fleet pages the pull (1000
+	// nodes a page by default, tombstones included); one full Curated pull
+	// per launch is within its limits. A leftover cursor file is removed.
+	if dataDir != "" {
+		_ = os.Remove(contextCursorPath(dataDir))
 	}
+	// The location index (context_pulled_locations.go) is kept from the
+	// last run so share dialogs have Fleet's answer before the full pull
+	// ends; the full pull confirms or prunes it.
+	s.locationsFor, s.locations = loadPulledLocations(dataDir)
 	return s
 }
 
@@ -452,6 +547,33 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	if !ok {
 		return nil, fmt.Errorf("fleet: context push: unsupported layer %q", entry.Layer)
 	}
+	// An explicit audience (spec 018 H-3) decides the classification, so
+	// the two can never contradict each other (400 audience_mismatch):
+	// team → team_shared in team_id; org governed → org_shared, no team;
+	// org not governed → team_shared in the org's default team.
+	var governed *bool
+	switch entry.Audience {
+	case "":
+	case AudienceTeam:
+		if entry.TeamID == nil || *entry.TeamID == "" {
+			return nil, ErrAudienceTeamNeedsTeam
+		}
+		classification = ClassTeamShared
+	case AudienceOrg:
+		g := entry.Governed
+		governed = &g
+		if g {
+			classification = ClassOrgShared
+			entry.TeamID = nil
+		} else {
+			classification = ClassTeamShared
+		}
+	default:
+		return nil, fmt.Errorf("fleet: context push: unsupported audience %q", entry.Audience)
+	}
+	if layer, ok := LayerForClassification(classification); ok {
+		entry.Layer = layer
+	}
 
 	// Capability gate.
 	switch classification {
@@ -498,6 +620,8 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		TeamID:         entry.TeamID,
 		Version:        entry.Version,
 		UnitKind:       curatedUnitKind,
+		Audience:       entry.Audience,
+		Governed:       governed,
 	}
 
 	// Build edges slice (two-phase: nodes first, then edges — FR-003).
@@ -532,6 +656,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		"node_id", wireID,
 		"classification", string(classification),
 		"team_id_present", entry.TeamID != nil,
+		"audience", entry.Audience,
 		"title_len", len(entry.Title),
 		"body_len", len(entry.Body),
 		"edge_count", len(edgeInputs),
@@ -604,24 +729,47 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		return nil, fmt.Errorf("fleet: context push parse response: %w", err)
 	}
 
-	// Per-item rejections (PR #173) are failures, never silent success. If
-	// the entry's own node was rejected the publish failed outright; edge
+	// The entry's own outcome: Fleet's results[] row (spec 018 H-3), or
+	// derived from accepted / conflicts / rejected on an older Fleet.
+	item := itemResultFor(result, wireID)
+	result.Item = item
+	result.WireNodeID = wireID
+
+	// A refused node is a failure, never silent success (PR #173). A
+	// version conflict keeps its own path below (conflicts[], the "not
+	// updated" copy); every other refusal fails the publish outright. Edge
 	// rejections leave the node published but are recorded as the push
 	// error so Context_SyncStatus shows them.
-	for _, r := range result.Rejected {
-		if r.Kind == "node" && r.ID == wireID {
-			s.mu.Lock()
+	if item.Status == PushStatusRefused && item.Reason != "version_conflict" {
+		s.mu.Lock()
+		if len(result.Rejected) > 0 {
 			s.lastPushErr = describeRejections(result.Rejected)
-			s.mu.Unlock()
-			logging.L().Warn("fleet.context.push.rejected",
-				"node_id", wireID,
-				"reason", r.Reason,
-				"rejected_count", len(result.Rejected),
-			)
-			return nil, &ContextPushRejectedError{NodeID: wireID, Reason: r.Reason}
+		} else {
+			s.lastPushErr = "refused: " + item.Reason
 		}
+		s.mu.Unlock()
+		logging.L().Warn("fleet.context.push.rejected",
+			"node_id", wireID,
+			"reason", item.Reason,
+			"rejected_count", len(result.Rejected),
+		)
+		return nil, &ContextPushRejectedError{NodeID: wireID, Reason: item.Reason}
+	}
+	if item.Status == PushStatusPendingReview {
+		// Nothing was written to the node: no location move, no
+		// "published" audit, no first-push signal. Not an error either.
+		s.mu.Lock()
+		s.lastPushErr = ""
+		s.lastConflicts = nil
+		s.mu.Unlock()
+		logging.L().Info("fleet.context.push.pending_review",
+			"node_id", wireID,
+			"merge_request_present", item.MergeRequest() != "",
+		)
+		return &result, nil
 	}
 
+	pushSelf := s.selfID()
 	s.mu.Lock()
 	s.lastPushErr = ""
 	if len(result.Rejected) > 0 {
@@ -637,6 +785,26 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		s.lastConflicts = append([]ContextPushConflict(nil), result.Conflicts...)
 	} else {
 		s.lastConflicts = nil
+	}
+	// An accepted push moves the node: record where it is now, so the
+	// share dialogs never read a stale pulled row right after a publish.
+	if item.Status == PushStatusPublished && (result.AcceptedNodes > 0 || len(result.Results) > 0) && pushSelf != "" && !pushConflicted(result.Conflicts, wireID) {
+		if layer, ok := LayerForClassification(classification); ok {
+			s.adoptLocationsOwnerLocked(pushSelf)
+			team := ""
+			if entry.TeamID != nil {
+				team = *entry.TeamID
+			}
+			if s.putLocationLocked(wireID, PulledShareLocation{Layer: layer, TeamID: team, Version: entry.Version}) {
+				s.savePulledLocationsLocked(pushSelf)
+			}
+		}
+	}
+	if item.Status != PushStatusPublished {
+		// Refused on version (conflicts[] above): nothing was written, so
+		// no first-push signal and no "published" audit.
+		s.mu.Unlock()
+		return &result, nil
 	}
 	// fleet-welcome-01NWEL01 context_synced seam: capture the hook and mark
 	// it fired (under the lock for the once-guard), then invoke it outside the
@@ -662,18 +830,24 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 			Version:        entry.Version,
 		}, time.Now())
 
-	result.WireNodeID = wireID
 	return &result, nil
 }
 
 // ── Pull-down ─────────────────────────────────────────────────────────────────
 
-// PullDelta fetches shared-graph deltas since the stored cursor, merges them
-// into the in-memory pulled cache, persists the cursor, and returns the
+// PullDelta fetches shared-graph deltas since the in-memory cursor, merges
+// them into the in-memory pulled cache, and returns the
 // number of nodes received (including tombstones).
 //
-// First sync (cursor == ""): backfills the full entitled shared graph.
-// Subsequent syncs: cursor-based delta (FR-101, FR-103, FR-104).
+// First sync (no cursor): backfills the full entitled shared graph, one page
+// per call. Subsequent syncs: cursor-based delta (FR-101, FR-103, FR-104).
+//
+// Spec 018 H-2 (context_pull_stream.go): the cursor is Fleet's opaque
+// next_cursor when served (legacy since= otherwise); a refused cursor
+// starts one clean full pull; a reset drops the copies of the teams it
+// names (all of them when it names none), then re-snapshots in this call
+// and drops whatever the snapshot did not serve. Neither can loop: a pull
+// without a cursor is never refused for its cursor and never resets.
 func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 	if err := s.canPull(); err != nil {
 		if errors.Is(err, ErrFleetDisabled) || errors.Is(err, ErrNotSignedIn) {
@@ -682,17 +856,114 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 		return 0, nil // capability absent → local-only, no error
 	}
 
-	s.mu.RLock()
+	self := s.selfID()
+	s.mu.Lock()
+	if self != "" && s.pulledFor != "" && !strings.EqualFold(self, s.pulledFor) {
+		// Another account signed in within this process: its entitled
+		// graph differs, so drop the cache and start a full pull.
+		logging.L().Info("fleet.context.pull.account_changed_full_pull")
+		s.cursor, s.pulled, s.pulledEdges, s.sweepSeen = pullCursor{}, nil, nil, nil
+		s.snapshotting, s.accessEpoch = false, nil
+	}
+	if self != "" {
+		s.pulledFor = self
+		if s.adoptLocationsOwnerLocked(self) {
+			s.savePulledLocationsLocked(self)
+		}
+	}
 	cursor := s.cursor
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
+	total := 0
+	cursorRetried, resetHandled := false, false
+	for page := 0; ; page++ {
+		pullResp, refused, err := s.fetchCuratedPage(ctx, cursor)
+		if errors.Is(err, errSilentPullStop) {
+			return total, nil
+		}
+		if err != nil {
+			return total, err
+		}
+		if refused {
+			// 400 cursor_filter_mismatch / invalid_cursor: one clean full
+			// re-pull. A cursorless pull is never refused for its cursor.
+			if cursorRetried || cursor.empty() {
+				s.recordPullErr("fleet: context pull: cursor refused")
+				return total, fmt.Errorf("fleet: context pull: cursor refused")
+			}
+			cursorRetried = true
+			logging.L().Info("fleet.context.pull.cursor_refused_full_pull")
+			s.mu.Lock()
+			s.beginSnapshotLocked(self, resetCursorRefused, nil, false)
+			s.mu.Unlock()
+			cursor = pullCursor{}
+			continue
+		}
+		s.mu.Lock()
+		if pullResp.Reset || s.epochChangedLocked(pullResp) {
+			reason := pullResp.ResetReason
+			if !pullResp.Reset {
+				reason = resetAccessEpoch
+			}
+			if resetHandled {
+				// Impossible from a conforming Fleet (a cursorless pull never
+				// resets); never loop on it.
+				s.mu.Unlock()
+				s.recordPullErr("fleet: context pull: repeated reset")
+				return total, fmt.Errorf("fleet: context pull: repeated reset")
+			}
+			resetHandled = true
+			logging.L().Info("fleet.context.pull.reset",
+				"reason", reason, "team_count", len(pullResp.ResetTeamIDs))
+			s.beginSnapshotLocked(self, reason, pullResp.ResetTeamIDs, true)
+			s.mu.Unlock()
+			cursor = pullCursor{}
+			continue
+		}
+		n, lastPage := s.applyCuratedPageLocked(ctx, pullResp, cursor, self)
+		total += n
+		more := s.snapshotting && !lastPage && page+1 < maxSnapshotPages
+		if lastPage {
+			s.snapshotting = false
+		}
+		cursor = s.cursor
+		s.mu.Unlock()
+		if !more {
+			break
+		}
+	}
+	return total, nil
+}
+
+// recordPullErr records a pull error for Status.
+func (s *ContextGraphSyncer) recordPullErr(msg string) {
+	s.mu.Lock()
+	s.lastPullErr = msg
+	s.mu.Unlock()
+}
+
+// epochChangedLocked reports a changed access_epoch on a legacy
+// since-stream (Fleet sends reset only to cursor clients) and records the
+// value seen. Caller holds s.mu.
+func (s *ContextGraphSyncer) epochChangedLocked(r contextPullResponse) bool {
+	if r.AccessEpoch == nil {
+		return false
+	}
+	prev := s.accessEpoch
+	v := *r.AccessEpoch
+	s.accessEpoch = &v
+	return r.NextCursor == "" && prev != nil && *prev != v
+}
+
+// fetchCuratedPage performs one Curated-lane pull at cursor. refused
+// reports a cursor refusal (the caller restarts without a cursor).
+func (s *ContextGraphSyncer) fetchCuratedPage(ctx context.Context, cursor pullCursor) (contextPullResponse, bool, error) {
+	var pullResp contextPullResponse
 	// The Curated lane pulls only Curated kinds (WP03 lane split by kind).
-	urlPath := lanePullPath(curatedKinds, cursor)
-
-	resp, err := s.client.Get(ctx, urlPath)
+	resp, err := s.client.Get(ctx, laneStreamPath(curatedKinds, cursor))
 	if err != nil {
 		if errors.Is(err, ErrNotSignedIn) {
-			return 0, nil
+			return pullResp, false, errSilentPullStop
 		}
 		s.mu.Lock()
 		s.lastPullErr = err.Error()
@@ -702,7 +973,7 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 			s.lastPullErr = ReasonOrgPaused
 		}
 		s.mu.Unlock()
-		return 0, fmt.Errorf("fleet: context pull: %w", err)
+		return pullResp, false, fmt.Errorf("fleet: context pull: %w", err)
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
@@ -711,41 +982,120 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 
 	if resp.StatusCode == http.StatusForbidden {
 		// Unentitled → local-only, no error surfaced (FR-104).
-		return 0, nil
+		return pullResp, false, errSilentPullStop
+	}
+	if isCursorRefusal(resp) {
+		return pullResp, true, nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		e := fmt.Errorf("fleet: context pull status %d", resp.StatusCode)
-		s.mu.Lock()
-		s.lastPullErr = e.Error()
-		s.mu.Unlock()
-		return 0, e
+		s.recordPullErr(e.Error())
+		return pullResp, false, e
 	}
-
 	rawBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, fmt.Errorf("fleet: context pull read: %w", err)
+		return pullResp, false, fmt.Errorf("fleet: context pull read: %w", err)
 	}
-
-	var pullResp contextPullResponse
 	if err := json.Unmarshal(rawBody, &pullResp); err != nil {
-		return 0, fmt.Errorf("fleet: context pull parse: %w", err)
+		return pullResp, false, fmt.Errorf("fleet: context pull parse: %w", err)
+	}
+	return pullResp, false, nil
+}
+
+// errSilentPullStop ends a pull with no error surfaced (signed out,
+// unentitled): PullDelta reports (n, nil).
+var errSilentPullStop = errors.New("fleet: context pull: stopped (local-only)")
+
+// beginSnapshotLocked starts a re-snapshot: the cursor is dropped so the
+// next page starts the stream again, the full-pull sweep (sweepSeen)
+// begins, and on a reset the copies of the listed teams — every copy when
+// none is listed — are dropped at once (tombstoned so the library merger
+// removes them; the re-snapshot brings back what is still readable).
+// Caller holds s.mu.
+func (s *ContextGraphSyncer) beginSnapshotLocked(self, reason string, teamIDs []string, reset bool) {
+	s.cursor = pullCursor{}
+	s.sweepSeen = nil
+	s.snapshotting = true
+	if !reset {
+		return
+	}
+	s.resetCount++
+	s.lastResetReason = reason
+	teams := teamSet(teamIDs)
+	dropped := 0
+	for i, e := range s.pulled {
+		if e.DeletedAt != nil {
+			continue
+		}
+		if teams != nil && (e.TeamID == nil || !teams[*e.TeamID]) {
+			continue
+		}
+		s.pulled[i] = tombstonedEntry(e)
+		dropped++
+	}
+	changed := false
+	for id, l := range s.locations {
+		if teams == nil || teams[l.TeamID] {
+			delete(s.locations, id)
+			changed = true
+		}
+	}
+	if changed {
+		s.savePulledLocationsLocked(self)
+	}
+	if dropped > 0 {
+		s.mergeDirty = true
+	}
+}
+
+// tombstonedEntry keeps only an entry's identity, marked deleted, with its
+// version forgotten (any later version is accepted again).
+func tombstonedEntry(e ContextNodeEntry) ContextNodeEntry {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	e.DeletedAt = &now
+	e.Title, e.Body, e.Metadata = "", "", nil
+	e.Version, e.ServerVersion = 0, 0
+	return e
+}
+
+// applyCuratedPageLocked merges one page into the cache and advances the
+// cursor. Reports the node count and whether this page ended a full pull.
+// Caller holds s.mu.
+func (s *ContextGraphSyncer) applyCuratedPageLocked(ctx context.Context, pullResp contextPullResponse, cursor pullCursor, self string) (int, bool) {
+	if cursor.empty() && s.sweepSeen == nil {
+		// A full pull starts (process start, ResetCursor, a reset or a
+		// refused cursor).
+		s.sweepSeen = map[string]bool{}
+	}
+	if s.sweepSeen != nil {
+		for _, n := range pullResp.Nodes {
+			s.sweepSeen[n.ID] = true
+		}
 	}
 
-	// Merge received nodes into the in-memory cache.
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	locationsChanged := false
 	for _, n := range pullResp.Nodes {
 		// Another lane's node (unit kinds, bootstrap taxonomy, anything a
 		// server that ignores ?kind= sends): skip and count — never list it
 		// under Knowledge › Curated (audit §0-E).
 		if !curatedLaneAccepts(n) {
 			s.skippedUnknownKinds++
+			if _, had := s.locations[n.ID]; had {
+				delete(s.locations, n.ID) // moved to another lane
+				locationsChanged = true
+			}
 			continue
 		}
 		layer, ok := LayerForClassification(n.Classification)
 		if !ok {
+			if _, had := s.locations[n.ID]; had {
+				delete(s.locations, n.ID)
+				locationsChanged = true
+			}
 			continue // skip unknown classifications
+		}
+		if s.recordPulledLocationLocked(n, layer, self) {
+			locationsChanged = true
 		}
 		entry := ContextNodeEntry{
 			ID:             n.ID,
@@ -761,15 +1111,51 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 			ServerVersion:  n.Version,
 			DeletedAt:      n.DeletedAt,
 			OwnerUserID:    n.OwnerUserID,
+			Audience:       n.Audience,
+			Governed:       n.Governed,
 		}
 		if entry.DeletedAt != nil {
 			// A tombstone keeps only its identity. Fleet sends a quarantine
 			// tombstone content-free, but whatever a server sends with a
 			// deleted_at must not linger in memory (nor reach the library
-			// merger) as if it were live content.
-			entry.Title, entry.Body, entry.Metadata = "", "", nil
+			// merger) as if it were live content. A withdrawn tombstone (the
+			// node moved out of this stream's audience; also a team-delete
+			// tombstone) is removed the same way, and its version is
+			// forgotten so it is accepted again at any version if it comes
+			// back. Pulled entries are never pushed, so no tombstone is ever
+			// sent back for it.
+			entry = tombstonedEntry(entry)
+			entry.DeletedAt = n.DeletedAt
+			if n.Withdrawn {
+				s.withdrawnApplied++
+			}
 		}
 		s.upsertPulledLocked(entry)
+	}
+
+	lastPage := len(pullResp.Nodes) < pullPageSize
+	if s.sweepSeen != nil && lastPage {
+		// Last page of the full pull: every node still visible was sent
+		// (tombstones too), so a cached entry or a location-index row it
+		// did not mention belongs to a node this member can no longer see.
+		// Drop them (an entry is tombstoned so the library merger removes
+		// its copy).
+		for id := range s.locations {
+			if !s.sweepSeen[id] {
+				delete(s.locations, id)
+				locationsChanged = true
+			}
+		}
+		for i, e := range s.pulled {
+			if e.DeletedAt == nil && !s.sweepSeen[e.ID] {
+				s.pulled[i] = tombstonedEntry(e)
+				s.mergeDirty = true
+			}
+		}
+		s.sweepSeen = nil
+	}
+	if locationsChanged {
+		s.savePulledLocationsLocked(self)
 	}
 
 	// Merge edges.
@@ -786,21 +1172,17 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 		s.upsertPulledEdgeLocked(edge)
 	}
 
-	// Advance cursor.
-	if pullResp.Cursor != "" {
-		s.cursor = pullResp.Cursor
-		if s.dataDir != "" {
-			if saveErr := saveContextCursor(s.dataDir, s.cursor); saveErr != nil {
-				log.Printf("fleet: context cursor save: %v", saveErr)
-			}
-		}
-	}
+	// Advance the cursor (in memory only).
+	s.cursor = nextCursorFrom(pullResp, s.cursor)
 
 	n := len(pullResp.Nodes)
 	s.pullCount += n
 	s.lastPullAt = time.Now()
 	s.lastPullErr = ""
-	auditCursor := s.cursor // snapshot for audit emit below (taken while locked)
+	if n > 0 {
+		s.mergeDirty = true
+	}
+	auditCursor := s.cursor.Value // snapshot for audit emit below (taken while locked)
 
 	// FR-007: emit audit event once per successful pull with ≥ 1 node.
 	// Emit is called while holding mu; contextaudit.MustEmit is fast
@@ -820,8 +1202,25 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 				Cursor:         auditCursor,
 			}, time.Now())
 	}
+	return n, lastPage
+}
 
-	return n, nil
+// ServesLive reports whether the Curated stream (kind-filtered only, never
+// by team or audience) currently serves id live. The Unit lane consults it
+// before applying a withdrawn tombstone (contract §2: withdrawn tombstones
+// are per stream).
+func (s *ContextGraphSyncer) ServesLive(id string) bool {
+	if s == nil || id == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, e := range s.pulled {
+		if e.ID == id {
+			return e.DeletedAt == nil
+		}
+	}
+	return false
 }
 
 // upsertPulledLocked inserts or replaces an entry in s.pulled.
@@ -857,6 +1256,16 @@ func (s *ContextGraphSyncer) WireNodeID(localID string) string {
 	return s.ids.For(WireLaneCurated, localID)
 }
 
+// pushConflicted reports whether conflicts include wireID.
+func pushConflicted(conflicts []ContextPushConflict, wireID string) bool {
+	for _, c := range conflicts {
+		if c.NodeID == wireID {
+			return true
+		}
+	}
+	return false
+}
+
 // teamIDPtr returns a *string for a non-empty team_id string.
 func teamIDPtr(s string) *string {
 	if s == "" {
@@ -872,6 +1281,14 @@ func teamIDPtr(s string) *string {
 // Requires CapSharedTeamGraph (server enforces org-graph separately).
 // FR-201, FR-202.
 func (s *ContextGraphSyncer) Promote(ctx context.Context, localID string) (*ContextPromoteResult, error) {
+	return s.PromoteExpecting(ctx, localID, 0)
+}
+
+// PromoteExpecting is Promote with Fleet's expected_version (spec 018
+// FR-7a): expectedVersion > 0 is sent, and a node whose stored version
+// differs answers 409 node_changed (ErrContextNodeChanged) with nothing
+// promoted. 0 sends none.
+func (s *ContextGraphSyncer) PromoteExpecting(ctx context.Context, localID string, expectedVersion int) (*ContextPromoteResult, error) {
 	if err := s.canPushOrg(); err != nil {
 		return nil, err
 	}
@@ -883,12 +1300,17 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, localID string) (*Cont
 		NodeID:           nodeID,
 		ToClassification: string(ClassOrgShared),
 	}
+	if expectedVersion > 0 {
+		v := expectedVersion
+		req.ExpectedVersion = &v
+	}
 
 	const promoteEndpoint = "/api/v1/context/promote"
 	logging.L().Info("fleet.context.promote.http.start",
 		"endpoint", promoteEndpoint,
 		"node_id", nodeID,
 		"to_classification", string(ClassOrgShared),
+		"expected_version_sent", req.ExpectedVersion != nil,
 	)
 
 	resp, err := s.client.PostJSON(ctx, promoteEndpoint, req)
@@ -951,6 +1373,8 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, localID string) (*Cont
 			s.pulled[i].Classification = ClassOrgShared
 			s.pulled[i].Layer = contextpack.LayerOrg
 			s.pulled[i].SyncStatus = SyncStatusSynced
+			s.pulled[i].Audience, s.pulled[i].Governed = AudienceOrg, true
+			s.pulled[i].TeamID = nil
 		}
 	}
 	s.mu.Unlock()
@@ -964,6 +1388,60 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, localID string) (*Cont
 		}, time.Now())
 
 	return &result, nil
+}
+
+// ── Default team (spec 018 H-3) ───────────────────────────────────────────────
+
+// defaultTeamTTL bounds how long the default-team answer is reused.
+const defaultTeamTTL = 2 * time.Minute
+
+// WithMeTeams overrides the /api/v1/me teams source (tests).
+func (s *ContextGraphSyncer) WithMeTeams(f func(ctx context.Context) ([]MeTeam, error)) *ContextGraphSyncer {
+	s.meTeams = f
+	return s
+}
+
+// DefaultTeamID returns the org's default (root) team id from GET
+// /api/v1/me, cached briefly per account. ok=false when it cannot be known
+// (lookup failed, an older Fleet with no is_default, the caller is not in
+// the default team): the caller then sends no explicit audience.
+//
+// Needed because the explicit audience must name the default team as
+// "org", never as "team" (contract §1b: 400 audience_mismatch).
+func (s *ContextGraphSyncer) DefaultTeamID(ctx context.Context) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	self := s.selfID()
+	s.mu.RLock()
+	cached, at, forUser := s.defaultTeam, s.defaultTeamAt, s.defaultTeamFor
+	s.mu.RUnlock()
+	if !at.IsZero() && time.Since(at) < defaultTeamTTL && strings.EqualFold(forUser, self) {
+		return cached, cached != ""
+	}
+	src := s.meTeams
+	if src == nil {
+		if s.client == nil || s.client.isNop {
+			return "", false
+		}
+		src = s.client.GetMeTeams
+	}
+	teams, err := src(ctx)
+	if err != nil {
+		logging.L().Info("fleet.context.default_team_unknown", "err", LogSafeErr(err))
+		return "", false
+	}
+	id := ""
+	for _, t := range teams {
+		if t.IsDefault && t.ID != "" {
+			id = t.ID
+			break
+		}
+	}
+	s.mu.Lock()
+	s.defaultTeam, s.defaultTeamAt, s.defaultTeamFor = id, time.Now(), self
+	s.mu.Unlock()
+	return id, id != ""
 }
 
 // ── Search / Export thin clients (gap #5) ──────────────────────────────────────
@@ -1145,6 +1623,12 @@ type ContextSyncStatusSnapshot struct {
 	SkippedUnknownKinds int `json:"skipped_unknown_kinds"`
 	// StrippedUnitKeys counts "_unit" metadata keys stripped before push.
 	StrippedUnitKeys int `json:"stripped_unit_keys"`
+	// ResetCount / LastResetReason: loss-of-access resets handled
+	// (cumulative) and the latest reason (spec 018 H-2). Never a team.
+	ResetCount      int    `json:"reset_count"`
+	LastResetReason string `json:"last_reset_reason,omitempty"`
+	// WithdrawnApplied counts withdrawn tombstones applied (cumulative).
+	WithdrawnApplied int `json:"withdrawn_applied"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -1161,7 +1645,7 @@ func (s *ContextGraphSyncer) Status() ContextSyncStatusSnapshot {
 		conflicts = append([]ContextPushConflict(nil), s.lastConflicts...)
 	}
 	return ContextSyncStatusSnapshot{
-		Cursor:         s.cursor,
+		Cursor:         s.cursor.Value,
 		LastPullAt:     s.lastPullAt,
 		LastPullErr:    s.lastPullErr,
 		LastPushErr:    s.lastPushErr,
@@ -1171,6 +1655,9 @@ func (s *ContextGraphSyncer) Status() ContextSyncStatusSnapshot {
 
 		SkippedUnknownKinds: s.skippedUnknownKinds,
 		StrippedUnitKeys:    s.strippedUnitKeys,
+		ResetCount:          s.resetCount,
+		LastResetReason:     s.lastResetReason,
+		WithdrawnApplied:    s.withdrawnApplied,
 	}
 }
 
@@ -1297,29 +1784,35 @@ func (s *ContextGraphSyncer) pollLoop(ctx context.Context, baseInterval time.Dur
 // (not just the delta) so the library stays consistent.
 func (s *ContextGraphSyncer) pullAndMerge(ctx context.Context) (int, error) {
 	n, err := s.PullDelta(ctx)
-	if err != nil || n == 0 {
-		return n, err
-	}
-	s.mu.RLock()
+	// A reset's drops reach the library even when the re-snapshot after it
+	// failed: copies of teams the member lost must not wait for the network.
+	s.mu.Lock()
 	merger := s.libraryMerger
-	s.mu.RUnlock()
-	if merger != nil {
+	dirty := s.mergeDirty
+	s.mergeDirty = false
+	s.mu.Unlock()
+	if merger != nil && (dirty || (err == nil && n > 0)) {
 		merger(s.pulledEntriesForMerger())
 	}
-	return n, nil
+	return n, err
 }
 
 // ResetCursor drops the stored cursor (forcing a full backfill on next pull).
 // Used in tests.
 func (s *ContextGraphSyncer) ResetCursor() {
 	s.mu.Lock()
-	s.cursor = ""
+	s.cursor = pullCursor{}
+	s.snapshotting, s.accessEpoch = false, nil
 	s.pulled = nil
 	s.pulledEdges = nil
+	s.locations = map[string]PulledShareLocation{}
+	s.sweepSeen = nil
+	s.pulledFor = ""
 	s.pullCount = 0
 	s.mu.Unlock()
 	if s.dataDir != "" {
 		_ = os.Remove(contextCursorPath(s.dataDir))
+		_ = os.Remove(pulledLocationsPath(s.dataDir))
 	}
 }
 
@@ -1329,35 +1822,10 @@ func (s *ContextGraphSyncer) ResetCursor() {
 // personal-layer entry to fleet. Personal entries are device-local.
 var ErrPersonalLayerNotSyncable = errors.New("fleet: personal layer entries are local-only and cannot be pushed to fleet")
 
-// ── Cursor persistence ─────────────────────────────────────────────────────────
+// ── Legacy cursor file ─────────────────────────────────────────────────────────
 
+// contextCursorPath is the cursor file older builds wrote. It is no longer
+// read or written; NewContextGraphSyncer and ResetCursor remove it.
 func contextCursorPath(dataDir string) string {
 	return filepath.Join(dataDir, "fleet", "context_cursor.txt")
-}
-
-func loadContextCursor(dataDir string) (string, error) {
-	if dataDir == "" {
-		return "", nil
-	}
-	b, err := os.ReadFile(contextCursorPath(dataDir))
-	if err != nil {
-		return "", err
-	}
-	s := string(b)
-	// Trim trailing newlines.
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
-		s = s[:len(s)-1]
-	}
-	return s, nil
-}
-
-func saveContextCursor(dataDir, cursor string) error {
-	if dataDir == "" {
-		return nil
-	}
-	dir := filepath.Join(dataDir, "fleet")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("fleet: mkdir context cursor: %w", err)
-	}
-	return atomicWriteFile(contextCursorPath(dataDir), cursor+"\n")
 }

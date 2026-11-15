@@ -81,6 +81,32 @@ describe('HandoffInboxPanel', () => {
     const w = mountPanel({}, []);
     expect(w.get('[data-testid="handoff-receive-warning"]').text()).toContain('too many devices');
   });
+
+  // kenaz-fleet ER-40
+  it('points to Settings → Account when the device keys need a fresh sign-in', () => {
+    applyFleetSession({
+      state: 'signed_in', autoRetry: true, tokensUsable: true,
+      claims: { hasSubject: true, hasOrgClaim: true },
+      deviceKeys: { status: 'reauth_required', message: "Sign in again to update this device's keys." },
+    } as unknown as FleetSessionView);
+    const w = mountPanel({}, []);
+    const text = w.get('[data-testid="handoff-receive-warning"]').text();
+    expect(text).toContain("Sign in again to update this device's keys.");
+    expect(text).toContain('Open Settings → Account to sign in again.');
+  });
+
+  it('shows the contact-your-administrator copy, without a sign-in pointer, when a fresh sign-in was refused', () => {
+    const copy = "Your organization's sign-in can't confirm this change yet. Contact your administrator.";
+    applyFleetSession({
+      state: 'signed_in', autoRetry: true, tokensUsable: true,
+      claims: { hasSubject: true, hasOrgClaim: true },
+      deviceKeys: { status: 'reauth_refused', message: copy },
+    } as unknown as FleetSessionView);
+    const w = mountPanel({}, []);
+    const text = w.get('[data-testid="handoff-receive-warning"]').text();
+    expect(text).toBe(copy);
+    expect(text).not.toContain('sign in again');
+  });
 });
 
 describe('handoffErrorText', () => {

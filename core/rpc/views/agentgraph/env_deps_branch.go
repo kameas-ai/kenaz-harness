@@ -200,6 +200,14 @@ func (a *BranchSeamAdapter) generationOf(sessionID string) int {
 	return a.generations[sessionID]
 }
 
+// forgetGeneration drops sessionID's recorded generation (its session was
+// deleted before it ever ran).
+func (a *BranchSeamAdapter) forgetGeneration(sessionID string) {
+	a.genMu.Lock()
+	defer a.genMu.Unlock()
+	delete(a.generations, sessionID)
+}
+
 // setGeneration records gen as sessionID's fork generation.
 func (a *BranchSeamAdapter) setGeneration(sessionID string, gen int) {
 	a.genMu.Lock()
@@ -278,6 +286,20 @@ func (a *BranchSeamAdapter) Fork(ctx context.Context, req coreag.ForkRequest) (c
 	// manufactured-success class this mission exists to end).
 	if spawner := a.getRunSpawner(); spawner != nil {
 		run, serr := spawner(ctx, br.ID, child.ID, req)
+		if serr != nil {
+			// B11 (fleet-workbench-next-plan-2026-11-10): the spawner
+			// failed before the child's first turn, so the child session
+			// is an orphan — a "New session (branch)" row with only the
+			// handoff prompt in it that nothing will ever run. Delete it
+			// (the branch row goes with it: ON DELETE CASCADE, migration
+			// 0306) and fail the Fork, so the dispatcher reports the
+			// failure instead of a branch_id for a run that never started.
+			a.forgetGeneration(child.ID)
+			if derr := a.sessions.Delete(context.WithoutCancel(ctx), child.ID); derr != nil {
+				return coreag.BranchHandle{}, fmt.Errorf("branch_seam: spawn child run: %w (and removing the unstarted child session %s failed: %v)", serr, child.ID, derr)
+			}
+			return coreag.BranchHandle{}, fmt.Errorf("branch_seam: spawn child run: %w", serr)
+		}
 		a.runsMu.Lock()
 		if a.runs == nil {
 			a.runs = make(map[string]spawnOutcome)

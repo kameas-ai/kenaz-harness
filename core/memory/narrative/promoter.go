@@ -43,6 +43,7 @@ type NarrativeWriteReq struct {
 	SessionID       string
 	ProjectID       string
 	TurnID          string
+	Account         string
 	Content         string
 	Kind            ChunkKind
 	RetrievalWeight float32
@@ -235,6 +236,7 @@ func (p *Promoter) processJob(ctx context.Context, j Job) {
 		SessionID:       j.SessionID,
 		ProjectID:       j.ProjectID,
 		TurnID:          j.TurnID,
+		Account:         j.Account,
 		Content:         content,
 		Kind:            ChunkKindNarrativeSynthesised,
 		RetrievalWeight: DefaultRetrievalWeight,
@@ -295,6 +297,7 @@ func (p *Promoter) writeFallback(ctx context.Context, j Job) {
 		SessionID:       j.SessionID,
 		ProjectID:       j.ProjectID,
 		TurnID:          j.TurnID,
+		Account:         j.Account,
 		Content:         fb.String(),
 		Kind:            ChunkKindNarrativeExtractiveFallback,
 		RetrievalWeight: DefaultRetrievalWeight,

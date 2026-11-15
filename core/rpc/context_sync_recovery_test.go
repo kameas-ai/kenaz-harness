@@ -115,3 +115,67 @@ func TestRecoveryImport_ReRegistersDeviceKeys(t *testing.T) {
 		t.Fatalf("node_removed on PUT keys: sign-out hook calls = %d, want 1", signedOut.Load())
 	}
 }
+
+// ER-40: under FLEET_NODE_KEYS_STEP_UP=enforce the post-import PUT replaces
+// an active key without a fresh sign-in → 403 reauth_required. The import
+// still succeeds locally, the device is NOT signed out, the outcome is
+// recorded as reauth_required (visible), the session is republished at
+// once, and nothing retries on its own.
+func TestRecoveryImport_ReauthRequired_VisibleNotSignedOut(t *testing.T) {
+	if corefleet.Disabled() {
+		t.Skip("HARNESS_FLEET_DISABLED=1")
+	}
+	var puts atomic.Int32
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/config.json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"api_base_url": srv.URL})
+	})
+	mux.HandleFunc("PUT /api/v1/me/nodes/{id}/keys", func(w http.ResponseWriter, r *http.Request) {
+		puts.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_user_authentication", max_age="600"`)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"code":"reauth_required","message":"Sign in again to change this device's keys, then retry.","details":{"max_age_seconds":600,"step_up_header":"X-Kenaz-Step-Up-Token"}}`))
+	})
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+	corefleet.SetExternalTokenSource(func() string { return "tok-recovery" })
+	t.Cleanup(func() { corefleet.SetExternalTokenSource(nil) })
+
+	dataDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "fleet", "node_id.txt"), []byte("NODE-C\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var signedOut, republished atomic.Int32
+	client := corefleet.NewClientForTestingWithDataDir(srv.URL, dataDir)
+	adapter := &recoveryBackendAdapter{
+		client:        client,
+		dataDir:       dataDir,
+		onNodeRemoved: func() { signedOut.Add(1) },
+		onKeysChanged: func() { republished.Add(1) },
+	}
+	code, err := corefleet.MintRecoveryCode(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.ApplyRecoveryCode(code); err != nil {
+		t.Fatalf("the import itself must still succeed: %v", err)
+	}
+	if n := puts.Load(); n != 1 {
+		t.Fatalf("PUT keys calls = %d, want exactly 1 (no automatic retry)", n)
+	}
+	if signedOut.Load() != 0 {
+		t.Fatal("reauth_required must not sign the device out")
+	}
+	if republished.Load() != 1 {
+		t.Fatalf("session republish calls = %d, want 1", republished.Load())
+	}
+	if kr := client.KeyRegistration(); kr.Status != corefleet.KeyRegReauthRequired || kr.Message == "" {
+		t.Fatalf("key registration = %+v, want reauth_required with copy", kr)
+	}
+}

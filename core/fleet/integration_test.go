@@ -56,9 +56,10 @@ func TestIntegration_AllCapabilityKeys(t *testing.T) {
 	// + CapContextBootstrap + CapOrgGraphSharing), then v0.93.0 added
 	// CapCedarPresetPolicies + CapCedarCustomPolicies (cedar policy
 	// sharing) + CapMemorySync (memory-sync-01MEMSY01) = 29, then
-	// CapHostedInference was re-added (ml-producer-01MLPRD01 WP01) = 30.
-	if len(all) != 30 {
-		t.Errorf("AllCapabilities() len = %d, want 30", len(all))
+	// CapHostedInference was re-added (ml-producer-01MLPRD01 WP01) = 30,
+	// then CapAuditLedgerRead (legal D173 compliance copy) = 31.
+	if len(all) != 31 {
+		t.Errorf("AllCapabilities() len = %d, want 31", len(all))
 	}
 }
 

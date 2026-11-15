@@ -894,6 +894,7 @@ func (a *API) ResummarizeChunk(ctx context.Context, chunkID string) (Chunk, erro
 			ID:        "resummary-" + found.TurnID,
 			TurnID:    found.TurnID,
 			SessionID: found.SessionID,
+			Account:   jobAccount(*found),
 			RetryAt:   time.Now().UTC(),
 		}
 		// (FR-006) WARN-log on enqueue failure so a "re-summarize did nothing"
@@ -1029,3 +1030,12 @@ func buildScopePath(scopeKind string) string {
 
 // Compile-time witness.
 var _ MemoryAPI = (*API)(nil)
+
+// jobAccount is who a re-summarize of c belongs to. An unstamped note stays of
+// unknown owner rather than going to whoever is signed in when the job runs.
+func jobAccount(c corememory.Chunk) string {
+	if c.Account == "" {
+		return corememory.AccountUnknown
+	}
+	return c.Account
+}

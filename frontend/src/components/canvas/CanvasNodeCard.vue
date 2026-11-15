@@ -77,12 +77,12 @@ const statusClass = computed(() => {
   >
     <div class="h-1 w-full" :class="categoryClass" aria-hidden="true" />
     <div class="flex min-w-0 flex-1 flex-col justify-center px-2 py-1">
-      <span class="truncate font-ui text-[12px] text-ink">{{ data.label }}</span>
-      <span class="truncate font-mono text-[10px] text-ink-muted">{{ data.kind }}</span>
+      <span class="truncate font-ui text-small text-ink">{{ data.label }}</span>
+      <span class="truncate font-mono text-eyebrow text-ink-muted">{{ data.kind }}</span>
     </div>
     <span
       v-if="data.status"
-      class="absolute right-1 top-1.5 rounded-sm border border-border-muted px-1 font-ui text-[9px] uppercase tracking-[0.14em] text-ink-muted"
+      class="absolute right-1 top-1.5 rounded-sm border border-border-muted px-1 font-ui text-tag uppercase tracking-eyebrow text-ink-muted"
       data-testid="canvas-node-status"
       >{{ data.status }}</span
     >

@@ -33,7 +33,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="flex items-center justify-between px-3 py-1.5 text-[11px]">
+  <div class="flex items-center justify-between px-3 py-1.5 text-caption">
     <div class="flex items-center gap-3" aria-label="Status legend">
       <slot name="legend" />
       <slot name="rate">
@@ -47,7 +47,7 @@ onMounted(async () => {
       <!-- Crash-reporting tier indicator — cosmetic reminder when active -->
       <span
         v-if="crashTier !== 'off'"
-        class="text-[10px] text-ink-muted px-1.5 py-0.5 rounded border border-border-muted"
+        class="text-eyebrow text-ink-muted px-1.5 py-0.5 rounded border border-border-muted"
         :title="`Crash reporting: ${crashTier}`"
         data-testid="crash-reporting-pill"
       >reporting: {{ crashTier }}</span>

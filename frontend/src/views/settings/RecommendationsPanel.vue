@@ -224,7 +224,7 @@ const showUninstall = computed(() => !!view.value?.installed);
         <!-- Paused label lanes (design A4): honest, per-kind, never only a log line. -->
         <div v-if="view.labelLanes?.length" class="space-y-0.5" data-testid="sidecar-label-lanes">
           <div v-for="lane in view.labelLanes" :key="lane.kind" :data-lane-kind="lane.kind">
-            <p class="text-xs text-amber-700 dark:text-amber-400">
+            <p class="text-xs text-signal-warn-text dark:text-signal-warn-text">
               Label sync for “{{ lane.kind }}” is paused ({{ lane.code || lane.reason }}); nothing is lost — it
               retries on the next recommendation<template v-if="retryAt(lane.until)">
                 after <span data-testid="sidecar-lane-until">{{ retryAt(lane.until) }}</span></template

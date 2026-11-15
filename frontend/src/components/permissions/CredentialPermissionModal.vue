@@ -63,7 +63,7 @@ defineExpose({ queue, reconcile });
 
 <template>
   <BasePermissionModal
-    family-icon="🔑"
+    family-icon="credential"
     family-label="Credential"
     :request="head"
     :queue-length="queue.length"

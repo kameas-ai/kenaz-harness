@@ -1,15 +1,23 @@
 package settings
 
-// approvals_local_dismiss.go — "Not now" on an informational hub item is a
-// LOCAL memory, never a Fleet record. Legal ruling (kameas-ai-11,
-// 2026-10-16): a server-side record of who declined an ML offer is new
-// personal data that could be used to pressure members under Member Choice,
-// so no client records it. The device remembers a dismissal per item id AND
-// version: a revised item (a new version) shows again.
+// approvals_local_dismiss.go — the LOCAL fallback for "Not now" on an
+// informational hub item.
 //
-// Only informational items whose approve action the harness does not send
-// can be dismissed this way (PendingApprovalView.LocalDismiss). Required
-// items cannot be dismissed at all.
+// "Not now" on the ml_opt_in_available offer normally IS sent to Fleet:
+// legal (kameas-ai-11, final ruling "option a", 2026-10-16) made it
+// member-private UX state that Fleet may keep (user, org, notice version;
+// readable only through the member's own /me ML state, deleted on erase).
+// When Fleet serves that dismissal as its approve action and the path is on
+// the harness allowlist (fleet.ApprovePathMLOptInPromptDismissed, bound to
+// this kind), the item is ApproveAllowed and FleetApproveItem POSTs it.
+//
+// This file covers the rest: an informational item whose approve action the
+// harness does not send (an older Fleet without that route, or a path
+// outside the allowlist) is marked LocalDismiss and "Not now" only hides it
+// on this device — nothing reaches Fleet. The device remembers a dismissal
+// per item id AND version: a revised item (a new version) shows again.
+// Required items cannot be dismissed at all, and a "Not now" on the Offload
+// ML notice itself is never recorded anywhere.
 
 import (
 	"context"

@@ -279,7 +279,11 @@ func TestStore_LegacyGobBackfill(t *testing.T) {
 
 func get(t *testing.T, st Store, id string) Chunk {
 	t.Helper()
-	all, err := st.List(context.Background())
+	list := st.List
+	if ss, ok := st.(SyncStore); ok { // whichever account is looking
+		list = func(ctx context.Context, _ ...ScopeFilter) ([]Chunk, error) { return ss.ListAll(ctx) }
+	}
+	all, err := list(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

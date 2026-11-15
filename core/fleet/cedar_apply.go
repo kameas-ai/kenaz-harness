@@ -26,18 +26,17 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
-// TeamSnippetPrefix namespaces every fleet-installed Cedar snippet. It is
-// exported so consumers can ask whether a decision was granted by a FLEET
-// rule specifically (cedar.Engine.PermittedBySnippet) — e.g. served-mode
-// bash availability, which only an explicit fleet permit turns on.
-const TeamSnippetPrefix = "fleet-team/"
-
-// fleetTeamSnippetPrefix is the package-internal spelling of TeamSnippetPrefix.
-const fleetTeamSnippetPrefix = TeamSnippetPrefix
+// fleetTeamSnippetPrefix namespaces every fleet-installed Cedar snippet.
+// The constant lives in core/policy/cedar (FleetTeamSnippetPrefix) so a
+// decision can be attributed to a FLEET rule (cedar.IsFleetDecision) —
+// served-mode bash availability and the "Blocked by your organization's
+// Fleet policy" denial copy — without that package importing fleet.
+const fleetTeamSnippetPrefix = cedarpolicy.FleetTeamSnippetPrefix
 
 // legacyRuleTextID is the team_rule_id given to a cedar_delta that carries
 // only the pre-2026-10-31 Fleet shape {"rule_text": "..."} with no "rules"
@@ -63,6 +62,30 @@ type CedarDelta struct {
 	Rules map[string]string `json:"rules"`
 	// RuleText is the legacy single-rule field; used only when Rules is empty.
 	RuleText string `json:"rule_text,omitempty"`
+	// PublishedAt / PublishedByEmail describe the published policy. Only
+	// published_at is on the wire today (contract-harness-sync.md
+	// "Bundle cedar_delta wire shape"); published_by_email (the name the
+	// GET /cedar-policy entry already uses) is read when Fleet adds it to
+	// the bundle. Fleet's published_by is a user id, not display copy, so
+	// it is not read. They feed the user-facing fleet-denial copy
+	// (cedar.FleetDenialMessage), nothing else. cedar_delta is a RawMessage
+	// in Bundle, so these do not touch the signing payload.
+	PublishedAt      string `json:"published_at,omitempty"`
+	PublishedByEmail string `json:"published_by_email,omitempty"`
+}
+
+// meta returns the policy metadata the engine attaches to fleet decisions;
+// nil when the delta installs no rules. An unparseable published_at is
+// dropped, not an error: it is display copy, not policy.
+func (d *CedarDelta) meta() *cedarpolicy.FleetPolicyMeta {
+	if d == nil || len(d.snapshot()) == 0 {
+		return nil
+	}
+	m := &cedarpolicy.FleetPolicyMeta{PublishedBy: strings.TrimSpace(d.PublishedByEmail)}
+	if t, err := time.Parse(time.RFC3339, strings.TrimSpace(d.PublishedAt)); err == nil {
+		m.PublishedAt = t
+	}
+	return m
 }
 
 // snapshot returns the rule set this delta installs.
@@ -138,6 +161,11 @@ func (a *CedarBundleApplier) SetTeamBundle(ctx context.Context, delta *CedarDelt
 		}
 		return &CedarApplyError{Category: CedarErrInstall}
 	}
+	ruleIDs := make([]string, 0, len(rules))
+	for id := range rules {
+		ruleIDs = append(ruleIDs, id)
+	}
+	cedarpolicy.SetFleetPolicyMeta(ruleIDs, delta.meta())
 	_ = ctx
 	return nil
 }

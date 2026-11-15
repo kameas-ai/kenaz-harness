@@ -23,7 +23,7 @@
  * open Settings → Account. No fleet affordances appear anywhere else in
  * the UI when the user is signed out.
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { refreshFeatureFlags } from '@/lib/featureFlags';
 import { isUserNotProvisionedError } from '@/lib/errors';
@@ -34,6 +34,9 @@ import {
   useFleetSession,
 } from '@/lib/fleetSession';
 import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
+import TeamTreeList from '@/components/fleet/TeamTreeList.vue';
+import FleetDeviceNameNotice from '@/components/fleet/FleetDeviceNameNotice.vue';
+import { useFleetTeams } from '@/lib/fleetTeams';
 
 const client = useHarnessClient();
 const fleet = useFleetSession(client);
@@ -55,6 +58,24 @@ const isSignedIn = fleet.signedIn;
 const isDegraded = computed(() => state.value === 'degraded');
 const isSigningIn = computed(() => state.value === 'signing_in');
 const identity = fleet.identity;
+
+/**
+ * The caller's teams as a tree (kenaz-fleet spec 018 H-1), read from Fleet's
+ * /api/v1/me whenever the session becomes usable or the account changes.
+ * Empty (signed out, read failed, older Fleet with no teams) falls back to
+ * the single enrolled team row.
+ */
+const fleetTeams = useFleetTeams(client);
+const teams = fleetTeams.teams;
+watch(
+  () => [isSignedIn.value, identity.value?.userId ?? '', identity.value?.orgId ?? ''] as const,
+  ([signedIn]) => {
+    // Never keep showing the previous account's teams while the new ones load.
+    fleetTeams.reset();
+    if (signedIn) void fleetTeams.load();
+  },
+  { immediate: true },
+);
 const profile = computed(() => fleet.session.value?.profile ?? null);
 
 const badgeColor = computed(() => profile.value?.badgeColor ?? '');
@@ -94,6 +115,12 @@ const sessionMessage = computed(() => {
     if (s.reason === 'not_provisioned') {
       return "You signed in with Zitadel, but this account hasn't finished Fleet signup yet.";
     }
+    if (s.reason === 'node_id_invalid') {
+      // Fleet refused this device's id as invalid, and the new one this app
+      // made for it too (core/fleet enrollRepairingNodeID). Retrying alone
+      // will not help, so automatic retries stop.
+      return "Fleet refused this device's id, even after the app made a new one. Try again later, or ask your administrator.";
+    }
     if (s.reason === 'needs_reauth') {
       return (
         'Your sign-in predates a permission fleet now needs (your organisation claim). ' +
@@ -113,22 +140,58 @@ const sessionMessage = computed(() => {
       'This device was removed from your organization by an org admin. Sign in again to re-register it as a new device.'
     );
   }
-  if (s.deviceKeys && s.deviceKeys.status !== 'registered' && s.deviceKeys.message) {
-    // Enrolled, but without a handoff key (too many devices / rejected key).
-    return s.deviceKeys.message;
-  }
   return '';
+});
+
+/**
+ * Why this device's keys aren't registered (too many devices, rejected key,
+ * a fresh sign-in needed or refused). Its own line, so it shows alongside a
+ * degraded session's message instead of being hidden by it.
+ */
+const deviceKeysMessage = computed(() => {
+  const dk = fleet.session.value?.deviceKeys;
+  if (!dk || dk.status === 'registered') return '';
+  return dk.message ?? '';
 });
 
 const needsReauth = computed(
   () => isDegraded.value && fleet.session.value?.reason === 'needs_reauth',
 );
+/**
+ * kenaz-fleet ER-40: Fleet kept this device's previous key because replacing
+ * it needs a fresh sign-in (e.g. after a recovery-code import). Offer
+ * "Sign in again"; the session message explains why.
+ */
+const keysNeedReauth = computed(
+  () => fleet.session.value?.deviceKeys?.status === 'reauth_required',
+);
+/**
+ * A fresh sign-in was presented and still refused (status reauth_refused):
+ * the organization's sign-in can't confirm the change yet (e.g. SSO-only
+ * sessions until a Fleet setting is on). The message says to contact the
+ * administrator; "Try again" stays available, demoted to secondary.
+ */
+const keysReauthRefused = computed(
+  () => fleet.session.value?.deviceKeys?.status === 'reauth_refused',
+);
+/**
+ * One sign-in button at most: when the session itself needs a new sign-in
+ * (needs_reauth), "Update sign-in" runs a full sign-in, whose fresh ID token
+ * also covers the key update, so the device-key button is not shown.
+ */
+const showKeysReauth = computed(
+  () => !needsReauth.value && (keysNeedReauth.value || keysReauthRefused.value),
+);
+/** The device-key step-up is waiting for the browser. */
+const keysReauthing = ref(false);
 const degradedHeadline = computed(() => {
   switch (fleet.session.value?.reason) {
     case 'not_provisioned':
       return 'Account setup not finished';
     case 'needs_reauth':
       return 'Update your sign-in to re-enable telemetry export';
+    case 'node_id_invalid':
+      return "Fleet refused this device's id";
     default:
       return 'Not connected to fleet';
   }
@@ -233,6 +296,48 @@ function humanizeFleetError(raw: string): string {
   return raw;
 }
 
+/**
+ * keysReauth runs the fresh sign-in Fleet requires before it replaces this
+ * device's keys, then the key update is retried once (backend). Never
+ * automatic: only this click starts it, so a refusal cannot loop. Cancel
+ * leaves the reauth_required message in place.
+ */
+async function keysReauth() {
+  keysReauthing.value = true;
+  actionError.value = '';
+  try {
+    await client.settings.fleetDeviceKeysReauth();
+  } catch (e: unknown) {
+    if (!isSignInCancelled(e)) {
+      const raw = e instanceof Error ? e.message : String(e ?? '');
+      actionError.value = humanizeKeysReauthError(raw);
+    }
+  } finally {
+    keysReauthing.value = false;
+    await fleet.refresh();
+  }
+}
+
+async function cancelKeysReauth() {
+  try {
+    await client.settings.fleetSignInCancel();
+  } catch {
+    // Nothing in flight: the session snapshot is the truth either way.
+  }
+}
+
+function humanizeKeysReauthError(raw: string): string {
+  if (raw.includes('different account')) {
+    return 'You signed in with a different account. Sign in again with the account this device uses.';
+  }
+  if (raw.includes("can't confirm this change")) {
+    // The session's reauth_refused copy ("Contact your administrator")
+    // already says it, persistently; no second, temporary line.
+    return '';
+  }
+  return humanizeFleetError(raw);
+}
+
 async function signOut() {
   loading.value = true;
   actionError.value = '';
@@ -319,6 +424,7 @@ async function refreshIdentity() {
         Cancel
       </button>
     </div>
+    <FleetDeviceNameNotice :refresh-key="state" />
     <p v-if="error" class="error-msg" data-testid="error-msg">
       {{ error }}
       <a
@@ -385,7 +491,13 @@ async function refreshIdentity() {
           {{ identity.orgName }}
         </span>
       </div>
-      <div v-if="identity?.teamName" class="identity-row">
+      <div v-if="teams.length > 0" class="identity-row identity-row--teams">
+        <span class="identity-label">{{ teams.length === 1 ? 'Team' : 'Teams' }}</span>
+        <div class="identity-value" data-testid="identity-teams">
+          <TeamTreeList :teams="teams" />
+        </div>
+      </div>
+      <div v-else-if="identity?.teamName" class="identity-row">
         <span class="identity-label">Team</span>
         <span class="identity-value" data-testid="identity-team">
           {{ identity.teamName }}
@@ -405,6 +517,30 @@ async function refreshIdentity() {
         <span class="identity-value fingerprint" data-testid="identity-device-fingerprint">
           {{ handoffFingerprint }}
         </span>
+      </div>
+      <FleetDeviceNameNotice :refresh-key="state" />
+    </div>
+
+    <div v-if="deviceKeysMessage" class="device-keys" data-testid="device-keys">
+      <p class="error-msg" role="status" data-testid="device-keys-msg">{{ deviceKeysMessage }}</p>
+      <div v-if="showKeysReauth" class="panel-actions">
+        <button
+          class="btn"
+          :class="keysReauthRefused ? 'btn-secondary' : 'btn-primary'"
+          :disabled="loading || keysReauthing"
+          data-testid="keys-reauth-btn"
+          @click="keysReauth"
+        >
+          {{ keysReauthing ? 'Waiting for browser…' : keysReauthRefused ? 'Try again' : 'Sign in again' }}
+        </button>
+        <button
+          v-if="keysReauthing"
+          class="btn btn-secondary"
+          data-testid="keys-reauth-cancel-btn"
+          @click="cancelKeysReauth"
+        >
+          Cancel
+        </button>
       </div>
     </div>
 
@@ -451,32 +587,32 @@ async function refreshIdentity() {
 
 <style scoped>
 .account-panel {
-  padding: 1.5rem;
+  padding: var(--space-24);
   max-width: 480px;
 }
 
 .panel-header {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  gap: var(--space-8);
+  margin-bottom: var(--space-12);
 }
 
 .panel-title {
-  font-size: 1.125rem;
+  font-size: var(--type-title-size);
   font-weight: 600;
   margin: 0;
 }
 
 .panel-explainer {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--ink-muted);
-  margin-bottom: 1rem;
+  margin-bottom: var(--space-16);
 }
 
 .panel-banner {
-  border-radius: 0.5rem;
-  padding: 1rem;
+  border-radius: var(--radius-md);
+  padding: var(--space-16);
 }
 
 .disabled-banner {
@@ -486,20 +622,20 @@ async function refreshIdentity() {
 
 .banner-title {
   font-weight: 600;
-  margin: 0 0 0.5rem;
+  margin: 0 0 var(--space-8);
 }
 
 .banner-body {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--ink-muted);
   margin: 0;
 }
 
 .env-badge {
-  font-size: 0.7rem;
+  font-size: var(--type-caption-size);
   font-weight: 700;
-  padding: 0.1rem 0.45rem;
-  border-radius: 0.25rem;
+  padding: var(--space-2) var(--space-8);
+  border-radius: var(--radius-sm);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -522,16 +658,25 @@ async function refreshIdentity() {
 .identity-card {
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 1rem;
-  margin-bottom: 1rem;
+  border-radius: var(--radius-md);
+  padding: var(--space-16);
+  margin-bottom: var(--space-16);
 }
 
 .identity-row {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  gap: var(--space-8);
+  margin-bottom: var(--space-8);
+}
+
+.identity-row--teams {
+  align-items: flex-start;
+}
+
+.identity-row--teams .identity-value {
+  flex: 1;
+  min-width: 0;
 }
 
 .identity-row:last-child {
@@ -539,20 +684,20 @@ async function refreshIdentity() {
 }
 
 .identity-label {
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   color: var(--ink-muted);
   min-width: 90px;
 }
 
 .identity-value {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .tier-badge {
-  font-size: 0.7rem;
+  font-size: var(--type-caption-size);
   font-weight: 600;
-  padding: 0.1rem 0.4rem;
-  border-radius: 0.2rem;
+  padding: var(--space-2) var(--space-6);
+  border-radius: var(--radius-sm);
   text-transform: capitalize;
   background: var(--accent-dim);
   color: var(--accent);
@@ -560,15 +705,15 @@ async function refreshIdentity() {
 
 .panel-actions {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-8);
 }
 
 .btn {
-  padding: 0.5rem 1rem;
+  padding: var(--space-8) var(--space-16);
   border: none;
-  border-radius: 0.375rem;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   transition: opacity 0.15s;
 }
@@ -594,33 +739,37 @@ async function refreshIdentity() {
 }
 
 .degraded-banner {
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
   color: var(--warn);
-  margin: 0 0 0.75rem;
+  margin: 0 0 var(--space-12);
 }
 
 .degraded-lanes {
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
   color: var(--warn);
-  margin: 0 0 0.75rem;
-  padding-left: 1rem;
+  margin: 0 0 var(--space-12);
+  padding-left: var(--space-16);
+}
+
+.device-keys {
+  margin-bottom: var(--space-12);
 }
 
 .error-msg {
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
   color: var(--danger);
-  margin-top: 0.5rem;
+  margin-top: var(--space-8);
 }
 
 .finish-signup-link {
   display: block;
-  margin-top: 0.35rem;
+  margin-top: var(--space-6);
   color: var(--accent);
   text-decoration: underline;
 }
 .fingerprint {
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--type-caption-size);
   word-break: break-all;
 }
 </style>

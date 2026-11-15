@@ -7,7 +7,7 @@ import (
 )
 
 // TestLease_AcquireRenewRelease covers the basic file-lease lifecycle:
-// write, read back, renew (mtime advances), release (file gone).
+// write, read back, renew (a stale mtime is refreshed), release (file gone).
 func TestLease_AcquireRenewRelease(t *testing.T) {
 	l := NewLayout(t.TempDir())
 	if err := AcquireOrRenewLease(l, "harness", 4242, "0.84.0"); err != nil {
@@ -21,8 +21,23 @@ func TestLease_AcquireRenewRelease(t *testing.T) {
 		t.Errorf("got %+v", info)
 	}
 
-	first := info.ModTime
-	time.Sleep(10 * time.Millisecond)
+	// Backdate the lease past the staleness bound rather than sleeping
+	// and expecting the renew to land in a later mtime tick: filesystem
+	// timestamp resolution varies (1 s on some, coarse jiffies on others),
+	// so a short sleep made this test flake. The property that matters in
+	// production — a renew refreshes a lease that would otherwise go
+	// stale — does not depend on granularity.
+	backdated := time.Now().Add(-2 * StaleAfter).Truncate(time.Second)
+	if err := os.Chtimes(l.LeaseFile("harness"), backdated, backdated); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+	old, ok, err := ReadLease(l, "harness")
+	if err != nil || !ok {
+		t.Fatalf("ReadLease after backdate: ok=%v err=%v", ok, err)
+	}
+	if !old.IsStale(time.Now()) {
+		t.Fatalf("backdated lease should be stale: mtime=%v", old.ModTime)
+	}
 	if err := RenewLease(l, "harness", 4242, "0.84.0"); err != nil {
 		t.Fatalf("RenewLease: %v", err)
 	}
@@ -30,8 +45,11 @@ func TestLease_AcquireRenewRelease(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("ReadLease after renew: ok=%v err=%v", ok, err)
 	}
-	if !info2.ModTime.After(first) {
-		t.Errorf("expected mtime to advance on renew: first=%v second=%v", first, info2.ModTime)
+	if !info2.ModTime.After(backdated) {
+		t.Errorf("expected mtime to advance on renew: backdated=%v renewed=%v", backdated, info2.ModTime)
+	}
+	if info2.IsStale(time.Now()) {
+		t.Errorf("renewed lease must not be stale: mtime=%v", info2.ModTime)
 	}
 
 	if err := ReleaseLease(l, "harness"); err != nil {

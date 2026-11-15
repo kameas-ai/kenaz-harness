@@ -48,7 +48,7 @@ onBeforeUnmount(() => {
     <div class="flex justify-end">
       <button
         type="button"
-        class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-[12px] text-ink-muted hover:bg-surface-2 hover:text-ink"
+        class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-small text-ink-muted hover:bg-surface-2 hover:text-ink"
         data-testid="audio-renderer-download"
         @click="downloadAudio"
       >

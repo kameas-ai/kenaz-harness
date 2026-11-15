@@ -233,7 +233,7 @@ function goto(to: string) {
         :aria-label="group.label"
       >
         <h3
-          class="hidden two-col:block px-3 pb-1 font-ui text-[10px] font-medium uppercase tracking-[0.18em] text-ink-subtle"
+          class="hidden two-col:block px-3 pb-1 font-ui text-eyebrow font-medium uppercase tracking-eyebrow text-ink-subtle"
         >
           {{ group.label }}
         </h3>
@@ -255,7 +255,7 @@ function goto(to: string) {
               <component
                 :is="t.icon"
                 :size="14"
-                class="shrink-0"
+                class="inline-block shrink-0"
                 :class="isActive(t) ? 'text-accent' : ''"
               />
               <span class="truncate hidden two-col:inline">{{ t.label }}</span>

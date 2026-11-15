@@ -148,11 +148,11 @@ const decisionLabel = computed<string>(() => {
           class="flex items-center justify-between border-b border-border-muted px-6 py-4 shrink-0"
         >
           <div>
-            <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">DRY RUN</div>
-            <h2 class="mt-0.5 font-ui text-base font-semibold text-ink">
+            <div class="text-caption uppercase tracking-eyebrow text-ink-subtle">DRY RUN</div>
+            <h2 class="mt-0.5 font-ui text-h3 font-semibold text-ink">
               {{ hook.name || hook.id }}
             </h2>
-            <p class="font-mono text-[10px] text-ink-subtle">
+            <p class="font-mono text-eyebrow text-ink-subtle">
               {{ hook.event }} · {{ hook.kind }}
             </p>
           </div>
@@ -167,7 +167,7 @@ const decisionLabel = computed<string>(() => {
           <div>
             <label
               for="dry-run-payload"
-              class="block font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1"
+              class="block font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-1"
             >
               Synthetic payload (JSON)
             </label>
@@ -193,7 +193,7 @@ const decisionLabel = computed<string>(() => {
             </Button>
             <span
               v-if="result"
-              class="font-ui text-[11px] text-ink-muted"
+              class="font-ui text-caption text-ink-muted"
               data-testid="hook-dry-run-latency"
             >
               {{ result.latencyMs }} ms
@@ -203,7 +203,7 @@ const decisionLabel = computed<string>(() => {
           <!-- Error banner -->
           <div
             v-if="runError"
-            class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+            class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
             role="alert"
             data-testid="hook-dry-run-error"
           >
@@ -214,12 +214,12 @@ const decisionLabel = computed<string>(() => {
           <template v-if="result">
             <!-- Decision badge -->
             <div>
-              <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1">
+              <p class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-1">
                 Merged decision
               </p>
               <span
                 :class="decisionBadgeClass"
-                class="inline-block font-mono text-[11px] rounded border px-2 py-0.5"
+                class="inline-block font-mono text-caption rounded border px-2 py-0.5"
                 data-testid="hook-dry-run-decision"
               >
                 {{ decisionLabel }}
@@ -231,7 +231,7 @@ const decisionLabel = computed<string>(() => {
               v-if="result.output.permissionDecision"
               data-testid="hook-dry-run-permission-decision"
             >
-              <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1">
+              <p class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-1">
                 Permission decision
               </p>
               <p class="font-mono text-xs text-ink">
@@ -246,7 +246,7 @@ const decisionLabel = computed<string>(() => {
               v-if="result.output.watchPaths && result.output.watchPaths.length"
               data-testid="hook-dry-run-watch-paths"
             >
-              <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1">
+              <p class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-1">
                 Watched paths
               </p>
               <ul class="text-xs font-mono text-ink list-disc pl-4">
@@ -260,7 +260,7 @@ const decisionLabel = computed<string>(() => {
               data-testid="hook-dry-run-additional-context"
               :data-delivered="contextDelivered ? 'true' : 'false'"
             >
-              <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1">
+              <p class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-1">
                 {{
                   contextDelivered
                     ? 'Additional context injected'
@@ -274,7 +274,7 @@ const decisionLabel = computed<string>(() => {
 
             <!-- HookOutput JSON -->
             <div>
-              <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1">
+              <p class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-1">
                 Hook output (raw)
               </p>
               <pre
@@ -286,7 +286,7 @@ const decisionLabel = computed<string>(() => {
             <!-- Shell stdout / stderr (kind=shell only) -->
             <template v-if="hook.kind === 'shell'">
               <div v-if="result.stdout" data-testid="hook-dry-run-stdout">
-                <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1">
+                <p class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-1">
                   Stdout
                   <span v-if="result.exitCode !== 0" class="text-signal-danger ml-1">
                     (exit {{ result.exitCode }})
@@ -297,18 +297,18 @@ const decisionLabel = computed<string>(() => {
                 >{{ result.stdout }}</pre>
               </div>
               <div v-if="result.stderr" data-testid="hook-dry-run-stderr">
-                <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1 text-signal-warning">
+                <p class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-1 text-signal-warn-text">
                   Stderr
                 </p>
                 <pre
-                  class="text-xs font-mono bg-surface-1 border border-signal-warning/40 rounded p-2 overflow-auto max-h-32 text-signal-warning"
+                  class="text-xs font-mono bg-surface-1 border border-signal-warn/40 rounded p-2 overflow-auto max-h-32 text-signal-warn-text"
                 >{{ result.stderr }}</pre>
               </div>
             </template>
 
             <!-- Merged output full JSON -->
             <div>
-              <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1">
+              <p class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-1">
                 Merged output
               </p>
               <pre

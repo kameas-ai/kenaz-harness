@@ -13,6 +13,7 @@
  *
  * branch-subagent-interactive-01KZNP3B WP08.
  */
+import { Agent } from '@/shell/icons';
 import { ref, computed } from 'vue';
 import SubagentBudgetMeter from '@/components/chat/SubagentBudgetMeter.vue';
 import type { SubagentBranch, SubagentStatus } from '@/lib/types';
@@ -73,9 +74,9 @@ const statusClass = computed(() => {
       return 'text-accent';
     case 'error':
     case 'aborted':
-      return 'text-status-error';
+      return 'text-signal-danger-text';
     case 'complete':
-      return 'text-status-success';
+      return 'text-signal-ok-text';
     default:
       return 'text-ink-muted';
   }
@@ -103,13 +104,13 @@ function confirmAbort() {
       data-testid="subagent-header"
     >
       <!-- Worker glyph + profile -->
-      <span class="text-sm" aria-hidden="true">⚙</span>
+      <Agent class="inline-block" :size="14" aria-hidden="true" />
       <span class="font-ui text-sm font-medium text-ink">
         {{ branch.title || branch.profileId }}
       </span>
-      <span class="font-ui text-[11px] text-ink-subtle">{{ branch.profileId }}</span>
+      <span class="font-ui text-caption text-ink-subtle">{{ branch.profileId }}</span>
       <span
-        class="rounded-full px-2 py-0.5 font-ui text-[10px] uppercase tracking-wide"
+        class="rounded-full px-2 py-0.5 font-ui text-eyebrow uppercase tracking-wide"
         :class="statusClass"
         :data-testid="`subagent-status-${branch.id}`"
       >
@@ -149,7 +150,7 @@ function confirmAbort() {
         <button
           v-if="!isComplete"
           type="button"
-          class="rounded border border-status-error/30 px-2 py-1 font-ui text-xs text-status-error hover:bg-status-error/10"
+          class="rounded border border-signal-danger/30 px-2 py-1 font-ui text-xs text-signal-danger-text hover:bg-signal-danger/10"
           data-testid="subagent-abort-btn"
           @click="confirmAbort"
         >
@@ -199,10 +200,10 @@ function confirmAbort() {
             Send
           </button>
         </div>
-        <div v-if="steerError" class="mt-1 font-ui text-xs text-status-error">
+        <div v-if="steerError" class="mt-1 font-ui text-xs text-signal-danger-text">
           {{ steerError }}
         </div>
-        <p class="mt-1 font-ui text-[11px] text-ink-subtle">
+        <p class="mt-1 font-ui text-caption text-ink-subtle">
           Messages sent here are delivered to the worker on its next turn. Engaging
           the worker will ask for merge confirmation before the summary returns to
           the parent.

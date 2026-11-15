@@ -115,7 +115,7 @@ async function rerun(): Promise<void> {
   <div class="relative" data-testid="context-health">
     <button
       type="button"
-      class="flex items-center gap-1.5 rounded-sm border border-border-muted bg-surface-1 px-2 py-0.5 font-ui text-[11px] text-ink-muted hover:bg-surface-2 hover:text-ink"
+      class="flex items-center gap-1.5 rounded-sm border border-border-muted bg-surface-1 px-2 py-0.5 font-ui text-caption text-ink-muted hover:bg-surface-2 hover:text-ink"
       :aria-expanded="expanded"
       aria-controls="context-health-card"
       data-testid="context-health-chip"
@@ -147,7 +147,7 @@ async function rerun(): Promise<void> {
       </div>
       <p
         v-if="rerunDisabledReason"
-        class="font-ui text-[11px] text-ink-subtle"
+        class="font-ui text-caption text-ink-subtle"
         data-testid="context-health-rerun-reason"
       >
         {{ rerunDisabledReason }}
@@ -155,13 +155,13 @@ async function rerun(): Promise<void> {
 
       <p v-if="loading" class="font-ui text-xs text-ink-muted">Loading…</p>
 
-      <p v-else-if="error" class="font-ui text-xs text-signal-warning" data-testid="context-health-error">
+      <p v-else-if="error" class="font-ui text-xs text-signal-warn-text" data-testid="context-health-error">
         {{ error }}
       </p>
 
       <template v-else-if="health">
         <div class="flex items-baseline gap-2">
-          <span class="font-ui text-2xl font-semibold text-ink" data-testid="context-health-total">
+          <span class="font-ui text-hero font-semibold text-ink" data-testid="context-health-total">
             {{ health.total_nodes }}
           </span>
           <span class="font-ui text-xs text-ink-muted">context nodes</span>

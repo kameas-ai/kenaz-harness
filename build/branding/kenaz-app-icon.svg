@@ -1,24 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Kenaz app icon — simplified mark per design doc.
-  Dark rounded-square background (squircle approximation via rx=225 on 1024)
-  with a centred gold chevron ">" in the brand accent (#C8A56A).
+  Kenaz app icon, vector source. Matches the raster build/appicon.png, which
+  is rendered by @kameas-ai/kenaz-design-system v0.13.0
+  scripts/render-brand-rasters.py (ink-theme --surface-0 field with a faint
+  brass radial glow, the mark in a 66% box: --ink-dim lattice r 2, --accent
+  rune 3.2, nodes 4/8/12/18/24 cut out). Regenerate the rasters with that
+  script, not from this file.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#23232A"/>
-      <stop offset="1" stop-color="#0E0E12"/>
-    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.6">
+      <stop offset="0" stop-color="#C8A56A" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#C8A56A" stop-opacity="0"/>
+    </radialGradient>
   </defs>
-  <!-- Squircle-ish background -->
-  <rect width="1024" height="1024" rx="225" ry="225" fill="url(#bg)"/>
-  <!-- Gold chevron — same accent as the existing UI tokens (--accent: #C8A56A) -->
-  <polyline
-    points="360,300 680,512 360,724"
-    stroke="#C8A56A"
-    stroke-width="92"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    fill="none"/>
+  <rect width="1024" height="1024" fill="#0A0A0B"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <g transform="translate(174.08 174.08) scale(10.5600)">
+    <g fill="#48484F"><circle cx="8" cy="8" r="2"/><circle cx="20" cy="8" r="2"/><circle cx="32" cy="8" r="2"/><circle cx="56" cy="8" r="2"/><circle cx="8" cy="20" r="2"/><circle cx="20" cy="20" r="2"/><circle cx="44" cy="20" r="2"/><circle cx="56" cy="20" r="2"/><circle cx="8" cy="32" r="2"/><circle cx="32" cy="32" r="2"/><circle cx="44" cy="32" r="2"/><circle cx="56" cy="32" r="2"/><circle cx="8" cy="44" r="2"/><circle cx="20" cy="44" r="2"/><circle cx="44" cy="44" r="2"/><circle cx="56" cy="44" r="2"/><circle cx="8" cy="56" r="2"/><circle cx="20" cy="56" r="2"/><circle cx="32" cy="56" r="2"/><circle cx="56" cy="56" r="2"/></g>
+    <path d="M 44 8 L 18 32 L 44 56" stroke="#C8A56A" stroke-width="3.2" stroke-linecap="square" stroke-linejoin="miter" stroke-miterlimit="8" fill="none"/>
+  </g>
 </svg>

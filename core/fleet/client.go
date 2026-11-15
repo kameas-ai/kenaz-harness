@@ -73,9 +73,21 @@ type Client struct {
 	// (device-keys-handoff-01DEVKH01 WP02). Mutex-guarded inside.
 	keyReg keyRegState
 
+	// stepUp holds, in memory only, the ID token from a max_age=0
+	// re-authentication that proves a fresh sign-in for a device-key
+	// replacement (device_keys_stepup.go). Never persisted.
+	stepUp stepUpHolder
+
 	// orgPause is the staff "pause paid features" state this client has
 	// observed (org_paused.go). Mutex-guarded inside.
 	orgPause orgPauseState
+
+	// deviceName is the SetDeviceNameSource callback (device_name.go):
+	// the enroll `hostname` (device display name), "" = omitted.
+	deviceName atomic.Pointer[func(nodeID string) string]
+	// lastDeviceName is the device name the last accepted enroll sent
+	// ("" = omitted); nil before any accepted enroll.
+	lastDeviceName atomic.Pointer[string]
 }
 
 // SetSessionBroker wires the session sink into the client. When set, a
@@ -242,7 +254,7 @@ func (c *Client) RefreshIdentity(ctx context.Context, nodeID, platform, version 
 	// Keyed by account: a sign-in must never join an enroll still running
 	// under the previous account's token and take its answer (legal D164).
 	v, err, _ := c.enrollSF.Do("enroll:"+TokenIdentityKey(), func() (any, error) {
-		return c.enrollIdentity(ctx, nodeID, platform, version)
+		return c.enrollRepairingNodeID(ctx, nodeID, platform, version)
 	})
 	if err != nil {
 		// v is the zero Identity{} on error (enrollIdentity's own contract);

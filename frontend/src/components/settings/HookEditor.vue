@@ -158,10 +158,10 @@ function handleDryRun(): void {
   <div data-testid="hook-editor">
     <header class="flex items-center justify-between mb-4">
       <div>
-        <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <div class="text-caption uppercase tracking-eyebrow text-ink-subtle">
           {{ isCreate ? 'ADD HOOK' : 'EDIT HOOK' }}
         </div>
-        <h2 class="mt-0.5 font-ui text-base font-semibold text-ink">
+        <h2 class="mt-0.5 font-ui text-h3 font-semibold text-ink">
           {{ draft.name || draft.id }}
         </h2>
       </div>
@@ -172,7 +172,7 @@ function handleDryRun(): void {
 
     <div
       v-if="validationError"
-      class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="hook-editor-validation-error"
     >
@@ -182,7 +182,7 @@ function handleDryRun(): void {
     <div class="grid gap-3">
       <!-- ID -->
       <label class="grid gap-1">
-        <span class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle">ID</span>
+        <span class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">ID</span>
         <input
           v-model="draft.id"
           class="font-mono text-xs px-2 py-1.5 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent"
@@ -193,7 +193,7 @@ function handleDryRun(): void {
 
       <!-- Name -->
       <label class="grid gap-1">
-        <span class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle">Name</span>
+        <span class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">Name</span>
         <input
           v-model="draft.name"
           class="text-sm px-2 py-1.5 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent"
@@ -204,7 +204,7 @@ function handleDryRun(): void {
 
       <!-- Event picker -->
       <label class="grid gap-1">
-        <span class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle">Event</span>
+        <span class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">Event</span>
         <select
           v-model="draft.event"
           class="text-sm px-2 py-1.5 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent"
@@ -230,7 +230,7 @@ function handleDryRun(): void {
         </select>
         <p
           v-if="!isFiringEvent"
-          class="font-ui text-[10px] text-signal-warning"
+          class="font-ui text-eyebrow text-signal-warn-text"
           data-testid="hook-editor-event-inert-badge"
         >
           Not firing yet — this event has no production trigger in this
@@ -242,7 +242,7 @@ function handleDryRun(): void {
 
       <!-- Kind picker -->
       <label class="grid gap-1">
-        <span class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle">Kind</span>
+        <span class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">Kind</span>
         <select
           v-model="draft.kind"
           class="text-sm px-2 py-1.5 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent"
@@ -254,7 +254,7 @@ function handleDryRun(): void {
 
       <!-- kind=builtin: builtin picker -->
       <label v-if="draft.kind === 'builtin'" class="grid gap-1">
-        <span class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle">Builtin</span>
+        <span class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">Builtin</span>
         <select
           v-model="draft.builtin"
           class="text-sm px-2 py-1.5 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent"
@@ -267,7 +267,7 @@ function handleDryRun(): void {
         </select>
         <p
           v-if="draft.builtin"
-          class="font-ui text-[11px] text-ink-muted"
+          class="font-ui text-caption text-ink-muted"
           data-testid="hook-editor-builtin-desc"
         >
           {{ builtins.find((b) => b.id === draft.builtin)?.description ?? '' }}
@@ -276,7 +276,7 @@ function handleDryRun(): void {
 
       <!-- kind=shell: command textarea -->
       <label v-if="draft.kind === 'shell'" class="grid gap-1">
-        <span class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle">Command</span>
+        <span class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">Command</span>
         <textarea
           v-model="draft.command"
           class="text-xs font-mono px-2 py-1.5 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent resize-y"
@@ -284,7 +284,7 @@ function handleDryRun(): void {
           data-testid="hook-editor-command"
           placeholder="echo '{}' | jq ."
         />
-        <p class="font-ui text-[10px] text-ink-subtle">
+        <p class="font-ui text-eyebrow text-ink-subtle">
           Receives <code class="font-mono">{"input": &lt;event payload&gt;}</code> on stdin.
           Write <code class="font-mono">{"decision":"approve"}</code> (or any HookOutput) on stdout.
         </p>
@@ -292,9 +292,9 @@ function handleDryRun(): void {
 
       <!-- Per-hook timeout (typed wire field as of v0.8.x). -->
       <label class="grid gap-1">
-        <span class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle">
+        <span class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Timeout (ms)
-          <span class="normal-case text-[10px] text-ink-subtle ml-1">0 = default (5 000 ms sync)</span>
+          <span class="normal-case text-eyebrow text-ink-subtle ml-1">0 = default (5 000 ms sync)</span>
         </span>
         <input
           :value="draft.timeoutMs ?? 0"
@@ -311,12 +311,12 @@ function handleDryRun(): void {
 
       <!-- Match filters -->
       <fieldset class="rounded-md border border-border-muted px-3 py-2">
-        <legend class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle px-1">
+        <legend class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle px-1">
           Match filters
-          <span class="normal-case text-[10px] text-ink-subtle ml-1">(empty = any)</span>
+          <span class="normal-case text-eyebrow text-ink-subtle ml-1">(empty = any)</span>
         </legend>
         <label class="block mt-2">
-          <span class="font-ui text-[11px] text-ink-muted">Session IDs (comma-separated)</span>
+          <span class="font-ui text-caption text-ink-muted">Session IDs (comma-separated)</span>
           <input
             :value="joinList(draft.match.sessionIds)"
             class="mt-1 w-full text-xs font-mono px-2 py-1 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent"
@@ -325,7 +325,7 @@ function handleDryRun(): void {
           />
         </label>
         <label class="block mt-2">
-          <span class="font-ui text-[11px] text-ink-muted">Kinds (comma-separated)</span>
+          <span class="font-ui text-caption text-ink-muted">Kinds (comma-separated)</span>
           <input
             :value="joinList(draft.match.kinds)"
             class="mt-1 w-full text-xs font-mono px-2 py-1 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent"
@@ -334,7 +334,7 @@ function handleDryRun(): void {
           />
         </label>
         <label class="block mt-2">
-          <span class="font-ui text-[11px] text-ink-muted">Models (comma-separated)</span>
+          <span class="font-ui text-caption text-ink-muted">Models (comma-separated)</span>
           <input
             :value="joinList(draft.match.models)"
             class="mt-1 w-full text-xs font-mono px-2 py-1 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent"

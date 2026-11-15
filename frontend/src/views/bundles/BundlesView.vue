@@ -275,7 +275,7 @@ onMounted(() => {
         rel="noopener"
       >Read the bundle docs →</a>
     </div>
-    <table v-else class="w-full font-ui text-[12px] text-ink" data-testid="bundles-table">
+    <table v-else class="w-full font-ui text-small text-ink" data-testid="bundles-table">
       <thead class="bg-surface-1 text-ink-muted">
         <tr>
           <th class="text-left px-4 py-2 font-medium">Name</th>
@@ -305,7 +305,7 @@ onMounted(() => {
                 "Unsigned" here, not "Signed".
               -->
               <span
-                class="text-[11px] uppercase tracking-[0.12em]"
+                class="text-caption uppercase tracking-eyebrow"
                 :class="isVerified(b) ? 'text-signal-ok' : 'text-ink-subtle'"
                 :data-testid="`bundle-verification-${b.id}`"
               >
@@ -316,7 +316,7 @@ onMounted(() => {
             <td class="px-4 py-2 text-right space-x-3">
               <button
                 type="button"
-                class="text-[11px] text-ink-muted hover:text-ink"
+                class="text-caption text-ink-muted hover:text-ink"
                 :data-testid="`bundle-toggle-${b.id}`"
                 @click="toggle(b.id)"
               >
@@ -326,7 +326,7 @@ onMounted(() => {
               <button
                 v-if="signedIn"
                 type="button"
-                class="text-[11px] text-ink-muted hover:text-accent"
+                class="text-caption text-ink-muted hover:text-accent"
                 :data-testid="`bundle-publish-${b.id}`"
                 @click="openPublishDialog(b)"
               >
@@ -334,7 +334,7 @@ onMounted(() => {
               </button>
               <button
                 type="button"
-                class="text-[11px] text-signal-danger hover:text-ink disabled:opacity-50"
+                class="text-caption text-signal-danger hover:text-ink disabled:opacity-50"
                 :data-testid="`bundle-remove-${b.id}`"
                 :disabled="removingId === b.id"
                 @click="remove(b.id)"
@@ -347,11 +347,11 @@ onMounted(() => {
             <td colspan="6" class="px-6 py-3">
               <div
                 v-if="(expanded[b.id]?.artifacts?.length ?? 0) === 0"
-                class="text-[11px] text-ink-muted font-ui"
+                class="text-caption text-ink-muted font-ui"
               >
                 Bundle declares no artifacts.
               </div>
-              <ul v-else class="space-y-1 font-mono text-[11px]">
+              <ul v-else class="space-y-1 font-mono text-caption">
                 <li
                   v-for="a in expanded[b.id]?.artifacts"
                   :key="a.contentHash + a.name"
@@ -369,7 +369,7 @@ onMounted(() => {
     </table>
 
     <form
-      class="mt-6 px-6 py-4 border-t border-border-muted font-ui text-[12px]"
+      class="mt-6 px-6 py-4 border-t border-border-muted font-ui text-small"
       data-testid="bundle-install-form"
       @submit.prevent="install"
     >
@@ -386,7 +386,7 @@ onMounted(() => {
         <select
           id="bundle-install-kind"
           v-model="installKind"
-          class="px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
+          class="px-2 py-1 font-mono text-small bg-surface-1 text-ink border border-border-muted rounded"
           :disabled="installBusy"
           data-testid="bundle-install-kind"
         >
@@ -405,13 +405,13 @@ onMounted(() => {
               ? 'https://mirror.example.com/bundles/my-bundle'
               : '/absolute/path/to/bundle'
           "
-          class="flex-1 px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
+          class="flex-1 px-2 py-1 font-mono text-small bg-surface-1 text-ink border border-border-muted rounded"
           :disabled="installBusy"
           data-testid="bundle-install-locator"
         />
         <button
           type="submit"
-          class="px-3 py-1 text-[11px] bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
+          class="px-3 py-1 text-caption bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
           :disabled="installBusy || !installLocator.trim()"
           data-testid="bundle-install-submit"
         >
@@ -420,7 +420,7 @@ onMounted(() => {
       </div>
       <div
         v-if="installError"
-        class="mt-2 text-[11px] text-signal-danger"
+        class="mt-2 text-caption text-signal-danger"
         role="alert"
         data-testid="bundle-install-error"
       >
@@ -431,7 +431,7 @@ onMounted(() => {
     <!-- UNIT-8: trust anchor management. Without this panel an install
          refused for "anchor_missing" (UNIT-4) has no user remedy — see
          core/rpc/views/trustanchor. -->
-    <div class="mt-6 px-6 py-4 border-t border-border-muted font-ui text-[12px]">
+    <div class="mt-6 px-6 py-4 border-t border-border-muted font-ui text-small">
       <div class="text-ink mb-2">Trust anchors</div>
       <p class="text-ink-muted mb-3 max-w-prose">
         A signed bundle verifies only against an installed anchor's
@@ -479,7 +479,7 @@ onMounted(() => {
           type="text"
           aria-label="Anchor ID"
           placeholder="anchor id"
-          class="px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
+          class="px-2 py-1 font-mono text-small bg-surface-1 text-ink border border-border-muted rounded"
           :disabled="anchorBusy"
           data-testid="anchor-install-id"
         />
@@ -488,7 +488,7 @@ onMounted(() => {
           type="text"
           aria-label="Peer ID (optional)"
           placeholder="peer id (optional)"
-          class="px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
+          class="px-2 py-1 font-mono text-small bg-surface-1 text-ink border border-border-muted rounded"
           :disabled="anchorBusy"
           data-testid="anchor-install-peer"
         />
@@ -497,13 +497,13 @@ onMounted(() => {
           type="text"
           aria-label="Public key (base64)"
           placeholder="public key, base64"
-          class="flex-1 min-w-[16ch] px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
+          class="flex-1 min-w-[16ch] px-2 py-1 font-mono text-small bg-surface-1 text-ink border border-border-muted rounded"
           :disabled="anchorBusy"
           data-testid="anchor-install-key"
         />
         <button
           type="submit"
-          class="px-3 py-1 text-[11px] bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
+          class="px-3 py-1 text-caption bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
           :disabled="anchorBusy || !anchorId.trim() || !anchorKeyB64.trim()"
           data-testid="anchor-install-submit"
         >
@@ -512,7 +512,7 @@ onMounted(() => {
       </form>
       <div
         v-if="anchorError"
-        class="mt-2 text-[11px] text-signal-danger"
+        class="mt-2 text-caption text-signal-danger"
         role="alert"
         data-testid="anchor-install-error"
       >

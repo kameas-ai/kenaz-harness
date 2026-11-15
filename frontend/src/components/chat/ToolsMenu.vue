@@ -323,7 +323,7 @@ function toggle() {
       data-testid="tools-menu-toggle"
       @click="toggle"
     >
-      <span class="uppercase tracking-[0.14em] text-ink-subtle">tools</span>
+      <span class="uppercase tracking-eyebrow text-ink-subtle">tools</span>
       <span
         v-if="composition"
         class="font-mono text-ink-muted"
@@ -348,13 +348,13 @@ function toggle() {
       />
       <template v-else>
         <div class="space-y-1 border-b border-border-muted px-3 py-2" data-testid="tools-menu-meter">
-          <div class="flex items-center justify-between text-[11px]">
+          <div class="flex items-center justify-between text-caption">
             <span class="text-ink-muted">Next request, before budget</span>
             <span class="font-mono text-ink" data-testid="tools-menu-next-tokens">
               {{ formatTokens(nextTokens) }}<template v-if="budget"> of {{ compactTokens(budget) }} budget</template>
             </span>
           </div>
-          <p v-if="orgBudget > 0" class="text-[10px] text-ink-subtle" data-testid="tools-menu-org-budget">
+          <p v-if="orgBudget > 0" class="text-eyebrow text-ink-subtle" data-testid="tools-menu-org-budget">
             Schema budget set by your organisation ({{ orgBudget.toLocaleString() }} tokens).
           </p>
           <span v-if="budget" class="block h-1 w-full overflow-hidden rounded-full bg-surface-2">
@@ -364,14 +364,14 @@ function toggle() {
               :style="{ width: meterPct + '%' }"
             ></span>
           </span>
-          <p v-if="composition" class="text-[10px] text-ink-subtle" data-testid="tools-menu-last">
+          <p v-if="composition" class="text-eyebrow text-ink-subtle" data-testid="tools-menu-last">
             Last request: {{ composition.tools.toLocaleString() }} tokens of tool definitions
             ({{ composition.toolsFull }} sent<template v-if="composition.toolsSummary">, {{ composition.toolsSummary }} listed by summary</template>),
             {{ composition.cached.toLocaleString() }} cached.
           </p>
           <p
             v-if="(composition?.hotOverBudgetBy ?? 0) > 0"
-            class="text-[11px] text-signal-danger"
+            class="text-caption text-signal-danger"
             role="status"
             data-testid="tools-menu-hot-over"
           >
@@ -379,7 +379,7 @@ function toggle() {
           </p>
           <p
             v-if="(composition?.pinnedOverBudgetBy ?? 0) > 0"
-            class="text-[11px] text-signal-warn"
+            class="text-caption text-signal-warn"
             role="status"
             data-testid="tools-menu-pinned-over"
           >
@@ -387,25 +387,25 @@ function toggle() {
           </p>
           <p
             v-if="(composition?.toolsEvicted ?? 0) > 0"
-            class="text-[11px] text-ink-muted"
+            class="text-caption text-ink-muted"
             role="status"
             data-testid="tools-menu-evicted"
           >
             {{ composition!.toolsEvicted }} loaded tool{{ composition!.toolsEvicted === 1 ? '' : 's' }} left out of the last request to fit the budget.
           </p>
         </div>
-        <div v-if="error" class="px-3 py-2 text-[11px] text-signal-danger" role="alert" data-testid="tools-menu-error">
+        <div v-if="error" class="px-3 py-2 text-caption text-signal-danger" role="alert" data-testid="tools-menu-error">
           {{ error }}
         </div>
-        <div v-if="notice" class="px-3 py-2 text-[11px] text-ink-muted" role="status" data-testid="tools-menu-notice">
+        <div v-if="notice" class="px-3 py-2 text-caption text-ink-muted" role="status" data-testid="tools-menu-notice">
           {{ notice }}
         </div>
-        <div v-if="loading && costs.length === 0" class="px-3 py-2 text-[11px] text-ink-muted">
+        <div v-if="loading && costs.length === 0" class="px-3 py-2 text-caption text-ink-muted">
           Loading tools…
         </div>
         <div
           v-else-if="!error && costs.length === 0"
-          class="px-3 py-2 text-[11px] text-ink-muted"
+          class="px-3 py-2 text-caption text-ink-muted"
           data-testid="tools-menu-empty"
         >
           No tool servers for this session.
@@ -418,19 +418,19 @@ function toggle() {
             :data-testid="`tools-menu-row-${c.server}`"
           >
             <div class="flex items-center justify-between gap-2">
-              <span class="font-mono text-[12px] text-ink">{{ c.server }}</span>
-              <span class="font-mono text-[11px] text-ink-subtle">
+              <span class="font-mono text-small text-ink">{{ c.server }}</span>
+              <span class="font-mono text-caption text-ink-subtle">
                 {{ c.running ? formatTokens(c.tokenEst) : '—' }}
               </span>
             </div>
-            <div class="mt-0.5 text-[11px] text-ink-muted" :data-testid="`tools-menu-state-${c.server}`">
+            <div class="mt-0.5 text-caption text-ink-muted" :data-testid="`tools-menu-state-${c.server}`">
               {{ stateText(c) }}<template v-if="isPinnedForProject(c)"> · pinned for this project</template>
             </div>
             <div class="mt-1 flex flex-wrap gap-1.5">
               <button
                 v-if="canLoad(c)"
                 type="button"
-                class="rounded-sm border border-accent-hairline px-2 py-0.5 text-[11px] text-accent hover:bg-accent-glow disabled:opacity-50"
+                class="rounded-sm border border-accent-hairline px-2 py-0.5 text-caption text-accent hover:bg-accent-glow disabled:opacity-50"
                 :disabled="busy !== null"
                 :data-testid="`tools-menu-load-${c.server}`"
                 @click="load(c)"
@@ -440,7 +440,7 @@ function toggle() {
               <button
                 v-if="rowState(c) === 'unloaded'"
                 type="button"
-                class="rounded-sm border border-accent-hairline px-2 py-0.5 text-[11px] text-accent hover:bg-accent-glow disabled:opacity-50"
+                class="rounded-sm border border-accent-hairline px-2 py-0.5 text-caption text-accent hover:bg-accent-glow disabled:opacity-50"
                 :disabled="busy !== null"
                 :data-testid="`tools-menu-undo-${c.server}`"
                 @click="undoUnload(c)"
@@ -450,7 +450,7 @@ function toggle() {
               <button
                 v-if="canUnload(c)"
                 type="button"
-                class="rounded-sm border border-border-muted px-2 py-0.5 text-[11px] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
+                class="rounded-sm border border-border-muted px-2 py-0.5 text-caption text-ink-muted hover:bg-surface-2 disabled:opacity-50"
                 :disabled="busy !== null"
                 :data-testid="`tools-menu-unload-${c.server}`"
                 @click="unload(c)"
@@ -460,7 +460,7 @@ function toggle() {
               <button
                 v-if="canPin(c)"
                 type="button"
-                class="rounded-sm border border-border-muted px-2 py-0.5 text-[11px] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
+                class="rounded-sm border border-border-muted px-2 py-0.5 text-caption text-ink-muted hover:bg-surface-2 disabled:opacity-50"
                 :disabled="busy !== null"
                 :data-testid="`tools-menu-pin-${c.server}`"
                 @click="pin(c)"
@@ -470,7 +470,7 @@ function toggle() {
             </div>
           </li>
         </ul>
-        <p class="border-t border-border-muted px-3 py-2 text-[10px] text-ink-subtle">
+        <p class="border-t border-border-muted px-3 py-2 text-eyebrow text-ink-subtle">
           Unload turns the server off for this session; the model cannot load it again until you
           undo. Defaults for every session are in Capabilities.
         </p>

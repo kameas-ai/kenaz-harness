@@ -2,8 +2,10 @@ package rpc
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -303,4 +305,52 @@ func TestCedarSessionKindResolver_ConcurrentResolve(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// E2E-11: a chat tool call denied by the org's Fleet policy reaches the
+// user as "Blocked by your organization's Fleet policy (...)", never the
+// Cedar reason / policy id; a local rule's deny keeps the Cedar reason.
+func TestCedarSessionKindResolver_FleetDenialCopy(t *testing.T) {
+	t.Parallel()
+	mgr, engine := harnessKindResolverFixture(t)
+	r := newCedarSessionKindResolver(mgr, engine)
+	ctx := context.Background()
+	rec, err := mgr.Create(ctx, "chat session")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	const forbid = `forbid(principal, action == Action::"use_tool", resource == Tool::"github__create_issue");`
+	if err := engine.ReplaceHarnessSnippets(cedar.FleetTeamSnippetPrefix, map[string][]byte{
+		cedar.FleetTeamSnippetPrefix + "r1": []byte(forbid),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cedar.SetFleetPolicyMeta([]string{"r1"}, &cedar.FleetPolicyMeta{PublishedAt: time.Date(2026, 11, 7, 9, 30, 0, 0, time.UTC)})
+	t.Cleanup(func() { cedar.SetFleetPolicyMeta(nil, nil) })
+
+	res, err := r.Resolve(ctx, rec.ID, "github", "create_issue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Policy != toolloop.PolicyDeny {
+		t.Fatalf("policy = %q, want deny", res.Policy)
+	}
+	if want := "Blocked by your organization's Fleet policy (published 2026-11-07 09:30 UTC)"; res.Reason != want {
+		t.Fatalf("reason = %q, want %q", res.Reason, want)
+	}
+
+	// A local (non-fleet) forbid keeps the Cedar reason.
+	if err := engine.ReplaceHarnessSnippets(cedar.FleetTeamSnippetPrefix, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.LoadHarnessSnippets(map[string][]byte{"local/r1": []byte(forbid)}); err != nil {
+		t.Fatal(err)
+	}
+	res, err = r.Resolve(ctx, rec.ID, "github", "create_issue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Policy != toolloop.PolicyDeny || strings.Contains(res.Reason, "Fleet") {
+		t.Fatalf("local deny: policy=%q reason=%q", res.Policy, res.Reason)
+	}
 }

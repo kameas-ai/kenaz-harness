@@ -117,13 +117,21 @@ var ErrEnrollTokenChanged = errors.New("fleet: tokens changed during enroll; try
 //
 // The node-fact fields (contract §16) are all optional and omitted when
 // unknown: an older Fleet ignores the ones it does not declare, and the
-// pre-existing body (node_id, platform, version, keys) is unchanged. There
-// is deliberately NO `hostname` field: Fleet shows it to admins as the device
-// name, and the harness never collects one.
+// pre-existing body (node_id, platform, version, keys) is unchanged.
+//
+// Hostname is NOT the OS hostname: it is the member-controlled device
+// display name Fleet shows admins as "Device name" (device_name.go; Fleet
+// ER-43). By default the computer's name is shared (macOS Computer Name,
+// Windows COMPUTERNAME, else the short hostname), or a neutral
+// "<OS> device <4 hex>" when that is empty or generic; the member can
+// choose the neutral label or a custom name instead; omitted when the
+// member turns sharing off, which clears it on Fleet (the enroll upsert
+// rewrites the column).
 type enrollRequest struct {
 	NodeID           string `json:"node_id"`
 	Platform         string `json:"platform"`
 	Version          string `json:"version"`
+	Hostname         string `json:"hostname,omitempty"`
 	HandoffPublicKey string `json:"handoff_public_key,omitempty"`
 	SigningPublicKey string `json:"signing_public_key,omitempty"`
 
@@ -173,6 +181,12 @@ type enrollResponse struct {
 	UserID string `json:"user_id,omitempty"`
 	Tier   string `json:"tier,omitempty"`
 
+	// KeysReauthRequired: a key sent with this enroll would have REPLACED
+	// an active key and no fresh sign-in was presented under
+	// FLEET_NODE_KEYS_STEP_UP=enforce. The enroll succeeded and the active
+	// key was kept (fleet contract §10.1, ER-40).
+	KeysReauthRequired bool `json:"keys_reauth_required,omitempty"`
+
 	// UserEmail / UserDisplayName are the keys the fleet enroll response
 	// actually serializes (both omitempty — either may be absent). Before
 	// this was fixed the harness read only `email`/`display_name`, which
@@ -209,10 +223,68 @@ func (er enrollResponse) displayName() string {
 //
 // The envelope may also carry a "details" object (e.g. zitadel_user_id
 // on user_not_provisioned); that is real identity data and deliberately
-// not unmarshalled here — enrollIdentity only ever needs Code + Message.
+// not unmarshalled here — enrollIdentity only needs Code + Message, plus
+// details.field, the NAME of the field a 400 invalid_request refused.
 type enrollErrorEnvelope struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	Details struct {
+		Field string `json:"field"`
+	} `json:"details"`
+}
+
+// ErrNodeIDInvalid: Fleet refused this device's node_id as invalid, and a
+// freshly minted one too. Shown in Settings › Account.
+var ErrNodeIDInvalid = errors.New("fleet: Fleet refused this device's id, even after this app made a new one. Try again later, or ask your administrator")
+
+// errEnrollNodeIDInvalid: one enroll got 400 invalid_request naming
+// node_id (Fleet enforces 1–128 printable ASCII, no spaces). The stored id
+// is corrupt; enrollRepairingNodeID re-mints it once.
+var errEnrollNodeIDInvalid = errors.New("fleet: enroll: node_id refused as invalid")
+
+// nodeIDRefused reports a 400 invalid_request that names node_id.
+func nodeIDRefused(status int, body []byte) bool {
+	if status != http.StatusBadRequest {
+		return false
+	}
+	var env enrollErrorEnvelope
+	if json.Unmarshal(body, &env) != nil || env.Code != "invalid_request" {
+		return false
+	}
+	return env.Details.Field == "node_id" || strings.HasPrefix(strings.TrimSpace(env.Message), "node_id")
+}
+
+// enrollRepairingNodeID enrolls; when Fleet refuses the stored node_id as
+// invalid it treats that id as corrupt, mints and persists a new one the
+// way first enroll does (NodeID), and retries ONCE. A second refusal is
+// ErrNodeIDInvalid. No other error ever re-mints.
+func (c *Client) enrollRepairingNodeID(ctx context.Context, nodeID, platform, version string) (Identity, error) {
+	id, err := c.enrollIdentity(ctx, nodeID, platform, version)
+	if !errors.Is(err, errEnrollNodeIDInvalid) {
+		return id, err
+	}
+	if c.dataDir == "" {
+		return Identity{}, ErrNodeIDInvalid
+	}
+	logging.L().Warn("fleet.enroll.node_id_invalid_reminting", "old_len", len(nodeID))
+	if cerr := ClearNodeID(c.dataDir); cerr != nil {
+		logging.L().Error("fleet.enroll.node_id_clear_failed", "err", cerr.Error())
+		return Identity{}, fmt.Errorf("%w (%v)", ErrNodeIDInvalid, cerr)
+	}
+	fresh, merr := NodeID(c.dataDir)
+	if merr != nil {
+		logging.L().Error("fleet.enroll.node_id_mint_failed", "err", merr.Error())
+		return Identity{}, fmt.Errorf("%w (%v)", ErrNodeIDInvalid, merr)
+	}
+	id, err = c.enrollIdentity(ctx, fresh, platform, version)
+	if errors.Is(err, errEnrollNodeIDInvalid) {
+		logging.L().Error("fleet.enroll.node_id_invalid_after_remint")
+		return Identity{}, ErrNodeIDInvalid
+	}
+	if err == nil {
+		logging.L().Info("fleet.enroll.node_id_reminted")
+	}
+	return id, err
 }
 
 // orgIDToString converts the fleet org_id (which may be a JSON number or string)
@@ -256,6 +328,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		Version:  version,
 	}
 	reqBody.withNodeFacts(CurrentNodeFacts())
+	reqBody.Hostname = c.deviceNameFor(nodeID)
 	km, kerr := c.localDeviceKeys(nodeID)
 	if kerr != nil {
 		logging.L().Warn("fleet.enroll.handoff_key_unavailable", "err", kerr.Error())
@@ -269,7 +342,13 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		return Identity{}, urlErr
 	}
 
-	status, respBody, err := c.postEnroll(ctx, reqURL, &ts, reqBody)
+	// A held step-up token lets this enroll replace an active key (ER-40);
+	// Fleet only evaluates it when the enroll would actually replace one.
+	reqStepUp := ""
+	if !km.body.empty() {
+		reqStepUp = c.heldStepUpToken()
+	}
+	status, respBody, err := c.postEnroll(ctx, reqURL, &ts, reqBody, reqStepUp)
 	if err != nil {
 		return Identity{}, err
 	}
@@ -281,16 +360,20 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 			// cannot receive handoffs.
 			logging.L().Warn("fleet.enroll.keys_rejected_retrying_without_keys",
 				"status", status, "reason", st)
-			c.keyReg.set(KeyRegistration{Status: st, Message: keyRegCopy(st)})
+			c.setKeyReg(KeyRegistration{Status: st, Message: keyRegCopy(st)})
 			keysRejected = true
 			reqBody.HandoffPublicKey, reqBody.SigningPublicKey = "", ""
-			status, respBody, err = c.postEnroll(ctx, reqURL, &ts, reqBody)
+			status, respBody, err = c.postEnroll(ctx, reqURL, &ts, reqBody, "")
 			if err != nil {
 				return Identity{}, err
 			}
 		}
 	}
 
+	if nodeIDRefused(status, respBody) {
+		logging.L().Warn("fleet.enroll.node_id_refused", "status", status)
+		return Identity{}, errEnrollNodeIDInvalid
+	}
 	if status != http.StatusOK {
 		preview := string(respBody)
 		if len(preview) > 800 {
@@ -331,7 +414,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 					}
 					return Identity{}, fmt.Errorf("%w (server: %s)", ErrUserNotProvisioned, msg)
 				case "node_removed":
-					c.keyReg.set(KeyRegistration{Message: keyRegNodeGoneCopy})
+					c.setKeyReg(KeyRegistration{Message: keyRegNodeGoneCopy})
 					return Identity{}, ErrNodeRemoved
 				case CodeOrgPaused:
 					// Defensive: fleet keeps enroll open while paused
@@ -347,22 +430,36 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		return Identity{}, fmt.Errorf("fleet: enroll: status %d: %s", status, respBody)
 	}
 
-	if !keysRejected {
-		switch {
-		case km.body.HandoffPublicKey != "":
-			c.keyReg.set(KeyRegistration{Status: KeyRegRegistered,
-				HandoffFingerprint: km.handoffFingerprint, SigningFingerprint: km.signingFingerprint})
-		default:
-			c.keyReg.set(KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy,
-				SigningFingerprint: km.signingFingerprint})
-		}
-	}
-
 	var er enrollResponse
 	if err := json.Unmarshal(respBody, &er); err != nil {
 		logging.L().Error("fleet.enroll.parse_failed", "err", err.Error(), "body_prefix", string(respBody[:min(len(respBody), 200)]))
 		return Identity{}, fmt.Errorf("fleet: parse enroll response: %w", err)
 	}
+
+	if !keysRejected {
+		switch {
+		case er.KeysReauthRequired:
+			// The replacement was skipped and the previous key kept: a
+			// fresh sign-in is needed (recoverable, shown to the user).
+			// A step-up token that was sent and still refused is useless.
+			if reqStepUp != "" {
+				c.ClearStepUpToken()
+			}
+			c.setReauthRequired(reqStepUp != "")
+			logging.L().Warn("fleet.device_keys.reauth_required", "via", "enroll", "step_up_sent", reqStepUp != "")
+		case km.body.HandoffPublicKey != "":
+			c.setKeyReg(KeyRegistration{Status: KeyRegRegistered,
+				HandoffFingerprint: km.handoffFingerprint, SigningFingerprint: km.signingFingerprint})
+		default:
+			c.setKeyReg(KeyRegistration{Status: KeyRegUnavailable, Message: keyRegUnavailCopy,
+				SigningFingerprint: km.signingFingerprint})
+		}
+	}
+
+	// Fleet accepted this body: record the device name it now holds, so a
+	// caller that joined this enroll can tell whether a setting change made
+	// meanwhile still needs sending (LastEnrolledDeviceName).
+	c.recordEnrolledDeviceName(reqBody.Hostname)
 
 	id := Identity{
 		UserID:      er.UserID,
@@ -398,7 +495,7 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 // owns the transport-error mapping, the SPA-HTML fall-through check and the
 // single 401 → refresh → retry (ts is updated in place on refresh so a
 // second postEnroll reuses the renewed token).
-func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, reqBody enrollRequest) (int, []byte, error) {
+func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, reqBody enrollRequest, stepUp string) (int, []byte, error) {
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return 0, nil, fmt.Errorf("fleet: marshal enroll request: %w", err)
@@ -417,6 +514,9 @@ func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, re
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+ts.AccessToken)
+	if stepUp != "" {
+		req.Header.Set(StepUpHeader, stepUp)
+	}
 	setUserAgent(req)
 
 	resp, err := c.httpClient.Do(req)
@@ -493,6 +593,9 @@ func (c *Client) postEnroll(ctx context.Context, reqURL string, ts *TokenSet, re
 		req2, _ := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 		req2.Header.Set("Content-Type", "application/json")
 		req2.Header.Set("Authorization", "Bearer "+newTS.AccessToken)
+		if stepUp != "" {
+			req2.Header.Set(StepUpHeader, stepUp)
+		}
 		setUserAgent(req2)
 		resp2, err2 := c.httpClient.Do(req2)
 		if err2 != nil {

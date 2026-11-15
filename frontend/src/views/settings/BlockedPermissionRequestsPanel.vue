@@ -19,6 +19,7 @@
  * blocked while this panel is already open appears without a manual
  * refresh.
  */
+import { AlertTriangle } from '@/shell/icons';
 import { ref, onMounted } from 'vue';
 import {
   createBlockedRequestsClient,
@@ -123,17 +124,17 @@ async function reRun(r: BlockedPermissionRequest) {
 
 <template>
   <section data-testid="blocked-permission-requests-panel">
-    <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
-      🚧 Blocked permission requests
+    <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
+      <AlertTriangle :size="14" class="inline-block mr-1.5 align-[-2px]" aria-hidden="true" />Blocked permission requests
     </h2>
-    <p class="mt-1 font-ui text-[11px] text-ink-dim">
+    <p class="mt-1 font-ui text-caption text-ink-dim">
       Filesystem operations denied because no policy permitted them — including scheduled chat
       runs that had nobody to ask. Grant a durable permit, or dismiss without granting.
     </p>
 
     <div
       v-if="actionError"
-      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="blocked-requests-error"
     >
@@ -142,7 +143,7 @@ async function reRun(r: BlockedPermissionRequest) {
 
     <p
       v-if="!loading && requests.length === 0"
-      class="mt-3 font-ui text-[12px] text-ink-dim"
+      class="mt-3 font-ui text-small text-ink-dim"
       data-testid="blocked-requests-empty"
     >
       Nothing pending.
@@ -157,10 +158,10 @@ async function reRun(r: BlockedPermissionRequest) {
       >
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <div class="font-mono text-[12px] text-ink truncate" :title="r.resource">
+            <div class="font-mono text-small text-ink truncate" :title="r.resource">
               {{ describeAction(r) }}: {{ r.resource }}
             </div>
-            <div class="mt-0.5 font-ui text-[11px] text-ink-dim">
+            <div class="mt-0.5 font-ui text-caption text-ink-dim">
               {{ r.origin === 'scheduled_chat_run' ? 'Scheduled chat run' : 'Interactive' }}
               — {{ r.reason }}
             </div>
@@ -168,7 +169,7 @@ async function reRun(r: BlockedPermissionRequest) {
           <div class="flex shrink-0 items-center gap-1.5">
             <span
               v-if="r.status === 'granted'"
-              class="font-ui text-[11px] uppercase tracking-[0.1em] text-signal-success"
+              class="font-ui text-caption uppercase tracking-eyebrow text-signal-ok-text"
               data-testid="blocked-request-granted-label"
             >
               Granted
@@ -176,7 +177,7 @@ async function reRun(r: BlockedPermissionRequest) {
             <template v-else>
               <button
                 type="button"
-                class="rounded-sm border border-border-muted px-2 py-1 font-ui text-[11px] uppercase tracking-[0.1em] text-ink hover:bg-surface-2 disabled:opacity-50"
+                class="rounded-sm border border-border-muted px-2 py-1 font-ui text-caption uppercase tracking-eyebrow text-ink hover:bg-surface-2 disabled:opacity-50"
                 :disabled="busyIds.has(r.id)"
                 :data-testid="`blocked-request-grant-${r.id}`"
                 @click="grant(r)"
@@ -185,7 +186,7 @@ async function reRun(r: BlockedPermissionRequest) {
               </button>
               <button
                 type="button"
-                class="rounded-sm border border-border-muted px-2 py-1 font-ui text-[11px] uppercase tracking-[0.1em] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
+                class="rounded-sm border border-border-muted px-2 py-1 font-ui text-caption uppercase tracking-eyebrow text-ink-muted hover:bg-surface-2 disabled:opacity-50"
                 :disabled="busyIds.has(r.id)"
                 :data-testid="`blocked-request-dismiss-${r.id}`"
                 @click="dismiss(r)"
@@ -196,7 +197,7 @@ async function reRun(r: BlockedPermissionRequest) {
             <button
               v-if="r.origin === 'scheduled_chat_run' && r.originId"
               type="button"
-              class="rounded-sm border border-accent px-2 py-1 font-ui text-[11px] uppercase tracking-[0.1em] text-accent hover:bg-accent hover:text-white disabled:opacity-50"
+              class="rounded-sm border border-accent px-2 py-1 font-ui text-caption uppercase tracking-eyebrow text-accent hover:bg-accent hover:text-white disabled:opacity-50"
               :disabled="busyIds.has(r.id)"
               :data-testid="`blocked-request-rerun-${r.id}`"
               @click="reRun(r)"
@@ -207,13 +208,13 @@ async function reRun(r: BlockedPermissionRequest) {
         </div>
         <p
           v-if="reRunResults.get(r.id) === 'ok'"
-          class="mt-1 font-ui text-[11px] text-signal-success"
+          class="mt-1 font-ui text-caption text-signal-ok-text"
         >
           Re-run dispatched.
         </p>
         <p
           v-else-if="reRunResults.get(r.id) === 'error'"
-          class="mt-1 font-ui text-[11px] text-signal-danger"
+          class="mt-1 font-ui text-caption text-signal-danger"
         >
           Re-run failed to dispatch.
         </p>

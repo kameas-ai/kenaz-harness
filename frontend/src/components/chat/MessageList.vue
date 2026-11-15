@@ -463,7 +463,7 @@ defineExpose({ scrollToBottom });
            exercised but never visible. -->
       <div
         v-if="(sweptCount ?? 0) > 0"
-        class="rounded-md border border-dashed border-border-muted px-3 py-2 font-ui text-[11px] text-ink-subtle"
+        class="rounded-md border border-dashed border-border-muted px-3 py-2 font-ui text-caption text-ink-subtle"
         role="status"
         data-testid="swept-history-placeholder"
       >
@@ -537,7 +537,7 @@ defineExpose({ scrollToBottom });
            stream until the first chunk arrives. -->
       <div
         v-if="waiting"
-        class="flex items-center gap-2 font-ui text-[12px] text-ink-muted"
+        class="flex items-center gap-2 font-ui text-small text-ink-muted"
         role="status"
         aria-live="polite"
       >
@@ -557,10 +557,10 @@ defineExpose({ scrollToBottom });
       <div
         v-if="errorMessage && errorKind === 'session_full'"
         data-testid="session-full-banner"
-        class="rounded-md border border-accent-hairline bg-surface-1 px-3 py-2 font-ui text-[12px]"
+        class="rounded-md border border-accent-hairline bg-surface-1 px-3 py-2 font-ui text-small"
         role="alert"
       >
-        <div class="text-[10px] uppercase tracking-[0.18em] text-accent">
+        <div class="text-eyebrow uppercase tracking-eyebrow text-accent">
           Session full
         </div>
         <p class="mt-1 break-words text-ink">
@@ -572,7 +572,7 @@ defineExpose({ scrollToBottom });
         <button
           type="button"
           data-testid="session-full-new-session"
-          class="mt-2 px-3 py-1 rounded-md border border-accent bg-surface-2 text-accent font-ui text-[11px] uppercase tracking-[0.18em] hover:bg-surface-3"
+          class="mt-2 px-3 py-1 rounded-md border border-accent bg-surface-2 text-accent font-ui text-caption uppercase tracking-eyebrow hover:bg-surface-3"
           @click="emit('new-session')"
         >
           + New session
@@ -582,10 +582,10 @@ defineExpose({ scrollToBottom });
       <!-- Inline error from useSession.error.value when send fails. -->
       <div
         v-else-if="errorMessage"
-        class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
       >
-        <div class="text-[10px] uppercase tracking-[0.18em] text-signal-danger">
+        <div class="text-eyebrow uppercase tracking-eyebrow text-signal-danger">
           Send failed
         </div>
         <p class="mt-1 break-words text-ink">{{ errorMessage }}</p>
@@ -595,7 +595,7 @@ defineExpose({ scrollToBottom });
     <button
       v-if="newPillVisible"
       type="button"
-      class="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-md border border-accent bg-surface-2 text-accent font-ui text-[11px] uppercase tracking-[0.18em] hover:bg-surface-3"
+      class="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-md border border-accent bg-surface-2 text-accent font-ui text-caption uppercase tracking-eyebrow hover:bg-surface-3"
       aria-label="Scroll to newest message"
       @click="scrollToBottom"
     >
@@ -607,12 +607,12 @@ defineExpose({ scrollToBottom });
 <style scoped>
 .thinking-dots {
   display: inline-flex;
-  gap: 3px;
+  gap: var(--space-4);
 }
 .thinking-dots .dot {
   width: 5px;
   height: 5px;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   background: currentColor;
   opacity: 0.4;
   animation: thinking-bounce 1.2s infinite ease-in-out;

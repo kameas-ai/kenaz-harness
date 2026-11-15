@@ -723,7 +723,7 @@ if (route) {
         >
           Canvas
         </button>
-        <span class="font-ui text-[11px] text-ink-muted">
+        <span class="font-ui text-caption text-ink-muted">
           Both panes read the workflow as last saved — switching discards
           unsaved edits in the pane you leave.
         </span>
@@ -830,7 +830,7 @@ if (route) {
           data-testid="workflows-detail"
         >
           <header>
-            <h3 class="font-ui text-base text-ink">{{ selected.name }}</h3>
+            <h3 class="font-ui text-h3 text-ink">{{ selected.name }}</h3>
             <p
               v-if="selected.description"
               class="font-ui text-sm text-ink-muted whitespace-pre-line"

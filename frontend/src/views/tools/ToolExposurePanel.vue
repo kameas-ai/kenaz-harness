@@ -189,16 +189,16 @@ onMounted(() => void load());
 <template>
   <section class="px-6 py-4 space-y-3" data-testid="tool-exposure-panel">
     <header class="space-y-1">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Tool definitions
       </h2>
-      <p class="max-w-prose font-ui text-[11px] text-ink-muted">
+      <p class="max-w-prose font-ui text-caption text-ink-muted">
         Full sends a server's tool definitions with every request. Summary lists the server in
         one line and the model loads it when it needs it. Off hides it.
       </p>
     </header>
 
-    <div class="flex flex-wrap items-end gap-4 font-ui text-[12px]">
+    <div class="flex flex-wrap items-end gap-4 font-ui text-small">
       <label class="flex flex-col gap-1 text-ink-muted">
         <span>Defaults for</span>
         <select
@@ -243,13 +243,13 @@ onMounted(() => void load());
     </div>
     <p
       v-if="!scope && orgBudget > 0"
-      class="font-ui text-[11px] text-ink-subtle"
+      class="font-ui text-caption text-ink-subtle"
       data-testid="tool-exposure-budget-org"
     >
       Schema budget {{ orgBudget.toLocaleString() }} tokens — set by your organisation; it can't be
       changed here.
     </p>
-    <p v-if="!scope && settings" class="font-ui text-[11px] text-ink-subtle" data-testid="tool-exposure-effective">
+    <p v-if="!scope && settings" class="font-ui text-caption text-ink-subtle" data-testid="tool-exposure-effective">
       In effect: {{ settings.effectiveSchemaBudgetTokens.toLocaleString() }} tokens of tool
       definitions per request at most (capped at 15% of the model's window); loaded tools unload
       after {{ settings.effectiveActivationTtlTurns }} turns unused.
@@ -257,7 +257,7 @@ onMounted(() => void load());
 
     <div
       v-if="loadError"
-      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="tool-exposure-load-error"
     >
@@ -265,19 +265,19 @@ onMounted(() => void load());
     </div>
     <div
       v-if="saveError"
-      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="tool-exposure-save-error"
     >
       {{ saveError }}
     </div>
 
-    <div v-if="loading && costs.length === 0" class="font-ui text-[12px] text-ink-muted">
+    <div v-if="loading && costs.length === 0" class="font-ui text-small text-ink-muted">
       Loading tool servers…
     </div>
     <div
       v-else-if="!loadError && costs.length === 0"
-      class="font-ui text-[12px] text-ink-muted"
+      class="font-ui text-small text-ink-muted"
       data-testid="tool-exposure-empty"
     >
       No tool servers to configure.
@@ -291,22 +291,22 @@ onMounted(() => void load());
       <li v-for="c in costs" :key="c.server" class="px-4 py-3" :data-testid="`tool-exposure-row-${c.server}`">
         <div class="grid items-start gap-3" style="grid-template-columns: 1fr auto">
           <div class="min-w-0">
-            <div class="flex flex-wrap items-center gap-2 font-ui text-[13px] text-ink">
+            <div class="flex flex-wrap items-center gap-2 font-ui text-ui text-ink">
               <span class="font-mono">{{ c.server }}</span>
-              <span class="text-[10px] uppercase tracking-[0.14em] text-ink-dim">
+              <span class="text-eyebrow uppercase tracking-eyebrow text-ink-dim">
                 {{ c.toolCount }} tool{{ c.toolCount === 1 ? '' : 's' }}
               </span>
               <span
-                class="text-[10px] uppercase tracking-[0.14em] text-ink-muted"
+                class="text-eyebrow uppercase tracking-eyebrow text-ink-muted"
                 :data-testid="`tool-exposure-resolved-${c.server}`"
               >{{ TIER_LABELS[c.tier] }}<template v-if="c.source"> · {{ sourceLabel(c.source) }}</template></span>
             </div>
-            <p class="mt-1 font-ui text-[11px] text-ink-muted" :data-testid="`tool-exposure-cost-${c.server}`">
+            <p class="mt-1 font-ui text-caption text-ink-muted" :data-testid="`tool-exposure-cost-${c.server}`">
               {{ costText(c) }}
             </p>
             <p
               v-if="someOrgLocked(c)"
-              class="mt-1 font-ui text-[11px] text-ink-subtle"
+              class="mt-1 font-ui text-caption text-ink-subtle"
               :data-testid="`tool-exposure-pinned-${c.server}`"
             >
               <template v-if="serverPinned(c)">{{ sourceSentence(c.source) }} — it can't be changed here.</template>
@@ -315,7 +315,7 @@ onMounted(() => void load());
           </div>
           <div class="flex items-center gap-2">
             <select
-              class="rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[11px] text-ink disabled:opacity-50"
+              class="rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-caption text-ink disabled:opacity-50"
               :value="layerServerTier(layer, c.server)"
               :disabled="saving || serverPinned(c)"
               :aria-label="`Tier for ${c.server}`"
@@ -328,7 +328,7 @@ onMounted(() => void load());
             <button
               v-if="c.tools.length > 0"
               type="button"
-              class="rounded-sm border border-border-muted px-2 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2"
+              class="rounded-sm border border-border-muted px-2 py-1 font-ui text-caption text-ink-muted hover:bg-surface-2"
               :aria-expanded="expanded === c.server"
               :data-testid="`tool-exposure-drawer-toggle-${c.server}`"
               @click="toggle(c.server)"
@@ -339,7 +339,7 @@ onMounted(() => void load());
         </div>
         <p
           v-if="c.server === BUILTIN_SERVER"
-          class="mt-1 font-ui text-[11px] text-ink-subtle"
+          class="mt-1 font-ui text-caption text-ink-subtle"
         >
           Setting this server to Summary or Off keeps the core tools (files, shell, web,
           load_tools) full; change them one by one under Per tool.
@@ -352,7 +352,7 @@ onMounted(() => void load());
           <li
             v-for="t in c.tools"
             :key="t.name"
-            class="grid items-center gap-3 font-ui text-[11px]"
+            class="grid items-center gap-3 font-ui text-caption"
             style="grid-template-columns: 1fr auto auto"
           >
             <span class="min-w-0 truncate font-mono text-ink">{{ t.name }}</span>

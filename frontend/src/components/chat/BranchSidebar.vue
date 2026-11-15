@@ -139,7 +139,7 @@ defineExpose({ refresh, branches });
       +
     </button>
     <span
-      class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+      class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
       style="writing-mode: vertical-rl; transform: rotate(180deg)"
     >
       Fork
@@ -153,12 +153,12 @@ defineExpose({ refresh, branches });
     data-testid="branch-sidebar"
   >
     <div class="flex items-center justify-between">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Branches
       </h2>
       <button
         type="button"
-        class="font-ui text-xs text-ink-link hover:underline"
+        class="font-ui text-xs text-accent hover:underline"
         data-testid="branch-create-btn"
         @click="emit('create')"
       >
@@ -169,7 +169,7 @@ defineExpose({ refresh, branches });
     <div v-if="loading" class="font-ui text-xs text-ink-subtle">Loading…</div>
     <div
       v-else-if="lastError"
-      class="font-ui text-xs text-status-error"
+      class="font-ui text-xs text-signal-danger-text"
       role="alert"
       data-testid="branch-sidebar-error"
     >
@@ -187,7 +187,7 @@ defineExpose({ refresh, branches });
             <div class="truncate font-ui text-sm text-ink">
               {{ branch.title || 'Untitled branch' }}
             </div>
-            <div class="mt-0.5 flex flex-wrap items-center gap-1 font-ui text-[11px] text-ink-subtle">
+            <div class="mt-0.5 flex flex-wrap items-center gap-1 font-ui text-caption text-ink-subtle">
               <span :data-testid="`branch-status-${branch.id}`">{{ statusLabel(branch.status) }}</span>
               <span v-if="branch.modelId" aria-hidden="true">·</span>
               <span v-if="branch.modelId">{{ branch.modelId }}</span>
@@ -198,7 +198,7 @@ defineExpose({ refresh, branches });
         <div class="mt-2 flex flex-wrap gap-2">
           <button
             type="button"
-            class="font-ui text-xs text-ink-link hover:underline"
+            class="font-ui text-xs text-accent hover:underline"
             :data-testid="`branch-open-${branch.id}`"
             @click="emit('open', branch.childSessionId)"
           >
@@ -216,7 +216,7 @@ defineExpose({ refresh, branches });
           <button
             v-if="branch.status === 'active'"
             type="button"
-            class="font-ui text-xs text-ink-link hover:underline"
+            class="font-ui text-xs text-accent hover:underline"
             :data-testid="`branch-merge-${branch.id}`"
             @click="handleMerge(branch.id)"
           >
@@ -225,7 +225,7 @@ defineExpose({ refresh, branches });
           <button
             v-if="branch.status === 'active'"
             type="button"
-            class="font-ui text-xs text-status-error hover:underline"
+            class="font-ui text-xs text-signal-danger-text hover:underline"
             :data-testid="`branch-abandon-${branch.id}`"
             @click="handleAbandon(branch.id)"
           >

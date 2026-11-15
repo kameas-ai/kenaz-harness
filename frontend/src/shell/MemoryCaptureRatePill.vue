@@ -13,6 +13,7 @@
  * Polls Memory_CaptureRate every 5 s while mounted.
  * Click → navigates to Knowledge › Learned (/knowledge/learned).
  */
+import { Brain } from '@/shell/icons';
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/harnessClientContext';
@@ -95,10 +96,10 @@ function onClick() {
     type="button"
     :title="tooltipText"
     aria-label="Memory capture rate"
-    class="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-ui text-ink-muted hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand transition-colors"
+    class="flex items-center gap-1 rounded px-1.5 py-0.5 text-caption font-ui text-ink-muted hover:bg-surface-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent transition-colors"
     @click="onClick"
   >
-    <span aria-hidden="true">🧠</span>
+    <Brain class="inline-block" :size="12" aria-hidden="true" />
     <span class="font-mono tabular-nums">{{ rateLabel }}</span>
     <span
       :class="['h-1.5 w-1.5 rounded-full', dotClass]"

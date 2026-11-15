@@ -774,7 +774,7 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 }
 
 .policy-view__disabled {
-  padding: 2rem;
+  padding: var(--space-32);
   color: var(--ink-muted);
 }
 
@@ -786,8 +786,8 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
   color: var(--ink);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.5rem 1rem;
-  font-size: 0.8125rem;
+  padding: var(--space-8) var(--space-16);
+  font-size: var(--type-ui-size);
   z-index: 9999;
   box-shadow: 0 2px 8px var(--modal-shadow);
 }
@@ -806,45 +806,45 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 1.5rem;
+  padding: var(--space-24);
   max-width: 380px;
   width: 90%;
 }
 
 .policy-view__dialog-msg {
-  margin: 0 0 1rem;
-  font-size: 0.875rem;
+  margin: 0 0 var(--space-16);
+  font-size: var(--type-body-size);
 }
 
 .policy-view__dialog-btns {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-8);
   justify-content: flex-end;
 }
 
 .policy-view__head {
-  padding: 0.75rem 1rem 0.5rem;
+  padding: var(--space-12) var(--space-16) var(--space-8);
   border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
 }
 
 .policy-view__title {
-  font-size: 0.6875rem;
+  font-size: var(--type-caption-size);
   color: var(--ink-muted);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .policy-view__heading {
-  font-size: 1.125rem;
+  font-size: var(--type-title-size);
   font-weight: 600;
-  margin: 0.25rem 0 0;
+  margin: var(--space-4) 0 0;
 }
 
 .policy-view__sub {
-  margin: 0.125rem 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--ink-muted);
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
 }
 
 .policy-view__layout {
@@ -867,13 +867,13 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-8) var(--space-12);
   border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
 }
 
 .policy-view__h2 {
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   font-weight: 600;
   margin: 0;
   text-transform: uppercase;
@@ -883,7 +883,7 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 
 .policy-view__sidebar-actions {
   display: flex;
-  gap: 0.25rem;
+  gap: var(--space-4);
 }
 
 .policy-view__file-list {
@@ -897,10 +897,10 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 .policy-view__file {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.375rem 0.75rem;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-12);
   cursor: pointer;
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
   border-bottom: 1px solid var(--border-muted);
   transition: background 0.1s;
 }
@@ -916,7 +916,7 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 
 .policy-view__file-name {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -925,7 +925,7 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 
 .policy-view__file-status {
   flex-shrink: 0;
-  font-size: 0.6875rem;
+  font-size: var(--type-caption-size);
   font-weight: 700;
 }
 
@@ -936,17 +936,17 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 .policy-view__err {
   color: var(--danger);
   font-weight: 600;
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
 }
 
 .policy-view__tag {
-  font-size: 0.5625rem;
+  font-size: var(--type-tag-size);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--ink-muted);
-  padding: 0 0.2rem;
+  padding: 0 var(--space-4);
   border: 1px solid var(--border-muted);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   flex-shrink: 0;
 }
 
@@ -956,9 +956,9 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 }
 
 .policy-view__empty {
-  padding: 0.75rem;
+  padding: var(--space-12);
   color: var(--ink-muted);
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
 }
 
 /* ── Editor pane ── */
@@ -974,42 +974,42 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-8) var(--space-12);
   border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
-  gap: 0.5rem;
+  gap: var(--space-8);
   flex-wrap: wrap;
 }
 
 .policy-view__editor-title {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: var(--space-6);
   min-width: 0;
 }
 
 .policy-view__editor-actions {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: var(--space-6);
   flex-shrink: 0;
 }
 
 .policy-view__parse-ok {
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   color: var(--ok);
   font-weight: 600;
 }
 
 .policy-view__parse-err {
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   color: var(--danger);
   font-weight: 600;
 }
 
 .policy-view__banner {
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8125rem;
+  padding: var(--space-8) var(--space-12);
+  font-size: var(--type-ui-size);
   flex-shrink: 0;
 }
 
@@ -1021,15 +1021,15 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 
 .policy-view__banner--parse {
   background: color-mix(in srgb, var(--warn) 10%, transparent);
-  color: var(--warn-ink, var(--ink));
+  color: var(--warn-text);
   border-bottom: 1px solid color-mix(in srgb, var(--warn) 20%, transparent);
 }
 
 .policy-view__parse-error-row {
   display: flex;
-  gap: 0.375rem;
+  gap: var(--space-6);
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
 }
 
 .policy-view__parse-loc {
@@ -1039,14 +1039,14 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 
 .policy-view__err-msg {
   color: var(--danger);
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
 }
 
 .policy-view__new-bar {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-12);
   border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
   flex-wrap: wrap;
@@ -1054,8 +1054,8 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 
 .policy-view__name-input {
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
-  padding: 0.25rem 0.5rem;
+  font-size: var(--type-ui-size);
+  padding: var(--space-4) var(--space-8);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
@@ -1070,7 +1070,7 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 
 .policy-view__new-actions {
   display: flex;
-  gap: 0.375rem;
+  gap: var(--space-6);
 }
 
 .policy-view__editor-wrap {
@@ -1083,9 +1083,9 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 .policy-view__editor {
   flex: 1;
   width: 100%;
-  padding: 0.75rem;
+  padding: var(--space-12);
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
   line-height: 1.5;
   border: none;
   outline: none;
@@ -1112,8 +1112,8 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
   align-items: center;
   justify-content: center;
   color: var(--ink-muted);
-  font-size: 0.875rem;
-  padding: 2rem;
+  font-size: var(--type-body-size);
+  padding: var(--space-32);
   text-align: center;
 }
 
@@ -1121,11 +1121,11 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 .policy-view__btn {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.25rem 0.625rem;
+  padding: var(--space-4) var(--space-10);
   background: var(--surface-2);
   color: var(--ink);
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   font-family: var(--font-ui);
   transition: background 0.1s;
 }
@@ -1140,13 +1140,13 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 }
 
 .policy-view__btn--sm {
-  padding: 0.125rem 0.5rem;
-  font-size: 0.6875rem;
+  padding: var(--space-2) var(--space-8);
+  font-size: var(--type-caption-size);
 }
 
 .policy-view__btn--primary {
   background: var(--accent);
-  color: var(--accent-ink);
+  color: var(--accent);
   border-color: var(--accent);
 }
 
@@ -1166,18 +1166,18 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 /* ── Sub-nav (Files / Decisions) ── */
 .policy-view__subnav {
   display: flex;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
+  gap: var(--space-8);
+  margin-top: var(--space-12);
 }
 
 .policy-view__subtab {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.25rem 0.75rem;
+  padding: var(--space-4) var(--space-12);
   background: var(--surface-2);
   color: var(--ink-muted);
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   font-family: var(--font-ui);
 }
 
@@ -1193,7 +1193,7 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 
 /* ── Decisions panel (WP06) ── */
 .policy-view__decisions {
-  padding: 0 1.5rem 1.5rem;
+  padding: 0 var(--space-24) var(--space-24);
   overflow-y: auto;
   flex: 1;
   min-height: 0;
@@ -1203,16 +1203,16 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: var(--space-16);
 }
 
 .policy-view__decision-list {
   list-style: none;
-  margin: 0.75rem 0 0;
+  margin: var(--space-12) 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.375rem;
+  gap: var(--space-6);
 }
 
 .policy-view__decision-row {
@@ -1222,22 +1222,22 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
     'outcome main policy'
     'reason reason reason'
     'time time time';
-  gap: 0.125rem 0.75rem;
+  gap: var(--space-2) var(--space-12);
   align-items: baseline;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8125rem;
+  padding: var(--space-8) var(--space-12);
+  font-size: var(--type-ui-size);
   background: var(--surface-1);
 }
 
 .policy-view__outcome {
   grid-area: outcome;
   text-transform: uppercase;
-  font-size: 0.6875rem;
+  font-size: var(--type-caption-size);
   font-weight: 600;
   letter-spacing: 0.02em;
-  padding: 0.0625rem 0.375rem;
+  padding: var(--space-2) var(--space-6);
   border-radius: var(--radius-sm);
   white-space: nowrap;
   height: fit-content;
@@ -1260,14 +1260,14 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 }
 
 .policy-view__outcome--confirm {
-  color: var(--warn-ink, var(--ink));
+  color: var(--warn-text);
   background: color-mix(in srgb, var(--warn) 14%, transparent);
 }
 
 .policy-view__decision-main {
   grid-area: main;
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-8);
   align-items: baseline;
   min-width: 0;
 }
@@ -1289,7 +1289,7 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 .policy-view__decision-policy {
   grid-area: policy;
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--type-caption-size);
   color: var(--ink-muted);
   white-space: nowrap;
 }
@@ -1297,12 +1297,12 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 .policy-view__decision-reason {
   grid-area: reason;
   color: var(--ink-muted);
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
 }
 
 .policy-view__decision-time {
   grid-area: time;
   color: var(--ink-muted);
-  font-size: 0.6875rem;
+  font-size: var(--type-caption-size);
 }
 </style>

@@ -95,8 +95,8 @@ func TestOSReleaseVersion(t *testing.T) {
 }
 
 // The enroll body: facts ride as Fleet's field names; nothing is sent for a
-// bare install beyond arch/os_version/client_kind; there is no hostname key
-// at all.
+// bare install beyond arch/os_version/client_kind. Node facts never set the
+// hostname key: the device name is the member's setting (device_name.go).
 func TestEnrollRequest_NodeFactsWire(t *testing.T) {
 	var r enrollRequest
 	r.NodeID, r.Platform, r.Version = "n1", "linux", "1.0.0"
@@ -122,7 +122,7 @@ func TestEnrollRequest_NodeFactsWire(t *testing.T) {
 		t.Fatalf("VM body = %s", b)
 	}
 	if _, ok := got["hostname"]; ok {
-		t.Fatalf("hostname must never be on the wire: %s", b)
+		t.Fatalf("node facts must not set hostname: %s", b)
 	}
 }
 

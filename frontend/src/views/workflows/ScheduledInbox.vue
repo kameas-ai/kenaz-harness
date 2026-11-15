@@ -442,7 +442,7 @@ onUnmounted(() => {
     <template v-if="chatClient">
       <div class="mt-6" data-testid="chat-runs-section">
         <h3
-          class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3"
+          class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-3"
           data-testid="chat-runs-heading"
         >
           Chat Runs

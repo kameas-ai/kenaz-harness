@@ -30,6 +30,7 @@
  * a key that never existed on the wire, so the Pro-gate copy below showed
  * to every signed-in user, entitled or not.
  */
+import { AlertTriangle } from '@/shell/icons';
 import { ref, computed, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { signedIn, capability } from '@/lib/featureFlags';
@@ -398,7 +399,7 @@ function goToMCPTools() {
         class="flex items-start gap-3 rounded-md border border-signal-warn bg-signal-warn-soft px-4 py-3"
         data-testid="sync-pending-secrets-banner"
       >
-        <span class="mt-0.5 text-signal-warn" aria-hidden="true">⚠</span>
+        <AlertTriangle :size="14" class="inline-block mt-0.5 shrink-0 text-signal-warn" aria-hidden="true" />
         <div class="flex-1">
           <p class="text-sm font-medium text-signal-warn">
             {{ pendingCount }} MCP {{ pendingCount === 1 ? 'server' : 'servers' }} need credentials
@@ -450,7 +451,7 @@ function goToMCPTools() {
                  currently load-bearing. -->
             <span
               v-if="notSyncingYet(s.category)"
-              class="mt-0.5 shrink-0 rounded-sm bg-surface-2 px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim"
+              class="mt-0.5 shrink-0 rounded-sm bg-surface-2 px-1.5 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim"
               :data-testid="`sync-not-yet-${s.category}`"
             >
               Not syncing yet
@@ -471,7 +472,7 @@ function goToMCPTools() {
             </label>
             <span
               v-else
-              class="mt-0.5 shrink-0 rounded-sm bg-surface-2 px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim"
+              class="mt-0.5 shrink-0 rounded-sm bg-surface-2 px-1.5 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim"
               :data-testid="`sync-managed-${s.category}`"
             >
               Managed
@@ -485,7 +486,7 @@ function goToMCPTools() {
                 <div v-if="isEnabled(s.category) && !localOnly(s.category) && !notSyncingYet(s.category)" class="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
-                    class="h-6 rounded-sm border border-border-muted px-2 font-ui text-[10px] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
+                    class="h-6 rounded-sm border border-border-muted px-2 font-ui text-eyebrow text-ink-muted hover:bg-surface-2 disabled:opacity-50"
                     :disabled="busyCategory !== null"
                     :data-testid="`sync-force-push-${s.category}`"
                     @click="forcePush(s.category)"
@@ -494,7 +495,7 @@ function goToMCPTools() {
                   </button>
                   <button
                     type="button"
-                    class="h-6 rounded-sm border border-border-muted px-2 font-ui text-[10px] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
+                    class="h-6 rounded-sm border border-border-muted px-2 font-ui text-eyebrow text-ink-muted hover:bg-surface-2 disabled:opacity-50"
                     :disabled="busyCategory !== null"
                     :data-testid="`sync-force-pull-${s.category}`"
                     @click="forcePull(s.category)"
@@ -525,7 +526,7 @@ function goToMCPTools() {
               </p>
 
               <!-- Last synced + error + org provenance -->
-              <div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[10px]">
+              <div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-eyebrow">
                 <span class="text-ink-subtle">
                   Last sync: <span :data-testid="`sync-last-ts-${s.category}`">{{ lastSyncLabel(s.category) }}</span>
                 </span>

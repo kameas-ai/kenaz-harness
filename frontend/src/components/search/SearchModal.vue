@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, h, type VNode } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { Search } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { SearchHit, SearchHighlight, SearchFilters } from '@/lib/harnessClient';
 import { useProjects } from '@/lib/useHarnessAPI';
@@ -294,7 +295,7 @@ const projectMap = computed(() => {
 <template>
   <!-- Backdrop -->
   <div
-    class="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4"
+    class="fixed inset-0 z-50 flex items-start justify-center pt-12 px-4"
     role="dialog"
     aria-modal="true"
     aria-label="Search sessions"
@@ -309,9 +310,7 @@ const projectMap = computed(() => {
       <!-- Search input -->
       <div class="px-3 py-2 border-b border-border-muted flex items-center gap-2">
         <span class="text-ink-subtle" aria-hidden="true">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
-          </svg>
+          <Search class="inline-block" :size="16" />
         </span>
         <input
           ref="inputEl"
@@ -341,7 +340,7 @@ const projectMap = computed(() => {
           Role
           <select
             v-model="roleFilter"
-            class="bg-surface-1 border border-border-muted rounded px-1 py-0.5 text-ink text-xs outline-none focus:ring-1 focus:ring-accent-a"
+            class="bg-surface-1 border border-border-muted rounded px-1 py-0.5 text-ink text-xs outline-none focus:ring-1 focus:ring-accent"
             aria-label="Filter by role"
           >
             <option value="">All roles</option>
@@ -354,7 +353,7 @@ const projectMap = computed(() => {
           Project
           <select
             v-model="projectFilter"
-            class="bg-surface-1 border border-border-muted rounded px-1 py-0.5 text-ink text-xs outline-none focus:ring-1 focus:ring-accent-a"
+            class="bg-surface-1 border border-border-muted rounded px-1 py-0.5 text-ink text-xs outline-none focus:ring-1 focus:ring-accent"
             aria-label="Filter by project"
           >
             <option value="">All projects</option>
@@ -368,7 +367,7 @@ const projectMap = computed(() => {
           <input
             v-model="dateFrom"
             type="date"
-            class="bg-surface-1 border border-border-muted rounded px-1 py-0.5 text-ink text-xs outline-none focus:ring-1 focus:ring-accent-a"
+            class="bg-surface-1 border border-border-muted rounded px-1 py-0.5 text-ink text-xs outline-none focus:ring-1 focus:ring-accent"
             aria-label="Filter from date"
             data-testid="search-date-from"
           />
@@ -378,7 +377,7 @@ const projectMap = computed(() => {
           <input
             v-model="dateTo"
             type="date"
-            class="bg-surface-1 border border-border-muted rounded px-1 py-0.5 text-ink text-xs outline-none focus:ring-1 focus:ring-accent-a"
+            class="bg-surface-1 border border-border-muted rounded px-1 py-0.5 text-ink text-xs outline-none focus:ring-1 focus:ring-accent"
             aria-label="Filter to date"
             data-testid="search-date-to"
           />
@@ -466,8 +465,8 @@ const projectMap = computed(() => {
 
 <style scoped>
 .search-highlight {
-  background-color: color-mix(in srgb, var(--color-accent-a, #f59e0b) 35%, transparent); /* css-tokens-allow: --color-accent-a fallback for older render paths */
-  border-radius: 2px;
+  background-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: var(--radius-xs);
   padding: 0 1px;
 }
 </style>

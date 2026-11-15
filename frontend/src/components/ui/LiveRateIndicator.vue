@@ -20,7 +20,7 @@ const formatted = computed(() => props.rate.toFixed(props.precision));
 
 <template>
   <span
-    class="inline-flex items-center gap-1 font-mono text-[11px] text-ink-subtle"
+    class="inline-flex items-center gap-1 font-mono text-caption text-ink-subtle"
     role="status"
     :aria-label="`Rate ${formatted} ${unit}`"
   >

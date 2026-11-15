@@ -67,6 +67,7 @@ import (
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/harnessmodels"
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/install"
 	"github.com/kameas-ai/kenaz-harness/core/keyring"
@@ -165,6 +166,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/tools/loadtools"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
 	coreskill "github.com/kameas-ai/kenaz-harness/core/tools/skill"
+	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
 	"github.com/kameas-ai/kenaz-harness/core/units"
 	coreupdate "github.com/kameas-ai/kenaz-harness/core/update"
@@ -569,6 +571,9 @@ type API struct {
 	logStore     *logstore.Store
 	logsAPI      logsview.LogsAPI
 	settingsImpl *settings.API
+	// policyDefault is the host policy default (launch spec L09):
+	// starter or legacy on the host, workbench when served.
+	policyDefault *policyDefault
 	settingsAPI  settings.SettingsAPI
 	memoryAPI    memoryview.MemoryAPI
 	hooksAPI     hooksview.HooksAPI
@@ -1006,6 +1011,10 @@ type API struct {
 	// client + pull-conflict surface). Held for Shutdown teardown.
 	// (unified-context-artifacts-01NCTXU01 / Phase 3)
 	unitSyncer *corefleet.UnitSyncer
+
+	// sharedCtx serves teammates' Fleet context to the model (see
+	// shared_context_wiring.go). Set from the LLM stack; nil-safe.
+	sharedCtx *sharedContextSource
 
 	// unitsMgr is the fleet-free unified Unit store manager. Held so the
 	// fleet view's resolution/enshrine RPCs reach it.
@@ -1534,6 +1543,10 @@ func (a *API) Shutdown() {
 	if a.compactionScheduler != nil {
 		a.compactionScheduler.Stop()
 	}
+	// The chat-cron Stop refuses new fires, cancels in-flight dispatches
+	// and waits (bounded) for their history writes, so no fire touches
+	// storage after the caller closes it. The run a dispatch started is
+	// not stopped by this — the chat runner drain below owns that.
 	if a.chatCronEngine != nil {
 		a.chatCronEngine.Stop()
 	}
@@ -1541,8 +1554,8 @@ func (a *API) Shutdown() {
 	// Cancel + drain in-flight chat runs: their exit paths write session
 	// storage, which the caller closes after Shutdown returns (main.go /
 	// serve.ShutdownServedCore: api.Shutdown THEN core shutdown). AFTER
-	// the workflow + chat-cron schedulers stop (neither Stop waits on a
-	// job), so a firing cannot start a run mid-drain; ChatRunner.Shutdown
+	// the workflow + chat-cron schedulers stop (the workflow Stop does not
+	// wait on a job), so a firing cannot start a run mid-drain; ChatRunner.Shutdown
 	// also refuses any later StartStream (chat.ErrRunnerShutdown). Bounded
 	// so a wedged run cannot hang app exit.
 	if a.chatRunner != nil {
@@ -1707,6 +1720,14 @@ type options struct {
 	// decision. See WithFleetGatedBash.
 	fleetGatedBash bool
 
+	// hostModelDefaults is the host layer of the model slots. See
+	// WithHostModelDefaults.
+	hostModelDefaults harnessmodels.Overrides
+
+	// worktreeIsolation enables isolation:"worktree" for
+	// kenaz__subagent_dispatch. See WithWorktreeIsolation.
+	worktreeIsolation bool
+
 	// settingsStore overrides the settings store New would otherwise
 	// build via settings.NewFileStoreFromEnv(). See WithSettingsStore.
 	settingsStore settings.SettingsStore
@@ -1750,6 +1771,25 @@ func WithHostProviders(profiles []corellm.ProviderProfile) Option {
 	return func(o *options) { o.hostProviders = profiles }
 }
 
+// WithHostModelDefaults seeds the host layer of the harness model slots
+// (default sub-agent model + per-role models) from the control plane —
+// the served harness passes harnessmodels.ParseHostEnv over
+// KENAZ_HARNESS_SUBAGENT_MODEL / KENAZ_HARNESS_ROLE_MODELS (kenaz-meta.env).
+// Values are validated against the host provider's models at resolve
+// time; an unknown id is ignored. Desktop never passes this option.
+func WithHostModelDefaults(o harnessmodels.Overrides) Option {
+	return func(opts *options) { opts.hostModelDefaults = o }
+}
+
+// WithWorktreeIsolation turns on isolation:"worktree" for
+// kenaz__subagent_dispatch: each such sub-agent gets its own
+// `git worktree` under <workspace>/.worktrees/<agent-id> on branch
+// agent/<agent-id>. Served mode only — the workspace is /workspace there.
+// Without it the option is refused with a clear error.
+func WithWorktreeIsolation() Option {
+	return func(opts *options) { opts.worktreeIsolation = true }
+}
+
 // WithServedConnectors installs the served-mode connector supervisor
 // (spec 091). When set, the persisted-enabled MCP recipe bootstrap is
 // REPLACED by the supervisor's whitelist-driven bootstrap — the profile
@@ -1766,14 +1806,13 @@ func WithServedConnectors(sup *connectors.Supervisor) Option {
 // policy decision instead of the local Settings.BashEnabled toggle.
 //
 // Served/workbench mode passes this (both served entry points: main.go's
-// runServeMode and cmd/harness-served). There, kenaz__bash is offered to
-// the model — and callable — iff the org's fleet Cedar policy (pushed in
-// the signed config bundle, installed as "fleet-team/..." snippets)
-// explicitly permits `use_tool` on Tool::"kenaz__bash" and no forbid
-// matches. With no such permit it is not advertised at all: the served
-// UI has no Settings toggle, so a Settings-gated bash was permanently off
-// in every workbench, and a tool that is advertised but always fails
-// would be a lie. Re-evaluated on every listing/dispatch, so a Fleet
+// runServeMode and cmd/harness-served). There, kenaz__bash is ON BY
+// DEFAULT (decision D-h, 2026-11-10) and a Cedar forbid on `use_tool` /
+// Tool::"kenaz__bash" — the org's fleet rule set, pushed in the signed
+// config bundle as "fleet-team/..." snippets — turns it off: not
+// advertised and not dispatchable, never advertised-but-always-denied.
+// The served UI has no Settings toggle, so Settings.BashEnabled cannot be
+// the gate there. Re-evaluated on every listing/dispatch, so a Fleet
 // change takes effect on the next poll + next turn, no restart.
 //
 // Which commands run is unchanged: Cedar run_bash_command (fleet permit
@@ -2230,6 +2269,25 @@ func New(c *core.Core, opts ...Option) *API {
 	settingsImpl := settings.NewAPI(settingsStore)
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
+	// Launch spec L09: decide the host policy default before any tool can
+	// run. Served (workbench) mode — the WithFleetGatedBash entry points —
+	// never applies the starter policy.
+	// Under `go test` the decision is not persisted: the store may be the
+	// developer's real settings file (check-tests-are-hermetic.sh).
+	a.policyDefault = newPolicyDefault(settingsImpl.Store(), opt.fleetGatedBash, flag.Lookup("test.v") == nil)
+	// fleet-workbench-next-plan-2026-11-10 B11: model slots. The session
+	// provider a served workbench derives from is its host profile; the
+	// desktop path has none, so nothing is derived there (its slots keep
+	// their historical per-consumer fallbacks) and only an explicit
+	// setting or the org layer resolves.
+	{
+		var sessionProvider func() *corellm.ProviderProfile
+		if len(opt.hostProviders) > 0 {
+			hp := opt.hostProviders[0]
+			sessionProvider = func() *corellm.ProviderProfile { p := hp; return &p }
+		}
+		settingsImpl.SetModelSlots(harnessmodels.NewResolver(opt.hostModelDefaults, logging.L()), sessionProvider)
+	}
 	// Fleet-delivered provider keys follow the signed-in account: a sign-in
 	// as someone else (or into another org) purges what the previous
 	// account left (provider-credentials-client-01PCCLI01 WP04).
@@ -2381,7 +2439,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// carry the stamp can't sync either.
 	if as, ok := memStore.(corememory.AccountStamper); ok && c != nil && c.DataDir() != "" {
 		accountDir := c.DataDir()
-		as.SetAccountSource(func() string { return corefleet.CurrentAccountKey(accountDir) })
+		as.SetAccountSource(func() corememory.AccountView { return corefleet.CurrentAccountView(accountDir) })
 	}
 	a.memForgets = openMemoryForgetOutbox(c, memStore, a.memClock)
 	personalForLLM := newPersonalStore(c)
@@ -2689,6 +2747,15 @@ func New(c *core.Core, opts ...Option) *API {
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, &acpAuditBridge{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions, blockedSink, a.scheduledRunOrigins.Resolve, a.mlProducer)
 	// Served/workbench mode: bash availability follows the org fleet Cedar
 	// policy (WithFleetGatedBash). Set before any turn can list tools.
+	// Launch spec L09: the host starter policy, read live per request.
+	if !opt.fleetGatedBash {
+		if stack.fsGate != nil {
+			stack.fsGate.SetStarterDefaults(a.policyDefault.StarterActive)
+		}
+		if stack.starterNet != nil {
+			stack.starterNet.SetActive(a.policyDefault.StarterActive)
+		}
+	}
 	if opt.fleetGatedBash {
 		stack.bashAvail.useFleetPolicy(a.cedarEngine)
 		logging.L().Info("rpc.builtins.bash_availability", "source", "fleet_policy", "cedar_engine", a.cedarEngine != nil)
@@ -2703,6 +2770,8 @@ func New(c *core.Core, opts ...Option) *API {
 	a.scheduledRunContainment = NewScheduledRunContainmentRegistry(blockedSink)
 	stack.sessionArm.SetScheduledRunContainment(a.scheduledRunContainment)
 	a.llmAPI = stack.api
+	a.sharedCtx = stack.sharedCtx
+	a.sharedCtx.setUnits(a.unitsMgr)
 	// llm-call-telemetry-01LLMTEL01 WP02: the local model-call store. The
 	// registry is its source for the OpenRouter stats pull
 	// (*llmregistry.Registry implements FetchProviderStats and keeps the
@@ -2806,6 +2875,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// is belt-and-suspenders.
 	if a.branchSeam != nil && a.llmAPI != nil && a.eventBus != nil {
 		capturedPersonalStoreForSubagent := personalForLLM
+		var subagentDerivationsLogged sync.Map // log each derivation once
 		a.branchSeam.SetRunSpawner(NewSubagentRunSpawner(SubagentRunSpawnerDeps{
 			UsageParent: newFleetUsageObserver(a.settingsImpl).AttributeTo,
 			LLM:         a.llmAPI,
@@ -2838,6 +2908,16 @@ func New(c *core.Core, opts ...Option) *API {
 				}
 				return profs[0].ID
 			},
+			// B11: a served workbench has no personal provider — derive
+			// the sub-agent's model from the host provider instead.
+			DerivedModel: func(declared string) (string, string, bool) {
+				p, m, src, ok := a.settingsImpl.MapSubagentModel(declared)
+				if _, seen := subagentDerivationsLogged.LoadOrStore(declared+"\x00"+p+"\x00"+m, true); ok && !seen {
+					logging.L().Info("rpc.subagent_run_spawner.model_derived",
+						"profile_id", p, "model", m, "source", string(src), "declared", declared)
+				}
+				return p, m, ok
+			},
 			// owner directive 2026-09-09, mission requirement 3: the SAME
 			// registry instance buildChatRunner wired into
 			// chat.Config.SubagentBudgets, obtained through the accessor
@@ -2851,7 +2931,11 @@ func New(c *core.Core, opts ...Option) *API {
 			Containment: a.scheduledRunContainment,
 		}))
 		logging.L().Info("rpc.subagent_run_spawner.armed")
-		registerSubagentDispatchTool(c, stack.builtins, a.branchSeam)
+		var worktrees []coresubagent.WorktreeManager
+		if opt.worktreeIsolation && c != nil && c.WorkspaceDir() != "" {
+			worktrees = append(worktrees, &coresubagent.GitWorktrees{Root: c.WorkspaceDir()})
+		}
+		registerSubagentDispatchTool(c, stack.builtins, a.branchSeam, worktrees...)
 	}
 
 	// confirm-each-enforcement-01PMAG05 WP02: the resolve leg. Bound to
@@ -4502,10 +4586,26 @@ func New(c *core.Core, opts ...Option) *API {
 			ctxSyncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps).
 				WithAuditEmitter(&contextSyncAuditBridge{impl: a.auditImpl})
 			impl.WithSyncer(ctxSyncer)
+			// Teammates' Curated entries become readable by the model
+			// (read_context_file shared=…), framed as data.
+			selfDir := flDataDir
+			a.sharedCtx.setCurated(ctxSyncer.PulledEntries, func() string {
+				if selfDir == "" {
+					return ""
+				}
+				id, err := corefleet.LoadIdentity(selfDir)
+				if err != nil {
+					return ""
+				}
+				return id.UserID
+			})
 			// The enrolled identity supplies the user id (to hide pulled
 			// copies of the user's own entries, review F3) and the team id
 			// a "team"-layer publish lands in.
 			impl.WithSelfIdentityFromDataDir(flDataDir)
+			// Where each entry was last shared, so a re-share starts on its
+			// current team, not the org root (spec 018 H-1 review).
+			impl.WithShareLedgerDir(flDataDir)
 
 			// FR-012: wire the library merger so each successful PullDelta
 			// applies team/org entries to the local context library. The
@@ -4635,6 +4735,17 @@ func New(c *core.Core, opts ...Option) *API {
 			if a.settingsImpl != nil {
 				unitSyncer.SetLanes(a.settingsImpl.FleetSyncLanes())
 			}
+			// Spec 018 H-2: withdrawn tombstones are per stream. The Unit lane
+			// is filtered by ?kind=, so before dropping a unit on one it asks
+			// the Curated lane's stream whether that node is still live.
+			if a.ctxGraphSyncer != nil {
+				unitSyncer.SetServesLive(a.ctxGraphSyncer.ServesLive)
+			}
+			// Audience labels for the model framing of shared units.
+			a.sharedCtx.setUnitLabels(func(ctx context.Context, unitID string) (string, bool, bool) {
+				l, ok := unitSyncer.NodeLabels(ctx, unitID)
+				return l.Audience, l.Governed, ok && l.Audience != ""
+			})
 			// Read-down-auto: pull org/team units into the local clone as read
 			// layers. Self-gates on sign-in + team-graph capability.
 			unitSyncer.StartPoller(context.Background())
@@ -4806,6 +4917,11 @@ func New(c *core.Core, opts ...Option) *API {
 							a.settingsImpl.FleetNodeRemoved()
 						}
 					},
+					onKeysChanged: func() {
+						if a.settingsImpl != nil {
+							a.settingsImpl.FleetDeviceKeysChanged()
+						}
+					},
 				},
 				// fleet-enforcement-truth-01PMZ505 WP13 (owner ruling
 				// G-7): a.cedarGate() is the SAME process-singleton every
@@ -4874,6 +4990,21 @@ func New(c *core.Core, opts ...Option) *API {
 			cap := p.Current()
 			return cap.Has(corefleet.CapAuditLogImmudb)
 		}
+		// withheldCheck: the plan includes the archive (audit_ledger_read
+		// carries the tier value) but Fleet advertises audit_log_immudb
+		// false for this org (legal D173). The panel must not say
+		// "upgrade" to an org that already has the plan.
+		withheldCheck := func() bool {
+			if a.settingsImpl == nil {
+				return false
+			}
+			p := a.settingsImpl.CapabilityPoller()
+			if p == nil {
+				return false
+			}
+			cap := p.Current()
+			return !cap.Has(corefleet.CapAuditLogImmudb) && cap.Has(corefleet.CapAuditLedgerRead)
+		}
 		// Construct only when we have a fleet client (non-nop) and a
 		// DataDir for cursor persistence. Degrade gracefully when the
 		// user is not enrolled or fleet is disabled.
@@ -4939,7 +5070,7 @@ func New(c *core.Core, opts ...Option) *API {
 			a.auditSweeper = sweeper
 
 			// Replace the stub with the real compliance view.
-			a.complianceAPI = complianceview.NewAPI(archiver, sweeper, capCheck)
+			a.complianceAPI = complianceview.NewAPI(archiver, sweeper, capCheck).WithWithheldCheck(withheldCheck)
 			logging.L().Info("fleet.audit_archiver.wired",
 				"data_dir", dataDir,
 				"fleet_client_nil", flCl == nil,
@@ -4991,7 +5122,20 @@ func New(c *core.Core, opts ...Option) *API {
 	if c != nil && c.DataDir() != "" && a.settingsImpl != nil && a.settingsImpl.Store() != nil {
 		snippetWriter := cedarpolicyview.NewAPIWithDataDir(nil, c.DataDir())
 		store := a.settingsImpl.Store()
+		pd := a.policyDefault
 		c.SetBashMigrationBootstrap(func(ctx context.Context) error {
+			// Launch spec L09: a fresh install on the starter policy asks
+			// for every shell command, so the historical allowlist (which
+			// includes interpreters and build tools) is not seeded. The
+			// migration exists for installs that relied on that list.
+			if pd.StarterActive() {
+				if done, err := store.LoadBashAllowlistMigrated(); err == nil && !done {
+					if err := store.SavePermissionsMigrationToastShown(true); err != nil {
+						return err
+					}
+					return store.SaveBashAllowlistMigrated(true)
+				}
+			}
 			return corebash.MigrateBashAllowlist(ctx, snippetWriter, store)
 		})
 	}
@@ -6166,6 +6310,12 @@ func (f *keychainForgetter) Forget(ctx context.Context, locator string) error {
 // shared secrets backend is what InstallRecipe writes credentials
 // into so the resolver finds them on the next ResolveEnv).
 type llmStack struct {
+	// sharedCtx serves teammates' Fleet context to the model (the
+	// read_context_file "shared" argument and the always-load block);
+	// New() binds its units store and Curated syncer. nil on the
+	// nil-core chassis.
+	sharedCtx *sharedContextSource
+
 	// loadTools is the shared on-demand tool-exposure core; nil on the
 	// nil-core chassis. toolServers is its server directory and
 	// toolsAudit its late-bound audit sink (see New()).
@@ -6198,6 +6348,9 @@ type llmStack struct {
 	// knowledge-site builder) are bound by the same write policy as
 	// kenaz__write_file instead of constructing a second gate.
 	fsGate *corefs.Gate
+	// starterNet wraps perms with the host starter policy's network leg
+	// (L09); New() wires its SetActive to the policy default.
+	starterNet *toolloop.StarterNetworkResolver
 	// bashStore is the bash tool's per-process output cache. Held so
 	// the agent-graph manager (which constructs its read_bash_output
 	// adapter against the SAME instance) wires both halves of the
@@ -6605,7 +6758,12 @@ func newLLMStack(
 	if settingsImpl != nil {
 		sessionArm.SetKillSwitch(onboardingSettingsDialAdapter{store: settingsImpl.Store()})
 	}
+	// Launch spec L09: the host starter policy's network leg. Inert until
+	// New() installs the policy default (stack.starterNet.SetActive), and
+	// never installed in served mode.
 	perms := toolloop.NewMergedResolver(staticPerms, sessionArm)
+	starterNet := toolloop.NewStarterNetworkResolver(perms)
+	perms = starterNet
 	// WP03 — pre/post-tool-use hooks and audit emission. core/hooks
 	// only exposes pre_send / post_send for chat-pipeline events;
 	// there is no pre_tool_use / post_tool_use surface there yet, so
@@ -6743,17 +6901,32 @@ func newLLMStack(
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
 	// on the next chat turn. Uses the same Cedar engine as the bash tool.
-	fsGate := registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir, blockedSink, originResolve)
+	var fsWorkspaceDir func() string
+	if c != nil {
+		fsWorkspaceDir = c.WorkspaceDir
+	}
+	fsGate := registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir, fsWorkspaceDir, blockedSink, originResolve)
 	// unified-context-artifacts-01NCTXU01: register the read_context_file
 	// built-in so the agent can read on-demand files from attached context
 	// modules. Requires both the contexts library AND an attachment manager;
 	// nil-safe: if either is absent the tool is simply not registered.
+	// sharedCtx serves teammates' Fleet context on demand (the tool's
+	// "shared" argument) and the always-load block (attachment resolvers
+	// below). Its sources are bound later in New() (units store, Curated
+	// syncer); sign-in is the settings view's FleetSignedIn.
+	sharedCtx := &sharedContextSource{}
+	if settingsImpl != nil {
+		sharedCtx.signedIn = func(ctx context.Context) bool {
+			ok, err := settingsImpl.FleetSignedIn(ctx)
+			return err == nil && ok
+		}
+	}
 	if attMgr != nil && contextsLib != nil {
 		modSrc := &moduleSourceAdapter{
 			mgr:    attMgr,
 			reader: &sessionProjectReader{mgr: c.SessionManager()},
 		}
-		registerReadContextFileTool(builtinRegistry, contextsLib, modSrc)
+		registerReadContextFileTool(builtinRegistry, contextsLib, modSrc, sharedCtx)
 	}
 	// bashAvail starts on the desktop source (Settings.BashEnabled); New()
 	// switches it to fleet Cedar policy when rpc.WithFleetGatedBash is set
@@ -6769,6 +6942,7 @@ func newLLMStack(
 		attResolver = &attachmentsResolverAdapter{
 			mgr:    attMgr,
 			reader: &sessionProjectReader{mgr: c.SessionManager()},
+			shared: sharedCtx,
 		}
 	}
 	// chatAttResolver is the same bridge, shaped for the chat package's
@@ -6781,6 +6955,7 @@ func newLLMStack(
 		chatAttResolver = &chatAttachmentsResolverAdapter{
 			mgr:    attMgr,
 			reader: &sessionProjectReader{mgr: c.SessionManager()},
+			shared: sharedCtx,
 		}
 	}
 	// Tool discovery wiring — the discoverer projects the same MCP
@@ -6905,16 +7080,24 @@ func newLLMStack(
 				return "", "", false
 			}
 			profs, perr := capturedRaterStore.List()
-			if perr != nil || len(profs) == 0 {
+			if perr != nil {
+				profs = nil
+			}
+			// B11: the served host provider is a candidate too — a
+			// workbench's personal store is empty by construction.
+			if settingsImpl != nil {
+				if hp := settingsImpl.SessionProvider(); hp != nil {
+					profs = append(profs, *hp)
+				}
+			}
+			if len(profs) == 0 {
 				return "", "", false
 			}
 			var setting risk.RaterModelSetting
-			if settingsImpl != nil && settingsImpl.Store() != nil {
-				if s, serr := settingsImpl.Store().LoadAll(); serr == nil {
-					setting = risk.RaterModelSetting{
-						ProviderID: s.RiskRaterModel.ProviderID,
-						ModelID:    s.RiskRaterModel.ModelID,
-					}
+			if settingsImpl != nil {
+				// Effective slot: org > settings > host > derived (B11).
+				if e, ok := settingsImpl.ResolveModelSlot(harnessmodels.SlotRiskRater); ok {
+					setting = risk.RaterModelSetting{ProviderID: e.ProviderID, ModelID: e.ModelID}
 				}
 			}
 			profileID, model, _, ok := risk.ResolveRaterModel(setting, profs)
@@ -6984,23 +7167,26 @@ func newLLMStack(
 		}
 		stackSidecarMgr, stackSidecarProbe = sidecarMgr, sidecarProbe
 		loadAdvisorProfiles := func() []corellm.ProviderProfile {
-			if capturedAdvisorStore == nil {
-				return nil
+			var profs []corellm.ProviderProfile
+			if capturedAdvisorStore != nil {
+				if ps, perr := capturedAdvisorStore.List(); perr == nil {
+					profs = ps
+				}
 			}
-			profs, perr := capturedAdvisorStore.List()
-			if perr != nil {
-				return nil
+			// B11: include the served host provider.
+			if settingsImpl != nil {
+				if hp := settingsImpl.SessionProvider(); hp != nil {
+					profs = append(profs, *hp)
+				}
 			}
 			return profs
 		}
 		loadAdvisorSetting := func() advice.AdvisorModelSetting {
 			var setting advice.AdvisorModelSetting
-			if settingsImpl != nil && settingsImpl.Store() != nil {
-				if s, serr := settingsImpl.Store().LoadAll(); serr == nil {
-					setting = advice.AdvisorModelSetting{
-						ProviderID: s.AdvisorModel.ProviderID,
-						ModelID:    s.AdvisorModel.ModelID,
-					}
+			if settingsImpl != nil {
+				// Effective slot: org > settings > host > derived (B11).
+				if e, ok := settingsImpl.ResolveModelSlot(harnessmodels.SlotAdvisor); ok {
+					setting = advice.AdvisorModelSetting{ProviderID: e.ProviderID, ModelID: e.ModelID}
 				}
 			}
 			return setting
@@ -7349,9 +7535,11 @@ func newLLMStack(
 		secrets:             secretsBackend,
 		reg:                 reg,
 		builtins:            builtinRegistry,
+		sharedCtx:           sharedCtx,
 		bashAvail:           bashAvail,
 		builtinFilter:       builtinFilter,
 		fsGate:              fsGate,
+		starterNet:          starterNet,
 		bashStore:           bashStore,
 		compactionScheduler: sweepScheduler,
 		compactionLLM:       compactionLLM,
@@ -7566,6 +7754,12 @@ func buildCompactionWiring(
 				return compaction.ProviderProfileRef{}, false
 			}
 			if s.CompactionModel.IsZero() {
+				// B11: served workbenches derive the slot (cheapest model of
+				// the host provider) or take it from host/org; desktop
+				// resolves nothing here and keeps the session-model fallback.
+				if e, ok := settingsImpl.ResolveModelSlot(harnessmodels.SlotCompaction); ok {
+					return compaction.ProviderProfileRef{ProviderID: e.ProviderID, ModelID: e.ModelID}, true
+				}
 				return compaction.ProviderProfileRef{}, false
 			}
 			return compaction.ProviderProfileRef{
@@ -9035,10 +9229,11 @@ func (p chatPermsAdapter) Resolve(ctx context.Context, sessionID, server, tool s
 		return chat.PermVerdict{}, err
 	}
 	return chat.PermVerdict{
-		Server: res.Server,
-		Tool:   res.Tool,
-		Policy: string(res.Policy),
-		Reason: res.Reason,
+		Server:           res.Server,
+		Tool:             res.Tool,
+		Policy:           string(res.Policy),
+		Reason:           res.Reason,
+		AskDespitePermit: res.AskDespitePermit,
 	}, nil
 }
 
@@ -9077,6 +9272,9 @@ func (p *thresholdPublisher) Publish(topic string, payload any) {
 type attachmentsResolverAdapter struct {
 	mgr    *coreatt.Manager
 	reader coreatt.SessionProjectReader
+	// shared supplies the framed always-load block of teammates' Fleet
+	// context, prepended as the base system layer. nil = none.
+	shared *sharedContextSource
 }
 
 func (a *attachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID string) ([]llm.ResolvedAttachment, error) {
@@ -9087,7 +9285,10 @@ func (a *attachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID
 	if err != nil {
 		return nil, err
 	}
-	out := make([]llm.ResolvedAttachment, 0, len(rows))
+	out := make([]llm.ResolvedAttachment, 0, len(rows)+1)
+	if block := sharedAlwaysBlock(ctx, a.shared, a.reader, sessionID); block != "" {
+		out = append(out, llm.ResolvedAttachment{Content: block, Kind: "system"})
+	}
 	for _, r := range rows {
 		out = append(out, llm.ResolvedAttachment{
 			Content: r.Content,
@@ -9106,6 +9307,8 @@ func (a *attachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID
 type chatAttachmentsResolverAdapter struct {
 	mgr    *coreatt.Manager
 	reader coreatt.SessionProjectReader
+	// shared: see attachmentsResolverAdapter.shared.
+	shared *sharedContextSource
 }
 
 func (a *chatAttachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID string) ([]chat.ResolvedAttachment, error) {
@@ -9116,7 +9319,10 @@ func (a *chatAttachmentsResolverAdapter) ListResolved(ctx context.Context, sessi
 	if err != nil {
 		return nil, err
 	}
-	out := make([]chat.ResolvedAttachment, 0, len(rows))
+	out := make([]chat.ResolvedAttachment, 0, len(rows)+1)
+	if block := sharedAlwaysBlock(ctx, a.shared, a.reader, sessionID); block != "" {
+		out = append(out, chat.ResolvedAttachment{Content: block, Kind: "system"})
+	}
 	for _, r := range rows {
 		out = append(out, chat.ResolvedAttachment{
 			Content: r.Content,
@@ -12655,4 +12861,13 @@ func (r revocationWorkflowsAdapter) CatalogInstalledWorkflows(ctx context.Contex
 
 func (r revocationWorkflowsAdapter) RemoveRevokedWorkflow(ctx context.Context, workflowID, catalogID string) (bool, error) {
 	return r.wf.RemoveRevokedCatalogDocument(ctx, workflowID, catalogID)
+}
+
+// ModelSlots returns the effective harness model slots and their source
+// (fleet-workbench-next-plan-2026-11-10 B11) — served Settings_ModelSlots.
+func (a *API) ModelSlots(ctx context.Context) (settings.ModelSlotsView, error) {
+	if a == nil || a.settingsImpl == nil {
+		return settings.ModelSlotsView{Slots: []harnessmodels.Effective{}}, nil
+	}
+	return a.settingsImpl.EffectiveModelSlots(ctx)
 }

@@ -76,8 +76,10 @@ export interface ScheduledChatRunSummary {
   chatRunId: string;
   sessionId?: string;
   /**
-   * 'skipped': the fire did not run because the schedule's conversation
-   * still had a turn in progress; `error` says why.
+   * 'skipped': the fire did not run, and `error` says why: the schedule's
+   * conversation still had a turn in progress, or the app was closing
+   * before the run started (a one-shot then runs the next time the app
+   * starts; a recurring schedule at its next scheduled time).
    */
   status: 'completed' | 'failed' | 'running' | 'skipped';
   startedAt: string; // ISO 8601

@@ -94,13 +94,13 @@ onMounted(() => {
 <template>
   <section data-testid="global-context-section" class="max-w-3xl">
     <div class="flex items-center justify-between">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Global context
         <span class="ml-1 text-ink-dim">({{ globalAttachments.length }})</span>
       </h2>
       <button
         type="button"
-        class="flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+        class="flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-caption text-accent hover:bg-accent-glow"
         data-testid="global-add-context"
         @click="openGlobalPicker"
       >
@@ -108,14 +108,14 @@ onMounted(() => {
         <span>Add context</span>
       </button>
     </div>
-    <p class="mt-1 font-ui text-[11px] text-ink-dim">
+    <p class="mt-1 font-ui text-caption text-ink-dim">
       Global context applies to every session in the harness. The
       resolved stream concatenates global → project → session, so
       ordering here affects the prefix every conversation receives.
     </p>
     <div
       v-if="globalAttachmentsError"
-      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
       role="alert"
       data-testid="global-attachments-error"
     >

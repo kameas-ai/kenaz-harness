@@ -381,7 +381,7 @@ function showToast(msg: string) {
       @close="publishPreviewOpen = false"
     >
       <div data-testid="cedar-publish-preview-dialog">
-        <h2 class="font-ui text-base font-semibold text-ink">
+        <h2 class="font-ui text-h3 font-semibold text-ink">
           Publish to team
         </h2>
         <p class="mt-1 font-ui text-xs text-ink-muted">
@@ -747,8 +747,8 @@ function showToast(msg: string) {
   color: var(--ink);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.5rem 1rem;
-  font-size: 0.8125rem;
+  padding: var(--space-8) var(--space-16);
+  font-size: var(--type-ui-size);
   z-index: 9999;
   box-shadow: 0 2px 8px var(--modal-shadow);
 }
@@ -767,52 +767,52 @@ function showToast(msg: string) {
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 1.5rem;
+  padding: var(--space-24);
   max-width: 380px;
   width: 90%;
 }
 
 .cedar-editor__dialog-msg {
-  margin: 0 0 1rem;
-  font-size: 0.875rem;
+  margin: 0 0 var(--space-16);
+  font-size: var(--type-body-size);
 }
 
 .cedar-editor__dialog-btns {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-8);
   justify-content: flex-end;
 }
 
 .cedar-editor__head {
-  padding: 0.75rem 1rem 0.5rem;
+  padding: var(--space-12) var(--space-16) var(--space-8);
   border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
 }
 
 .cedar-editor__title {
-  font-size: 0.6875rem;
+  font-size: var(--type-caption-size);
   color: var(--ink-muted);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .cedar-editor__heading {
-  font-size: 1.125rem;
+  font-size: var(--type-title-size);
   font-weight: 600;
-  margin: 0.25rem 0 0;
+  margin: var(--space-4) 0 0;
 }
 
 .cedar-editor__sub {
-  margin: 0.125rem 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--ink-muted);
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
 }
 
 .cedar-editor__fleet-banner {
-  margin-top: 0.5rem;
-  padding: 0.375rem 0.625rem;
+  margin-top: var(--space-8);
+  padding: var(--space-6) var(--space-10);
   border-radius: var(--radius-sm);
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
   color: var(--ink-muted);
   border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
@@ -844,13 +844,13 @@ function showToast(msg: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-8) var(--space-12);
   border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
 }
 
 .cedar-editor__h2 {
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   font-weight: 600;
   margin: 0;
   text-transform: uppercase;
@@ -860,7 +860,7 @@ function showToast(msg: string) {
 
 .cedar-editor__sidebar-actions {
   display: flex;
-  gap: 0.25rem;
+  gap: var(--space-4);
 }
 
 .cedar-editor__file-list {
@@ -874,10 +874,10 @@ function showToast(msg: string) {
 .cedar-editor__file {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.375rem 0.75rem;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-12);
   cursor: pointer;
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
   border-bottom: 1px solid var(--border-muted);
   transition: background 0.1s;
 }
@@ -897,7 +897,7 @@ function showToast(msg: string) {
 
 .cedar-editor__file-name {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -906,7 +906,7 @@ function showToast(msg: string) {
 
 .cedar-editor__file-status {
   flex-shrink: 0;
-  font-size: 0.6875rem;
+  font-size: var(--type-caption-size);
   font-weight: 700;
 }
 
@@ -917,17 +917,17 @@ function showToast(msg: string) {
 .cedar-editor__err {
   color: var(--danger);
   font-weight: 600;
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
 }
 
 .cedar-editor__tag {
-  font-size: 0.5625rem;
+  font-size: var(--type-tag-size);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--ink-muted);
-  padding: 0 0.2rem;
+  padding: 0 var(--space-4);
   border: 1px solid var(--border-muted);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   flex-shrink: 0;
 }
 
@@ -943,9 +943,9 @@ function showToast(msg: string) {
 }
 
 .cedar-editor__empty {
-  padding: 0.75rem;
+  padding: var(--space-12);
   color: var(--ink-muted);
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
 }
 
 /* ── Editor pane ── */
@@ -961,42 +961,42 @@ function showToast(msg: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-8) var(--space-12);
   border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
-  gap: 0.5rem;
+  gap: var(--space-8);
   flex-wrap: wrap;
 }
 
 .cedar-editor__editor-title {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: var(--space-6);
   min-width: 0;
 }
 
 .cedar-editor__editor-actions {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: var(--space-6);
   flex-shrink: 0;
 }
 
 .cedar-editor__parse-ok {
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   color: var(--ok);
   font-weight: 600;
 }
 
 .cedar-editor__parse-err {
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   color: var(--danger);
   font-weight: 600;
 }
 
 .cedar-editor__banner {
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8125rem;
+  padding: var(--space-8) var(--space-12);
+  font-size: var(--type-ui-size);
   flex-shrink: 0;
 }
 
@@ -1008,15 +1008,15 @@ function showToast(msg: string) {
 
 .cedar-editor__banner--parse {
   background: color-mix(in srgb, var(--warn) 10%, transparent);
-  color: var(--warn-ink, var(--ink));
+  color: var(--warn-text);
   border-bottom: 1px solid color-mix(in srgb, var(--warn) 20%, transparent);
 }
 
 .cedar-editor__parse-error-row {
   display: flex;
-  gap: 0.375rem;
+  gap: var(--space-6);
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
 }
 
 .cedar-editor__parse-loc {
@@ -1026,14 +1026,14 @@ function showToast(msg: string) {
 
 .cedar-editor__err-msg {
   color: var(--danger);
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
 }
 
 .cedar-editor__new-bar {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-12);
   border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
   flex-wrap: wrap;
@@ -1041,8 +1041,8 @@ function showToast(msg: string) {
 
 .cedar-editor__name-input {
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
-  padding: 0.25rem 0.5rem;
+  font-size: var(--type-ui-size);
+  padding: var(--space-4) var(--space-8);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
@@ -1057,7 +1057,7 @@ function showToast(msg: string) {
 
 .cedar-editor__new-actions {
   display: flex;
-  gap: 0.375rem;
+  gap: var(--space-6);
 }
 
 .cedar-editor__editor-wrap {
@@ -1070,9 +1070,9 @@ function showToast(msg: string) {
 .cedar-editor__editor {
   flex: 1;
   width: 100%;
-  padding: 0.75rem;
+  padding: var(--space-12);
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
   line-height: 1.5;
   border: none;
   outline: none;
@@ -1099,8 +1099,8 @@ function showToast(msg: string) {
   align-items: center;
   justify-content: center;
   color: var(--ink-muted);
-  font-size: 0.875rem;
-  padding: 2rem;
+  font-size: var(--type-body-size);
+  padding: var(--space-32);
   text-align: center;
 }
 
@@ -1108,11 +1108,11 @@ function showToast(msg: string) {
 .cedar-editor__btn {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.25rem 0.625rem;
+  padding: var(--space-4) var(--space-10);
   background: var(--surface-2);
   color: var(--ink);
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   font-family: var(--font-ui);
   transition: background 0.1s;
 }
@@ -1127,13 +1127,13 @@ function showToast(msg: string) {
 }
 
 .cedar-editor__btn--sm {
-  padding: 0.125rem 0.5rem;
-  font-size: 0.6875rem;
+  padding: var(--space-2) var(--space-8);
+  font-size: var(--type-caption-size);
 }
 
 .cedar-editor__btn--primary {
   background: var(--accent);
-  color: var(--accent-ink);
+  color: var(--accent);
   border-color: var(--accent);
 }
 

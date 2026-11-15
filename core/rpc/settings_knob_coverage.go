@@ -350,6 +350,32 @@ func init() {
 			"as KENAZ_ML_ACTIVITY_RETENTION_DAYS on every spawn "+
 			"(TestMLProducerWiring_SidecarGetsEffectiveRetention).",
 	)
+	// ── Fleet device display name (Fleet ER-43) ──────────────────────
+	knobcoverage.Register[settings.Settings](
+		"FleetDeviceNameHidden",
+		"views/settings SetFleetClient wires API.fleetDeviceName as the "+
+			"fleet.Client device-name source, read on every enroll: true "+
+			"omits the enroll `hostname` field, clearing the name Fleet stores "+
+			"(TestFleetDeviceName_SettingReachesEnrollBody).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"FleetDeviceNameUseComputerName",
+		"same source (API.fleetDeviceName → fleet.ResolveDeviceName): true "+
+			"is an explicit choice of this computer's name (also the default) "+
+			"and overrides FleetDeviceNameNeutral in the enroll `hostname` "+
+			"(TestFleetDeviceName_SettingReachesEnrollBody).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"FleetDeviceNameNeutral",
+		"same source: true sends the neutral \"<OS> device <4 hex>\" label "+
+			"instead of the computer-name default in the enroll `hostname` "+
+			"(TestFleetDeviceName_SettingReachesEnrollBody).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"FleetDeviceNameCustom",
+		"same source: a non-empty value is the enroll `hostname` sent "+
+			"(TestFleetDeviceName_SettingReachesEnrollBody).",
+	)
 	knobcoverage.Register[settings.Settings](
 		"ShareModelCallTelemetryTextRevision",
 		"views/settings Settings.modelCallSharingEffective: the opt-in "+
@@ -448,6 +474,18 @@ func init() {
 		"PermissionCacheDangerousOps",
 		"read by the bash and filesystem permission modals to decide "+
 			"whether 'Allow always' is offered for dangerous-tier ops.",
+	)
+	knobcoverage.Register[settings.Settings](
+		"PolicyDefault",
+		"read by core/rpc/policy_default.go (policyDefault.StarterActive), "+
+			"which the fs gate (corefs.Gate.SetStarterDefaults), the network-tool "+
+			"resolver (toolloop.StarterNetworkResolver) and the bash allowlist "+
+			"seeding consult per request (launch spec L09).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"PolicyDefaultNoticeSeen",
+		"read by Settings_GetPolicyDefault; PolicyDefaultNotice.vue shows the "+
+			"first-run policy notice until it is set (L09 R7).",
 	)
 	knobcoverage.Register[settings.Settings](
 		"BashAllowlistMigrated",

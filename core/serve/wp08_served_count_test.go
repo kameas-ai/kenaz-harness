@@ -18,7 +18,7 @@ import "testing"
 //
 // *Falsify*: add or remove an entry from servedMethods in methods.go
 // without updating wantServedMethodCount below → this goes red.
-const wantServedMethodCount = 57 // +2: Settings_FleetConfigPullStatus, Settings_FleetHealth (fleet-policy push-down); +1: Settings_FleetSession (fleet-session-truth-01DOGF0A FR-1); +3: Fleet_GetTelemetryConsent, Fleet_SetTelemetryConsent, Fleet_TelemetryStatus; +7: Documents_{BuildSite,Create,ExportsDir,Get,List,Preview,Update} (contracts/documents-rpc.md); +4: Agents_{ListProfiles,LoadProfile,SaveProfile,DeleteProfile} (contracts/agents-served-rpc.md); +1: LLM_ListCredentialKeys (provider-credentials-client-01PCCLI01 WP04)
+const wantServedMethodCount = 58 // +1: Settings_ModelSlots (fleet-workbench-next-plan B11); +2: Settings_FleetConfigPullStatus, Settings_FleetHealth (fleet-policy push-down); +1: Settings_FleetSession (fleet-session-truth-01DOGF0A FR-1); +3: Fleet_GetTelemetryConsent, Fleet_SetTelemetryConsent, Fleet_TelemetryStatus; +7: Documents_{BuildSite,Create,ExportsDir,Get,List,Preview,Update} (contracts/documents-rpc.md); +4: Agents_{ListProfiles,LoadProfile,SaveProfile,DeleteProfile} (contracts/agents-served-rpc.md); +1: LLM_ListCredentialKeys (provider-credentials-client-01PCCLI01 WP04)
 
 func TestServedMethodsCountMatchesDoc(t *testing.T) {
 	got := len(servedMethods)

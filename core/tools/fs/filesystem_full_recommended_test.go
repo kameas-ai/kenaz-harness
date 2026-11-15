@@ -237,3 +237,30 @@ func TestFilesystemFullRecommendedTemplate_OrdinaryPathsStillReachPrompt(t *test
 		})
 	}
 }
+
+// A read through a planted link into ~/.ssh is the forbidden read: the
+// template's forbids are written against canonical_path, so the gate also
+// evaluates the location the read really acts on and takes its Deny.
+// Fail-on-revert: drop the resolved-location forbid pass in evaluate ->
+// the read of /tmp/.../k falls through to the prompt.
+func TestFilesystemFullRecommendedTemplate_ForbidFollowsReadThroughLink(t *testing.T) {
+	t.Parallel()
+	dataDir := installFilesystemFullTemplate(t)
+	engine := newRealFilesystemFullEngine(t, dataDir)
+	keys := filepath.Join(t.TempDir(), "home", ".ssh")
+	if err := os.MkdirAll(keys, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "k")
+	if err := os.Symlink(filepath.Join(keys, "id_ed25519"), link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	gate := NewGate(GateOptions{Engine: engine, Prompter: failIfPromptedPrompter{t: t}})
+	d, err := gate.Evaluate(context.Background(), OpRead, link)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if d.Outcome != cedar.Deny {
+		t.Fatalf("read through a link into .ssh = %s (%s), want Deny", d.Outcome, d.Reason)
+	}
+}

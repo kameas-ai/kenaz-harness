@@ -215,6 +215,34 @@ export interface ModelCallTelemetrySettings {
 }
 
 /**
+ * Settings › Account › Device name (Go settings.FleetDeviceNameSettings,
+ * Fleet ER-43): the name your organization's Fleet admins see for this
+ * device.
+ */
+export interface FleetDeviceNameSettings {
+  /** "Share this device's name with your organization" — default true. */
+  share: boolean;
+  /**
+   * Explicit choice of this computer's own name. Neither this nor
+   * useNeutralName = the default, which is also the computer's name (the
+   * neutral name when it is unavailable).
+   */
+  useComputerName: boolean;
+  /** Explicit choice of the neutral "<OS> device <4 hex>" name. */
+  useNeutralName: boolean;
+  /** When non-empty, sent instead (sanitised, at most maxLength). */
+  customName: string;
+  /** Read-only: this computer's name as it would be sent. */
+  computerName: string;
+  /** Read-only: the neutral "<OS> device <4 hex>" name ('' before sign-in). */
+  defaultName: string;
+  /** Read-only: what the next enroll sends ('' = nothing). */
+  effectiveName: string;
+  /** Read-only: Fleet's limit, in characters. */
+  maxLength: number;
+}
+
+/**
  * The local ML activity store (ml-producer-01MLPRD01 WP11): what Kenaz keeps
  * on this device to power local suggestions (rpc.MLLocalActivityView).
  */
@@ -858,6 +886,13 @@ export interface ContextNode {
   size?: number;
   modified?: string;
   children?: ContextNode[];
+  /**
+   * A pulled team/org entry's audience as Fleet serves it (spec 018 FR-6):
+   * "team" or "org". Absent for local files.
+   */
+  audience?: string;
+  /** True only for admin-governed org content. */
+  governed?: boolean;
 }
 
 // ── Fleet context-graph sync types (fleet-context-graph-sync-01NDFSEX17) ──────
@@ -878,6 +913,23 @@ export interface ContextPushConflict {
   client_version: number;
 }
 
+/**
+ * ContextShareStateView — where this device last shared a context entry
+ * (kenaz-fleet spec 018 H-1). Mirrors core/rpc/views/contexts.ContextShareStateView.
+ */
+export interface ContextShareStateView {
+  /** The LOCAL id, as published. */
+  node_id: string;
+  layer: 'team' | 'org';
+  /** The team a "team" share went to. */
+  team_id?: string;
+  /** An org-wide share of this entry still waiting for an admin's review. */
+  pending_merge_request_id?: string;
+}
+
+/** Fleet's per-item push outcome (spec 018 H-3). */
+export type ContextPushStatus = 'published' | 'pending_review' | 'refused';
+
 export interface ContextPublishResult {
   accepted_nodes: number;
   accepted_edges: number;
@@ -888,11 +940,23 @@ export interface ContextPublishResult {
    * core/rpc/views/contexts/impl.go).
    */
   effective_layer: 'team' | 'org';
+  /** The explicit audience sent: "team", or "org" (the whole organisation). */
+  audience?: 'team' | 'org' | '';
+  /** Fleet's per-item outcome. Absent from an older backend: derive it. */
+  status?: ContextPushStatus;
+  /** The merge request a pending_review opened (or kept). */
+  merge_request_id?: string;
+  /** The earlier request Fleet superseded because the content changed. */
+  superseded_merge_request_id?: string;
+  /** Refusal code as served, and the same in plain words. */
+  reason?: string;
+  reason_text?: string;
 }
 
 export interface ContextPromoteResult {
   updated_node_id: string;
   new_classification: 'org_shared';
+  status?: 'published';
 }
 
 export interface ContextSyncStatusView {
@@ -4043,6 +4107,16 @@ export interface PermissionRequest {
       /** True when the pattern cannot be saved as an "Allow always" grant. */
       allow_always_unavailable?: boolean;
     };
+    fs?: {
+      /** The write creates its parent directory (E2E-1): default the scope to the directory. */
+      parent_missing?: boolean;
+      /** Banner text: the path is, or a directory grant would include, harness state (E2E-3). */
+      privileged?: string;
+      /** Where the operation really acts (links resolved); shown when it differs from canonical_path. */
+      resolved_path?: string;
+      /** The path as requested. */
+      canonical_path?: string;
+    };
   };
 }
 
@@ -4921,6 +4995,8 @@ export interface MemorySyncStatus {
   olderNotes: number;
   /** Who those notes would sync to. */
   olderNotesAccount?: string;
+  /** Erased from Fleet, not yet from this device. It keeps trying. */
+  localErasePending?: boolean;
   /** Notes that stay on this device: the keychain couldn't be read when they were written. */
   unresolvedNotes: number;
   /** An earlier version left an erase unfinished (legal). Shown until dismissed. */
@@ -4932,6 +5008,37 @@ export interface MemorySyncStatus {
   /** Staff org pause (kenaz-fleet PR 206): show the paused banner, keep data-rights actions. */
   orgPaused?: boolean;
   pausedCategory?: string;
+  /**
+   * Uploads wait until the memory-access notice is read in this org (legal
+   * D168(2)). Never set while Fleet serves no memory-access text.
+   */
+  noticeHold?: boolean;
+  /** unread | text_refused | check_failed */
+  noticeHoldReason?: string;
+}
+
+/**
+ * Mirrors settings.MemberNoticeView — one notice text Fleet serves on the
+ * kenaz-harness surface (contract-harness-sync §17) and this member's read
+ * state for its family in the current org. `text` is shown verbatim.
+ */
+export interface MemberNotice {
+  family: 'memory-access' | 'agent-telemetry' | string;
+  edition: string;
+  text: string;
+  textHash: string;
+  /** Latest row in this org: 'ack', 'withdraw', or '' for none. */
+  action: string;
+  rowEdition: string;
+  acked: boolean;
+  actedAt: string;
+  ackedSince: string;
+}
+
+/** Mirrors settings.MemberNoticesView. `notices` is empty while nothing is registered. */
+export interface MemberNotices {
+  notices: MemberNotice[];
+  stateError?: string;
 }
 
 /**
@@ -5120,7 +5227,7 @@ export interface FleetSyncView {
  */
 export interface FleetSessionView {
   state: FleetSessionState;
-  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled | node_removed */
+  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled | node_removed | node_id_invalid */
   reason?: string;
   /** Raw error text behind `reason` (humanize before showing). */
   message?: string;
@@ -5164,7 +5271,12 @@ export interface FleetSessionView {
 
 /** Mirrors settings.FleetDeviceKeysView. */
 export interface FleetDeviceKeysView {
-  /** registered | too_many_devices | invalid_key | unavailable */
+  /**
+   * registered | too_many_devices | invalid_key | unavailable |
+   * reauth_required (kenaz-fleet ER-40: replacing this device's active key
+   * needs a fresh sign-in — settings.fleetDeviceKeysReauth()) |
+   * reauth_refused (a fresh sign-in was refused: contact the administrator).
+   */
   status: string;
   /** Human copy when this device cannot receive shared sessions. */
   message?: string;
@@ -5258,6 +5370,31 @@ export interface TelemetryOptInView {
   optedAt?: string;
   /** "user_self" | "admin_default" | etc. */
   source?: string;
+}
+
+// ── Fleet team tree (kenaz-fleet spec 018 H-1) ──────────────────────────────
+
+/**
+ * FleetTeamView — one of the caller's Fleet teams, placed in the team tree.
+ * Mirrors core/rpc/views/settings.FleetTeamView. `id` is the key; `name`
+ * and `slug` are labels, shown as Fleet serves them. A team is never put
+ * on telemetry.
+ */
+export interface FleetTeamView {
+  id: string;
+  name: string;
+  /** The org's default team: the root of the tree. */
+  is_default: boolean;
+  /** The caller's role on the team ("member" | "lead"); absent on an older Fleet. */
+  role?: string;
+  /** The team this one is drawn under; absent for the root and the top of a rootless list. */
+  parent_team_id?: string;
+  /** Indent level as drawn: 0 for the root, 1 directly under it. */
+  tree_depth: number;
+  /** Announced by spec 018, not served yet. */
+  slug?: string;
+  /** "direct" | "inherited" — announced by spec 018, not served yet. */
+  membership?: string;
 }
 
 // ── Unit sync types (fleet-integrity-observability WP08) ────────────────────
@@ -5669,6 +5806,11 @@ export interface ComplianceStatus {
   retentionDays: number;
   /** True when CapAuditLogImmuDB capability is active for this org tier. */
   enabled: boolean;
+  /**
+   * True when the org's plan includes the archive but Fleet has turned it
+   * off for the org (legal D173). Show "not available yet", never "upgrade".
+   */
+  archiveWithheld?: boolean;
   /** True when the background archiver goroutine is running. */
   archiverRunning: boolean;
   /**
@@ -5917,4 +6059,18 @@ export interface ServerSchemaCost {
   /** Tokens of the tools a call in this scope sends. */
   sendableTokenEst: number;
   tools: ToolSchemaCost[];
+}
+
+/**
+ * Launch spec L09: the host policy default (core/rpc/policy_default.go
+ * PolicyDefaultView). "starter": reads and edits inside the workspace run
+ * without asking; shell commands, web requests and writes outside the
+ * workspace ask. "legacy": the behaviour before the starter policy, kept
+ * on installs that predate it until the person accepts the new default.
+ * "workbench": served mode, where the VM is the boundary.
+ */
+export interface PolicyDefaultView {
+  mode: 'starter' | 'legacy' | 'workbench' | string;
+  noticeSeen: boolean;
+  upgraded: boolean;
 }

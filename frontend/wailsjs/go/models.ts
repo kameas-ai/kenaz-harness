@@ -1372,6 +1372,9 @@ export namespace cedar {
 	    op: string;
 	    canonical_path: string;
 	    dangerous: boolean;
+	    parent_missing?: boolean;
+	    privileged?: string;
+	    resolved_path?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new FSPromptSurface(source);
@@ -1382,6 +1385,9 @@ export namespace cedar {
 	        this.op = source["op"];
 	        this.canonical_path = source["canonical_path"];
 	        this.dangerous = source["dangerous"];
+	        this.parent_missing = source["parent_missing"];
+	        this.privileged = source["privileged"];
+	        this.resolved_path = source["resolved_path"];
 	    }
 	}
 	export class PolicyEvalError {
@@ -1810,6 +1816,7 @@ export namespace compliance {
 	    chainBreak: boolean;
 	    retentionDays: number;
 	    enabled: boolean;
+	    archiveWithheld?: boolean;
 	    archiverRunning: boolean;
 	    stoppedReason?: string;
 	    pausedReason?: string;
@@ -1826,6 +1833,7 @@ export namespace compliance {
 	        this.chainBreak = source["chainBreak"];
 	        this.retentionDays = source["retentionDays"];
 	        this.enabled = source["enabled"];
+	        this.archiveWithheld = source["archiveWithheld"];
 	        this.archiverRunning = source["archiverRunning"];
 	        this.stoppedReason = source["stoppedReason"];
 	        this.pausedReason = source["pausedReason"];
@@ -1980,6 +1988,7 @@ export namespace contexts {
 	export class ContextPromoteResult {
 	    updated_node_id: string;
 	    new_classification: string;
+	    status: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ContextPromoteResult(source);
@@ -1989,6 +1998,7 @@ export namespace contexts {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.updated_node_id = source["updated_node_id"];
 	        this.new_classification = source["new_classification"];
+	        this.status = source["status"];
 	    }
 	}
 	export class ContextPublishRequest {
@@ -2020,6 +2030,12 @@ export namespace contexts {
 	    accepted_edges: number;
 	    conflicts: fleet.ContextPushConflict[];
 	    effective_layer: string;
+	    audience?: string;
+	    status: string;
+	    merge_request_id?: string;
+	    superseded_merge_request_id?: string;
+	    reason?: string;
+	    reason_text?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ContextPublishResult(source);
@@ -2031,6 +2047,12 @@ export namespace contexts {
 	        this.accepted_edges = source["accepted_edges"];
 	        this.conflicts = this.convertValues(source["conflicts"], fleet.ContextPushConflict);
 	        this.effective_layer = source["effective_layer"];
+	        this.audience = source["audience"];
+	        this.status = source["status"];
+	        this.merge_request_id = source["merge_request_id"];
+	        this.superseded_merge_request_id = source["superseded_merge_request_id"];
+	        this.reason = source["reason"];
+	        this.reason_text = source["reason_text"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2069,6 +2091,24 @@ export namespace contexts {
 	        this.classification = source["classification"];
 	        this.snippet = source["snippet"];
 	        this.rank = source["rank"];
+	    }
+	}
+	export class ContextShareStateView {
+	    node_id: string;
+	    layer: string;
+	    team_id?: string;
+	    pending_merge_request_id?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContextShareStateView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.node_id = source["node_id"];
+	        this.layer = source["layer"];
+	        this.team_id = source["team_id"];
+	        this.pending_merge_request_id = source["pending_merge_request_id"];
 	    }
 	}
 	export class ContextSyncStatusView {
@@ -2152,6 +2192,8 @@ export namespace contexts {
 	    // Go type: time
 	    modified?: any;
 	    children?: Node[];
+	    audience?: string;
+	    governed?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Node(source);
@@ -2165,6 +2207,8 @@ export namespace contexts {
 	        this.size = source["size"];
 	        this.modified = this.convertValues(source["modified"], null);
 	        this.children = this.convertValues(source["children"], Node);
+	        this.audience = source["audience"];
+	        this.governed = source["governed"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -6615,6 +6659,22 @@ export namespace risk {
 
 export namespace rpc {
 	
+	export class PolicyDefaultView {
+	    mode: string;
+	    noticeSeen: boolean;
+	    upgraded: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PolicyDefaultView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.noticeSeen = source["noticeSeen"];
+	        this.upgraded = source["upgraded"];
+	    }
+	}
 	export class WindowSize {
 	    width: number;
 	    height: number;
@@ -7958,6 +8018,32 @@ export namespace settings {
 	        this.handoffFingerprint = source["handoffFingerprint"];
 	    }
 	}
+	export class FleetDeviceNameSettings {
+	    share: boolean;
+	    useComputerName: boolean;
+	    useNeutralName: boolean;
+	    customName: string;
+	    computerName: string;
+	    defaultName: string;
+	    effectiveName: string;
+	    maxLength: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetDeviceNameSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.share = source["share"];
+	        this.useComputerName = source["useComputerName"];
+	        this.useNeutralName = source["useNeutralName"];
+	        this.customName = source["customName"];
+	        this.computerName = source["computerName"];
+	        this.defaultName = source["defaultName"];
+	        this.effectiveName = source["effectiveName"];
+	        this.maxLength = source["maxLength"];
+	    }
+	}
 	export class FleetHealthView {
 	    configDistributionEnabled: boolean;
 	    configSource: string;
@@ -8221,6 +8307,32 @@ export namespace settings {
 	
 	
 	
+	export class FleetTeamView {
+	    id: string;
+	    name: string;
+	    is_default: boolean;
+	    role?: string;
+	    parent_team_id?: string;
+	    tree_depth: number;
+	    slug?: string;
+	    membership?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetTeamView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.is_default = source["is_default"];
+	        this.role = source["role"];
+	        this.parent_team_id = source["parent_team_id"];
+	        this.tree_depth = source["tree_depth"];
+	        this.slug = source["slug"];
+	        this.membership = source["membership"];
+	    }
+	}
 	export class FleetTelemetryStatusView {
 	    wired: boolean;
 	    enrolled: boolean;
@@ -8451,6 +8563,66 @@ export namespace settings {
 		    return a;
 		}
 	}
+	export class MemberNoticeView {
+	    family: string;
+	    edition: string;
+	    text: string;
+	    textHash: string;
+	    action: string;
+	    rowEdition: string;
+	    acked: boolean;
+	    actedAt: string;
+	    ackedSince: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemberNoticeView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.family = source["family"];
+	        this.edition = source["edition"];
+	        this.text = source["text"];
+	        this.textHash = source["textHash"];
+	        this.action = source["action"];
+	        this.rowEdition = source["rowEdition"];
+	        this.acked = source["acked"];
+	        this.actedAt = source["actedAt"];
+	        this.ackedSince = source["ackedSince"];
+	    }
+	}
+	export class MemberNoticesView {
+	    notices: MemberNoticeView[];
+	    stateError?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemberNoticesView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.notices = this.convertValues(source["notices"], MemberNoticeView);
+	        this.stateError = source["stateError"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MemorySyncStatusView {
 	    wired: boolean;
 	    entitled: boolean;
@@ -8467,6 +8639,7 @@ export namespace settings {
 	    pendingCount: number;
 	    olderNotes: number;
 	    olderNotesAccount?: string;
+	    localErasePending?: boolean;
 	    unresolvedNotes: number;
 	    inheritedErase?: boolean;
 	    inheritedOptOut?: boolean;
@@ -8474,6 +8647,8 @@ export namespace settings {
 	    lane: FleetSyncLaneView;
 	    orgPaused: boolean;
 	    pausedCategory?: string;
+	    noticeHold: boolean;
+	    noticeHoldReason?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MemorySyncStatusView(source);
@@ -8496,6 +8671,7 @@ export namespace settings {
 	        this.pendingCount = source["pendingCount"];
 	        this.olderNotes = source["olderNotes"];
 	        this.olderNotesAccount = source["olderNotesAccount"];
+	        this.localErasePending = source["localErasePending"];
 	        this.unresolvedNotes = source["unresolvedNotes"];
 	        this.inheritedErase = source["inheritedErase"];
 	        this.inheritedOptOut = source["inheritedOptOut"];
@@ -8503,6 +8679,8 @@ export namespace settings {
 	        this.lane = this.convertValues(source["lane"], FleetSyncLaneView);
 	        this.orgPaused = source["orgPaused"];
 	        this.pausedCategory = source["pausedCategory"];
+	        this.noticeHold = source["noticeHold"];
+	        this.noticeHoldReason = source["noticeHoldReason"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -8683,6 +8861,8 @@ export namespace settings {
 	    permissionCacheDangerousOps?: boolean;
 	    bashAllowlistMigrated?: boolean;
 	    permissionsMigrationToastShown?: boolean;
+	    policyDefault?: string;
+	    policyDefaultNoticeSeen?: boolean;
 	    cedarStrictCredentialMode?: boolean;
 	    cedarStrictWorkflowMode?: boolean;
 	    graphAuthoringEnabled?: boolean;
@@ -8757,6 +8937,10 @@ export namespace settings {
 	    settingsSyncUploadsConfirmed?: boolean;
 	    settingsSyncEnabledCategories?: string[];
 	    mlLocalActivityRetentionDays?: number;
+	    fleetDeviceNameHidden?: boolean;
+	    fleetDeviceNameUseComputerName?: boolean;
+	    fleetDeviceNameCustom?: string;
+	    fleetDeviceNameNeutral?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -8789,6 +8973,8 @@ export namespace settings {
 	        this.permissionCacheDangerousOps = source["permissionCacheDangerousOps"];
 	        this.bashAllowlistMigrated = source["bashAllowlistMigrated"];
 	        this.permissionsMigrationToastShown = source["permissionsMigrationToastShown"];
+	        this.policyDefault = source["policyDefault"];
+	        this.policyDefaultNoticeSeen = source["policyDefaultNoticeSeen"];
 	        this.cedarStrictCredentialMode = source["cedarStrictCredentialMode"];
 	        this.cedarStrictWorkflowMode = source["cedarStrictWorkflowMode"];
 	        this.graphAuthoringEnabled = source["graphAuthoringEnabled"];
@@ -8863,6 +9049,10 @@ export namespace settings {
 	        this.settingsSyncUploadsConfirmed = source["settingsSyncUploadsConfirmed"];
 	        this.settingsSyncEnabledCategories = source["settingsSyncEnabledCategories"];
 	        this.mlLocalActivityRetentionDays = source["mlLocalActivityRetentionDays"];
+	        this.fleetDeviceNameHidden = source["fleetDeviceNameHidden"];
+	        this.fleetDeviceNameUseComputerName = source["fleetDeviceNameUseComputerName"];
+	        this.fleetDeviceNameCustom = source["fleetDeviceNameCustom"];
+	        this.fleetDeviceNameNeutral = source["fleetDeviceNameNeutral"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

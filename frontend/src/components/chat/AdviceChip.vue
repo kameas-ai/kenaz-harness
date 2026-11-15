@@ -12,6 +12,7 @@
  * split between a dumb component and its composable.
  */
 
+import { Suggestions } from '@/shell/icons';
 import type { AdviceChipPayload } from '@/lib/types';
 
 const props = defineProps<{
@@ -53,7 +54,7 @@ function handleDismiss() {
     data-testid="advice-chip"
     :data-kind-id="chip.kind_id"
   >
-    <div class="flex-shrink-0 text-accent-strong" aria-hidden="true">💡</div>
+    <Suggestions :size="14" class="flex-shrink-0 text-ink-muted" aria-hidden="true" />
 
     <div class="flex min-w-0 flex-1 flex-col gap-1">
       <span class="font-ui text-sm text-ink" data-testid="advice-chip-title">
@@ -66,7 +67,7 @@ function handleDismiss() {
       <div class="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          class="rounded-md bg-accent-strong px-2.5 py-1 font-ui text-xs text-on-accent"
+          class="rounded-md bg-accent px-2.5 py-1 font-ui text-xs text-surface-0"
           data-testid="advice-chip-accept"
           @click="handleAccept"
         >

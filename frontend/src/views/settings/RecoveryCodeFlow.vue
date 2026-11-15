@@ -129,7 +129,7 @@ function handleClose() {
     @close="handleClose"
   >
     <div data-testid="recovery-code-flow">
-      <h2 class="font-ui text-base font-semibold text-ink">
+      <h2 class="font-ui text-h3 font-semibold text-ink">
         {{ title }}
       </h2>
 
@@ -224,7 +224,7 @@ function handleClose() {
         </p>
 
         <div class="mt-4">
-          <label for="apply-code-input" class="block font-ui text-xs uppercase tracking-[0.15em] text-ink-muted mb-1">
+          <label for="apply-code-input" class="block font-ui text-xs uppercase tracking-eyebrow text-ink-muted mb-1">
             Recovery code
           </label>
           <textarea

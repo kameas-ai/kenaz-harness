@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +24,39 @@ type ChatRunDispatcher interface {
 	// Returns a ChatRunHistoryRecord populated with the outcome; the
 	// caller persists it via ScheduledChatStore.AppendHistory.
 	DispatchChatRun(ctx context.Context, job Job, now time.Time) (ChatRunHistoryRecord, error)
+}
+
+// RunStartReporter is implemented by a ChatRunDispatcher that calls
+// MarkRunDispatched before a run's first durable effect. The cron engine
+// uses it to tell a fire that engine Stop cancelled before anything was
+// dispatched (a one-shot stays enabled and fires on the next start) from
+// one cancelled after the run began (the attempt is used up, so tools
+// with side effects never run twice). A dispatcher that does not
+// implement it is treated as having started the run as soon as
+// DispatchChatRun is called — the safe direction.
+type RunStartReporter interface {
+	ReportsRunStart()
+}
+
+type dispatchMarkKey struct{}
+
+// MarkRunDispatched records, on a ctx the cron engine handed to
+// DispatchChatRun, that the run has started its first durable effect
+// (the prompt turn is about to be written). A no-op on any other ctx
+// (RunNow, tests).
+func MarkRunDispatched(ctx context.Context) {
+	if m, ok := ctx.Value(dispatchMarkKey{}).(*atomic.Bool); ok {
+		m.Store(true)
+	}
+}
+
+// WithDispatchMark returns ctx carrying a fresh dispatch mark and a
+// func reporting whether MarkRunDispatched was called on it. The cron
+// engine uses it around every DispatchChatRun; dispatcher tests use it to
+// check where a RunStartReporter marks.
+func WithDispatchMark(ctx context.Context) (context.Context, func() bool) {
+	m := new(atomic.Bool)
+	return context.WithValue(ctx, dispatchMarkKey{}, m), m.Load
 }
 
 // RenderPromptTemplate substitutes the standard variables in a prompt

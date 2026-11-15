@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"sync"
@@ -39,6 +40,9 @@ type auditEmitter interface {
 // It is attached to API after construction via SetFleetClient.
 type fleetState struct {
 	mu              sync.RWMutex
+	// modelSlots is the harness model-slot state (SetModelSlots); the
+	// org_config.harness_models section is applied into it.
+	modelSlots *ModelSlots
 	client          *fleet.Client
 	dataDir         string
 	poller          *fleet.CapabilityPoller
@@ -208,6 +212,12 @@ type fleetState struct {
 	signIn     *signInCall
 	signInFlow func(context.Context, fleet.EnvProfile) (fleet.TokenSet, error)
 
+	// keysStepUp is the in-flight device-key step-up (nil when none);
+	// stepUpFlow is the max_age=0 re-authentication, fleet.StepUpFlow
+	// unless a test injects a fake (ER-40, fleet_keys_stepup.go).
+	keysStepUp *keysStepUpCall
+	stepUpFlow func(context.Context, fleet.EnvProfile) (string, error)
+
 	// sessionResetHooks run when one fleet session ends and another may
 	// begin (sign-in success, sign-out): per-session state held outside this
 	// package — the context-sync append breaker — forgets the old session.
@@ -261,6 +271,9 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 		// before a broker is wired.
 		c.SetSessionBroker(sessionExpiredTap{api: a, inner: a.fleet.lockdownBroker})
 		c.SetAuthOKHook(a.onFleetAuthOK)
+		// The enroll body's device name (Fleet ER-43) is read from the
+		// member's setting on every enroll.
+		c.SetDeviceNameSource(a.fleetDeviceName)
 		if a.fleet.orgPauseHooked != c {
 			a.fleet.orgPauseHooked = c
 			// A refusal observed on any request goroutine — which may hold
@@ -1045,10 +1058,16 @@ func (a *API) FleetSignInCancel(_ context.Context) error {
 	}
 	a.fleet.mu.RLock()
 	call := a.fleet.signIn
+	stepUp := a.fleet.keysStepUp
 	a.fleet.mu.RUnlock()
 	if call != nil {
 		logging.L().Info("fleet.rpc.sign_in.cancel_requested")
 		call.cancel()
+	}
+	// The device-key step-up is the same "Waiting for browser… Cancel".
+	if stepUp != nil {
+		logging.L().Info("fleet.rpc.keys_step_up.cancel_requested")
+		stepUp.cancel()
 	}
 	return nil
 }
@@ -1108,7 +1127,13 @@ func (a *API) runSignIn(ctx context.Context) (FleetIdentity, error) {
 	if err := fleet.ClearNodeRemoved(dataDirForMarker); err != nil {
 		logging.L().Warn("fleet.rpc.sign_in.clear_node_removed_failed", "err", err.Error())
 	}
+	// A sign-in the user really just completed (fresh auth_time) is the
+	// recent interactive sign-in Fleet needs to replace a device key (ER-40),
+	// so the enroll below needs no second prompt. Held in memory only, and
+	// dropped once this enroll has run.
+	c.OfferSignInIDToken(ts.IDToken)
 	id, err := a.fleetEnroll(ctx)
+	c.ClearStepUpToken()
 	if err != nil {
 		logging.L().Error("fleet.rpc.sign_in.enroll_failed", "err", err.Error())
 		return id, err
@@ -1272,6 +1297,13 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 		if err := os.Remove(fleet.IdentityFilePath(dataDir)); err != nil && !os.IsNotExist(err) {
 			logging.L().Warn("fleet.rpc.sign_out.remove_identity_failed", "err", err.Error())
 			signOutErr = errors.Join(signOutErr, fmt.Errorf("remove identity file: %w", err))
+		}
+		// Per-account local records (share ledger, own-node location
+		// index, step-up refusal): the next account never inherits them.
+		for _, p := range fleet.AccountScopedFiles(dataDir) {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				logging.L().Warn("fleet.rpc.sign_out.remove_account_file_failed", "file", filepath.Base(p), "err", err.Error())
+			}
 		}
 	}
 	if signOutErr != nil {
@@ -1494,6 +1526,13 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		a.publishFleetSession("enroll_failed")
 		logging.L().Error("fleet.rpc.enroll.failed", "err", err.Error())
 		return FleetIdentity{}, err
+	}
+	// Enroll may have re-minted a node id Fleet refused as invalid
+	// (fleet.ErrNodeIDInvalid path): what Fleet now knows this device as is
+	// the persisted id, not the one read before the call.
+	if cur := fleet.ReadNodeID(dataDir); cur != "" && cur != nodeID {
+		logging.L().Info("fleet.rpc.enroll.node_id_reminted")
+		nodeID = cur
 	}
 	a.recordEnrollOutcome(&id, nil)
 	logging.L().Info("fleet.rpc.enroll.success",
@@ -2172,6 +2211,22 @@ func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.
 	//     compat gap, so it gets the same error-not-skip treatment as
 	//     cedar_delta/mandated_items — an ACK must not read
 	//     "applied:true" for a section this device cannot actually apply.
+	// org_config.harness_models (fleet-workbench-next-plan-2026-11-10
+	// B11): a harness-local section, not a SyncKind — it has no user scope
+	// and nothing to collect. An absent section clears the org layer so
+	// slots fall back to settings / host / derived, the same "absent means
+	// the organisation sets nothing" rule tool_exposure follows.
+	{
+		a.state.mu.RLock()
+		ms := a.state.modelSlots
+		a.state.mu.RUnlock()
+		if raw, ok := b.OrgConfig[OrgConfigHarnessModels]; ok {
+			errs = append(errs, ms.applyOrgHarnessModels(raw)...)
+		} else {
+			ms.clearOrgHarnessModels()
+		}
+	}
+
 	if len(b.OrgConfig) > 0 {
 		a.state.mu.RLock()
 		registry := a.state.syncKindRegistry
@@ -2190,6 +2245,9 @@ func (a *compositeConfigApplier) ApplyBundleItems(ctx context.Context, b *fleet.
 			}
 			sort.Strings(ids)
 			for _, id := range ids {
+				if id == OrgConfigHarnessModels {
+					continue // applied above
+				}
 				payload := b.OrgConfig[id]
 				kind, ok := registry.Kind(id)
 				if !ok {
@@ -2384,6 +2442,41 @@ func (a *API) FleetSetTelemetryOptIn(ctx context.Context, class string, optedIn 
 	// Re-pull so the cache reflects the server-applied source/opted_at.
 	a.refreshTelemetryOptIns(ctx)
 	return nil
+}
+
+// FleetTeams reads the caller's teams from GET /api/v1/me and lays them
+// out as a tree (kenaz-fleet spec 018 H-1). It is read live on each call:
+// the list is small and a team can be added, renamed or moved at any time.
+// Returns fleet.ErrFleetDisabled when fleet is not wired.
+func (a *API) FleetTeams(ctx context.Context) ([]FleetTeamView, error) {
+	c := a.fleetClient()
+	if c == nil || fleet.Disabled() {
+		return nil, fleet.ErrFleetDisabled
+	}
+	teams, err := c.GetMeTeams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return fleetTeamsToView(fleet.OrderTeamTree(teams)), nil
+}
+
+func fleetTeamsToView(entries []fleet.TeamTreeEntry) []FleetTeamView {
+	out := make([]FleetTeamView, 0, len(entries))
+	for _, e := range entries {
+		// Only the drawn root is the default team; a non-root entry that
+		// also claimed is_default is shown as an ordinary team.
+		out = append(out, FleetTeamView{
+			ID:           e.ID,
+			Name:         e.Name,
+			IsDefault:    e.IsDefault && e.TreeDepth == 0 && e.TreeParentID == "",
+			Role:         e.Role,
+			ParentTeamID: e.TreeParentID,
+			TreeDepth:    e.TreeDepth,
+			Slug:         e.Slug,
+			Membership:   e.Membership,
+		})
+	}
+	return out
 }
 
 func telemetryOptInsToView(items []fleet.TelemetryOptInItem) []TelemetryOptInView {

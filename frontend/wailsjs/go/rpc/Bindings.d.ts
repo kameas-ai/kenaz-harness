@@ -286,6 +286,8 @@ export function Contexts_ContextPublish(arg1:contexts.ContextPublishRequest):Pro
 
 export function Contexts_ContextSearch(arg1:string,arg2:string,arg3:number):Promise<Array<contexts.ContextSearchHitView>>;
 
+export function Contexts_ContextShareStates(arg1:Array<string>):Promise<Array<contexts.ContextShareStateView>>;
+
 export function Contexts_ContextSyncStatus():Promise<contexts.ContextSyncStatusView>;
 
 export function Contexts_CreateFolder(arg1:string):Promise<void>;
@@ -362,6 +364,8 @@ export function Fleet_MLAckNotice(arg1:number,arg2:string):Promise<settings.MLSt
 
 export function Fleet_MLStatus():Promise<settings.MLStatusView>;
 
+export function Fleet_MemberNotices():Promise<settings.MemberNoticesView>;
+
 export function Fleet_MemorySyncContinueOlderNotes():Promise<settings.MemorySyncStatusView>;
 
 export function Fleet_MemorySyncDisable(arg1:boolean,arg2:string):Promise<settings.MemorySyncStatusView>;
@@ -374,7 +378,9 @@ export function Fleet_MemorySyncStatus():Promise<settings.MemorySyncStatusView>;
 
 export function Fleet_PendingApprovals():Promise<settings.PendingApprovalsView>;
 
-export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
+export function Fleet_RespondMemberNotice(arg1:string,arg2:string,arg3:string,arg4:string):Promise<settings.MemberNoticesView>;
+
+export function Fleet_SetTelemetryConsent(arg1:string,arg2:string):Promise<void>;
 
 export function Fleet_SetWorkflowEventsOptIn(arg1:boolean):Promise<settings.MLStatusView>;
 
@@ -762,9 +768,13 @@ export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
 
 export function Settings_DeleteMLLocalActivity():Promise<rpc.MLLocalActivityView>;
 
+export function Settings_DismissPolicyDefaultNotice():Promise<void>;
+
 export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
 
 export function Settings_FleetConfigPullStatus():Promise<settings.FleetConfigPullStatusView>;
+
+export function Settings_FleetDeviceKeysReauth():Promise<void>;
 
 export function Settings_FleetHealth():Promise<settings.FleetHealthView>;
 
@@ -785,6 +795,8 @@ export function Settings_FleetSignIn():Promise<settings.FleetIdentity>;
 export function Settings_FleetSignInCancel():Promise<void>;
 
 export function Settings_FleetSignOut():Promise<void>;
+
+export function Settings_FleetTeams():Promise<Array<settings.FleetTeamView>>;
 
 export function Settings_FleetTelemetryOptIns():Promise<Array<settings.TelemetryOptInView>>;
 
@@ -818,6 +830,8 @@ export function Settings_GetFSRequestAccessEnabled():Promise<boolean>;
 
 export function Settings_GetFSWriteEnabled():Promise<boolean>;
 
+export function Settings_GetFleetDeviceName():Promise<settings.FleetDeviceNameSettings>;
+
 export function Settings_GetLocalRuntimeRAMOverrideGB():Promise<number>;
 
 export function Settings_GetMCPAutoRestart():Promise<boolean>;
@@ -841,6 +855,8 @@ export function Settings_GetPermissionCacheDangerousOps():Promise<boolean>;
 export function Settings_GetPermissionMode():Promise<string>;
 
 export function Settings_GetPermissionsMigrationToastShown():Promise<boolean>;
+
+export function Settings_GetPolicyDefault():Promise<rpc.PolicyDefaultView>;
 
 export function Settings_GetRiskRaterBenchmark():Promise<risk.RiskRaterBenchmark>;
 
@@ -888,6 +904,8 @@ export function Settings_SetFSRequestAccessEnabled(arg1:boolean):Promise<void>;
 
 export function Settings_SetFSWriteEnabled(arg1:boolean):Promise<void>;
 
+export function Settings_SetFleetDeviceName(arg1:settings.FleetDeviceNameSettings):Promise<void>;
+
 export function Settings_SetLocalRuntimeRAMOverrideGB(arg1:number):Promise<void>;
 
 export function Settings_SetMCPAutoRestart(arg1:boolean):Promise<void>;
@@ -911,6 +929,8 @@ export function Settings_SetPermissionCacheDangerousOps(arg1:boolean):Promise<vo
 export function Settings_SetPermissionMode(arg1:string):Promise<void>;
 
 export function Settings_SetPermissionsMigrationToastShown(arg1:boolean):Promise<void>;
+
+export function Settings_SetPolicyDefault(arg1:string):Promise<void>;
 
 export function Settings_SetSaveArtifactEnabled(arg1:boolean):Promise<void>;
 

@@ -16,6 +16,9 @@
 //     enforces the last fleet policy even when the server answers 304. A
 //     cached bundle that no longer verifies is discarded and the checksum
 //     cleared, so the next poll re-fetches.
+//   - Per-org state: bundle_org.txt records the org (token resource-owner
+//     claim) the state belongs to; an org change resets id, checksum, cache
+//     and the applied sections (config_pull_org.go).
 //   - Sign-in wake: a poll that finds no session parks; a token arriving
 //     (NotifyTokensAvailable — sign-in, served-mode token source) wakes it
 //     for an immediate round instead of waiting out the 5-minute tick.
@@ -145,6 +148,12 @@ type ConfigPoller struct {
 	// own; skill-library-01SKLIB01 WP03). Never affects the poll's backoff.
 	afterPoll func(context.Context)
 
+	// orgID is the org the bundle state (lastAppliedID, checksum, cached
+	// bundle, applied sections) belongs to; "" until known. orgOf returns
+	// the current org (nil = currentTokenOrg). See config_pull_org.go.
+	orgID string
+	orgOf func() string
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -238,6 +247,7 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 	// Restore state from disk cache.
 	if id, cs, err := loadBundleState(p.dataDir); err == nil {
 		p.mu.Lock()
+		p.orgID = loadBundleOrg(p.dataDir)
 		p.lastAppliedID = id
 		p.checksum = cs
 		if id > 0 {
@@ -275,6 +285,9 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 			}
 		}()
 
+		// A cached bundle from another org is not re-enforced: syncOrg
+		// resets the state first (lastAppliedID 0 → restore is a no-op).
+		p.syncOrg(innerCtx)
 		// Re-enforce the last applied bundle before the first fetch.
 		p.restoreCachedBundle(innerCtx)
 
@@ -370,6 +383,10 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	if p.client == nil || p.client.isNop {
 		return ErrFleetDisabled
 	}
+
+	// Bundle state is per org: reset it when the signed-in org changed
+	// since the state was recorded (config_pull_org.go).
+	p.syncOrg(ctx)
 
 	// Build the URL with machine + checksum query params.
 	nodeID, _ := NodeID(p.dataDir)
@@ -530,6 +547,7 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		hadRefusals = true
 	}
 	buildVersion := p.buildVersion
+	bundleOrg := p.orgID
 	if len(applyErrs) == 0 {
 		p.lastAppliedID = b.BundleID
 		p.lastAppliedAt = time.Now()
@@ -562,6 +580,9 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		}
 		if saveErr := saveBundleApplyMeta(p.dataDir, bundleApplyMeta{BuildVersion: buildVersion, HadRefusals: hadRefusals}); saveErr != nil {
 			log.Printf("fleet: save bundle apply meta: %v", saveErr)
+		}
+		if saveErr := saveBundleOrg(p.dataDir, bundleOrg); saveErr != nil {
+			log.Printf("fleet: save bundle org: %v", saveErr)
 		}
 	}
 

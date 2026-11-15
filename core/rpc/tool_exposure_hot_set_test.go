@@ -65,7 +65,7 @@ func TestToolExposureHotSet_NamesRegisteredBuiltins(t *testing.T) {
 	}
 	registry := toolloop.NewBuiltinRegistry()
 	registerBuiltinTools(nil, registry, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	registerFSBuiltinTools(registry, nil, nil, nil, "", nil, nil)
+	registerFSBuiltinTools(registry, nil, nil, nil, "", nil, nil, nil)
 
 	prefix := toolexposure.BuiltinServer + toolexposure.NameSeparator
 	registered := map[string]bool{coreforkconv.ToolName: true, coresaveartifact.ToolName: true, loadtools.Name: true}

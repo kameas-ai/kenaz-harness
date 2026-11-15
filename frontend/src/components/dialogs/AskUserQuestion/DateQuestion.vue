@@ -44,7 +44,7 @@ function onInput(e: Event) {
       type="date"
       :value="value"
       :aria-label="ariaLabel"
-      class="w-full rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-[13px] text-ink focus:border-accent focus:outline-none"
+      class="w-full rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-ui text-ink focus:border-accent focus:outline-none"
       data-testid="date-question-input"
       @input="onInput"
     />

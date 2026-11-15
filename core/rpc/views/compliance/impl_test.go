@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -320,5 +321,44 @@ func TestComplianceAPI_Status_StoppedReason_EndpointUnsupported(t *testing.T) {
 	}
 	if st.ArchiverRunning || st.StoppedReason != StoppedReasonEndpointUnsupported {
 		t.Fatalf("status = %+v, want stopped with reason %q", st, StoppedReasonEndpointUnsupported)
+	}
+}
+
+// Legal D173: Fleet advertises audit_log_immudb false to a customer org
+// whose plan includes the archive. Status reports it as withheld so the
+// panel never shows that org an upgrade prompt.
+func TestStatus_ArchiveWithheld(t *testing.T) {
+	cases := []struct {
+		name     string
+		enabled  bool
+		withheld func() bool
+		want     bool
+	}{
+		{"plan has it, Fleet withholds it", false, func() bool { return true }, true},
+		{"plan lacks it", false, func() bool { return false }, false},
+		{"no check wired", false, nil, false},
+		{"enabled wins over a stale withheld check", true, func() bool { return true }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enabled := tc.enabled
+			api := NewAPI(nil, nil, func() bool { return enabled }).WithWithheldCheck(tc.withheld)
+			st, err := api.Status(context.Background())
+			if err != nil {
+				t.Fatalf("Status: %v", err)
+			}
+			if st.ArchiveWithheld != tc.want {
+				t.Fatalf("ArchiveWithheld = %v, want %v", st.ArchiveWithheld, tc.want)
+			}
+		})
+	}
+}
+
+func TestErrComplianceNotEnabled_NamesNoPlan(t *testing.T) {
+	msg := strings.ToLower(ErrComplianceNotEnabled.Error())
+	for _, bad := range []string{"upgrade", "tier", "team"} {
+		if strings.Contains(msg, bad) {
+			t.Fatalf("ErrComplianceNotEnabled %q mentions %q; withheld Team+ orgs see it too", msg, bad)
+		}
 	}
 }

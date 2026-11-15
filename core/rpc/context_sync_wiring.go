@@ -276,6 +276,10 @@ type recoveryBackendAdapter struct {
 	dataDir string
 	// onNodeRemoved applies the node_removed sign-out (settings API).
 	onNodeRemoved func()
+	// onKeysChanged republishes the fleet session snapshot after the PUT,
+	// so its outcome — notably reauth_required (ER-40: replacing the
+	// active key needs a fresh sign-in) — reaches the UI at once.
+	onKeysChanged func()
 	// register is the PUT seam (nil → client.RegisterDeviceKeys); tests
 	// substitute it.
 	register func(ctx context.Context, nodeID string) error
@@ -326,9 +330,17 @@ func (r *recoveryBackendAdapter) reRegisterKeys() {
 		register = r.client.RegisterDeviceKeys
 	}
 	err := register(ctx, nodeID)
+	if r.onKeysChanged != nil && !errors.Is(err, corefleet.ErrNodeRemoved) {
+		defer r.onKeysChanged()
+	}
 	switch {
 	case err == nil:
 		logging.L().Info("rpc.context_sync.recovery_keys_reregistered")
+	case errors.Is(err, corefleet.ErrKeysReauthRequired):
+		// Fleet kept the previous key: the user must sign in again
+		// (Settings → Account "Sign in again"). Recorded on the client's
+		// KeyRegistration; never retried automatically.
+		logging.L().Warn("rpc.context_sync.recovery_keys_reauth_required")
 	case errors.Is(err, corefleet.ErrNodeRemoved):
 		logging.L().Warn("rpc.context_sync.recovery_keys_node_removed")
 		if r.onNodeRemoved != nil {

@@ -159,6 +159,7 @@ import type {
   SessionUsage,
   ModelCall,
   ModelCallTelemetrySettings,
+  FleetDeviceNameSettings,
   SettingsResetUnreadableResult,
   MLLocalActivity,
   TurnRun,
@@ -186,6 +187,7 @@ import type {
   FleetProfileInfo,
   FleetSessionView,
   MemorySyncStatus,
+  MemberNotices,
   MLStatus,
   PendingApprovals,
   CapabilitiesView,
@@ -227,6 +229,7 @@ import type {
   SessionToolExposure,
   LoadToolsResult,
   ServerSchemaCost,
+  PolicyDefaultView,
 } from './types';
 
 /**
@@ -312,6 +315,9 @@ interface WailsBindingsLike {
   Sessions_ModelCalls(id: string, limit: number): Promise<ModelCall[] | null>;
   Settings_GetModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   Settings_SetModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  // ── Fleet ER-43: device display name ────────────────────────────────
+  Settings_GetFleetDeviceName(): Promise<FleetDeviceNameSettings>;
+  Settings_SetFleetDeviceName(dn: FleetDeviceNameSettings): Promise<void>;
   /** "Reset settings" recovery for an unreadable settings.json. Desktop-only. */
   Settings_ResetUnreadable(): Promise<SettingsResetUnreadableResult>;
   // ── ml-producer-01MLPRD01 WP11 ──────────────────────────────────────
@@ -519,6 +525,7 @@ interface WailsBindingsLike {
   Contexts_RootPath(): Promise<string>;
   Contexts_ContextPublish(req: ContextPublishRequest): Promise<ContextPublishResult>;
   Contexts_ContextPromote(nodeID: string): Promise<ContextPromoteResult>;
+  Contexts_ContextShareStates(nodeIDs: string[]): Promise<import('./types').ContextShareStateView[]>;
   Contexts_ContextSyncStatus(): Promise<ContextSyncStatusView>;
   // A-14 Tier 1: bound in bindings.go / Bindings.d.ts already; this
   // declaration was the missing type-safety site (controls-and-readouts
@@ -596,6 +603,10 @@ interface WailsBindingsLike {
   Settings_SetBashAllowlistMigrated(migrated: boolean): Promise<void>;
   Settings_GetPermissionsMigrationToastShown(): Promise<boolean>;
   Settings_SetPermissionsMigrationToastShown(shown: boolean): Promise<void>;
+  // Launch spec L09 host policy default (desktop only).
+  Settings_GetPolicyDefault?(): Promise<PolicyDefaultView>;
+  Settings_SetPolicyDefault?(mode: string): Promise<void>;
+  Settings_DismissPolicyDefaultNotice?(): Promise<void>;
   // WP05 credential-gate strictness dial
   Settings_GetCedarStrictCredentialMode(): Promise<boolean>;
   Settings_SetCedarStrictCredentialMode(enabled: boolean): Promise<void>;
@@ -649,6 +660,8 @@ interface WailsBindingsLike {
   Settings_FleetSignIn(): Promise<FleetIdentity>;
   Settings_FleetSignOut(): Promise<void>;
   Settings_FleetSignInCancel(): Promise<void>;
+  // kenaz-fleet ER-40: step-up before replacing this device's keys
+  Settings_FleetDeviceKeysReauth(): Promise<void>;
   Settings_FleetRefreshIdentity(): Promise<FleetIdentity>;
   Settings_FleetProfile(): Promise<FleetProfileInfo>;
   // fleet-session-truth-01DOGF0A FR-1
@@ -1033,7 +1046,9 @@ interface WailsBindingsLike {
   /** Returns the current fleet telemetry consent level: "none" | "aggregate" | "full". */
   Fleet_GetTelemetryConsent(): Promise<string>;
   /** Persists a new fleet telemetry consent level. Returns an error if the org tier is insufficient. */
-  Fleet_SetTelemetryConsent(level: string): Promise<void>;
+  Fleet_SetTelemetryConsent(level: string, noticeEdition: string): Promise<void>;
+  Fleet_MemberNotices(): Promise<MemberNotices>;
+  Fleet_RespondMemberNotice(family: string, edition: string, textHash: string, action: string): Promise<MemberNotices>;
   Fleet_TelemetryStatus(): Promise<FleetTelemetryStatus>;
   // ── Fleet learned-memory sync (memory-sync-01MEMSY01 WP08) ────────────
   Fleet_MemorySyncStatus(): Promise<MemorySyncStatus>;
@@ -1111,6 +1126,8 @@ interface WailsBindingsLike {
   Settings_FleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
   /** Flip a single telemetry class opt-in in the fleet store. */
   Settings_FleetSetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
+  /** The caller's Fleet teams as a tree, root first (kenaz-fleet spec 018 H-1). */
+  Settings_FleetTeams(): Promise<import('./types').FleetTeamView[]>;
 
   // ── Unit sync conflicts (fleet-integrity-observability WP08) ─────────────
   /** Returns the current unit syncer state: pull/push errors, conflict count. */
@@ -2222,6 +2239,12 @@ export interface ContextsClient {
   publish(req: ContextPublishRequest): Promise<ContextPublishResult>;
   /** Elevate a team_shared entry to org_shared on the fleet server. */
   promote(nodeID: string): Promise<ContextPromoteResult>;
+  /**
+   * Where this device last shared each of the given local node ids (layer,
+   * and team id for a team share), for the signed-in fleet user. Never-shared
+   * ids are omitted (kenaz-fleet spec 018 H-1).
+   */
+  shareStates(nodeIDs: string[]): Promise<import('./types').ContextShareStateView[]>;
   /** Return a snapshot of the fleet context-graph syncer state. */
   syncStatus(): Promise<ContextSyncStatusView>;
   /**
@@ -2459,6 +2482,16 @@ export interface SettingsClient {
   getPermissionsMigrationToastShown(): Promise<boolean>;
   /** Mark the migration toast as shown. */
   setPermissionsMigrationToastShown(shown: boolean): Promise<void>;
+  /**
+   * Launch spec L09: the host policy default — "starter", "legacy" (an
+   * install that predates the starter policy), or "workbench" (served).
+   * Optional: absent on clients with no desktop backend.
+   */
+  getPolicyDefault?(): Promise<PolicyDefaultView>;
+  /** Switch the host policy default ("starter" | "legacy"). */
+  setPolicyDefault?(mode: 'starter' | 'legacy'): Promise<void>;
+  /** Dismiss the first-run policy notice without changing the default. */
+  dismissPolicyDefaultNotice?(): Promise<void>;
 
   // ── WP05 credential-gate strictness dial ──────────────────────────
 
@@ -2535,6 +2568,14 @@ export interface SettingsClient {
   getModelCallTelemetry(): Promise<ModelCallTelemetrySettings>;
   /** Persist them; turning sharing on exports only calls that start afterwards. */
   setModelCallTelemetry(mc: ModelCallTelemetrySettings): Promise<void>;
+  /**
+   * The device name Fleet admins see for this install (Fleet ER-43):
+   * share on/off (default on), computer name or custom name. The
+   * read-only fields carry the computer, default and effective names.
+   */
+  getFleetDeviceName(): Promise<FleetDeviceNameSettings>;
+  /** Persist it; when signed in, Fleet sees the change at once. */
+  setFleetDeviceName(dn: FleetDeviceNameSettings): Promise<void>;
   /**
    * Recovery for a settings file that cannot be read: moves it aside to
    * settings.json.corrupt-<UTC timestamp> (returned as backupPath), writes
@@ -2675,6 +2716,14 @@ export interface SettingsClient {
    * no flow is running.
    */
   fleetSignInCancel(): Promise<void>;
+  /**
+   * kenaz-fleet ER-40: Fleet refused to replace this device's keys without a
+   * fresh sign-in (deviceKeys.status === 'reauth_required'). Opens the
+   * browser for a fresh sign-in, then retries the key update once. Cancel
+   * with fleetSignInCancel() (rejects with "context canceled"; the
+   * reauth_required state stays on the session).
+   */
+  fleetDeviceKeysReauth(): Promise<void>;
   /** Clear tokens and identity cache. */
   fleetSignOut(): Promise<void>;
   /** Re-call the fleet enroll endpoint and update the cached identity. */
@@ -2690,6 +2739,12 @@ export interface SettingsClient {
    * which calls it once and then follows `fleet:session-changed`.
    */
   fleetSession(): Promise<FleetSessionView>;
+  /**
+   * Effective harness model slots and where each came from
+   * (Settings_ModelSlots; fleet-workbench-next-plan B11). Served-only and
+   * read-only: undefined on the desktop client, which has per-slot pickers.
+   */
+  modelSlots?(): Promise<ModelSlotsView>;
 
   // ── fleet-capability-surface-01NDFSEX09 WP11 ────────────────────────────
   /** Return the in-memory fleet capability snapshot. */
@@ -2714,6 +2769,13 @@ export interface SettingsClient {
   fleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
   /** Flip a single telemetry class opt-in. */
   setFleetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
+  /**
+   * The caller's Fleet teams from GET /api/v1/me as a tree (kenaz-fleet spec
+   * 018 H-1): the default team first as the org root, parent before
+   * children, each with the indent level it is drawn at. Keyed by id; an
+   * older Fleet without tree fields yields a flat list.
+   */
+  fleetTeams(): Promise<import('./types').FleetTeamView[]>;
 }
 
 /**
@@ -3959,6 +4021,23 @@ export function fakeSidecarStatus(): Promise<SidecarStatusView> {
 
 // ── fleet telemetry client (fleet-otel-archival-01NDFSEX11 WP06) ─────────
 
+/** One harness model slot (Go: harnessmodels.Effective). */
+export interface ModelSlot {
+  slot: 'subagent_default' | 'advisor' | 'compaction' | 'branch_advisor' | 'risk_rater';
+  providerId?: string;
+  modelId?: string;
+  /** Which layer decided: org > settings > host > derived; none = unresolved. */
+  source: 'org' | 'settings' | 'host' | 'derived' | 'profile' | 'none';
+}
+
+/** Settings_ModelSlots result (Go: settings.ModelSlotsView). */
+export interface ModelSlotsView {
+  providerId?: string;
+  models?: string[];
+  slots: ModelSlot[];
+  orgErrors?: string[];
+}
+
 /** Payload-free export health (Go: settings.FleetTelemetryStatusView). */
 export interface FleetTelemetryStatus {
   wired: boolean;
@@ -4006,8 +4085,24 @@ export interface FleetClient {
   getTelemetryStatus(): Promise<FleetTelemetryStatus>;
   /** Returns the current fleet telemetry consent level. */
   getTelemetryConsent(): Promise<'none' | 'aggregate' | 'full'>;
-  /** Persists a new consent level. Rejects when the org tier is insufficient. */
-  setTelemetryConsent(level: 'none' | 'aggregate' | 'full'): Promise<void>;
+  /**
+   * Persists a new consent level. Rejects when the org tier is insufficient.
+   * noticeEdition is the Agent Telemetry notice edition shown with the
+   * choice (contract-harness-sync §17.2), omitted when none was shown.
+   */
+  setTelemetryConsent(level: 'none' | 'aggregate' | 'full', noticeEdition?: string): Promise<void>;
+  /**
+   * Notice texts Fleet serves on the kenaz-harness surface, with this
+   * member's read state in the current org. Empty while nothing is registered.
+   */
+  memberNotices(): Promise<MemberNotices>;
+  /** "I have read this" (ack) or withdraw, for the memory-access text shown. */
+  respondMemberNotice(
+    family: string,
+    edition: string,
+    textHash: string,
+    action: 'ack' | 'withdraw',
+  ): Promise<MemberNotices>;
   /** Learned-memory sync panel state (memory-sync-01MEMSY01 WP08). */
   memorySyncStatus(): Promise<MemorySyncStatus>;
   /** Opt in with scopes ⊆ long_term/global and the accepted disclosure version. */
@@ -4348,7 +4443,7 @@ const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
   'Workflow_ListJobs', 'Trust_ListSecretReferences', 'Context_List', 'Contexts_RecentlyApplied',
   'Contexts_ContextSearch', 'Bundle_List', 'Trust_ListAnchors', 'CedarPolicy_ListPolicies',
   'CedarPolicy_RecentDecisions', 'Permissions_ListGrants', 'Permissions_ListPending', 'Audit_ListEntries',
-  'Audit_Filter', 'Audit_ListSavedQueries', 'Logs_Tail', 'Settings_FleetTelemetryOptIns',
+  'Audit_Filter', 'Audit_ListSavedQueries', 'Logs_Tail', 'Settings_FleetTelemetryOptIns', 'Settings_FleetTeams', 'Contexts_ContextShareStates',
   'Memory_ListChunks', 'Memory_JournalTail', 'Memory_NarrativeFailedList', 'Memory_EmbeddingProbe',
   'Projects_List', 'Projects_ListSessions', 'Documents_List', 'Artifacts_List', 'Attachments_List',
   'Attachments_ListResolved', 'Hooks_List', 'Hooks_AvailableBuiltins', 'Tools_ListRecipes',
@@ -4678,6 +4773,7 @@ export function createHarnessClient(): HarnessClient {
       rootPath: () => b().Contexts_RootPath(),
       publish: (req: ContextPublishRequest) => b().Contexts_ContextPublish(req),
       promote: (nodeID: string) => b().Contexts_ContextPromote(nodeID),
+      shareStates: (nodeIDs: string[]) => b().Contexts_ContextShareStates(nodeIDs),
       syncStatus: () => b().Contexts_ContextSyncStatus(),
       search: (query, teamID, limit) =>
         b().Contexts_ContextSearch(query, teamID, limit),
@@ -4770,6 +4866,21 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetPermissionsMigrationToastShown(),
       setPermissionsMigrationToastShown: (shown) =>
         b().Settings_SetPermissionsMigrationToastShown(shown),
+      getPolicyDefault: async () => {
+        const bb = b();
+        if (!bb.Settings_GetPolicyDefault) throw new Error('policy default is not available');
+        return bb.Settings_GetPolicyDefault();
+      },
+      setPolicyDefault: async (mode) => {
+        const bb = b();
+        if (!bb.Settings_SetPolicyDefault) throw new Error('policy default is not available');
+        return bb.Settings_SetPolicyDefault(mode);
+      },
+      dismissPolicyDefaultNotice: async () => {
+        const bb = b();
+        if (!bb.Settings_DismissPolicyDefaultNotice) return;
+        return bb.Settings_DismissPolicyDefaultNotice();
+      },
       getCedarStrictCredentialMode: () =>
         b().Settings_GetCedarStrictCredentialMode(),
       setCedarStrictCredentialMode: (enabled) =>
@@ -4789,6 +4900,8 @@ export function createHarnessClient(): HarnessClient {
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
       getModelCallTelemetry: () => b().Settings_GetModelCallTelemetry(),
       setModelCallTelemetry: (mc) => b().Settings_SetModelCallTelemetry(mc),
+      getFleetDeviceName: () => b().Settings_GetFleetDeviceName(),
+      setFleetDeviceName: (dn) => b().Settings_SetFleetDeviceName(dn),
       resetUnreadable: () => b().Settings_ResetUnreadable(),
       getMLLocalActivity: () => b().Settings_GetMLLocalActivity(),
       setMLLocalActivityRetention: (days) => b().Settings_SetMLLocalActivityRetention(days),
@@ -4829,6 +4942,7 @@ export function createHarnessClient(): HarnessClient {
       fleetSignIn: () => b().Settings_FleetSignIn(),
       fleetSignOut: () => b().Settings_FleetSignOut(),
       fleetSignInCancel: () => b().Settings_FleetSignInCancel(),
+      fleetDeviceKeysReauth: () => b().Settings_FleetDeviceKeysReauth(),
       fleetRefreshIdentity: () => b().Settings_FleetRefreshIdentity(),
       fleetProfile: () => b().Settings_FleetProfile(),
       fleetSession: () => b().Settings_FleetSession(),
@@ -4845,6 +4959,7 @@ export function createHarnessClient(): HarnessClient {
       fleetTelemetryOptIns: () => b().Settings_FleetTelemetryOptIns(),
       setFleetTelemetryOptIn: (className, optedIn) =>
         b().Settings_FleetSetTelemetryOptIn(className, optedIn),
+      fleetTeams: () => b().Settings_FleetTeams(),
     },
     permissions: {
       listGrants: (family) =>
@@ -5145,7 +5260,11 @@ export function createHarnessClient(): HarnessClient {
         b()
           .Fleet_GetTelemetryConsent()
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
-      setTelemetryConsent: (level) => b().Fleet_SetTelemetryConsent(level),
+      setTelemetryConsent: (level, noticeEdition) =>
+        b().Fleet_SetTelemetryConsent(level, noticeEdition ?? ''),
+      memberNotices: () => b().Fleet_MemberNotices(),
+      respondMemberNotice: (family, edition, textHash, action) =>
+        b().Fleet_RespondMemberNotice(family, edition, textHash, action),
       getTelemetryStatus: () => b().Fleet_TelemetryStatus(),
       memorySyncStatus: () => b().Fleet_MemorySyncStatus(),
       memorySyncEnable: (scopes, consentVersion) => b().Fleet_MemorySyncEnable(scopes, consentVersion),
@@ -5804,6 +5923,7 @@ export function createServedHarnessClient(opts?: {
       fleetConfigPullStatus: () =>
         transport.call<FleetConfigPullStatusView>('Settings_FleetConfigPullStatus'),
       fleetHealth: () => transport.call<FleetHealthView>('Settings_FleetHealth'),
+      modelSlots: () => transport.call<ModelSlotsView>('Settings_ModelSlots'),
     },
 
     // Fleet telemetry consent + status: the workbench is where everyday work
@@ -5814,8 +5934,11 @@ export function createServedHarnessClient(opts?: {
         transport
           .call<string>('Fleet_GetTelemetryConsent')
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
-      setTelemetryConsent: (level) =>
-        transport.call<void>('Fleet_SetTelemetryConsent', { level }),
+      setTelemetryConsent: (level, noticeEdition) =>
+        transport.call<void>(
+          'Fleet_SetTelemetryConsent',
+          noticeEdition ? { level, noticeEdition } : { level },
+        ),
       getTelemetryStatus: () => transport.call<FleetTelemetryStatus>('Fleet_TelemetryStatus'),
     },
 
@@ -6212,6 +6335,7 @@ export function createFakeHarnessClient(
         updated_node_id: _nodeID,
         new_classification: 'org_shared' as const,
       }),
+      shareStates: async (_nodeIDs: string[]): Promise<import('./types').ContextShareStateView[]> => [],
       syncStatus: async () => ({
         cursor: '',
         last_pull_at: undefined,
@@ -6365,6 +6489,17 @@ export function createFakeHarnessClient(
         shareWithFleet: false,
       }),
       setModelCallTelemetry: noop,
+      getFleetDeviceName: async () => ({
+        share: true,
+        useComputerName: false,
+        useNeutralName: false,
+        customName: '',
+        computerName: '',
+        defaultName: '',
+        effectiveName: '',
+        maxLength: 64,
+      }),
+      setFleetDeviceName: noop,
       resetUnreadable: async () => ({ backupPath: '' }),
       getMLLocalActivity: async () => fakeMLLocalActivity(),
       setMLLocalActivityRetention: async (days: number) => fakeMLLocalActivity(days),
@@ -6448,6 +6583,7 @@ export function createFakeHarnessClient(
       }),
       fleetSignOut: noop,
       fleetSignInCancel: noop,
+      fleetDeviceKeysReauth: noop,
       fleetRefreshIdentity: async () => ({
         userId: '', orgId: '', teamId: '',
       }),
@@ -6479,6 +6615,7 @@ export function createFakeHarnessClient(
       // fleet-integrity-observability WP09
       fleetTelemetryOptIns: async (): Promise<import('./types').TelemetryOptInView[]> => [],
       setFleetTelemetryOptIn: noop,
+      fleetTeams: async (): Promise<import('./types').FleetTeamView[]> => [],
     },
     permissions: {
       listGrants: async () => [],
@@ -7138,6 +7275,8 @@ export function createFakeHarnessClient(
     fleet: {
       getTelemetryConsent: async () => 'none' as const,
       setTelemetryConsent: noop,
+      memberNotices: async () => ({ notices: [] }),
+      respondMemberNotice: async () => ({ notices: [] }),
       memorySyncStatus: async () => fakeMemorySyncStatus(),
       memorySyncEnable: async () => fakeMemorySyncStatus(),
       memorySyncContinueOlderNotes: async () => fakeMemorySyncStatus(),

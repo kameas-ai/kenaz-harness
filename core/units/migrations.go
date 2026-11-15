@@ -31,7 +31,20 @@ const (
 	// in place, so the table is rebuilt with the wider constraint, preserving
 	// every existing edge row and index.
 	migrationIDUnitsConflictEdge = "units/1103-conflict-edge"
+
+	// migrationIDUnitsSyncStateServerLoadPolicy identifies migration 1106 —
+	// adds unit_sync_state.server_load_policy, the load_policy Fleet holds
+	// for the node as last pulled or pushed (team-context-in-prompt). The
+	// eager always-load path trusts only this column. Additive: existing
+	// rows read "" (not recorded) until their next pull.
+	migrationIDUnitsSyncStateServerLoadPolicy = "units/1106-sync-state-server-load-policy"
 )
+
+// sqlUnitsSyncStateServerLoadPolicy is the DDL for migration 1106.
+const sqlUnitsSyncStateServerLoadPolicy = `
+    ALTER TABLE unit_sync_state
+        ADD COLUMN server_load_policy TEXT NOT NULL DEFAULT '';
+`
 
 // sqlUnitsSchema is the DDL for migration 1100. Three tables:
 //
@@ -310,6 +323,26 @@ func Migrations() []migrations.Migration {
 		// drop the retained *_legacy tables (one release after the copy).
 		// See migration_drop_legacy_artifacts.go.
 		migration1105(),
+		{
+			ID:            migrationIDUnitsSyncStateServerLoadPolicy,
+			Version:       1106,
+			OwningMission: OwningMission,
+			UpSource:      sqlUnitsSyncStateServerLoadPolicy,
+			Up: func(ctx context.Context, tx migrations.WriteTx) error {
+				for _, stmt := range splitUnitSQL(sqlUnitsSyncStateServerLoadPolicy) {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			// Down drops only the added column (SQLite >= 3.35); every
+			// other sidecar column and row is kept.
+			Down: func(ctx context.Context, tx migrations.WriteTx) error {
+				_, err := tx.Exec(ctx, "ALTER TABLE unit_sync_state DROP COLUMN server_load_policy")
+				return err
+			},
+		},
 	}
 }
 

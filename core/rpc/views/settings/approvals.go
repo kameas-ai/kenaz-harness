@@ -43,9 +43,12 @@ type PendingApprovalView struct {
 	// ApproveAllowed is false when Fleet's approve action is outside the
 	// harness allowlist: the item is shown but cannot be approved here.
 	ApproveAllowed bool `json:"approveAllowed"`
-	// LocalDismiss: an informational item the harness does not send an
-	// action for (e.g. ml_opt_in_available) can be hidden on this device
-	// with "Not now" (FleetDismissItemLocally). Nothing reaches Fleet.
+	// LocalDismiss: an informational item whose approve action the harness
+	// does not send can be hidden on this device with "Not now"
+	// (FleetDismissItemLocally); then nothing reaches Fleet. An
+	// ml_opt_in_available offer whose dismissal path Fleet serves and the
+	// allowlist holds is ApproveAllowed instead, and its "Not now" is POSTed
+	// to Fleet (legal option a); LocalDismiss is the fallback when it is not.
 	LocalDismiss bool `json:"localDismiss"`
 }
 

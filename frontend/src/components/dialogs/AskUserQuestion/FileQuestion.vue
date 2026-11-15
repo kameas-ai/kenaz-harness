@@ -14,6 +14,7 @@
  *
  * Emits update:modelValue with the selected path string or null.
  */
+import { X } from '@/shell/icons';
 import { ref } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 
@@ -64,7 +65,7 @@ function clear() {
       class="flex items-center gap-3 rounded-md border border-border-muted bg-surface-2 p-3"
     >
       <span
-        class="flex-1 truncate font-mono text-[12px]"
+        class="flex-1 truncate font-mono text-small"
         :class="selectedPath ? 'text-ink' : 'text-ink-subtle'"
         data-testid="file-question-path"
       >
@@ -78,13 +79,13 @@ function clear() {
         aria-label="Clear selection"
         @click="clear"
       >
-        ✕
+        <X class="inline-block" :size="12" aria-hidden="true" />
       </button>
     </div>
 
     <button
       type="button"
-      class="rounded-md border border-accent px-3 py-2 font-ui text-[11px] uppercase tracking-[0.18em] text-accent hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+      class="rounded-md border border-accent px-3 py-2 font-ui text-caption uppercase tracking-eyebrow text-accent hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
       :disabled="picking"
       data-testid="file-question-pick-btn"
       @click="openPicker"
@@ -94,7 +95,7 @@ function clear() {
 
     <div
       v-if="pickError"
-      class="rounded-sm border border-signal-warn px-3 py-2 font-ui text-[12px] text-signal-warn"
+      class="rounded-sm border border-signal-warn px-3 py-2 font-ui text-small text-signal-warn"
       role="alert"
       data-testid="file-question-error"
     >

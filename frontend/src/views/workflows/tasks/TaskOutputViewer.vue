@@ -154,13 +154,13 @@ function statusLabel(): string {
   >
     <!-- Header -->
     <div
-      class="flex items-center justify-between px-4 py-2 border-b border-border-muted bg-surface-raised shrink-0"
+      class="flex items-center justify-between px-4 py-2 border-b border-border-muted bg-surface-2 shrink-0"
     >
-      <span class="font-mono text-[12px] text-ink truncate" :title="taskId">
+      <span class="font-mono text-small text-ink truncate" :title="taskId">
         {{ task?.description || task?.cmd || taskId }}
       </span>
       <span
-        class="text-[11px] font-mono ml-4 shrink-0"
+        class="text-caption font-mono ml-4 shrink-0"
         :class="isTerminal ? 'text-ink-muted' : 'text-accent'"
         data-testid="viewer-status"
       >
@@ -169,17 +169,17 @@ function statusLabel(): string {
     </div>
 
     <!-- Loading -->
-    <p v-if="loading" class="p-4 text-ink-muted text-[13px]">Loading…</p>
+    <p v-if="loading" class="p-4 text-ink-muted text-ui">Loading…</p>
 
     <!-- Error -->
-    <p v-if="error" class="p-4 text-signal-danger text-[13px]" data-testid="viewer-error">
+    <p v-if="error" class="p-4 text-signal-danger text-ui" data-testid="viewer-error">
       {{ error }}
     </p>
 
     <!-- Output area -->
     <div
       ref="outputEl"
-      class="flex-1 overflow-y-auto p-4 font-mono text-[12px] bg-surface"
+      class="flex-1 overflow-y-auto p-4 font-mono text-small bg-surface-1"
       data-testid="viewer-output"
     >
       <div v-if="lines.length === 0 && !loading" class="text-ink-muted">

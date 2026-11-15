@@ -206,13 +206,13 @@ function insertToken(token: string) {
   <div class="flex flex-col gap-4" data-testid="slash-command-editor">
     <!-- YAML toggle strip -->
     <div class="flex items-center justify-between">
-      <h3 class="font-ui text-[12px] uppercase tracking-[0.18em] text-ink-muted">
+      <h3 class="font-ui text-small uppercase tracking-eyebrow text-ink-muted">
         {{ isNew ? 'New command' : `Edit /${form.name}` }}
       </h3>
       <button
         v-if="!readOnly"
         type="button"
-        class="font-ui text-[11px] text-ink-muted hover:text-ink transition-colors"
+        class="font-ui text-caption text-ink-muted hover:text-ink transition-colors"
         :data-testid="yamlMode ? 'exit-yaml-mode' : 'enter-yaml-mode'"
         @click="yamlMode ? exitYamlMode() : enterYamlMode()"
       >
@@ -226,9 +226,9 @@ function insertToken(token: string) {
         class="rounded-md border border-border-muted bg-surface-1 px-3 py-2"
         data-testid="yaml-preview"
       >
-        <pre class="font-mono text-[11px] text-ink whitespace-pre-wrap">{{ yamlText }}</pre>
+        <pre class="font-mono text-caption text-ink whitespace-pre-wrap">{{ yamlText }}</pre>
       </div>
-      <p class="font-ui text-[11px] text-ink-muted">
+      <p class="font-ui text-caption text-ink-muted">
         To edit YAML directly, open the file in your editor:
         <code class="font-mono text-accent">{{ form.payloadPath || '(not yet saved)' }}</code>
       </p>
@@ -240,7 +240,7 @@ function insertToken(token: string) {
       <div class="flex flex-col gap-1">
         <label
           for="cmd-name"
-          class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+          class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
         >
           Name
         </label>
@@ -255,7 +255,7 @@ function insertToken(token: string) {
         />
         <p
           v-if="fieldError('name')"
-          class="font-ui text-[11px] text-signal-danger"
+          class="font-ui text-caption text-signal-danger"
           data-testid="cmd-name-error"
           role="alert"
         >
@@ -267,7 +267,7 @@ function insertToken(token: string) {
       <div class="flex flex-col gap-1">
         <label
           for="cmd-description"
-          class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+          class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
         >
           Description
         </label>
@@ -287,7 +287,7 @@ function insertToken(token: string) {
         <div class="flex flex-col gap-1 flex-1">
           <label
             for="cmd-kind"
-            class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+            class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
           >
             Kind
           </label>
@@ -304,7 +304,7 @@ function insertToken(token: string) {
           </select>
           <p
             v-if="fieldError('kind')"
-            class="font-ui text-[11px] text-signal-danger"
+            class="font-ui text-caption text-signal-danger"
             data-testid="cmd-kind-error"
             role="alert"
           >
@@ -315,7 +315,7 @@ function insertToken(token: string) {
         <div class="flex flex-col gap-1 flex-1">
           <label
             for="cmd-scope"
-            class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+            class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
           >
             Scope
           </label>
@@ -338,7 +338,7 @@ function insertToken(token: string) {
         <div class="flex flex-col gap-1">
           <label
             for="cmd-tool"
-            class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+            class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
           >
             Tool name
           </label>
@@ -353,7 +353,7 @@ function insertToken(token: string) {
           />
           <p
             v-if="fieldError('tool')"
-            class="font-ui text-[11px] text-signal-danger"
+            class="font-ui text-caption text-signal-danger"
             data-testid="cmd-tool-error"
             role="alert"
           >
@@ -364,7 +364,7 @@ function insertToken(token: string) {
         <div class="flex flex-col gap-1">
           <label
             for="cmd-tool-args"
-            class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+            class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
           >
             Args template
           </label>
@@ -379,7 +379,7 @@ function insertToken(token: string) {
           />
           <p
             v-if="fieldError('toolArgsTemplate')"
-            class="font-ui text-[11px] text-signal-danger"
+            class="font-ui text-caption text-signal-danger"
             data-testid="cmd-tool-args-error"
             role="alert"
           >
@@ -401,7 +401,7 @@ function insertToken(token: string) {
             :key="v.token"
             type="button"
             :title="v.hint"
-            class="font-mono text-[10px] px-1.5 py-0.5 rounded border border-border-muted bg-surface-2 text-ink-muted hover:text-ink hover:border-accent transition-colors"
+            class="font-mono text-eyebrow px-1.5 py-0.5 rounded border border-border-muted bg-surface-2 text-ink-muted hover:text-ink hover:border-accent transition-colors"
             :data-testid="`var-chip-${v.token}`"
             @click="insertToken(v.token)"
           >
@@ -412,7 +412,7 @@ function insertToken(token: string) {
         <div class="flex flex-col gap-1">
           <label
             for="cmd-body"
-            class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+            class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
           >
             {{ form.kind === 'prompt' ? 'Prompt template' : 'Expansion text' }}
           </label>
@@ -431,7 +431,7 @@ function insertToken(token: string) {
           />
           <p
             v-if="fieldError('body')"
-            class="font-ui text-[11px] text-signal-danger"
+            class="font-ui text-caption text-signal-danger"
             data-testid="cmd-body-error"
             role="alert"
           >
@@ -443,7 +443,7 @@ function insertToken(token: string) {
       <!-- Optional metadata section -->
       <details class="group">
         <summary
-          class="cursor-pointer list-none font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted hover:text-ink transition-colors"
+          class="cursor-pointer list-none font-ui text-caption uppercase tracking-eyebrow text-ink-muted hover:text-ink transition-colors"
           data-testid="cmd-metadata-toggle"
         >
           More options
@@ -453,7 +453,7 @@ function insertToken(token: string) {
           <div class="flex flex-col gap-1">
             <label
               for="cmd-when-to-use"
-              class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+              class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
             >
               When to use
             </label>
@@ -472,7 +472,7 @@ function insertToken(token: string) {
           <div class="flex flex-col gap-1">
             <label
               for="cmd-does-not-handle"
-              class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+              class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
             >
               Does not handle
             </label>
@@ -499,7 +499,7 @@ function insertToken(token: string) {
             />
             <label
               for="cmd-model-invokable"
-              class="font-ui text-[12px] text-ink cursor-pointer"
+              class="font-ui text-small text-ink cursor-pointer"
             >
               Model-invokable
               <span class="text-ink-muted">
@@ -520,7 +520,7 @@ function insertToken(token: string) {
             />
             <label
               for="cmd-hidden-from-panel"
-              class="font-ui text-[12px] text-ink cursor-pointer"
+              class="font-ui text-small text-ink cursor-pointer"
             >
               Hide from panel
               <span class="text-ink-muted">
@@ -533,7 +533,7 @@ function insertToken(token: string) {
           <div class="flex flex-col gap-1">
             <label
               for="cmd-icon"
-              class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+              class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
             >
               Icon (optional)
             </label>
@@ -553,7 +553,7 @@ function insertToken(token: string) {
       <!-- Save error -->
       <p
         v-if="saveError"
-        class="font-ui text-[11px] text-signal-danger"
+        class="font-ui text-caption text-signal-danger"
         role="alert"
         data-testid="cmd-save-error"
       >

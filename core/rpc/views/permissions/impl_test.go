@@ -822,3 +822,18 @@ func TestExtractFilesystemOpPath(t *testing.T) {
 		})
 	}
 }
+
+// E2E-1: the filesystem modal's scope radio rides the decision string.
+func TestSplitScopedDecision(t *testing.T) {
+	for in, want := range map[string][2]string{
+		"allow_always":              {"allow_always", ""},
+		"allow_always:directory":    {"allow_always", "directory"},
+		"allow_always:directory_rw": {"allow_always", "directory_rw"},
+		"deny":                      {"deny", ""},
+	} {
+		d, s := SplitScopedDecision(in)
+		if string(d) != want[0] || string(s) != want[1] {
+			t.Errorf("SplitScopedDecision(%q) = (%q,%q), want %v", in, d, s, want)
+		}
+	}
+}

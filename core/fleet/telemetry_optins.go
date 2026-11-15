@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -48,6 +49,10 @@ type listTelemetryOptInsResponse struct {
 // source='user_self', opted_at=NOW().
 type updateTelemetryOptInsRequest struct {
 	Updates []TelemetryOptInItem `json:"updates"`
+	// NoticeVersion is the Agent Telemetry notice shown in the same flow,
+	// always the harness's own form "kenaz-harness/<edition>"
+	// (contract-harness-sync §17.2). Omitted when no text was shown.
+	NoticeVersion string `json:"notice_version,omitempty"`
 }
 
 // KnownTelemetryClasses is the canonical ordered list of telemetry classes,
@@ -100,10 +105,25 @@ func (c *Client) GetTelemetryOptIns(ctx context.Context) ([]TelemetryOptInItem, 
 // Class + OptedIn; the server forces source='user_self' and opted_at=NOW().
 // Returns ErrFleetDisabled when the client is a nop.
 func (c *Client) PutTelemetryOptIns(ctx context.Context, updates []TelemetryOptInItem) error {
+	return c.PutTelemetryOptInsWithNotice(ctx, updates, "")
+}
+
+// PutTelemetryOptInsWithNotice is PutTelemetryOptIns carrying the Agent
+// Telemetry notice the member was shown in the same flow. noticeVersion must
+// be "" or the harness form from HarnessTelemetryNoticeVersion; any other
+// value is refused before anything is sent, so the harness can never bind
+// its ack to another surface's text (fleet-dashboard/…, …+pN).
+func (c *Client) PutTelemetryOptInsWithNotice(ctx context.Context, updates []TelemetryOptInItem, noticeVersion string) error {
 	if c == nil || c.isNop {
 		return ErrFleetDisabled
 	}
-	body := updateTelemetryOptInsRequest{Updates: updates}
+	if noticeVersion != "" {
+		edition, ok := strings.CutPrefix(noticeVersion, telemetryNoticeVersionPrefix)
+		if want, err := HarnessTelemetryNoticeVersion(edition); !ok || err != nil || want != noticeVersion {
+			return fmt.Errorf("fleet: put telemetry opt-ins: notice_version %q is not the harness form", noticeVersion)
+		}
+	}
+	body := updateTelemetryOptInsRequest{Updates: updates, NoticeVersion: noticeVersion}
 	data, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("fleet: put telemetry opt-ins: marshal: %w", err)

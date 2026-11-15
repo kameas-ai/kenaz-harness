@@ -52,7 +52,7 @@ watch(selected, (v) => emit('update:modelValue', v));
     <label
       v-for="opt in options"
       :key="opt.value"
-      class="flex cursor-pointer items-center gap-3 rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-[13px] text-ink hover:border-accent hover:bg-surface-1"
+      class="flex cursor-pointer items-center gap-3 rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-ui text-ink hover:border-accent hover:bg-surface-1"
       :class="{
         'border-accent bg-accent/5': selected === opt.value,
       }"

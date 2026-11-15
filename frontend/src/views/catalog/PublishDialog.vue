@@ -90,7 +90,7 @@ async function submit() {
     @close="emit('close')"
   >
     <div data-testid="publish-dialog">
-      <h2 class="font-ui text-base font-semibold text-ink" data-testid="publish-dialog-title">
+      <h2 class="font-ui text-h3 font-semibold text-ink" data-testid="publish-dialog-title">
         Publish to team catalog
       </h2>
       <p class="mt-1 font-ui text-xs text-ink-muted">

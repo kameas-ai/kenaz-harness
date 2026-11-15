@@ -17,9 +17,19 @@
  * Cancel while running is cancel-safe: the in-flight entry finishes, the
  * rest are marked "not started". The dialog cannot be dismissed mid-entry.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import type { ContextNode } from '@/lib/types';
+import { useFleetSession } from '@/lib/fleetSession';
+import {
+  folderInitialTeam,
+  folderShareMoveWarning,
+  staysWithTeamNote,
+  pickableTeams,
+  readShareStates,
+  useFleetTeams,
+} from '@/lib/fleetTeams';
+import TeamPicker from '@/components/fleet/TeamPicker.vue';
+import type { ContextNode, ContextShareStateView } from '@/lib/types';
 import {
   buildBatchEntries,
   contextEntryTitle,
@@ -30,14 +40,19 @@ import {
   type BatchEntry,
   type FolderBatchMode,
 } from './folderBatch';
+import { publishOutcome } from './shareOutcome';
 
 const props = defineProps<{
   folder: ContextNode;
   mode: FolderBatchMode;
   /** FleetSession-derived reason from ContextsView; non-null disables everything. */
   disabledReason: string | null;
-  /** Known non-admin: Fleet refuses org-wide publishing, so don't offer it. */
-  orgPublishBlocked?: boolean;
+  /**
+   * Known member (not admin/owner): an org-wide share is admin-governed, so
+   * Fleet opens a merge request for an entry already shared with a team
+   * (spec 018 H-3). Shown as a note; Fleet answers per entry.
+   */
+  orgNeedsReview?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -56,12 +71,55 @@ const entries = ref<BatchEntry[]>(buildBatchEntries(props.folder, props.mode));
 
 const stopRequested = ref(false);
 const layer = ref<'team' | 'org'>('team');
-// A session refresh can demote an admin while the dialog is open.
-watch(
-  () => props.orgPublishBlocked,
-  (blocked) => {
-    if (blocked) layer.value = 'team';
-  },
+/**
+ * The caller's teams as a tree and the one a "team" share goes to, by id
+ * (kenaz-fleet spec 018 H-1). Fleet overwrites an entry's team on re-share,
+ * so the dialog reads where each entry is shared now (Fleet's team_id for
+ * the node this install pushed, else the local share record): it starts on their one common team if they have one, and warns
+ * when the chosen audience moves any of them. Until both reads finish there
+ * is no picker and Share is disabled. With no team list (older Fleet, read
+ * failed) each entry is re-shared to its own recorded team, and a
+ * never-shared entry sends no team_id (the backend's enrolled team).
+ */
+const fleetSession = useFleetSession(client);
+const fleetTeams = useFleetTeams(client);
+const teams = computed(() => pickableTeams(fleetTeams.teams.value));
+const teamId = ref('');
+const priors = ref<ContextShareStateView[]>([]);
+const teamsReady = ref(props.mode !== 'share');
+if (props.mode === 'share') {
+  const ids = entries.value.map((e) => contextNodeID(e.path));
+  const states = readShareStates(client, ids);
+  void Promise.all([fleetTeams.load(), states]).then(([, st]) => {
+    priors.value = st;
+    teamId.value = folderInitialTeam(teams.value, eligiblePriors(), fleetSession.identity.value?.teamId);
+    teamsReady.value = true;
+  });
+}
+/** Share records of the entries currently checked for this batch. */
+function eligiblePriors(): ContextShareStateView[] {
+  const checked = new Set(
+    entries.value.filter((e) => e.checked && e.ineligible === null).map((e) => contextNodeID(e.path)),
+  );
+  return priors.value.filter((p) => checked.has(p.node_id));
+}
+function priorTeamFor(path: string): string {
+  const p = priors.value.find((x) => x.node_id === contextNodeID(path));
+  return p?.layer === 'team' ? p.team_id ?? '' : '';
+}
+const moveWarning = computed(() =>
+  props.mode === 'share' && teamsReady.value && phase.value === 'select'
+    ? folderShareMoveWarning(fleetTeams.teams.value, eligiblePriors(), {
+        layer: layer.value,
+        teamId: teamId.value,
+      })
+    : null,
+);
+/** With no team list, says a re-share keeps entries on their recorded team. */
+const staysNote = computed(() =>
+  props.mode === 'share' && teamsReady.value && phase.value === 'select'
+    ? staysWithTeamNote(teams.value, eligiblePriors(), layer.value)
+    : null,
 );
 
 const folderName = computed(() => props.folder.path.split('/').pop() || 'library root');
@@ -81,6 +139,8 @@ function toggleAll(on: boolean) {
 async function shareOne(e: BatchEntry): Promise<string | { skipped: string }> {
   const body = await staged('read failed', () => client.contexts.get(e.path));
   if (!body) return { skipped: 'Empty file — nothing to share.' };
+  const team =
+    layer.value === 'team' ? (teams.value.length > 0 ? teamId.value : priorTeamFor(e.path)) : '';
   const res = await staged('publish rejected', () =>
     client.contexts.publish({
       node_id: contextNodeID(e.path),
@@ -89,16 +149,14 @@ async function shareOne(e: BatchEntry): Promise<string | { skipped: string }> {
       title: contextEntryTitle(e.path),
       body,
       version: 1,
+      ...(team ? { team_id: team } : {}),
     }),
   );
-  const where = res.effective_layer === 'org' ? 'your organisation' : 'your team';
-  const conflicts = res.conflicts?.length ?? 0;
-  if (res.accepted_nodes === 0 && conflicts > 0) {
-    throw new Error('Not updated: Fleet has a newer version of this entry.');
-  }
-  return conflicts > 0
-    ? `Published to ${where} · ${conflicts} version conflict${conflicts === 1 ? '' : 's'}`
-    : `Published to ${where}`;
+  // Fleet's per-item outcome (spec 018 H-3): a refusal fails the entry
+  // with its reason; waiting for review and published are done.
+  const outcome = publishOutcome(res);
+  if (outcome.status === 'refused') throw new Error(outcome.text);
+  return outcome.text;
 }
 
 async function promoteOne(e: BatchEntry): Promise<string> {
@@ -107,7 +165,7 @@ async function promoteOne(e: BatchEntry): Promise<string> {
 }
 
 async function confirm() {
-  if (disabled.value || phase.value !== 'select' || selectedCount.value === 0) return;
+  if (disabled.value || phase.value !== 'select' || selectedCount.value === 0 || !teamsReady.value) return;
   phase.value = 'running';
   stopRequested.value = false;
   for (const e of entries.value) {
@@ -150,16 +208,16 @@ const statusLabel: Record<BatchEntry['status'], string> = {
 const statusClass: Record<BatchEntry['status'], string> = {
   pending: 'text-ink-subtle',
   running: 'text-accent',
-  done: 'text-signal-success',
+  done: 'text-signal-ok-text',
   failed: 'text-signal-danger',
-  skipped: 'text-signal-warning',
+  skipped: 'text-signal-warn-text',
   not_started: 'text-ink-subtle',
 };
 </script>
 
 <template>
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-modal-overlay"
     data-testid="folder-share-overlay"
   >
     <div
@@ -177,7 +235,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
 
       <p
         v-if="disabledReason"
-        class="font-ui text-[12px] text-ink-muted leading-relaxed mb-3"
+        class="font-ui text-small text-ink-muted leading-relaxed mb-3"
         data-testid="folder-share-disabled-reason"
       >
         {{ disabledReason }}
@@ -189,14 +247,14 @@ const statusClass: Record<BatchEntry['status'], string> = {
       <template v-else>
         <p
           v-if="mode === 'share'"
-          class="font-ui text-[12px] text-ink-muted leading-relaxed mb-3"
+          class="font-ui text-small text-ink-muted leading-relaxed mb-3"
         >
           Each checked file is published as its own entry. Do not share credentials, private
           keys, or sensitive personal information in shared layers.
         </p>
         <p
           v-else
-          class="font-ui text-[12px] text-ink-muted leading-relaxed mb-3"
+          class="font-ui text-small text-ink-muted leading-relaxed mb-3"
         >
           Promote moves entries already shared with your team to org-wide. A file that was never
           shared fails with the server's reason; the other files still promote.
@@ -209,33 +267,51 @@ const statusClass: Record<BatchEntry['status'], string> = {
         :disabled="disabled || phase !== 'select'"
         data-testid="folder-share-layer-choice"
       >
-        <legend class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle mb-1">
+        <legend class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle mb-1">
           Visibility
         </legend>
-        <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
+        <label class="flex items-center gap-2 font-ui text-small text-ink cursor-pointer">
           <input v-model="layer" type="radio" value="team" data-testid="folder-share-layer-team" />
           <span>Share to team</span>
         </label>
-        <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
+        <div v-if="teamsReady && layer === 'team' && teams.length > 0" class="pl-6">
+          <TeamPicker v-model="teamId" :teams="teams" testid="folder-share-team-picker" />
+        </div>
+        <label class="flex items-center gap-2 font-ui text-small text-ink cursor-pointer">
           <input
             v-model="layer"
             type="radio"
             value="org"
             data-testid="folder-share-layer-org"
-            :disabled="orgPublishBlocked"
           />
           <span>Publish org-wide (visible to everyone in your organisation)</span>
         </label>
         <p
-          v-if="orgPublishBlocked"
-          class="font-ui text-[11px] text-ink-muted"
-          data-testid="folder-share-org-admin-only"
+          v-if="orgNeedsReview"
+          class="font-ui text-caption text-ink-muted"
+          data-testid="folder-share-org-review-note"
         >
-          Only an org admin or owner can publish org-wide.
+          An org admin reviews org-wide shares: each entry already shared with a team waits for
+          review, and the rest are refused with the reason.
         </p>
       </fieldset>
+      <p
+        v-if="moveWarning"
+        class="font-ui text-small text-signal-warn-text leading-relaxed mb-3"
+        role="alert"
+        data-testid="folder-share-move-warning"
+      >
+        {{ moveWarning }}
+      </p>
+      <p
+        v-if="staysNote"
+        class="font-ui text-small text-ink-muted leading-relaxed mb-3"
+        data-testid="folder-share-stays-note"
+      >
+        {{ staysNote }}
+      </p>
 
-      <div class="flex items-center gap-3 mb-1 font-ui text-[11px] text-ink-muted">
+      <div class="flex items-center gap-3 mb-1 font-ui text-caption text-ink-muted">
         <span class="flex-1">{{ entries.length }} file{{ entries.length === 1 ? '' : 's' }} · {{ selectedCount }} selected</span>
         <button
           type="button"
@@ -255,7 +331,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
 
       <p
         v-if="entries.length === 0"
-        class="font-ui text-[12px] text-ink-muted py-2"
+        class="font-ui text-small text-ink-muted py-2"
         data-testid="folder-share-empty"
       >
         This folder has no files to {{ mode }}.
@@ -268,7 +344,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
         <li
           v-for="e in entries"
           :key="e.path"
-          class="px-2 py-1.5 font-ui text-[12px]"
+          class="px-2 py-1.5 font-ui text-small"
           :data-status="e.status"
           :data-testid="`folder-share-entry-${e.path}`"
         >
@@ -284,19 +360,19 @@ const statusClass: Record<BatchEntry['status'], string> = {
             <span
               v-if="statusLabel[e.status]"
               :class="statusClass[e.status]"
-              class="text-[11px] shrink-0"
+              class="text-caption shrink-0"
             >{{ statusLabel[e.status] }}</span>
           </label>
           <p
             v-if="e.ineligible"
-            class="pl-6 text-[11px] text-ink-subtle"
+            class="pl-6 text-caption text-ink-subtle"
             :data-testid="`folder-share-ineligible-${e.path}`"
           >
             {{ e.ineligible }}
           </p>
           <p
             v-else-if="e.message"
-            class="pl-6 text-[11px]"
+            class="pl-6 text-caption"
             :class="statusClass[e.status]"
             :data-testid="`folder-share-message-${e.path}`"
           >
@@ -307,14 +383,14 @@ const statusClass: Record<BatchEntry['status'], string> = {
 
       <div
         v-if="phase === 'finished'"
-        class="mt-3 font-ui text-[12px]"
+        class="mt-3 font-ui text-small"
         role="status"
         data-testid="folder-share-summary"
       >
-        <p :class="summary.failed > 0 ? 'text-signal-warning' : 'text-signal-success'">
+        <p :class="summary.failed > 0 ? 'text-signal-warn-text' : 'text-signal-ok-text'">
           {{ summary.done }} {{ doneWord }}, {{ summary.failed }} failed<template v-if="summary.skipped > 0">, {{ summary.skipped }} skipped</template><template v-if="summary.notStarted > 0">, {{ summary.notStarted }} not started (cancelled)</template>.
         </p>
-        <ul v-if="failures.length > 0" class="mt-1 text-signal-danger text-[11px]">
+        <ul v-if="failures.length > 0" class="mt-1 text-signal-danger text-caption">
           <li v-for="f in failures" :key="f.path">
             <span class="font-mono">{{ f.relPath }}</span> — {{ f.message }}
           </li>
@@ -324,7 +400,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
       <div class="flex justify-end gap-3 mt-4">
         <button
           type="button"
-          class="font-ui text-[12px] text-ink-dim hover:text-ink px-3 py-1.5 rounded-md border border-border-muted disabled:opacity-50"
+          class="font-ui text-small text-ink-dim hover:text-ink px-3 py-1.5 rounded-md border border-border-muted disabled:opacity-50"
           :disabled="phase === 'running' && stopRequested"
           data-testid="folder-share-cancel"
           @click="onCancel"
@@ -336,8 +412,8 @@ const statusClass: Record<BatchEntry['status'], string> = {
         <button
           v-if="phase !== 'finished'"
           type="button"
-          class="font-ui text-[12px] text-accent hover:text-accent-muted px-3 py-1.5 rounded-md bg-accent/10 hover:bg-accent/20 disabled:opacity-50"
-          :disabled="disabled || phase !== 'select' || selectedCount === 0"
+          class="font-ui text-small text-accent hover:text-accent-muted px-3 py-1.5 rounded-md bg-accent/10 hover:bg-accent/20 disabled:opacity-50"
+          :disabled="disabled || phase !== 'select' || selectedCount === 0 || !teamsReady"
           data-testid="folder-share-confirm"
           @click="confirm"
         >

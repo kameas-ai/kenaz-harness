@@ -141,17 +141,17 @@ function cancelEdit() {
       <div class="flex items-center justify-between border-b border-border-muted px-5 py-3">
         <div>
           <div
-            class="font-ui text-[11px] uppercase tracking-[0.18em] text-signal-warn"
+            class="font-ui text-caption uppercase tracking-eyebrow text-signal-warn"
           >
             Plan review
           </div>
           <h2
             id="plan-approval-modal-title"
-            class="mt-0.5 font-ui text-base font-semibold text-ink"
+            class="mt-0.5 font-ui text-h3 font-semibold text-ink"
           >
             The model has drafted a plan
           </h2>
-          <p class="mt-1 font-ui text-[12px] text-ink-muted">
+          <p class="mt-1 font-ui text-small text-ink-muted">
             Review the plan below. Approve to allow the model to proceed,
             Edit to modify the plan, or Discard to send the model back to
             the drawing board.
@@ -179,7 +179,7 @@ function cancelEdit() {
       <!-- Error notice -->
       <div
         v-if="lastError"
-        class="mx-5 mb-2 rounded-sm border border-signal-danger bg-surface-2 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="mx-5 mb-2 rounded-sm border border-signal-danger bg-surface-2 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
         data-testid="plan-approval-modal-error"
       >
@@ -191,7 +191,7 @@ function cancelEdit() {
         <!-- Left: Discard (destructive, less prominent) -->
         <button
           type="button"
-          class="rounded px-3 py-1.5 font-ui text-xs uppercase tracking-[0.12em] text-signal-danger hover:bg-surface-2 disabled:opacity-50"
+          class="rounded px-3 py-1.5 font-ui text-xs uppercase tracking-eyebrow text-signal-danger hover:bg-surface-2 disabled:opacity-50"
           :disabled="submitting"
           data-testid="plan-approval-modal-discard"
           @click="doDiscard"
@@ -205,7 +205,7 @@ function cancelEdit() {
           <button
             v-if="editMode"
             type="button"
-            class="rounded px-3 py-1.5 font-ui text-xs uppercase tracking-[0.12em] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
+            class="rounded px-3 py-1.5 font-ui text-xs uppercase tracking-eyebrow text-ink-muted hover:bg-surface-2 disabled:opacity-50"
             :disabled="submitting"
             data-testid="plan-approval-modal-cancel-edit"
             @click="cancelEdit"
@@ -217,7 +217,7 @@ function cancelEdit() {
           <button
             v-if="!editMode"
             type="button"
-            class="rounded border border-border-muted px-3 py-1.5 font-ui text-xs uppercase tracking-[0.12em] text-ink hover:bg-surface-2 disabled:opacity-50"
+            class="rounded border border-border-muted px-3 py-1.5 font-ui text-xs uppercase tracking-eyebrow text-ink hover:bg-surface-2 disabled:opacity-50"
             :disabled="submitting"
             data-testid="plan-approval-modal-edit"
             @click="enterEditMode"
@@ -229,7 +229,7 @@ function cancelEdit() {
           <button
             v-if="editMode"
             type="button"
-            class="rounded border border-signal-warn bg-signal-warn-soft px-3 py-1.5 font-ui text-xs uppercase tracking-[0.12em] text-signal-warn hover:bg-signal-warn hover:text-white disabled:opacity-50"
+            class="rounded border border-signal-warn bg-signal-warn-soft px-3 py-1.5 font-ui text-xs uppercase tracking-eyebrow text-signal-warn hover:bg-signal-warn hover:text-white disabled:opacity-50"
             :disabled="submitting || editedText.trim() === ''"
             data-testid="plan-approval-modal-save-edit"
             @click="doSaveEdit"
@@ -241,7 +241,7 @@ function cancelEdit() {
           <button
             v-if="!editMode"
             type="button"
-            class="rounded border border-signal-warn bg-signal-warn px-3 py-1.5 font-ui text-xs uppercase tracking-[0.12em] text-white hover:brightness-90 disabled:opacity-50"
+            class="rounded border border-signal-warn bg-signal-warn px-3 py-1.5 font-ui text-xs uppercase tracking-eyebrow text-white hover:brightness-90 disabled:opacity-50"
             :disabled="submitting"
             data-testid="plan-approval-modal-approve"
             @click="doApprove"

@@ -154,10 +154,10 @@ function fmtCost(n: number): string {
 <template>
   <div class="grid gap-4" data-testid="risk-rater-model-picker">
     <section>
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Risk rating model
       </h2>
-      <p class="mt-1 font-ui text-[11px] text-ink-muted">
+      <p class="mt-1 font-ui text-caption text-ink-muted">
         When a tool call falls outside Cedar's hard allow/deny rules, this model
         rates its risk 0-100 against your autonomy tier's threshold. Pick a
         model, or use the provider default (a small, fast model measured for
@@ -165,7 +165,7 @@ function fmtCost(n: number): string {
       </p>
       <p
         v-if="benchmark"
-        class="mt-1 font-ui text-[10px] text-ink-subtle"
+        class="mt-1 font-ui text-eyebrow text-ink-subtle"
         data-testid="risk-rater-benchmark-provenance"
       >
         Benchmark: {{ benchmark.provenance.calls }} calls, measured
@@ -173,7 +173,7 @@ function fmtCost(n: number): string {
       </p>
       <p
         v-if="loadError"
-        class="mt-1 font-ui text-[11px] text-signal-danger"
+        class="mt-1 font-ui text-caption text-signal-danger"
         role="alert"
         data-testid="risk-rater-benchmark-load-error"
       >
@@ -181,7 +181,7 @@ function fmtCost(n: number): string {
       </p>
 
       <div class="mt-3 overflow-x-auto">
-        <table class="w-full border-collapse font-ui text-[11px]" data-testid="risk-rater-model-table">
+        <table class="w-full border-collapse font-ui text-caption" data-testid="risk-rater-model-table">
           <thead>
             <tr class="border-b border-border text-left text-ink-subtle">
               <th class="w-8 py-1"><span class="sr-only">Select</span></th>
@@ -249,7 +249,7 @@ function fmtCost(n: number): string {
               <template v-else>
                 <td class="py-1.5 pr-3 text-ink-muted" colspan="4">
                   <span
-                    class="rounded-sm border border-border-muted bg-surface-2 px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-wide text-ink-subtle"
+                    class="rounded-sm border border-border-muted bg-surface-2 px-1.5 py-0.5 font-ui text-eyebrow uppercase tracking-wide text-ink-subtle"
                     :data-testid="`risk-rater-unbenchmarked-badge-${row.value}`"
                   >
                     Unbenchmarked

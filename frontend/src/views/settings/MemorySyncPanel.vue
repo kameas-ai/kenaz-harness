@@ -3,8 +3,10 @@
  * MemorySyncPanel — Settings → Sync → "Learned memory across devices"
  * (memory-sync-01MEMSY01 WP08, Fleet contract H9).
  *
- * Opt-in, user-private sync of learned memory (global + long-term scopes)
- * between the user's own devices. The whole section is hidden unless the
+ * Opt-in sync of learned memory (global + long-term scopes) between the
+ * user's own devices. Synced notes are server-readable (encrypted in
+ * transit and at rest, not end-to-end); the disclosure says who can read
+ * them. The whole section is hidden unless the
  * memory_sync capability is present; it is off until the user accepts the
  * disclosure. Disabling keeps Fleet's copy unless the user also asks to
  * delete it, which needs the literal confirmation "forget-all".
@@ -13,6 +15,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MemorySyncStatus } from '@/lib/types';
 import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
+import MemoryAccessNotice from '@/views/settings/MemoryAccessNotice.vue';
 
 const client = useHarnessClient();
 
@@ -121,6 +124,7 @@ async function runInheritedErase() {
     status.value = await client.fleet.memorySyncDisable(true, eraseConfirmText.value);
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : String(err);
+    await refresh(); // the backend may have moved on: sync can be off by now
   } finally {
     busy.value = false;
   }
@@ -168,6 +172,7 @@ async function confirmDisable() {
     confirmingDisable.value = false;
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : String(err);
+    await refresh(); // the backend may have moved on: sync can be off by now
   } finally {
     busy.value = false;
   }
@@ -176,22 +181,33 @@ async function confirmDisable() {
 
 <template>
   <section v-if="visible && status" class="space-y-3" data-testid="memory-sync-panel">
-    <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+    <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
       Learned memory across devices
     </h2>
 
     <OrgPausedBanner v-if="paused" force :category="status.pausedCategory" />
 
+    <!-- The memory-access notice (legal D168(2)). Renders nothing until Fleet
+         serves a text; while it is unread, uploads wait on this device. -->
+    <p v-if="status.noticeHold" class="text-small text-signal-warn" data-testid="memory-sync-notice-hold">
+      Uploads are waiting. Your notes stay on this device until then.
+    </p>
+    <MemoryAccessNotice @changed="refresh" />
+
+    <p v-if="status.localErasePending" class="text-small text-signal-warn" data-testid="memory-sync-local-erase-pending">
+      Your notes were erased from Kameas Fleet but not yet from this device. It will keep trying.
+    </p>
+
     <!-- Requests an earlier version left unfinished. Wording from legal. -->
     <div
       v-if="status.inheritedOptOut"
-      class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+      class="space-y-2 rounded-sm border border-border-muted p-3 text-small"
       data-testid="memory-sync-inherited-opt-out"
     >
       <p>Memory sync was turned off by an earlier request that hadn't finished. You can turn it back on here.</p>
       <button
         type="button"
-        class="px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent"
+        class="px-3 py-1.5 text-caption uppercase tracking-eyebrow text-ink-dim hover:text-accent"
         :disabled="busy"
         data-testid="memory-sync-inherited-opt-out-dismiss"
         @click="dismissNotice('inherited_opt_out')"
@@ -201,13 +217,12 @@ async function confirmDisable() {
     </div>
     <div
       v-if="status.inheritedErase"
-      class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+      class="space-y-2 rounded-sm border border-border-muted p-3 text-small"
       data-testid="memory-sync-inherited-erase"
     >
       <p>
-        An earlier request to erase your notes from Kameas Fleet didn't finish. If you still want
-        that, run it again. Notes on this device aren't affected, and can upload again if you turn
-        memory sync back on.
+        An earlier request to erase your notes didn't finish. If you still want that, run it again.
+        It erases your notes from Kameas Fleet and this device.
       </p>
       <p v-if="status.enabled" data-testid="memory-sync-erase-warning">
         Turning this off stops syncing on all your devices.
@@ -226,16 +241,16 @@ async function confirmDisable() {
       <div class="flex gap-2">
         <button
           type="button"
-          class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+          class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2"
           :disabled="busy || eraseConfirmText !== 'forget-all'"
           data-testid="memory-sync-erase-run"
           @click="runInheritedErase"
         >
-          Delete from Fleet
+          Erase
         </button>
         <button
           type="button"
-          class="px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent"
+          class="px-3 py-1.5 text-caption uppercase tracking-eyebrow text-ink-dim hover:text-accent"
           :disabled="busy"
           data-testid="memory-sync-inherited-erase-dismiss"
           @click="dismissNotice('inherited_erase')"
@@ -248,25 +263,45 @@ async function confirmDisable() {
     <!-- Off: disclosure + scope choice + consent. Turning sync ON is a paid
          action, so it is not offered while paused. -->
     <div v-if="!status.enabled && !paused" class="space-y-3" data-testid="memory-sync-off">
-      <div class="text-[12px] text-ink-muted space-y-1.5" data-testid="memory-sync-disclosure">
+      <div class="text-small text-ink-muted space-y-1.5" data-testid="memory-sync-disclosure">
         <p>
           When on, the memories this harness has learned in the scopes you pick are copied to
           Fleet and to your other signed-in devices, so they follow you.
         </p>
         <ul class="list-disc pl-5 space-y-0.5">
-          <li>Private to you: no admin, teammate or Kenaz staff view exists.</li>
+          <li data-testid="memory-sync-disclosure-view">
+            Only you can view your synced notes in Fleet today. Kameas staff have no view of note
+            content in the product.
+          </li>
+          <li data-testid="memory-sync-disclosure-storage">
+            They're stored on Kameas servers in a form Kameas can read. They're encrypted in transit
+            and at rest, but not end-to-end, and our systems read them to keep your devices in sync.
+          </li>
+          <li data-testid="memory-sync-disclosure-org">
+            Your organization's admins and team leads can't read them unless your organization turns
+            that on and you first acknowledge a notice. Only notes synced after that point would be
+            readable, and you'd be able to see who read them.
+          </li>
+          <li data-testid="memory-sync-disclosure-connector">
+            If your organization enables the Kameas connector and you opt in, apps you connect to it
+            can read and update these notes.
+          </li>
+          <li data-testid="memory-sync-disclosure-leave">
+            If you leave or are removed from your organization, your synced notes are deleted from
+            Fleet.
+          </li>
           <li>Session memory never leaves this device. Project memory does not sync yet.</li>
           <li>
             Memory text, titles, pins and file paths are sent; embeddings are not (each device
             builds its own). Anything that looks like a credential is refused and stays local.
           </li>
           <li>
-            Turning this off keeps Fleet's copy; you can also delete everything from Fleet at any
-            time.
+            Turning this off keeps Fleet's copy. To erase your notes from Fleet and this device, do
+            that here first, or turn sync back on later to do it.
           </li>
         </ul>
       </div>
-      <fieldset class="flex gap-4 text-[12px]" data-testid="memory-sync-scopes">
+      <fieldset class="flex gap-4 text-small" data-testid="memory-sync-scopes">
         <legend class="sr-only">Scopes to sync</legend>
         <label class="flex items-center gap-1.5">
           <input v-model="scopeLongTerm" type="checkbox" data-testid="memory-sync-scope-long_term" />
@@ -277,13 +312,13 @@ async function confirmDisable() {
           Global
         </label>
       </fieldset>
-      <label class="flex items-start gap-2 text-[12px]">
+      <label class="flex items-start gap-2 text-small">
         <input v-model="consentChecked" type="checkbox" data-testid="memory-sync-consent" />
         <span>I understand what syncs and want to turn this on.</span>
       </label>
       <button
         type="button"
-        class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
         :disabled="!canEnable"
         data-testid="memory-sync-enable"
         @click="enable"
@@ -294,7 +329,7 @@ async function confirmDisable() {
 
     <!-- On: readout + disable (the disable / delete-from-Fleet path stays
          enabled while paused). -->
-    <div v-else-if="status.enabled" class="space-y-2 text-[12px]" data-testid="memory-sync-on">
+    <div v-else-if="status.enabled" class="space-y-2 text-small" data-testid="memory-sync-on">
       <p data-testid="memory-sync-scopes-on">
         Syncing: {{ status.scopes.map(scopeLabel).join(', ') || '—' }}
       </p>
@@ -320,7 +355,7 @@ async function confirmDisable() {
         <p>{{ olderNotesLine }}</p>
         <button
           type="button"
-          class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+          class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2"
           :disabled="busy"
           data-testid="memory-sync-older-notes-continue"
           @click="continueOlderNotes"
@@ -336,7 +371,7 @@ async function confirmDisable() {
       <button
         v-if="!confirmingDisable"
         type="button"
-        class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+        class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2"
         data-testid="memory-sync-disable"
         @click="startDisable"
       >
@@ -345,11 +380,12 @@ async function confirmDisable() {
       <div v-else class="space-y-2 rounded-sm border border-border-muted p-3" data-testid="memory-sync-disable-confirm">
         <p>
           Turning this off stops syncing on all your devices. Fleet keeps its copy unless you also
-          delete it.
+          erase your notes.
         </p>
         <label class="flex items-center gap-2">
           <input v-model="deleteFromFleet" type="checkbox" data-testid="memory-sync-delete-fleet" />
-          Also delete all my memory from Fleet (other devices delete their synced copies too)
+          Also erase all my memory notes, from Kameas Fleet, this device and my other devices when
+          they next sync. Notes you made while signed out stay.
         </label>
         <div v-if="deleteFromFleet" class="space-y-1">
           <label for="memory-sync-confirm" class="block text-ink-muted">
@@ -367,16 +403,16 @@ async function confirmDisable() {
         <div class="flex gap-2">
           <button
             type="button"
-            class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="!canConfirmDisable"
             data-testid="memory-sync-disable-confirm-button"
             @click="confirmDisable"
           >
-            {{ deleteFromFleet ? 'Turn off and delete from Fleet' : 'Turn off' }}
+            {{ deleteFromFleet ? 'Turn off and erase' : 'Turn off' }}
           </button>
           <button
             type="button"
-            class="px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent"
+            class="px-3 py-1.5 text-caption uppercase tracking-eyebrow text-ink-dim hover:text-accent"
             data-testid="memory-sync-disable-cancel"
             @click="confirmingDisable = false"
           >
@@ -386,17 +422,17 @@ async function confirmDisable() {
       </div>
     </div>
 
-    <p class="text-[12px] text-ink-muted" data-testid="memory-sync-signed-out-note">
+    <p class="text-small text-ink-muted" data-testid="memory-sync-signed-out-note">
       Notes you make while signed out stay on this device and don't sync.
     </p>
     <p
       v-if="(status.unresolvedNotes ?? 0) > 0"
-      class="text-[12px] text-ink-muted"
+      class="text-small text-ink-muted"
       data-testid="memory-sync-unresolved"
     >
       {{ status.unresolvedNotes }} {{ status.unresolvedNotes === 1 ? 'note stays' : 'notes stay' }} on this device only.
     </p>
 
-    <p v-if="errorMsg" class="text-[12px] text-signal-danger" data-testid="memory-sync-error">{{ errorMsg }}</p>
+    <p v-if="errorMsg" class="text-small text-signal-danger" data-testid="memory-sync-error">{{ errorMsg }}</p>
   </section>
 </template>

@@ -88,7 +88,7 @@ defineExpose({ queue, reconcile });
 
 <template>
   <BasePermissionModal
-    family-icon="⚡"
+    family-icon="bash"
     family-label="Bash command"
     :request="head"
     :queue-length="queue.length"

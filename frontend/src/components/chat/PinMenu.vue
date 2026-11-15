@@ -14,10 +14,12 @@
  *   - Click-outside / blur closes the menu (parent owns `open`).
  *
  * Visual register matches the existing model-switcher dropdown in
- * SessionsView.vue (surface-1 background, border-muted, shadow-lg).
+ * SessionsView.vue (surface-1 background, border-border-muted, shadow-lg).
  * No raw color literals — privacy CI invariant #4.
  */
 
+import type { Component } from 'vue';
+import { MessageSquare, Folder, Globe } from '@/shell/icons';
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import type { MemoryScopeKind } from '@/lib/types';
 
@@ -38,7 +40,7 @@ const emit = defineEmits<{
 interface Option {
   scope: MemoryScopeKind;
   label: string;
-  glyph: string;
+  glyph: Component;
   disabled: boolean;
   title?: string;
 }
@@ -47,13 +49,13 @@ const options = computed<Option[]>(() => [
   {
     scope: 'session',
     label: 'Pin to session',
-    glyph: '💬',
+    glyph: MessageSquare,
     disabled: false,
   },
   {
     scope: 'project',
     label: 'Pin to project',
-    glyph: '📁',
+    glyph: Folder,
     disabled: !props.hasProject,
     title: props.hasProject
       ? undefined
@@ -62,7 +64,7 @@ const options = computed<Option[]>(() => [
   {
     scope: 'global',
     label: 'Pin to global',
-    glyph: '🌐',
+    glyph: Globe,
     disabled: false,
   },
 ]);
@@ -166,7 +168,7 @@ onBeforeUnmount(() => {
       :key="opt.scope"
       type="button"
       role="menuitem"
-      class="block w-full px-3 py-1.5 text-left font-ui text-[12px]"
+      class="block w-full px-3 py-1.5 text-left font-ui text-small"
       :class="[
         opt.disabled
           ? 'text-ink-dim opacity-60 cursor-not-allowed'
@@ -180,7 +182,7 @@ onBeforeUnmount(() => {
       @click="pickAt(idx)"
       @mouseenter="opt.disabled ? null : (highlight = idx)"
     >
-      <span class="mr-2" aria-hidden="true">{{ opt.glyph }}</span>
+      <component :is="opt.glyph" :size="12" class="mr-2 inline-block align-[-1px]" aria-hidden="true" />
       <span>{{ opt.label }}</span>
     </button>
   </div>

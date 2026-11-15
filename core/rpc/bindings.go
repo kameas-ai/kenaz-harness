@@ -791,6 +791,13 @@ func (b *Bindings) Contexts_ContextPublish(req contextsview.ContextPublishReques
 	return b.api.Contexts().Context_Publish(b.ctx(), req)
 }
 
+// Contexts_ContextShareStates returns where this device last shared each of
+// the given local context node ids (kenaz-fleet spec 018 H-1).
+func (b *Bindings) Contexts_ContextShareStates(nodeIDs []string) ([]contextsview.ContextShareStateView, error) {
+	defer sentry.WrapBinding("Contexts_ContextShareStates")()
+	return b.api.Contexts().Context_ShareStates(b.ctx(), nodeIDs)
+}
+
 // Contexts_ContextPromote elevates a team_shared context entry to org_shared
 // on the fleet server. Requires CapSharedTeamGraph.
 // (fleet-context-graph-sync-01NDFSEX17 WP06)
@@ -1362,6 +1369,29 @@ func (b *Bindings) Settings_SetPermissionsMigrationToastShown(shown bool) error 
 	return b.storeFn().SavePermissionsMigrationToastShown(shown)
 }
 
+// Settings_GetPolicyDefault reports the host policy default (launch spec
+// L09): "starter", "legacy" (an install that predates the starter policy
+// and has not accepted it) or "workbench" (served mode, VM-bounded), and
+// whether the first-run notice was answered.
+func (b *Bindings) Settings_GetPolicyDefault() (PolicyDefaultView, error) {
+	defer sentry.WrapBinding("Settings_GetPolicyDefault")()
+	return b.policyDefault().View()
+}
+
+// Settings_SetPolicyDefault switches the host policy default to "starter"
+// or "legacy". It applies to the next request. Refused in served mode.
+func (b *Bindings) Settings_SetPolicyDefault(mode string) error {
+	defer sentry.WrapBinding("Settings_SetPolicyDefault")()
+	return b.policyDefault().Set(mode)
+}
+
+// Settings_DismissPolicyDefaultNotice records that the first-run policy
+// notice was dismissed without changing the default.
+func (b *Bindings) Settings_DismissPolicyDefaultNotice() error {
+	defer sentry.WrapBinding("Settings_DismissPolicyDefaultNotice")()
+	return b.policyDefault().MarkNoticeSeen()
+}
+
 // Settings_GetCedarStrictCredentialMode exposes the WP05
 // credential-gate strictness dial (default false / lenient). When
 // false, NotApplicable Cedar outcomes allow credential access. When
@@ -1508,6 +1538,22 @@ func (b *Bindings) Settings_GetModelCallTelemetry() (settings.ModelCallTelemetry
 func (b *Bindings) Settings_SetModelCallTelemetry(mc settings.ModelCallTelemetrySettings) error {
 	defer sentry.WrapBinding("Settings_SetModelCallTelemetry")()
 	return b.api.Settings().SetModelCallTelemetry(b.ctx(), mc)
+}
+
+// Settings_GetFleetDeviceName returns Settings › Account › Device name:
+// whether this device's name is shared with the organization (default
+// on), the computer-name / custom-name choice, and the read-only
+// computer, default and effective names (Fleet ER-43).
+func (b *Bindings) Settings_GetFleetDeviceName() (settings.FleetDeviceNameSettings, error) {
+	defer sentry.WrapBinding("Settings_GetFleetDeviceName")()
+	return b.api.Settings().GetFleetDeviceName(b.ctx())
+}
+
+// Settings_SetFleetDeviceName persists the device-name setting and, when
+// enrolled, re-enrolls in the background so Fleet sees the change.
+func (b *Bindings) Settings_SetFleetDeviceName(dn settings.FleetDeviceNameSettings) error {
+	defer sentry.WrapBinding("Settings_SetFleetDeviceName")()
+	return b.api.Settings().SetFleetDeviceName(b.ctx(), dn)
 }
 
 // Settings_GetMLLocalActivity returns the local ML activity store's
@@ -1828,6 +1874,14 @@ func (b *Bindings) Settings_FleetSignInCancel() error {
 	return b.api.Settings().FleetSignInCancel(b.ctx())
 }
 
+// Settings_FleetDeviceKeysReauth runs the fresh sign-in Fleet requires to
+// replace this device's keys (ER-40) and retries the key update once.
+// Cancel with Settings_FleetSignInCancel.
+func (b *Bindings) Settings_FleetDeviceKeysReauth() error {
+	defer sentry.WrapBinding("Settings_FleetDeviceKeysReauth")()
+	return b.api.Settings().FleetDeviceKeysReauth(b.ctx())
+}
+
 // Settings_FleetSignOut clears tokens and identity cache.
 func (b *Bindings) Settings_FleetSignOut() error {
 	defer sentry.WrapBinding("Settings_FleetSignOut")()
@@ -1901,6 +1955,13 @@ func (b *Bindings) Settings_FleetHealth() (settings.FleetHealthView, error) {
 func (b *Bindings) Settings_FleetTelemetryOptIns() ([]settings.TelemetryOptInView, error) {
 	defer sentry.WrapBinding("Settings_FleetTelemetryOptIns")()
 	return b.api.Settings().FleetTelemetryOptIns(b.ctx())
+}
+
+// Settings_FleetTeams returns the caller's Fleet teams as a tree, root
+// first, parent before children, keyed by team id (kenaz-fleet spec 018 H-1).
+func (b *Bindings) Settings_FleetTeams() ([]settings.FleetTeamView, error) {
+	defer sentry.WrapBinding("Settings_FleetTeams")()
+	return b.api.Settings().FleetTeams(b.ctx())
 }
 
 // Settings_FleetSetTelemetryOptIn flips a single telemetry class opt-in in the
@@ -3735,9 +3796,13 @@ func (b *Bindings) Fleet_GetTelemetryConsent() (string, error) {
 // Fleet_SetTelemetryConsent persists the given consent level. Returns an error
 // when the org tier is insufficient (aggregate requires Pro+, full requires
 // Team+).
-func (b *Bindings) Fleet_SetTelemetryConsent(level string) error {
+//
+// noticeEdition is the Agent Telemetry notice edition the panel showed while
+// the change was made ("" when none was shown): the opt-in PUT then carries
+// notice_version "kenaz-harness/<edition>" (contract-harness-sync §17.2).
+func (b *Bindings) Fleet_SetTelemetryConsent(level, noticeEdition string) error {
 	defer sentry.WrapBinding("Fleet_SetTelemetryConsent")()
-	return b.api.Fleet().SetTelemetryConsent(b.ctx(), level)
+	return b.api.Fleet().SetTelemetryConsentWithNotice(b.ctx(), level, noticeEdition)
 }
 
 // Fleet_TelemetryStatus returns a payload-free export health snapshot, so
@@ -3782,6 +3847,23 @@ func (b *Bindings) Fleet_MemorySyncDismissNotice(notice string) (settings.Memory
 func (b *Bindings) Fleet_MemorySyncDisable(deleteFromFleet bool, confirm string) (settings.MemorySyncStatusView, error) {
 	defer sentry.WrapBinding("Fleet_MemorySyncDisable")()
 	return b.api.Settings().FleetMemorySyncDisable(b.ctx(), deleteFromFleet, confirm)
+}
+
+// Fleet_MemberNotices lists the notice texts Fleet serves to this member on
+// the kenaz-harness surface (memory-access, agent-telemetry) with their read
+// state in the current org (contract-harness-sync §17). Empty while nothing
+// is registered.
+func (b *Bindings) Fleet_MemberNotices() (settings.MemberNoticesView, error) {
+	defer sentry.WrapBinding("Fleet_MemberNotices")()
+	return b.api.Settings().FleetMemberNotices(b.ctx())
+}
+
+// Fleet_RespondMemberNotice records "I have read this" (action "ack") or a
+// withdraw for the memory-access text the panel showed, echoing the served
+// edition and text hash.
+func (b *Bindings) Fleet_RespondMemberNotice(family, edition, textHash, action string) (settings.MemberNoticesView, error) {
+	defer sentry.WrapBinding("Fleet_RespondMemberNotice")()
+	return b.api.Settings().FleetRespondMemberNotice(b.ctx(), family, edition, textHash, action)
 }
 
 // Fleet_MLStatus returns the Cloud ML consent panel state

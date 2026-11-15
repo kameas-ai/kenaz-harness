@@ -25,6 +25,11 @@ type ComplianceStatus struct {
 	RetentionDays int `json:"retentionDays"`
 	// Enabled is true when CapAuditLogImmuDB is active for this user.
 	Enabled bool `json:"enabled"`
+	// ArchiveWithheld is true when the archive is off for this org although
+	// its plan includes it: Fleet sends audit_log_immudb false and
+	// audit_ledger_read true (legal D173). The panel then says the archive
+	// isn't available for the organization yet, never "upgrade".
+	ArchiveWithheld bool `json:"archiveWithheld,omitempty"`
 	// ArchiverRunning is true when the background archive loop is running.
 	ArchiverRunning bool `json:"archiverRunning"`
 	// StoppedReason says why a stopped archiver is stopped, when known.

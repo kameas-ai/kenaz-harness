@@ -414,7 +414,7 @@ onBeforeUnmount(() => {
 
     <!-- Rich filter rail -->
     <div class="px-6 py-3 border-b border-border-muted bg-surface-1">
-      <div class="flex flex-wrap items-center gap-3 font-ui text-[12px] text-ink-muted">
+      <div class="flex flex-wrap items-center gap-3 font-ui text-small text-ink-muted">
         <!-- Kind / Category — multi-select (audit-that-tells-the-truth-
              01PMZA10 WP08): a saved query can carry more than one kind,
              and the control that edits it must be able to show and set
@@ -426,7 +426,7 @@ onBeforeUnmount(() => {
             multiple
             size="3"
             :aria-label="selectedCategories.length > 0 ? `Kinds: ${selectedCategories.join(', ')}` : 'All categories'"
-            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px] min-w-[8rem]"
+            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-small min-w-[8rem]"
           >
             <option v-for="c in CATEGORIES" :key="c" :value="c">{{ c }}</option>
           </select>
@@ -439,7 +439,7 @@ onBeforeUnmount(() => {
             v-model="sinceInput"
             type="text"
             placeholder="YYYY-MM-DD"
-            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px] w-48"
+            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-small w-48"
           />
         </label>
         <label class="flex items-center gap-2">
@@ -448,7 +448,7 @@ onBeforeUnmount(() => {
             v-model="untilInput"
             type="text"
             placeholder="YYYY-MM-DD (open)"
-            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px] w-48"
+            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-small w-48"
           />
         </label>
 
@@ -465,7 +465,7 @@ onBeforeUnmount(() => {
             :title="ACTOR_FILTER_UNAVAILABLE"
             data-testid="audit-actor-input"
             placeholder="emitter-id, emitter-id2"
-            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px] w-36"
+            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-small w-36"
           />
         </label>
 
@@ -476,7 +476,7 @@ onBeforeUnmount(() => {
             v-model="freeText"
             type="search"
             placeholder="free-text..."
-            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px] w-40"
+            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-small w-40"
           />
         </label>
 
@@ -490,7 +490,7 @@ onBeforeUnmount(() => {
         <select
           v-if="savedQueries.length > 0"
           v-model="selectedSavedQuery"
-          class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px]"
+          class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-small"
           @change="applySavedQuery(selectedSavedQuery)"
         >
           <option value="">Saved queries…</option>
@@ -500,7 +500,7 @@ onBeforeUnmount(() => {
         <!-- Stream controls -->
         <button
           type="button"
-          class="ml-auto px-2 py-1 text-[11px] font-ui rounded-sm border border-border hover:border-border-strong text-ink-muted hover:text-ink"
+          class="ml-auto px-2 py-1 text-caption font-ui rounded-sm border border-border hover:border-border-strong text-ink-muted hover:text-ink"
           :aria-label="stream.paused.value ? 'Resume audit stream' : 'Pause audit stream'"
           @click="onTogglePause"
         >
@@ -508,7 +508,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           type="button"
-          class="px-2 py-1 text-[11px] font-ui rounded-sm border border-accent-hairline hover:border-accent text-accent hover:text-accent"
+          class="px-2 py-1 text-caption font-ui rounded-sm border border-accent-hairline hover:border-accent text-accent hover:text-accent"
           @click="verifyVisible"
         >
           Verify chain
@@ -516,7 +516,7 @@ onBeforeUnmount(() => {
         <!-- Export controls -->
         <select
           v-model="exportFormat"
-          class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[11px]"
+          class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-caption"
           aria-label="Export format"
         >
           <option value="jsonl">JSONL</option>
@@ -525,14 +525,14 @@ onBeforeUnmount(() => {
         </select>
         <button
           type="button"
-          class="px-2 py-1 text-[11px] font-ui rounded-sm border border-border text-ink-muted hover:text-ink"
+          class="px-2 py-1 text-caption font-ui rounded-sm border border-border text-ink-muted hover:text-ink"
           @click="exportAudit"
         >
           Export
         </button>
         <button
           type="button"
-          class="px-2 py-1 text-[11px] font-ui rounded-sm border border-border text-ink-muted hover:text-ink"
+          class="px-2 py-1 text-caption font-ui rounded-sm border border-border text-ink-muted hover:text-ink"
           @click="clearFilters"
         >
           Clear
@@ -541,7 +541,7 @@ onBeforeUnmount(() => {
         <button
           v-if="selectedIDs.size > 0"
           type="button"
-          class="px-2 py-1 text-[11px] font-ui rounded-sm border border-signal-danger text-signal-danger hover:bg-signal-danger hover:text-white transition-colors"
+          class="px-2 py-1 text-caption font-ui rounded-sm border border-signal-danger text-signal-danger hover:bg-signal-danger hover:text-white transition-colors"
           data-testid="audit-purge-selected"
           @click="requestPurge"
         >
@@ -555,22 +555,22 @@ onBeforeUnmount(() => {
           v-model="saveQueryName"
           type="text"
           placeholder="Save current filter as…"
-          class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[11px] w-48"
+          class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-caption w-48"
           @keydown.enter="saveCurrentQuery"
         />
         <button
           type="button"
-          class="px-2 py-1 text-[11px] font-ui rounded-sm border border-border text-ink-muted hover:text-ink"
+          class="px-2 py-1 text-caption font-ui rounded-sm border border-border text-ink-muted hover:text-ink"
           @click="saveCurrentQuery"
         >
           Save
         </button>
-        <span v-if="saveQueryError" class="text-[11px] text-signal-danger">{{ saveQueryError }}</span>
+        <span v-if="saveQueryError" class="text-caption text-signal-danger">{{ saveQueryError }}</span>
         <!-- Saved query chips for deletion -->
         <span
           v-for="sq in savedQueries"
           :key="sq.id"
-          class="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded-full bg-surface-2 border border-border text-ink-muted"
+          class="inline-flex items-center gap-1 px-2 py-0.5 text-caption rounded-full bg-surface-2 border border-border text-ink-muted"
         >
           {{ sq.name }}
           <button
@@ -585,7 +585,7 @@ onBeforeUnmount(() => {
       <!-- Export toast -->
       <div
         v-if="exportToast"
-        class="mt-1 text-[11px] font-ui text-ink-muted"
+        class="mt-1 text-caption font-ui text-ink-muted"
         data-testid="export-toast"
       >
         {{ exportToast }}
@@ -594,7 +594,7 @@ onBeforeUnmount(() => {
       <!-- Verify chain result pill -->
       <div
         v-if="verifyResult"
-        class="mt-2 text-[11px] font-ui"
+        class="mt-2 text-caption font-ui"
         :class="verifyResult.ok ? 'text-signal-ok' : 'text-signal-danger'"
         data-testid="verify-result"
       >
@@ -608,7 +608,7 @@ onBeforeUnmount(() => {
     <div
       v-if="actorFilterIgnored"
       role="note"
-      class="mx-6 mt-3 rounded-sm border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+      class="mx-6 mt-3 rounded-sm border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-small text-signal-warn"
       data-testid="audit-actor-ignored"
     >
       This saved query's actor filter can't be applied yet — ignored. Audit
@@ -627,13 +627,13 @@ onBeforeUnmount(() => {
       <div
         v-if="loadError"
         role="alert"
-        class="mx-6 my-3 flex items-center gap-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="mx-6 my-3 flex items-center gap-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         data-testid="audit-load-error"
       >
         <span class="flex-1 min-w-0 break-words">Audit query failed: {{ loadError }}</span>
         <button
           type="button"
-          class="shrink-0 px-2 py-1 text-[11px] rounded-sm border border-signal-danger hover:bg-surface-2"
+          class="shrink-0 px-2 py-1 text-caption rounded-sm border border-signal-danger hover:bg-surface-2"
           data-testid="audit-load-retry"
           @click="refresh()"
         >
@@ -676,24 +676,24 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div
         v-if="showPurgeModal"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-modal-overlay"
         role="dialog"
         aria-modal="true"
         aria-labelledby="purge-modal-title"
         data-testid="audit-purge-modal"
       >
         <div class="bg-surface-1 rounded border border-border shadow-xl p-6 max-w-sm w-full mx-4">
-          <h2 id="purge-modal-title" class="font-ui text-[13px] font-semibold text-ink mb-2">
+          <h2 id="purge-modal-title" class="font-ui text-ui font-semibold text-ink mb-2">
             Confirm bulk purge
           </h2>
-          <p class="font-ui text-[12px] text-ink-muted mb-4">
+          <p class="font-ui text-small text-ink-muted mb-4">
             Permanently delete {{ selectedIDs.size }} audit event{{ selectedIDs.size === 1 ? '' : 's' }}?
             This operation is <strong class="text-signal-danger">irreversible</strong>.
           </p>
           <div
             v-if="purgeError"
             role="alert"
-            class="mb-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+            class="mb-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
             data-testid="purge-modal-error"
           >
             {{ purgeError }}
@@ -701,7 +701,7 @@ onBeforeUnmount(() => {
           <div class="flex gap-2 justify-end">
             <button
               type="button"
-              class="px-3 py-1.5 font-ui text-[12px] rounded-sm border border-border text-ink-muted hover:text-ink"
+              class="px-3 py-1.5 font-ui text-small rounded-sm border border-border text-ink-muted hover:text-ink"
               data-testid="purge-modal-cancel"
               @click="cancelPurge"
             >
@@ -710,7 +710,7 @@ onBeforeUnmount(() => {
             <button
               type="button"
               :disabled="purging"
-              class="px-3 py-1.5 font-ui text-[12px] rounded-sm border border-signal-danger bg-signal-danger text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+              class="px-3 py-1.5 font-ui text-small rounded-sm border border-signal-danger bg-signal-danger text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
               data-testid="purge-modal-confirm"
               @click="confirmPurge"
             >

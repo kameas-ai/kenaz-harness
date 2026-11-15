@@ -91,16 +91,16 @@ function onKeydown(event: KeyboardEvent) {
         class="flex items-center justify-between border-b border-border-muted px-5 py-3"
       >
         <div>
-          <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          <div class="text-caption uppercase tracking-eyebrow text-ink-subtle">
             MCP Servers
           </div>
-          <h2 class="mt-1 font-ui text-base font-semibold text-ink">
+          <h2 class="mt-1 font-ui text-h3 font-semibold text-ink">
             Add MCP Server
           </h2>
         </div>
         <button
           type="button"
-          class="text-[11px] text-ink-dim hover:text-ink"
+          class="text-caption text-ink-dim hover:text-ink"
           data-testid="add-mcp-modal-close"
           @click="close"
         >
@@ -122,7 +122,7 @@ function onKeydown(event: KeyboardEvent) {
           :aria-selected="activeTab === tab.id"
           :data-testid="`add-mcp-tab-${tab.id}`"
           :class="[
-            'px-4 py-2.5 font-ui text-[11px] uppercase tracking-[0.16em] border-b-2 -mb-px transition-colors',
+            'px-4 py-2.5 font-ui text-caption uppercase tracking-eyebrow border-b-2 -mb-px transition-colors',
             activeTab === tab.id
               ? 'border-accent text-accent'
               : 'border-transparent text-ink-dim hover:text-ink',

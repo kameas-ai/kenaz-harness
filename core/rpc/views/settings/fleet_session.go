@@ -63,6 +63,10 @@ const (
 	// the identity cache and node_id.txt are cleared, and the next sign-in
 	// enrolls under a fresh node id (device-keys-handoff-01DEVKH01 WP02).
 	FleetReasonNodeRemoved = "node_removed"
+	// FleetReasonNodeIDInvalid: Fleet refused this device's id as invalid,
+	// and a freshly minted one too (fleet.ErrNodeIDInvalid). Retrying
+	// cannot help, so automatic retries stop.
+	FleetReasonNodeIDInvalid = "node_id_invalid"
 	// FleetReasonOrgPaused: an identity refresh was refused 403 org_paused
 	// (a Kameas-staff "pause paid features" hold, kenaz-fleet #206).
 	// Defensive — fleet keeps enroll open while paused — and never
@@ -78,7 +82,10 @@ const fleetNodeRemovedCopy = "This device was removed from your organization by 
 // with fleet at the last enroll, and if not, why it cannot receive shared
 // sessions (human copy).
 type FleetDeviceKeysView struct {
-	// Status is registered | too_many_devices | invalid_key | unavailable.
+	// Status is registered | too_many_devices | invalid_key | unavailable |
+	// reauth_required (replacing the active key needs a fresh sign-in:
+	// FleetDeviceKeysReauth) | reauth_refused (a fresh sign-in was refused:
+	// contact the administrator).
 	Status string `json:"status"`
 	// Message is human copy for a non-registered status.
 	Message string `json:"message,omitempty"`
@@ -461,6 +468,8 @@ func classifyEnrollError(err error) (reason string, expired bool) {
 		return FleetReasonNodeRemoved, true
 	case errors.Is(err, fleet.ErrUserNotProvisioned):
 		return FleetReasonNotProvisioned, false
+	case errors.Is(err, fleet.ErrNodeIDInvalid):
+		return FleetReasonNodeIDInvalid, false
 	case fleet.IsOrgPaused(err):
 		return FleetReasonOrgPaused, false
 	case errors.Is(err, fleet.ErrProfileNotConfigured):
@@ -529,7 +538,7 @@ func (a *API) recordEnrollOutcome(id *fleet.Identity, err error) {
 	} else {
 		tr.reason = reason
 	}
-	if reason == FleetReasonNotProvisioned {
+	if reason == FleetReasonNotProvisioned || reason == FleetReasonNodeIDInvalid {
 		// Keep the production fix (60+ enroll/fail pairs): stop automatic
 		// retries. Recovery is explicit retry, a new sign-in, app focus, or
 		// a session change from elsewhere (FR-4).

@@ -56,12 +56,12 @@ async function openInBrowser() {
   <div class="space-y-2">
     <div
       v-if="openExternallyPath"
-      class="rounded-sm border border-border-muted bg-surface-1 px-3 py-2 text-[11px] text-ink-muted flex items-center justify-between gap-2"
+      class="rounded-sm border border-border-muted bg-surface-1 px-3 py-2 text-caption text-ink-muted flex items-center justify-between gap-2"
     >
       <span>Scripts and external resources are blocked in the preview.</span>
       <button
         type="button"
-        class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 text-[11px] text-accent hover:bg-accent-glow"
+        class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 text-caption text-accent hover:bg-accent-glow"
         data-testid="iframe-sandbox-open-external"
         @click="openInBrowser"
       >

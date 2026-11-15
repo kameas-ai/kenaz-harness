@@ -512,7 +512,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
     <div>
       <label
         for="prov-kind"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         Provider
       </label>
@@ -554,7 +554,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
 
     <!-- Bedrock-only: auth method toggle -->
     <div v-if="form.kind === 'bedrock'">
-      <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <span class="block text-caption uppercase tracking-eyebrow text-ink-subtle">
         Authentication
       </span>
       <div class="mt-1 flex gap-1 rounded-sm border border-border-muted bg-surface-1 p-0.5">
@@ -585,7 +585,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
           AWS profile
         </button>
       </div>
-      <p class="mt-1 text-[11px] text-ink-dim">
+      <p class="mt-1 text-caption text-ink-dim">
         {{
           form.bedrockAuth === 'api_key'
             ? 'Long-lived Bedrock API key from the AWS console — paste it below.'
@@ -598,7 +598,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
     <div v-if="requiresAzureHost">
       <label
         for="prov-azure-host"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         Resource Hostname
       </label>
@@ -613,7 +613,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
       <p v-if="validation.azureHost" class="mt-1 text-xs text-signal-danger">
         {{ validation.azureHost }}
       </p>
-      <p class="mt-1 text-[11px] text-ink-dim">
+      <p class="mt-1 text-caption text-ink-dim">
         The hostname of your Azure OpenAI resource (without "https://"). Found in
         the Azure portal under your resource's "Keys and Endpoint" page.
       </p>
@@ -621,7 +621,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
 
     <!-- Gemini-only: endpoint kind radio -->
     <div v-if="isGemini" :data-testid="'add-provider-gemini-endpoint'">
-      <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <span class="block text-caption uppercase tracking-eyebrow text-ink-subtle">
         Endpoint
       </span>
       <div class="mt-1 flex gap-1 rounded-sm border border-border-muted bg-surface-1 p-0.5">
@@ -650,7 +650,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
     <div v-if="isGeminiVertex" class="space-y-3" :data-testid="'add-provider-gemini-vertex-fields'">
       <!-- Project ID -->
       <div>
-        <label class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <label class="block text-caption uppercase tracking-eyebrow text-ink-subtle">
           GCP Project ID
         </label>
         <input
@@ -666,7 +666,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
       </div>
       <!-- Region -->
       <div>
-        <label class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <label class="block text-caption uppercase tracking-eyebrow text-ink-subtle">
           Region
         </label>
         <input
@@ -679,7 +679,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
       </div>
       <!-- Auth method -->
       <div>
-        <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <span class="block text-caption uppercase tracking-eyebrow text-ink-subtle">
           Auth method
         </span>
         <div class="mt-1 flex gap-1 rounded-sm border border-border-muted bg-surface-1 p-0.5">
@@ -696,11 +696,11 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
             :data-testid="'add-provider-gemini-sa-path'"
             @click="form.geminiVertexAuth = 'service_account_path'">Service account (path)</button>
         </div>
-        <p v-if="geminiVertexUsesADC" class="mt-1 text-[11px] text-ink-dim" :data-testid="'add-provider-gemini-adc-hint'">
+        <p v-if="geminiVertexUsesADC" class="mt-1 text-caption text-ink-dim" :data-testid="'add-provider-gemini-adc-hint'">
           Application Default Credentials will be used. Run <code>gcloud auth application-default login</code> first.
         </p>
         <div v-if="geminiVertexUsesSAPath" class="mt-2">
-          <label class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          <label class="block text-caption uppercase tracking-eyebrow text-ink-subtle">
             Service account JSON path
           </label>
           <input
@@ -722,7 +722,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
     <div v-if="requiresApiKey && !isCustomOpenAI">
       <label
         for="prov-apikey"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         API Key
       </label>
@@ -772,7 +772,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
       <p v-else-if="validation.apiKey" class="mt-1 text-xs text-signal-danger">
         {{ validation.apiKey }}
       </p>
-      <p class="mt-1 text-[11px] text-ink-dim">
+      <p class="mt-1 text-caption text-ink-dim">
         Stored in your OS keychain. Never written to providers.json.
       </p>
     </div>
@@ -781,7 +781,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
     <div v-if="requiresAwsProfile && !isCustomOpenAI">
       <label
         for="prov-aws-profile"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         AWS Profile
       </label>
@@ -799,7 +799,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
       >
         {{ validation.awsProfile }}
       </p>
-      <p class="mt-1 text-[11px] text-ink-dim">
+      <p class="mt-1 text-caption text-ink-dim">
         Reads from <span class="font-mono">~/.aws/credentials</span>. The
         harness never sees your access keys.
       </p>
@@ -809,7 +809,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
     <div v-if="requiresRegion">
       <label
         for="prov-region"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         Region
       </label>
@@ -832,10 +832,10 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
     <!-- Hidden for custom-openai — model is entered in CustomEndpointFields -->
     <div v-if="probed && !fallbackToManual && !isCustomOpenAI">
       <div class="flex items-center justify-between">
-        <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <span class="block text-caption uppercase tracking-eyebrow text-ink-subtle">
           Models ({{ form.selectedModelIds.length }} selected)
         </span>
-        <div class="flex gap-2 text-[11px]">
+        <div class="flex gap-2 text-caption">
           <button
             type="button"
             class="text-accent hover:text-ink"
@@ -882,7 +882,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
     <div v-if="fallbackToManual && !isCustomOpenAI">
       <label
         for="prov-model-manual"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         Model IDs
       </label>
@@ -901,7 +901,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
               : 'model-id-1\nmodel-id-2'
         "
       />
-      <p class="mt-1 text-[11px] text-ink-dim">
+      <p class="mt-1 text-caption text-ink-dim">
         One model id per line (or comma-separated). The first id is the
         default; chat sessions can switch to any of the others.
       </p>
@@ -913,12 +913,12 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
     <!-- Optional: customize the auto-derived ID -->
     <div v-if="effectiveModelIds.length > 0">
       <div class="flex items-center justify-between">
-        <span class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <span class="text-caption uppercase tracking-eyebrow text-ink-subtle">
           Provider ID
         </span>
         <button
           type="button"
-          class="text-[11px] text-accent hover:text-ink"
+          class="text-caption text-accent hover:text-ink"
           :data-testid="'add-provider-customize-id'"
           @click="customizeId = !customizeId"
         >

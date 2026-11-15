@@ -269,18 +269,18 @@ defineExpose({ refresh, refreshLegacyControls });
 <template>
   <section data-testid="autonomy-panel">
     <div class="flex items-center justify-between">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Autonomy
       </h2>
       <span
         v-if="isCustom"
-        class="rounded-sm border border-border-muted bg-surface-2 px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-muted"
+        class="rounded-sm border border-border-muted bg-surface-2 px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-muted"
         data-testid="autonomy-custom-label"
       >
         Custom
       </span>
     </div>
-    <p class="mt-1 font-ui text-[11px] text-ink-muted">
+    <p class="mt-1 font-ui text-caption text-ink-muted">
       Controls how aggressively the model proceeds without confirmation.
       Cedar deny remains the floor regardless of tier.
     </p>
@@ -297,7 +297,7 @@ defineExpose({ refresh, refreshLegacyControls });
         type="button"
         role="radio"
         :aria-checked="selectedTier === t"
-        class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+        class="px-3 py-1.5 font-ui text-small border-r border-border last:border-r-0 transition-colors"
         :class="
           selectedTier === t
             ? 'bg-surface-3 text-ink'
@@ -314,7 +314,7 @@ defineExpose({ refresh, refreshLegacyControls });
       <button
         v-if="!showAllTiers"
         type="button"
-        class="font-ui text-[11px] text-ink-subtle hover:text-ink underline-offset-2 hover:underline"
+        class="font-ui text-caption text-ink-subtle hover:text-ink underline-offset-2 hover:underline"
         data-testid="autonomy-show-all-tiers"
         @click="showAllTiers = true"
       >
@@ -323,7 +323,7 @@ defineExpose({ refresh, refreshLegacyControls });
       <button
         v-if="selectedTier !== null"
         type="button"
-        class="font-ui text-[11px] text-ink-subtle hover:text-ink underline-offset-2 hover:underline"
+        class="font-ui text-caption text-ink-subtle hover:text-ink underline-offset-2 hover:underline"
         data-testid="autonomy-clear-tier"
         @click="clearTier"
       >
@@ -333,7 +333,7 @@ defineExpose({ refresh, refreshLegacyControls });
 
     <p
       v-if="selectedTier !== null"
-      class="mt-2 font-ui text-[12px] text-ink"
+      class="mt-2 font-ui text-small text-ink"
       data-testid="autonomy-tier-description"
     >
       {{ AUTONOMY_TIER_DESCRIPTIONS[selectedTier] }}
@@ -342,7 +342,7 @@ defineExpose({ refresh, refreshLegacyControls });
     <div class="mt-4">
       <button
         type="button"
-        class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted hover:text-ink"
+        class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted hover:text-ink"
         data-testid="autonomy-advanced-toggle"
         :aria-expanded="advancedOpen"
         @click="advancedOpen = !advancedOpen"
@@ -362,14 +362,14 @@ defineExpose({ refresh, refreshLegacyControls });
         class="rounded-sm border border-border-muted bg-surface-1 px-3 py-2"
       >
         <label
-          class="block font-ui text-[10px] uppercase tracking-[0.16em] text-ink-subtle"
+          class="block font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
         >
           {{ AUTONOMY_KNOB_LABELS[k] }}
         </label>
         <div class="mt-1 flex items-center gap-2">
           <input
             type="text"
-            class="flex-1 rounded-sm border border-border bg-surface-2 px-2 py-1 font-mono text-[12px] text-ink"
+            class="flex-1 rounded-sm border border-border bg-surface-2 px-2 py-1 font-mono text-small text-ink"
             :value="knobDisplay(k)"
             :placeholder="layer.overrides[k] === undefined ? '(use tier preset)' : ''"
             :data-testid="`autonomy-knob-${k}`"
@@ -378,7 +378,7 @@ defineExpose({ refresh, refreshLegacyControls });
           <button
             v-if="layer.overrides[k] !== undefined"
             type="button"
-            class="font-ui text-[10px] uppercase tracking-[0.14em] text-ink-subtle hover:text-ink"
+            class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle hover:text-ink"
             :data-testid="`autonomy-knob-reset-${k}`"
             @click="resetOverride(k)"
           >
@@ -390,7 +390,7 @@ defineExpose({ refresh, refreshLegacyControls });
 
     <div
       v-if="saveError"
-      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="autonomy-error"
     >
@@ -398,15 +398,15 @@ defineExpose({ refresh, refreshLegacyControls });
     </div>
 
     <div class="mt-5 border-t border-border-muted pt-4">
-      <h3 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h3 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Fallback &amp; permission dials
       </h3>
 
       <div class="mt-3 rounded-sm border border-border-muted bg-surface-1 px-3 py-2">
-        <label class="block font-ui text-[12px] text-ink" for="autonomy-max-agent-turns">
+        <label class="block font-ui text-small text-ink" for="autonomy-max-agent-turns">
           Default iteration cap
         </label>
-        <p class="mt-1 font-ui text-[11px] text-ink-muted max-w-prose">
+        <p class="mt-1 font-ui text-caption text-ink-muted max-w-prose">
           Legacy fallback for the chat graph's iteration cap. Only takes
           effect when the "Max iterations" override above is unset — a
           value there always wins. 0 means "use the built-in default".
@@ -415,7 +415,7 @@ defineExpose({ refresh, refreshLegacyControls });
           id="autonomy-max-agent-turns"
           type="number"
           min="0"
-          class="mt-2 w-32 rounded-sm border border-border bg-surface-2 px-2 py-1 font-mono text-[12px] text-ink"
+          class="mt-2 w-32 rounded-sm border border-border bg-surface-2 px-2 py-1 font-mono text-small text-ink"
           :value="maxAgentTurns"
           :disabled="maxAgentTurnsBusy"
           data-testid="autonomy-max-agent-turns"
@@ -423,7 +423,7 @@ defineExpose({ refresh, refreshLegacyControls });
         />
         <div
           v-if="maxAgentTurnsError"
-          class="mt-2 font-ui text-[11px] text-signal-danger"
+          class="mt-2 font-ui text-caption text-signal-danger"
           role="alert"
         >
           {{ maxAgentTurnsError }}
@@ -434,10 +434,10 @@ defineExpose({ refresh, refreshLegacyControls });
         class="mt-3 flex items-start justify-between gap-3 rounded-sm border border-border-muted bg-surface-1 px-3 py-2 cursor-pointer"
       >
         <span>
-          <span class="block font-ui text-[12px] text-ink">
+          <span class="block font-ui text-small text-ink">
             Allow requesting filesystem access
           </span>
-          <span class="mt-1 block font-ui text-[11px] text-ink-muted max-w-prose">
+          <span class="mt-1 block font-ui text-caption text-ink-muted max-w-prose">
             When off, the model's tool catalog omits
             kenaz__request_filesystem_access entirely — it cannot ask to
             expand its filesystem allowlist during a run.
@@ -455,7 +455,7 @@ defineExpose({ refresh, refreshLegacyControls });
       </label>
       <div
         v-if="fsRequestAccessError"
-        class="mt-2 font-ui text-[11px] text-signal-danger"
+        class="mt-2 font-ui text-caption text-signal-danger"
         role="alert"
       >
         {{ fsRequestAccessError }}

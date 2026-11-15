@@ -48,7 +48,7 @@ const emit = defineEmits<{
     @close="emit('cancel')"
   >
     <div>
-      <h2 class="font-ui text-base font-semibold text-ink" data-testid="confirm-dialog-title">
+      <h2 class="font-ui text-h3 font-semibold text-ink" data-testid="confirm-dialog-title">
         {{ title }}
       </h2>
       <p v-if="message" class="mt-2 font-ui text-sm text-ink-muted" data-testid="confirm-dialog-message">

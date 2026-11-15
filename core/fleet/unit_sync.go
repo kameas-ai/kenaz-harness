@@ -97,8 +97,41 @@ type UnitSyncer struct {
 	// wire_id.go). Immutable after construction.
 	ids *WireIDs
 
-	mu          sync.RWMutex
-	cursor      string
+	mu sync.RWMutex
+	// cursor is the stored pull position (opaque next_cursor, or legacy
+	// since), persisted in unit_cursor.txt (encodeUnitCursor).
+	cursor pullCursor
+	// snapshotting: a re-snapshot is pulling every page within the call;
+	// snapSweep: it ends with the reset sweep (finishSnapshot); snapSeen:
+	// the node ids it served so far.
+	snapshotting bool
+	snapSweep    bool
+	snapSeen     map[string]bool
+	// snapAccount is the account (user + org) that started the reset
+	// re-snapshot, also kept in its mark file. Its drops run only for that
+	// account; any other (or an unknown identity) holds them.
+	snapAccount snapshotAccount
+	// dropMu serialises a reset's drops with pushes.
+	dropMu sync.Mutex
+	// pageSize is the pull page size sent as limit= (pullPageSize; tests
+	// shrink it). A shorter page ends a full pull.
+	pageSize int
+	// accessEpoch is the last access_epoch seen (legacy since-stream only).
+	accessEpoch *int64
+	// Reset outcomes (spec 018 H-2), cumulative. Never a team id.
+	resetCount       int
+	lastResetReason  string
+	resetDropped     int
+	resetDemoted     int
+	withdrawnApplied int
+	withdrawnDemoted int
+	withdrawnKept    int
+	resetHeld        int
+	// index holds Fleet's labels per node (team, audience, author).
+	index *unitIndex
+	// servesLive reports whether another, wider stream (the Curated lane)
+	// serves a node live; a withdrawn tombstone is then not applied here.
+	servesLive  func(nodeID string) bool
 	lastPullAt  time.Time
 	lastPullErr string
 	lastPushErr string
@@ -164,6 +197,9 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 		dataDir: dataDir,
 		ids:     NewWireIDs(dataDir),
 		stopCh:  make(chan struct{}),
+		index:   newUnitIndex(dataDir),
+
+		pageSize: pullPageSize,
 	}
 	s.selfIdentity = func() Identity {
 		if dataDir == "" {
@@ -175,10 +211,27 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 		}
 		return id
 	}
-	if c, err := loadUnitCursor(dataDir); err == nil {
-		s.cursor = c
+	s.cursor = loadUnitPullCursor(dataDir)
+	// The cursor was advanced under a narrower pull filter (Fleet ruling
+	// 2026-11-13 widened it to the bootstrap and legacy kinds): those nodes
+	// were filtered out server-side and would never be re-sent past the old
+	// cursor. Re-pull from the start once; applying a known node again is a
+	// no-op (sidecar baselines), so only the missed nodes are created.
+	if !s.cursor.empty() && loadUnitLaneSig(dataDir) != unitLaneSig() {
+		logging.L().Info("fleet.unit.pull.cursor_reset", "reason", "lane_kind_filter_changed")
+		s.cursor = pullCursor{}
 	}
+	// A reset's re-snapshot that a restart interrupted resumes from the
+	// start of the stream once its account is signed in (resumeMarked).
 	return s
+}
+
+// selfUserID is the signed-in fleet user id ("" when unknown).
+func (s *UnitSyncer) selfUserID() string {
+	if s.selfIdentity == nil {
+		return ""
+	}
+	return s.selfIdentity().UserID
 }
 
 // ── Capability gating ──────────────────────────────────────────────────────
@@ -281,6 +334,10 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 	if len(dirty) == 0 {
 		return 0, nil
 	}
+	// Serialised with a reset's drops (dropMu): a unit shared while a
+	// re-snapshot finishes must not be demoted as "not served".
+	s.dropMu.Lock()
+	defer s.dropMu.Unlock()
 
 	nodes := make([]contextNodeInput, 0, len(dirty))
 	pushed := make([]units.Unit, 0, len(dirty))
@@ -288,6 +345,8 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 	// response's conflicts / rejections (keyed by wire id) and the sidecar
 	// write resolve back to the local unit.
 	wireOf := make(map[string]string, len(dirty))
+	wirePolicy := make(map[string]string, len(dirty))
+	wireTeam := make(map[string]string, len(dirty))
 	seenEdge := map[string]bool{}
 	edges := make([]contextEdgeInput, 0)
 	type edgeCand struct {
@@ -322,6 +381,10 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 		}
 		node.ID = s.WireNodeID(ctx, u.ID)
 		wireOf[u.ID] = node.ID
+		wirePolicy[u.ID] = node.LoadPolicy
+		if node.TeamID != nil {
+			wireTeam[u.ID] = *node.TeamID
+		}
 		nodes = append(nodes, node)
 		pushed = append(pushed, u)
 
@@ -392,6 +455,13 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 	for _, c := range result.Conflicts {
 		conflicted[c.NodeID] = true
 	}
+	// Spec 018 results[]: anything not published was not written (a
+	// pending review or a refusal); it stays dirty.
+	for _, r := range result.Results {
+		if r.Status != "" && r.Status != PushStatusPublished {
+			conflicted[r.ID] = true
+		}
+	}
 	for _, r := range result.Rejected {
 		if r.Kind == "node" {
 			conflicted[r.ID] = true
@@ -421,9 +491,28 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 			SyncedLocalVersion:  u.Version,
 			Classification:      classStr,
 			LastSynced:          now,
+			// What Fleet now holds: the wire value sent (a non-admin's
+			// "always" went out as on_demand).
+			ServerLoadPolicy: wirePolicy[u.ID],
 		}); err != nil {
 			return 0, fmt.Errorf("fleet: unit push: sidecar %s: %w", u.ID, err)
 		}
+		// This member wrote the node; the next pull fills team and audience.
+		if self := s.selfUserID(); self != "" {
+			prev, _ := s.index.get(wireOf[u.ID])
+			prev.OwnerUserID, prev.PulledBy = self, self
+			if tid := wireTeam[u.ID]; tid != "" {
+				prev.TeamID = tid
+			}
+			s.index.put(wireOf[u.ID], prev)
+		}
+		s.index.flush()
+		// Fleet holds it now: a re-snapshot in progress counts it as served.
+		s.mu.Lock()
+		if s.snapshotting && s.snapSeen != nil {
+			s.snapSeen[wireOf[u.ID]] = true
+		}
+		s.mu.Unlock()
 	}
 	return result.AcceptedNodes, nil
 }
@@ -456,6 +545,15 @@ func (s *UnitSyncer) WireNodeID(ctx context.Context, unitID string) string {
 // sync, the divergence is recorded as a UnitConflict (surfaced via
 // Conflicts()) and the local body is left intact for Phase-3 resolution.
 //
+// Spec 018 H-2 (context_pull_stream.go): the stored cursor is Fleet's
+// opaque next_cursor when served (legacy since= otherwise). A refused
+// cursor, or a reset, starts a re-snapshot from the start of the stream;
+// it pulls every page within the call and then removes every synced team /
+// org unit the snapshot did not serve (the member's own units are kept as
+// personal, as their own tombstone would). A reset also removes the units
+// of the teams it names at once. Neither loops: a pull with no cursor is
+// never refused for its cursor and never resets.
+//
 // Returns the number of nodes applied (created or fast-forwarded).
 func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	if err := s.canSync(); err != nil {
@@ -465,45 +563,138 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
+	s.resumeMarked()
 	s.mu.RLock()
 	cursor := s.cursor
 	s.mu.RUnlock()
 
-	// The Unit lane pulls only unit kinds (WP03 lane split by kind).
-	urlPath := lanePullPath(unitLaneKinds, cursor)
+	applied := 0
+	cursorRetried, resetHandled := false, false
+	for page := 0; ; page++ {
+		pullResp, refused, err := s.fetchUnitPage(ctx, cursor)
+		if errors.Is(err, errSilentPullStop) {
+			return applied, nil
+		}
+		if err != nil {
+			return applied, err
+		}
+		if refused {
+			if cursorRetried || cursor.empty() {
+				s.setPullErr("fleet: unit pull: cursor refused")
+				return applied, fmt.Errorf("fleet: unit pull: cursor refused")
+			}
+			cursorRetried = true
+			logging.L().Info("fleet.unit.pull.cursor_refused_full_pull")
+			if err := s.beginSnapshot(ctx, resetCursorRefused, nil, false); err != nil {
+				return applied, err
+			}
+			cursor = pullCursor{}
+			continue
+		}
+		if pullResp.Reset || s.epochChanged(pullResp) {
+			reason := pullResp.ResetReason
+			if !pullResp.Reset {
+				reason = resetAccessEpoch
+			}
+			if resetHandled {
+				s.setPullErr("fleet: unit pull: repeated reset")
+				return applied, fmt.Errorf("fleet: unit pull: repeated reset")
+			}
+			resetHandled = true
+			logging.L().Info("fleet.unit.pull.reset", "reason", reason, "team_count", len(pullResp.ResetTeamIDs))
+			if err := s.beginSnapshot(ctx, reason, pullResp.ResetTeamIDs, true); err != nil {
+				return applied, err
+			}
+			cursor = pullCursor{}
+			continue
+		}
+		n, committed, err := s.applyUnitPage(ctx, pullResp, cursor)
+		applied += n
+		if err != nil {
+			return applied, err
+		}
+		s.mu.RLock()
+		snapshotting := s.snapshotting
+		cursor = s.cursor
+		s.mu.RUnlock()
+		if !committed || !snapshotting {
+			// Not committed: tombstones held for an unknown identity; the
+			// page (and any snapshot) is retried next tick.
+			break
+		}
+		if len(pullResp.Nodes) < s.pageSize {
+			if err := s.finishSnapshot(ctx); err != nil {
+				return applied, err
+			}
+			break
+		}
+		if page+1 >= maxSnapshotPages {
+			break // continued next tick from the stored cursor
+		}
+	}
+	return applied, nil
+}
 
-	resp, err := s.client.Get(ctx, urlPath)
+func (s *UnitSyncer) setPullErr(msg string) {
+	s.mu.Lock()
+	s.lastPullErr = msg
+	s.mu.Unlock()
+}
+
+// epochChanged reports a changed access_epoch on a legacy since-stream and
+// records the value seen.
+func (s *UnitSyncer) epochChanged(r contextPullResponse) bool {
+	if r.AccessEpoch == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev := s.accessEpoch
+	v := *r.AccessEpoch
+	s.accessEpoch = &v
+	return r.NextCursor == "" && prev != nil && *prev != v
+}
+
+// fetchUnitPage performs one Unit-lane pull at cursor.
+func (s *UnitSyncer) fetchUnitPage(ctx context.Context, cursor pullCursor) (contextPullResponse, bool, error) {
+	var pullResp contextPullResponse
+	// The Unit lane pulls its own kinds plus the allowlisted kinds no lane
+	// owns (WP03 lane split by kind; Fleet ruling 2026-11-13 reader rule).
+	resp, err := s.client.Get(ctx, laneStreamPathLimit(unitLanePullKinds, cursor, s.pageSize))
 	if err != nil {
 		if errors.Is(err, ErrNotSignedIn) {
-			return 0, nil
+			return pullResp, false, errSilentPullStop
 		}
-		s.mu.Lock()
-		s.lastPullErr = err.Error()
-		s.mu.Unlock()
-		return 0, fmt.Errorf("fleet: unit pull: %w", err)
+		s.setPullErr(err.Error())
+		return pullResp, false, fmt.Errorf("fleet: unit pull: %w", err)
 	}
 	defer drain(resp)
 
 	if resp.StatusCode == http.StatusForbidden {
-		return 0, nil // unentitled → local-only
+		return pullResp, false, errSilentPullStop // unentitled → local-only
+	}
+	if isCursorRefusal(resp) {
+		return pullResp, true, nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		e := fmt.Errorf("fleet: unit pull status %d", resp.StatusCode)
-		s.mu.Lock()
-		s.lastPullErr = e.Error()
-		s.mu.Unlock()
-		return 0, e
+		s.setPullErr(e.Error())
+		return pullResp, false, e
 	}
-
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, fmt.Errorf("fleet: unit pull read: %w", err)
+		return pullResp, false, fmt.Errorf("fleet: unit pull read: %w", err)
 	}
-	var pullResp contextPullResponse
 	if err := json.Unmarshal(raw, &pullResp); err != nil {
-		return 0, fmt.Errorf("fleet: unit pull parse: %w", err)
+		return pullResp, false, fmt.Errorf("fleet: unit pull parse: %w", err)
 	}
+	return pullResp, false, nil
+}
 
+// applyUnitPage applies one page and, unless a tombstone was held for an
+// unknown identity, commits it: counters, the snapshot's seen set and the
+// stored cursor. Reports applied count and whether the page was committed.
+func (s *UnitSyncer) applyUnitPage(ctx context.Context, pullResp contextPullResponse, cursor pullCursor) (int, bool, error) {
 	applied := 0
 	skippedKinds, skippedInvalid, held := 0, 0, 0
 	for _, n := range pullResp.Nodes {
@@ -513,6 +704,11 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 		// such node made applyPulledNode fail and PullDown return BEFORE the
 		// cursor advanced, stalling the lane on that page forever (§0-E).
 		if !unitLaneAccepts(n) {
+			// A node this lane already knows that has since moved to
+			// another lane (re-pushed with a Curated kind, say) must stop
+			// eager-loading here: the sidecar's "always" is no longer what
+			// Fleet holds for a unit.
+			s.clearServerLoadPolicy(ctx, n.ID)
 			skippedKinds++
 			continue
 		}
@@ -531,19 +727,22 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 				// scope / classification / load policy): a permanent
 				// property of the node, so retrying cannot help. Skip it.
 				logging.L().Warn("fleet.unit.pull.skipped_invalid", "node_id", n.ID, "err", err.Error())
+				s.clearServerLoadPolicy(ctx, n.ID)
 				skippedInvalid++
 				continue
 			}
 			// A storage failure is transient: abort before the cursor
 			// advances so the page is retried.
-			return applied, err
+			return applied, false, err
 		}
 		if ok {
 			applied++
 		}
 	}
 
+	s.index.flush()
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	wasHeld := s.tombstonesHeldIdentityUnknown > 0
 	s.tombstonesHeldIdentityUnknown = held
 	switch {
@@ -552,28 +751,304 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	case held == 0 && wasHeld:
 		logging.L().Info("fleet.unit.pull.held_identity_cleared")
 	}
-	if held == 0 {
-		// Counted only when the page is committed: a held page is re-applied
-		// next tick (idempotently: first-sight rows now have a sidecar,
-		// fast-forwards are at the baseline, applied tombstones have no
-		// sidecar left), and would otherwise be counted twice.
-		s.skippedUnknownKinds += skippedKinds
-		s.skippedInvalid += skippedInvalid
-		s.pullCount += len(pullResp.Nodes)
-		if pullResp.Cursor != "" {
-			s.cursor = pullResp.Cursor
-			if s.dataDir != "" {
-				if saveErr := saveUnitCursor(s.dataDir, s.cursor); saveErr != nil {
-					logging.L().Warn("fleet.unit.cursor_save_failed", "err", saveErr.Error())
-				}
-			}
+	if held > 0 {
+		s.lastPullAt = time.Now().UTC()
+		s.lastPullErr = ""
+		return applied, false, nil
+	}
+	// Counted only when the page is committed: a held page is re-applied
+	// next tick (idempotently: first-sight rows now have a sidecar,
+	// fast-forwards are at the baseline, applied tombstones have no
+	// sidecar left), and would otherwise be counted twice.
+	s.skippedUnknownKinds += skippedKinds
+	s.skippedInvalid += skippedInvalid
+	s.pullCount += len(pullResp.Nodes)
+	if s.snapshotting {
+		if s.snapSeen == nil {
+			s.snapSeen = map[string]bool{}
 		}
+		for _, n := range pullResp.Nodes {
+			if n.Withdrawn {
+				continue // left this stream: not "served"
+			}
+			s.snapSeen[n.ID] = true
+		}
+	}
+	next := nextCursorFrom(pullResp, s.cursor)
+	if next != s.cursor {
+		s.cursor = next
+		s.saveCursorLocked()
 	}
 	s.lastPullAt = time.Now().UTC()
 	s.lastPullErr = ""
-	s.mu.Unlock()
+	return applied, true, nil
+}
 
-	return applied, nil
+// saveCursorLocked persists the cursor. Caller holds s.mu.
+func (s *UnitSyncer) saveCursorLocked() {
+	if s.dataDir == "" {
+		return
+	}
+	if err := saveUnitPullCursor(s.dataDir, s.cursor); err != nil {
+		logging.L().Warn("fleet.unit.cursor_save_failed", "err", err.Error())
+	}
+}
+
+// beginSnapshot starts a re-snapshot: the stored cursor is dropped, the
+// snapshot is recorded on disk (a restart continues it from the start) and,
+// on a reset, the units of the listed teams are removed at once.
+//
+// A refused cursor is a clean full re-pull only (no sweep): a cursor is
+// bound to one member, so the usual cause is another account signing in on
+// this profile, whose snapshot says nothing about the previous account's
+// units.
+func (s *UnitSyncer) beginSnapshot(ctx context.Context, reason string, teamIDs []string, reset bool) error {
+	self := s.selfAccount()
+	s.mu.Lock()
+	s.cursor = pullCursor{}
+	s.snapshotting = true
+	// A cursor refusal during a reset's re-snapshot keeps its sweep.
+	s.snapSweep = s.snapSweep || reset
+	s.snapSeen = map[string]bool{}
+	if reset {
+		s.resetCount++
+		s.lastResetReason = reason
+		s.snapAccount = self
+	}
+	if s.dataDir != "" {
+		removeUnitCursors(s.dataDir)
+		if reset {
+			marks := loadUnitSnapshotMarks(s.dataDir)
+			marks[self.key()] = unitSnapshotMark{Reason: reason, UserID: self.UserID, OrgID: self.OrgID}
+			if err := saveUnitSnapshotMarks(s.dataDir, marks); err != nil {
+				logging.L().Warn("fleet.unit.snapshot_mark_failed", "err", err.Error())
+			}
+		}
+	}
+	s.mu.Unlock()
+	teams := teamSet(teamIDs)
+	if !reset || teams == nil {
+		return nil // every remaining copy is decided by the snapshot sweep
+	}
+	if !s.dropsAllowed() {
+		// Identity unknown: nothing is removed now; the sweep after the
+		// re-snapshot decides once the identity is known.
+		return nil
+	}
+	return s.dropUnits(ctx, func(nodeID string) bool {
+		l, ok := s.index.get(nodeID)
+		return ok && l.TeamID != "" && teams[l.TeamID]
+	})
+}
+
+// snapshotAccount names the account a reset re-snapshot belongs to.
+type snapshotAccount struct{ UserID, OrgID string }
+
+// key is the account's key in the mark file ("|" when unknown).
+func (a snapshotAccount) key() string {
+	return strings.ToLower(a.UserID) + "|" + strings.ToLower(a.OrgID)
+}
+
+// selfAccount is the signed-in identity ({} when unknown).
+func (s *UnitSyncer) selfAccount() snapshotAccount {
+	if s.selfIdentity == nil {
+		return snapshotAccount{}
+	}
+	id := s.selfIdentity()
+	return snapshotAccount{UserID: id.UserID, OrgID: id.OrgID}
+}
+
+// dropsAllowed reports whether a reset may remove units now: the identity
+// is known (user and org) and is the account that started the
+// re-snapshot. An unrecorded starter (a reset begun before the identity
+// existed) is adopted by the first known identity.
+func (s *UnitSyncer) dropsAllowed() bool {
+	self := s.selfAccount()
+	if self.UserID == "" || self.OrgID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.snapAccount.UserID == "" {
+		s.snapAccount = self
+		return true
+	}
+	return strings.EqualFold(s.snapAccount.UserID, self.UserID) && strings.EqualFold(s.snapAccount.OrgID, self.OrgID)
+}
+
+// finishSnapshot removes every synced team / org unit the completed
+// snapshot did not serve, and ends the snapshot.
+func (s *UnitSyncer) finishSnapshot(ctx context.Context) error {
+	s.mu.RLock()
+	seen, sweep := s.snapSeen, s.snapSweep
+	s.mu.RUnlock()
+	if sweep {
+		if !s.dropsAllowed() {
+			// Identity unknown, or another account than the one that lost
+			// access: remove nothing, keep the mark, try again next tick.
+			s.mu.Lock()
+			s.resetHeld++
+			s.mu.Unlock()
+			logging.L().Info("fleet.unit.pull.reset_sweep_held")
+			return nil
+		}
+		if err := s.dropUnits(ctx, func(nodeID string) bool {
+			s.mu.RLock()
+			defer s.mu.RUnlock()
+			return !s.snapSeen[nodeID] && !seen[nodeID]
+		}); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	done := s.snapAccount
+	s.snapshotting, s.snapSweep, s.snapSeen = false, false, nil
+	s.snapAccount = snapshotAccount{}
+	if sweep && s.dataDir != "" {
+		// Only this account's pending sweep is done; another account's
+		// mark stays for when it signs in again.
+		marks := loadUnitSnapshotMarks(s.dataDir)
+		delete(marks, done.key())
+		delete(marks, snapshotAccount{}.key())
+		if err := saveUnitSnapshotMarks(s.dataDir, marks); err != nil {
+			logging.L().Warn("fleet.unit.snapshot_mark_failed", "err", err.Error())
+		}
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+// resumeMarked restarts, from the start of the stream, a reset
+// re-snapshot that a restart interrupted, once the account it belongs to
+// is signed in. A mark recorded with no account (identity unknown when the
+// reset came, or an unreadable file) is adopted by the first known one.
+// Other accounts' marks wait for them.
+func (s *UnitSyncer) resumeMarked() {
+	if s.dataDir == "" {
+		return
+	}
+	self := s.selfAccount()
+	if self.UserID == "" || self.OrgID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.snapshotting {
+		return
+	}
+	marks := loadUnitSnapshotMarks(s.dataDir)
+	m, ok := marks[self.key()]
+	if !ok {
+		m, ok = marks[snapshotAccount{}.key()]
+	}
+	if !ok {
+		return
+	}
+	s.cursor = pullCursor{}
+	s.snapshotting, s.snapSweep, s.snapSeen = true, true, map[string]bool{}
+	s.snapAccount = self
+	s.lastResetReason = m.Reason
+	logging.L().Info("fleet.unit.pull.reset_resumed", "reason", m.Reason)
+}
+
+// dropUnits removes every synced team / org unit whose node id matches,
+// deciding each one with dropVerdictFor. Callers check dropsAllowed first.
+// Serialised with pushes (dropMu).
+func (s *UnitSyncer) dropUnits(ctx context.Context, match func(nodeID string) bool) error {
+	lister, ok := s.store.(interface {
+		ListSyncState(ctx context.Context) ([]units.SyncState, error)
+	})
+	if !ok {
+		return nil
+	}
+	s.dropMu.Lock()
+	defer s.dropMu.Unlock()
+	states, err := lister.ListSyncState(ctx)
+	if err != nil {
+		return fmt.Errorf("fleet: unit pull: list sidecars: %w", err)
+	}
+	defer s.index.flush()
+	self := s.selfUserID()
+	for _, st := range states {
+		if st.NodeID == "" || !match(st.NodeID) {
+			continue
+		}
+		local, gerr := s.store.Get(ctx, st.UnitID)
+		if errors.Is(gerr, units.ErrUnitNotFound) {
+			continue
+		}
+		if gerr != nil {
+			return fmt.Errorf("fleet: unit pull: reset get %s: %w", st.UnitID, gerr)
+		}
+		if local.Classification == units.ClassPersonal {
+			continue
+		}
+		switch dropVerdictFor(local, st, s.index, self) {
+		case dropKeep:
+			continue
+		case dropDemote:
+			if err := s.store.DemoteToPersonal(ctx, st.UnitID); err != nil {
+				return fmt.Errorf("fleet: unit pull: reset demote %s: %w", st.UnitID, err)
+			}
+			s.mu.Lock()
+			s.resetDemoted++
+			s.dropConflictLocked(st.UnitID)
+			s.mu.Unlock()
+		case dropDelete:
+			if _, err := s.store.DeleteWithSyncState(ctx, st.UnitID); err != nil && !errors.Is(err, units.ErrPersonalUnit) {
+				return fmt.Errorf("fleet: unit pull: reset delete %s: %w", st.UnitID, err)
+			}
+			s.mu.Lock()
+			s.resetDropped++
+			s.dropConflictLocked(st.UnitID)
+			s.mu.Unlock()
+		}
+		s.index.remove(st.NodeID)
+	}
+	return nil
+}
+
+// dropVerdict is what losing access to a unit's node does to the local unit.
+type dropVerdict int
+
+const (
+	// dropKeep: leave it untouched (recorded for another account).
+	dropKeep dropVerdict = iota
+	// dropDemote: keep content and history as a personal unit.
+	dropDemote
+	// dropDelete: remove it with its history, edges and sidecar.
+	dropDelete
+)
+
+// dropVerdictFor decides one unit when the member loses access to its node
+// (a reset, its sweep, a withdrawn tombstone). In order:
+//
+//  1. recorded for another account signed in on this profile → keep;
+//  2. the member's own (index author == self) → demote to personal;
+//  3. carrying un-pushed local edits → demote;
+//  4. created on this device (its local id is not its node id: a local
+//     unit's ULID never equals the UUID it is pushed under, while a pulled
+//     unit takes the node's id) → demote;
+//  5. otherwise — it arrived by pull, has no local edits, and its author
+//     is someone else or unknown (a pre-index unit, a withdrawn row) →
+//     delete. Access was revoked; keeping it would leak the content.
+//
+// The caller has already held when the identity is unknown.
+func dropVerdictFor(local units.Unit, st units.SyncState, idx *unitIndex, self string) dropVerdict {
+	l, _ := idx.get(st.NodeID)
+	if l.PulledBy != "" && !strings.EqualFold(l.PulledBy, self) {
+		return dropKeep
+	}
+	if l.OwnerUserID != "" && strings.EqualFold(l.OwnerUserID, self) {
+		return dropDemote
+	}
+	if local.Version > st.SyncedLocalVersion {
+		return dropDemote
+	}
+	if !strings.EqualFold(local.ID, st.NodeID) {
+		return dropDemote
+	}
+	return dropDelete
 }
 
 // isUnitValidationErr reports whether err is the local store refusing a node
@@ -608,15 +1083,24 @@ func isUnitValidationErr(err error) bool {
 // after a local edit (local.Version=1) a later server delta checked
 // local.Version(1) > baseline(N) = FALSE and silently overwrote the edit.
 func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (bool, error) {
+	if n.DeletedAt != nil && n.Withdrawn {
+		return s.applyWithdrawn(ctx, n)
+	}
 	if n.DeletedAt != nil {
 		return s.applyTombstone(ctx, n)
 	}
+	// Fleet's labels for the node (team, audience, author), kept for a
+	// reset's per-team drop and for the audience label.
+	s.index.put(n.ID, UnitNodeLabels{TeamID: n.TeamID, Audience: n.Audience, Governed: n.Governed, OwnerUserID: n.OwnerUserID, PulledBy: s.selfUserID()})
 	mapped, ok, err := s.mapper.PulledNodeToUnit(n)
 	if err != nil {
 		return false, err
 	}
 	if !ok {
-		return false, nil // classification doesn't map locally — skip
+		// Classification doesn't map locally — skip. A known node must
+		// then stop eager-loading on a stale "always".
+		s.clearServerLoadPolicy(ctx, n.ID)
+		return false, nil
 	}
 
 	st, err := s.store.GetSyncStateByNodeID(ctx, n.ID)
@@ -655,6 +1139,7 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 			SyncedServerVersion: n.Version,
 			Classification:      string(n.Classification),
 			LastSynced:          time.Now().UTC(),
+			ServerLoadPolicy:    string(mapped.LoadPolicy),
 		}); cerr != nil {
 			return false, fmt.Errorf("fleet: unit pull: create %s: %w", n.ID, cerr)
 		}
@@ -676,6 +1161,13 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 	// 3-way baseline comparison. Each counter space is tracked independently.
 	serverChanged := n.Version > st.SyncedServerVersion
 	localChanged := local.Version > st.SyncedLocalVersion
+
+	// Record the load_policy Fleet holds now, whatever else this pull does
+	// (an admin demotion, or a push that downgraded it, must stop eager
+	// loading even when nothing else is applied). Baselines are untouched.
+	if err := s.refreshServerLoadPolicy(ctx, st, mapped.LoadPolicy); err != nil {
+		return false, err
+	}
 
 	if !serverChanged {
 		// Server hasn't advanced beyond our last sync — nothing to apply.
@@ -714,6 +1206,7 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 		SyncedServerVersion: n.Version, // server counter at this pull
 		Classification:      string(n.Classification),
 		LastSynced:          time.Now().UTC(),
+		ServerLoadPolicy:    string(mapped.LoadPolicy),
 	}); err != nil {
 		if errors.Is(err, units.ErrVersionConflict) {
 			latest := local.Version + 1 // at least one local edit raced in
@@ -831,6 +1324,7 @@ func (s *UnitSyncer) applyTombstone(ctx context.Context, n ContextPulledNode) (b
 		s.tombstonesDemoted++
 		s.dropConflictLocked(st.UnitID)
 		s.mu.Unlock()
+		s.index.remove(n.ID)
 		logging.L().Info("fleet.unit.pull.tombstone_demoted_own_unit",
 			"unit_id", st.UnitID, "node_id", n.ID)
 		return true, nil
@@ -850,11 +1344,159 @@ func (s *UnitSyncer) applyTombstone(ctx context.Context, n ContextPulledNode) (b
 	}
 	s.dropConflictLocked(st.UnitID)
 	s.mu.Unlock()
+	s.index.remove(n.ID)
 	if hadUnpushed {
 		logging.L().Warn("fleet.unit.pull.tombstone_dropped_local_edits",
 			"unit_id", st.UnitID, "node_id", n.ID)
 	}
 	return true, nil
+}
+
+// applyWithdrawn handles a withdrawn tombstone (contract §2): the node
+// moved out of this stream's audience. It is not a deletion and never
+// pushes anything back. A wider stream that still serves the node live
+// wins (the Unit lane is filtered by ?kind=, so the Curated lane's stream
+// is checked first). Otherwise the unit is decided like a reset's drop
+// (dropVerdictFor): the member's own unit, one with no author on record
+// (a withdrawn row never names one) or with un-pushed edits is kept as
+// personal; only a teammate's unit is deleted. Either way its sidecar goes,
+// so its version is forgotten and a return is a first sight again. The
+// author can receive a withdrawn row too (they moved the node and later
+// left its new team), so ownership is always consulted, and an unknown
+// identity holds the tombstone like applyTombstone does.
+func (s *UnitSyncer) applyWithdrawn(ctx context.Context, n ContextPulledNode) (bool, error) {
+	if n.ID == "" {
+		return false, nil
+	}
+	s.mu.RLock()
+	live := s.servesLive
+	s.mu.RUnlock()
+	if live != nil && live(n.ID) {
+		s.mu.Lock()
+		s.withdrawnKept++
+		s.mu.Unlock()
+		return false, nil
+	}
+	st, err := s.store.GetSyncStateByNodeID(ctx, n.ID)
+	if errors.Is(err, units.ErrSyncStateNotFound) {
+		return false, nil // never held here: ignore (contract §2)
+	}
+	if err != nil {
+		return false, fmt.Errorf("fleet: unit pull: withdrawn sidecar lookup %s: %w", n.ID, err)
+	}
+	local, err := s.store.Get(ctx, st.UnitID)
+	switch {
+	case errors.Is(err, units.ErrUnitNotFound):
+		if _, derr := s.store.DeleteWithSyncState(ctx, st.UnitID); derr != nil {
+			return false, fmt.Errorf("fleet: unit pull: withdrawn orphan sidecar %s: %w", st.UnitID, derr)
+		}
+		s.index.remove(n.ID)
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("fleet: unit pull: withdrawn get local %s: %w", st.UnitID, err)
+	}
+	if local.Classification == units.ClassPersonal {
+		return false, nil
+	}
+	self := s.selfAccount()
+	if self.UserID == "" || self.OrgID == "" || (n.OrgID != "" && !strings.EqualFold(self.OrgID, n.OrgID)) {
+		return false, errTombstoneHeld
+	}
+	s.dropMu.Lock()
+	defer s.dropMu.Unlock()
+	switch dropVerdictFor(local, st, s.index, self.UserID) {
+	case dropKeep:
+		return false, nil
+	case dropDemote:
+		if err := s.store.DemoteToPersonal(ctx, st.UnitID); err != nil {
+			return false, fmt.Errorf("fleet: unit pull: withdrawn demote %s: %w", st.UnitID, err)
+		}
+		s.mu.Lock()
+		s.withdrawnDemoted++
+		s.dropConflictLocked(st.UnitID)
+		s.mu.Unlock()
+	case dropDelete:
+		if _, err := s.store.DeleteWithSyncState(ctx, st.UnitID); err != nil {
+			if errors.Is(err, units.ErrPersonalUnit) {
+				return false, nil
+			}
+			return false, fmt.Errorf("fleet: unit pull: withdrawn delete %s: %w", st.UnitID, err)
+		}
+		s.mu.Lock()
+		s.withdrawnApplied++
+		s.dropConflictLocked(st.UnitID)
+		s.mu.Unlock()
+	}
+	s.index.remove(n.ID)
+	return true, nil
+}
+
+// SetServesLive wires the check a withdrawn tombstone consults before it
+// removes a unit: whether a wider stream (the Curated lane's) still serves
+// the node live. nil = no other stream.
+func (s *UnitSyncer) SetServesLive(f func(nodeID string) bool) {
+	s.mu.Lock()
+	s.servesLive = f
+	s.mu.Unlock()
+}
+
+// NodeLabels returns Fleet's last labels for a local unit (audience,
+// governed, team), resolved through its sidecar. ok=false when the unit has
+// never synced or no label is on record.
+func (s *UnitSyncer) NodeLabels(ctx context.Context, unitID string) (UnitNodeLabels, bool) {
+	if s == nil || s.store == nil || unitID == "" {
+		return UnitNodeLabels{}, false
+	}
+	st, err := s.store.GetSyncState(ctx, unitID)
+	if err != nil || st.NodeID == "" {
+		return UnitNodeLabels{}, false
+	}
+	return s.index.get(st.NodeID)
+}
+
+// refreshServerLoadPolicy records the load_policy Fleet holds for a known
+// node when it differs from the sidecar. Only that field changes.
+func (s *UnitSyncer) refreshServerLoadPolicy(ctx context.Context, st units.SyncState, lp units.LoadPolicy) error {
+	if st.ServerLoadPolicy == string(lp) {
+		return nil
+	}
+	st.ServerLoadPolicy = string(lp)
+	if _, err := s.store.UpsertSyncState(ctx, st); err != nil {
+		return fmt.Errorf("fleet: unit pull: record load policy %s: %w", st.NodeID, err)
+	}
+	return nil
+}
+
+// clearServerLoadPolicy forgets the load_policy recorded for a known node
+// the Unit lane now skips (another lane's kind, or invalid for the local
+// store), so a stale "always" stops eager-loading it. A node with no
+// sidecar, or none recorded, is left alone. Only that field changes.
+//
+// Best-effort: a storage failure is logged and the pull goes on. The node
+// is skipped either way, so failing here would only stall the lane's
+// cursor on a page it can never apply; the clear is retried the next time
+// Fleet sends the node.
+func (s *UnitSyncer) clearServerLoadPolicy(ctx context.Context, nodeID string) {
+	if nodeID == "" {
+		return
+	}
+	st, err := s.store.GetSyncStateByNodeID(ctx, nodeID)
+	if errors.Is(err, units.ErrSyncStateNotFound) {
+		return
+	}
+	if err != nil {
+		logging.L().Warn("fleet.unit.pull.load_policy_clear_failed", "node_id", nodeID, "err", err.Error())
+		return
+	}
+	if st.ServerLoadPolicy == "" {
+		return
+	}
+	st.ServerLoadPolicy = ""
+	if _, err := s.store.UpsertSyncState(ctx, st); err != nil {
+		logging.L().Warn("fleet.unit.pull.load_policy_clear_failed", "node_id", nodeID, "err", err.Error())
+		return
+	}
+	logging.L().Info("fleet.unit.pull.load_policy_cleared", "node_id", nodeID)
 }
 
 // dropConflictLocked forgets any surfaced conflict for unitID. Caller holds
@@ -886,6 +1528,7 @@ func (s *UnitSyncer) adoptOrphan(ctx context.Context, n ContextPulledNode, exist
 		SyncedServerVersion: n.Version,
 		Classification:      string(n.Classification),
 		LastSynced:          time.Now().UTC(),
+		ServerLoadPolicy:    string(mapped.LoadPolicy),
 	}
 	if existing.Version == 0 {
 		_, _, err := s.store.UpdateWithSyncState(ctx, existing.ID, 0, mapped.Body, mapped.Metadata, base)
@@ -1133,6 +1776,20 @@ type UnitSyncStatus struct {
 	TombstoneDroppedLocalEdits    int `json:"tombstone_dropped_local_edits"`
 	TombstonesDemoted             int `json:"tombstones_demoted"`
 	TombstonesHeldIdentityUnknown int `json:"tombstones_held_identity_unknown"`
+	// Spec 018 H-2: loss-of-access resets handled and the latest reason;
+	// units removed / kept as personal by a reset; withdrawn tombstones
+	// applied, and kept because a wider stream serves the node live.
+	// Counts only, never a team.
+	ResetCount       int    `json:"reset_count"`
+	LastResetReason  string `json:"last_reset_reason,omitempty"`
+	ResetDropped     int    `json:"reset_dropped"`
+	ResetDemoted     int    `json:"reset_demoted"`
+	WithdrawnApplied int    `json:"withdrawn_applied"`
+	WithdrawnDemoted int    `json:"withdrawn_demoted"`
+	WithdrawnKept    int    `json:"withdrawn_kept"`
+	// ResetHeld counts reset sweeps held for an unknown identity or another
+	// account (nothing removed, retried next tick).
+	ResetHeld int `json:"reset_held"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -1140,7 +1797,7 @@ func (s *UnitSyncer) Status() UnitSyncStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return UnitSyncStatus{
-		Cursor:        s.cursor,
+		Cursor:        s.cursor.Value,
 		LastPullAt:    s.lastPullAt,
 		LastPullErr:   s.lastPullErr,
 		LastPushErr:   s.lastPushErr,
@@ -1158,6 +1815,15 @@ func (s *UnitSyncer) Status() UnitSyncStatus {
 		TombstoneDroppedLocalEdits:    s.tombstoneDroppedLocalEdits,
 		TombstonesDemoted:             s.tombstonesDemoted,
 		TombstonesHeldIdentityUnknown: s.tombstonesHeldIdentityUnknown,
+
+		ResetCount:       s.resetCount,
+		LastResetReason:  s.lastResetReason,
+		ResetDropped:     s.resetDropped,
+		ResetDemoted:     s.resetDemoted,
+		WithdrawnApplied: s.withdrawnApplied,
+		WithdrawnDemoted: s.withdrawnDemoted,
+		WithdrawnKept:    s.withdrawnKept,
+		ResetHeld:        s.resetHeld,
 	}
 }
 
@@ -1199,5 +1865,160 @@ func saveUnitCursor(dataDir, cursor string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("fleet: mkdir unit cursor: %w", err)
 	}
-	return atomicWriteFile(unitCursorPath(dataDir), cursor+"\n")
+	if err := atomicWriteFile(unitCursorPath(dataDir), cursor+"\n"); err != nil {
+		return err
+	}
+	// Record the filter the cursor was advanced under (see NewUnitSyncer).
+	return atomicWriteFile(unitLaneSigPath(dataDir), unitLaneSig()+"\n")
+}
+
+// Cursor files. unit_cursor.txt keeps only a legacy since timestamp, the
+// format every older build reads; Fleet's opaque cursor goes to
+// unit_cursor_v2.txt, which older builds never read, so a downgrade
+// continues from its last since instead of sending an opaque value as
+// since=. A v2 cursor wins when both exist. Build 369f26be wrote the
+// opaque cursor into unit_cursor.txt with an "opaque:" prefix; it is
+// migrated to v2 on read.
+const unitCursorOpaquePrefix = "opaque:"
+
+func unitCursorV2Path(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "unit_cursor_v2.txt")
+}
+
+func loadUnitPullCursor(dataDir string) pullCursor {
+	if dataDir == "" {
+		return pullCursor{}
+	}
+	if b, err := os.ReadFile(unitCursorV2Path(dataDir)); err == nil {
+		if v := strings.TrimSpace(string(b)); v != "" {
+			return pullCursor{Kind: pullCursorOpaque, Value: v}
+		}
+	}
+	v, err := loadUnitCursor(dataDir)
+	if err != nil || v == "" {
+		return pullCursor{}
+	}
+	if strings.HasPrefix(v, unitCursorOpaquePrefix) {
+		c := pullCursor{Kind: pullCursorOpaque, Value: strings.TrimPrefix(v, unitCursorOpaquePrefix)}
+		if err := saveUnitPullCursor(dataDir, c); err == nil {
+			_ = os.Remove(unitCursorPath(dataDir))
+		}
+		return c
+	}
+	return pullCursor{Kind: pullCursorSince, Value: v}
+}
+
+func saveUnitPullCursor(dataDir string, c pullCursor) error {
+	if dataDir == "" {
+		return nil
+	}
+	if c.Kind != pullCursorOpaque {
+		return saveUnitCursor(dataDir, c.Value)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
+		return fmt.Errorf("fleet: mkdir unit cursor: %w", err)
+	}
+	if err := atomicWriteFile(unitCursorV2Path(dataDir), c.Value+"\n"); err != nil {
+		return err
+	}
+	return atomicWriteFile(unitLaneSigPath(dataDir), unitLaneSig()+"\n")
+}
+
+func removeUnitCursors(dataDir string) {
+	_ = os.Remove(unitCursorPath(dataDir))
+	_ = os.Remove(unitCursorV2Path(dataDir))
+}
+
+// unitSnapshotMark records a reset re-snapshot in progress for one
+// account: its reason and the account. unit_resnapshot.json holds one per
+// account (several can sign in on a profile), so one account's reset never
+// overwrites another's held sweep.
+type unitSnapshotMark struct {
+	Reason string `json:"reason"`
+	UserID string `json:"user_id,omitempty"`
+	OrgID  string `json:"org_id,omitempty"`
+}
+
+type unitSnapshotMarksFile struct {
+	Version  int                         `json:"version"`
+	Accounts map[string]unitSnapshotMark `json:"accounts"`
+}
+
+func unitSnapshotMarkPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "unit_resnapshot.json")
+}
+
+func saveUnitSnapshotMarks(dataDir string, marks map[string]unitSnapshotMark) error {
+	if dataDir == "" {
+		return nil
+	}
+	if len(marks) == 0 {
+		if err := os.Remove(unitSnapshotMarkPath(dataDir)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
+		return err
+	}
+	for k, m := range marks {
+		if m.Reason == "" {
+			m.Reason = "reset"
+			marks[k] = m
+		}
+	}
+	b, err := json.Marshal(unitSnapshotMarksFile{Version: 2, Accounts: marks})
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(unitSnapshotMarkPath(dataDir), string(b))
+}
+
+// loadUnitSnapshotMarks returns the pending marks by account key. An
+// unreadable file still means a snapshot was in progress, for an unknown
+// account (adopted by the first known identity); a single mark (the shape
+// before per-account marks) is read as that account's.
+func loadUnitSnapshotMarks(dataDir string) map[string]unitSnapshotMark {
+	out := map[string]unitSnapshotMark{}
+	if dataDir == "" {
+		return out
+	}
+	b, err := os.ReadFile(unitSnapshotMarkPath(dataDir))
+	if err != nil {
+		return out
+	}
+	var f unitSnapshotMarksFile
+	if json.Unmarshal(b, &f) == nil && f.Accounts != nil {
+		for k, m := range f.Accounts {
+			out[k] = m
+		}
+		return out
+	}
+	var one unitSnapshotMark
+	if json.Unmarshal(b, &one) == nil && one.Reason != "" {
+		out[snapshotAccount{UserID: one.UserID, OrgID: one.OrgID}.key()] = one
+		return out
+	}
+	out[snapshotAccount{}.key()] = unitSnapshotMark{Reason: "reset"}
+	return out
+}
+
+// unitLaneSig identifies the Unit lane's pull filter.
+func unitLaneSig() string { return strings.Join(unitLanePullKinds, ",") }
+
+func unitLaneSigPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "unit_cursor_kinds.txt")
+}
+
+// loadUnitLaneSig returns the filter the stored cursor was advanced under,
+// or "" when none was recorded (a cursor from before the record existed).
+func loadUnitLaneSig(dataDir string) string {
+	if dataDir == "" {
+		return unitLaneSig()
+	}
+	b, err := os.ReadFile(unitLaneSigPath(dataDir))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(string(b), "\r\n")
 }

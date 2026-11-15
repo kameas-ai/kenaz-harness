@@ -130,7 +130,7 @@ function formatLastSeen(iso?: string): string {
 
 function tierBadgeClass(tier: string): string {
   switch (tier) {
-    case 'full':    return 'bg-signal-success/20 text-signal-success';
+    case 'full':    return 'bg-signal-ok/20 text-signal-ok-text';
     case 'limited': return 'bg-signal-warn/20 text-signal-warn';
     default:        return 'bg-surface-2 text-ink-muted';
   }
@@ -138,7 +138,7 @@ function tierBadgeClass(tier: string): string {
 
 function outcomeBadgeClass(outcome: string): string {
   switch (outcome) {
-    case 'ok':                 return 'text-signal-success';
+    case 'ok':                 return 'text-signal-ok-text';
     case 'denied_by_policy':   return 'text-signal-danger';
     case 'transport_error':    return 'text-signal-warn';
     case 'verify_rejected':    return 'text-signal-warn';
@@ -153,7 +153,7 @@ function outcomeBadgeClass(outcome: string): string {
     data-testid="peers-panel"
   >
     <!-- Header description -->
-    <p class="font-ui text-[11px] text-ink-dim">
+    <p class="font-ui text-caption text-ink-dim">
       Manage trusted agent peers reachable via ACP (Agent Communication
       Protocol). Peers are registered by pasting their signed agent card.
       Each peer is assigned a trust tier that gates Cedar policy decisions
@@ -162,10 +162,10 @@ function outcomeBadgeClass(outcome: string): string {
 
     <!-- ── Trust a peer ─────────────────────────────────────────────────── -->
     <section data-testid="trust-peer-section">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Trust a new peer
       </h2>
-      <p class="mt-1 font-ui text-[11px] text-ink-dim">
+      <p class="mt-1 font-ui text-caption text-ink-dim">
         Paste the agent card JSON blob supplied by the remote peer to
         register it. The card is verified and its fingerprint stored.
       </p>
@@ -178,7 +178,7 @@ function outcomeBadgeClass(outcome: string): string {
         <div class="grid gap-1">
           <label
             for="trust-card-blob"
-            class="font-ui text-[11px] text-ink-muted"
+            class="font-ui text-caption text-ink-muted"
           >
             Agent card JSON
           </label>
@@ -186,7 +186,7 @@ function outcomeBadgeClass(outcome: string): string {
             id="trust-card-blob"
             v-model="trustCardBlob"
             rows="4"
-            class="w-full rounded-sm border border-border bg-surface-1 px-2 py-1.5 font-mono text-[11px] text-ink focus:outline-none focus:ring-1 focus:ring-accent resize-y"
+            class="w-full rounded-sm border border-border bg-surface-1 px-2 py-1.5 font-mono text-caption text-ink focus:outline-none focus:ring-1 focus:ring-accent resize-y"
             placeholder='{"id":"…","name":"…","public_key":"…"}'
             data-testid="trust-card-blob-input"
           />
@@ -196,7 +196,7 @@ function outcomeBadgeClass(outcome: string): string {
         <div
           v-if="trustError"
           role="alert"
-          class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+          class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
           data-testid="trust-peer-error"
         >
           {{ trustError }}
@@ -206,7 +206,7 @@ function outcomeBadgeClass(outcome: string): string {
         <div
           v-if="trustSuccess"
           role="status"
-          class="rounded-sm border border-signal-success bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-success"
+          class="rounded-sm border border-signal-ok bg-surface-1 px-3 py-2 font-ui text-small text-signal-ok-text"
           data-testid="trust-peer-success"
         >
           {{ trustSuccess }}
@@ -216,7 +216,7 @@ function outcomeBadgeClass(outcome: string): string {
           <button
             type="submit"
             :disabled="trusting || !trustCardBlob.trim()"
-            class="rounded-sm border border-border bg-surface-2 px-3 py-1.5 font-ui text-[12px] text-ink hover:bg-surface-3 disabled:opacity-50 transition-colors"
+            class="rounded-sm border border-border bg-surface-2 px-3 py-1.5 font-ui text-small text-ink hover:bg-surface-3 disabled:opacity-50 transition-colors"
             data-testid="trust-peer-submit"
           >
             {{ trusting ? 'Registering…' : 'Trust peer' }}
@@ -228,12 +228,12 @@ function outcomeBadgeClass(outcome: string): string {
     <!-- ── Peer list ───────────────────────────────────────────────────── -->
     <section data-testid="peer-list-section">
       <div class="flex items-center gap-3 mb-2">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Trusted peers
         </h2>
         <button
           type="button"
-          class="ml-auto font-ui text-[11px] text-ink-muted hover:text-ink transition-colors"
+          class="ml-auto font-ui text-caption text-ink-muted hover:text-ink transition-colors"
           data-testid="peers-refresh"
           @click="loadPeers"
         >
@@ -244,7 +244,7 @@ function outcomeBadgeClass(outcome: string): string {
       <!-- Loading -->
       <div
         v-if="loading"
-        class="font-ui text-[12px] text-ink-muted"
+        class="font-ui text-small text-ink-muted"
         data-testid="peers-loading"
       >
         Loading peers…
@@ -254,7 +254,7 @@ function outcomeBadgeClass(outcome: string): string {
       <div
         v-else-if="listError"
         role="alert"
-        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         data-testid="peers-list-error"
       >
         {{ listError }}
@@ -263,7 +263,7 @@ function outcomeBadgeClass(outcome: string): string {
       <!-- Empty state -->
       <div
         v-else-if="peers.length === 0"
-        class="font-ui text-[12px] text-ink-dim"
+        class="font-ui text-small text-ink-dim"
         data-testid="peers-empty"
       >
         No trusted peers. Paste an agent card above to register one.
@@ -284,18 +284,18 @@ function outcomeBadgeClass(outcome: string): string {
           <!-- Row header -->
           <div class="flex items-start gap-3">
             <div class="flex-1 min-w-0">
-              <p class="font-ui text-[12px] font-medium text-ink truncate">
+              <p class="font-ui text-small font-medium text-ink truncate">
                 {{ peer.agentName || peer.id }}
               </p>
               <p
                 v-if="peer.agentName"
-                class="font-mono text-[10px] text-ink-muted truncate"
+                class="font-mono text-eyebrow text-ink-muted truncate"
               >
                 {{ peer.id }}
               </p>
               <p
                 v-if="peer.agentDescription"
-                class="mt-0.5 font-ui text-[11px] text-ink-dim"
+                class="mt-0.5 font-ui text-caption text-ink-dim"
               >
                 {{ peer.agentDescription }}
               </p>
@@ -303,7 +303,7 @@ function outcomeBadgeClass(outcome: string): string {
 
             <!-- Trust tier badge -->
             <span
-              class="shrink-0 rounded px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-wider"
+              class="shrink-0 rounded px-1.5 py-0.5 font-ui text-eyebrow uppercase tracking-wider"
               :class="tierBadgeClass(peer.trustTier)"
               :data-testid="`peer-tier-${peer.id}`"
             >
@@ -312,7 +312,7 @@ function outcomeBadgeClass(outcome: string): string {
           </div>
 
           <!-- Details row -->
-          <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-ui text-[11px]">
+          <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-ui text-caption">
             <dt class="text-ink-muted">Transport</dt>
             <dd class="font-mono text-ink truncate">{{ peer.transport }}</dd>
             <dt class="text-ink-muted">Endpoint</dt>
@@ -320,14 +320,14 @@ function outcomeBadgeClass(outcome: string): string {
             <dt class="text-ink-muted">Last seen</dt>
             <dd class="text-ink">{{ formatLastSeen(peer.lastSeen) }}</dd>
             <dt class="text-ink-muted">Fingerprint</dt>
-            <dd class="font-mono text-[10px] text-ink-muted truncate">{{ peer.cardFingerprint }}</dd>
+            <dd class="font-mono text-eyebrow text-ink-muted truncate">{{ peer.cardFingerprint }}</dd>
           </dl>
 
           <!-- Revoke error -->
           <div
             v-if="revokeError && revokingId === peer.id"
             role="alert"
-            class="rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 font-ui text-[11px] text-signal-danger"
+            class="rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 font-ui text-caption text-signal-danger"
             :data-testid="`peer-revoke-error-${peer.id}`"
           >
             {{ revokeError }}
@@ -340,18 +340,18 @@ function outcomeBadgeClass(outcome: string): string {
             :data-testid="`peer-trace-${peer.id}`"
           >
             <div class="flex items-center gap-2">
-              <span class="font-ui text-[10px] uppercase tracking-wider text-ink-subtle">Last envelope</span>
+              <span class="font-ui text-eyebrow uppercase tracking-wider text-ink-subtle">Last envelope</span>
               <button
                 type="button"
-                class="ml-auto font-ui text-[10px] text-ink-muted hover:text-ink"
+                class="ml-auto font-ui text-eyebrow text-ink-muted hover:text-ink"
                 @click="clearTrace(peer.id)"
               >
                 Close
               </button>
             </div>
-            <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-ui text-[11px]">
+            <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-ui text-caption">
               <dt class="text-ink-muted">Envelope ID</dt>
-              <dd class="font-mono text-[10px] text-ink truncate">{{ traceMap.get(peer.id)!.envelopeId }}</dd>
+              <dd class="font-mono text-eyebrow text-ink truncate">{{ traceMap.get(peer.id)!.envelopeId }}</dd>
               <dt class="text-ink-muted">Direction</dt>
               <dd class="text-ink">{{ traceMap.get(peer.id)!.direction }}</dd>
               <dt class="text-ink-muted">Outcome</dt>
@@ -366,7 +366,7 @@ function outcomeBadgeClass(outcome: string): string {
               <dd class="text-ink">{{ traceMap.get(peer.id)!.bytesOut }}</dd>
               <template v-if="traceMap.get(peer.id)!.errorCode">
                 <dt class="text-ink-muted">Error</dt>
-                <dd class="text-signal-danger font-mono text-[10px]">{{ traceMap.get(peer.id)!.errorCode }}</dd>
+                <dd class="text-signal-danger font-mono text-eyebrow">{{ traceMap.get(peer.id)!.errorCode }}</dd>
               </template>
               <dt class="text-ink-muted">Created at</dt>
               <dd class="text-ink">{{ formatLastSeen(traceMap.get(peer.id)!.createdAt) }}</dd>
@@ -377,7 +377,7 @@ function outcomeBadgeClass(outcome: string): string {
           <div
             v-if="traceError && inspectingPeerID === peer.id"
             role="alert"
-            class="rounded-sm border border-signal-warn bg-surface-1 px-2 py-1 font-ui text-[11px] text-signal-warn"
+            class="rounded-sm border border-signal-warn bg-surface-1 px-2 py-1 font-ui text-caption text-signal-warn"
             :data-testid="`peer-trace-error-${peer.id}`"
           >
             {{ traceError }}
@@ -387,7 +387,7 @@ function outcomeBadgeClass(outcome: string): string {
           <div class="flex items-center gap-2 pt-1">
             <button
               type="button"
-              class="font-ui text-[11px] rounded-sm border border-border bg-surface-1 px-2 py-1 text-ink-muted hover:text-ink hover:bg-surface-2 transition-colors disabled:opacity-50"
+              class="font-ui text-caption rounded-sm border border-border bg-surface-1 px-2 py-1 text-ink-muted hover:text-ink hover:bg-surface-2 transition-colors disabled:opacity-50"
               :disabled="inspectingPeerID === peer.id"
               :data-testid="`peer-inspect-${peer.id}`"
               @click="inspectTrace(peer)"
@@ -396,7 +396,7 @@ function outcomeBadgeClass(outcome: string): string {
             </button>
             <button
               type="button"
-              class="ml-auto font-ui text-[11px] rounded-sm border border-signal-danger/40 bg-surface-1 px-2 py-1 text-signal-danger hover:bg-signal-danger/10 transition-colors disabled:opacity-50"
+              class="ml-auto font-ui text-caption rounded-sm border border-signal-danger/40 bg-surface-1 px-2 py-1 text-signal-danger hover:bg-signal-danger/10 transition-colors disabled:opacity-50"
               :disabled="revokingId === peer.id"
               :data-testid="`peer-revoke-${peer.id}`"
               @click="revokePeer(peer.id)"

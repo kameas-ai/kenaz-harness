@@ -40,7 +40,7 @@ const shortId = computed(() =>
     :href="href"
     target="_blank"
     rel="noopener noreferrer"
-    class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono rounded border border-border-muted text-ink-muted hover:text-accent hover:border-accent transition-colors"
+    class="inline-flex items-center gap-1 px-1.5 py-0.5 text-eyebrow font-mono rounded border border-border-muted text-ink-muted hover:text-accent hover:border-accent transition-colors"
     :title="`OTel trace: ${traceId}`"
     @click.stop
   >

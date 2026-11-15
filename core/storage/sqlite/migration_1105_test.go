@@ -152,9 +152,14 @@ func captureUnitsState(t *testing.T, ctx context.Context, path string) unitsStat
 	raw := openRawSQLiteAt(t, path)
 	defer func() { _ = raw.Close() }()
 	st := unitsState{digests: map[string]string{}, refcounts: map[string]int{}}
-	for _, table := range []string{"units", "unit_versions", "unit_edges", "unit_sync_state"} {
+	for _, table := range []string{"units", "unit_versions", "unit_edges"} {
 		st.digests[table] = rowsDigest(t, ctx, raw, table)
 	}
+	// unit_sync_state over the columns that existed at 1105: Open applies
+	// every pending migration, and units/1106 adds server_load_policy (an
+	// additive column, not a change 1105 made to any row).
+	st.digests["unit_sync_state"] = rowsDigest(t, ctx, raw, `(SELECT rowid AS rowid, unit_id, node_id, synced_version,
+        classification, last_synced, synced_server_version, synced_local_version FROM unit_sync_state)`)
 	rows, err := raw.QueryContext(ctx, `
         SELECT json_extract(metadata, '$.content_hash') FROM units WHERE json_extract(metadata, '$.content_hash') IS NOT NULL
         UNION

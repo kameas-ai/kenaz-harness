@@ -313,7 +313,7 @@ defineExpose({ applyOp, adapter, draft, selectedName });
         class="rounded-sm border border-border-muted bg-surface-1 p-2 overflow-y-auto"
         data-testid="wge-palette"
       >
-        <p class="font-ui text-[10px] uppercase tracking-widest text-ink-muted mb-2">Steps</p>
+        <p class="font-ui text-eyebrow uppercase tracking-widest text-ink-muted mb-2">Steps</p>
         <ul class="space-y-1">
           <li v-for="item in WORKFLOW_STEP_KINDS" :key="item.kind">
             <button
@@ -358,7 +358,7 @@ defineExpose({ applyOp, adapter, draft, selectedName });
           Select a step on the canvas to configure it.
         </div>
         <template v-else>
-          <p class="font-ui text-[10px] uppercase tracking-widest text-ink-muted mb-3">
+          <p class="font-ui text-eyebrow uppercase tracking-widest text-ink-muted mb-3">
             Configure: {{ selectedStep.kind }}
           </p>
           <div class="space-y-3">
@@ -477,13 +477,13 @@ defineExpose({ applyOp, adapter, draft, selectedName });
 
             <p
               v-if="editableFields.length === 0"
-              class="font-ui text-[11px] text-ink-muted"
+              class="font-ui text-caption text-ink-muted"
               data-testid="wge-step-yaml-only"
             >
               Configure this step by editing the workflow YAML directly.
             </p>
 
-            <p class="font-ui text-[11px] text-ink-muted" data-testid="wge-step-deps">
+            <p class="font-ui text-caption text-ink-muted" data-testid="wge-step-deps">
               Depends on:
               {{
                 (selectedStep.inputsFrom ?? []).length > 0

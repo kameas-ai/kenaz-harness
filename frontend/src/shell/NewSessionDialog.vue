@@ -263,10 +263,10 @@ const isSelected = (c: ModelChoice) =>
     >
       <header class="flex items-center justify-between border-b border-border-muted px-5 py-3">
         <div>
-          <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          <div class="text-caption uppercase tracking-eyebrow text-ink-subtle">
             NEW SESSION
           </div>
-          <h2 class="mt-1 font-ui text-base font-semibold text-ink">
+          <h2 class="mt-1 font-ui text-h3 font-semibold text-ink">
             Configure conversation
           </h2>
         </div>
@@ -277,7 +277,7 @@ const isSelected = (c: ModelChoice) =>
         <div>
           <label
             for="new-session-project"
-            class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
           >
             Project
           </label>
@@ -305,7 +305,7 @@ const isSelected = (c: ModelChoice) =>
             />
             <button
               type="button"
-              class="text-[11px] text-ink-dim hover:text-ink"
+              class="text-caption text-ink-dim hover:text-ink"
               @click="newProjectMode = false; newProjectName = ''"
             >
               Cancel
@@ -313,7 +313,7 @@ const isSelected = (c: ModelChoice) =>
           </div>
           <p
             v-if="selectedProjectId || newProjectMode"
-            class="mt-1.5 font-ui text-[11px] text-ink-dim"
+            class="mt-1.5 font-ui text-caption text-ink-dim"
             data-testid="new-session-project-scope-hint"
           >
             This session inherits the project's contexts. Files attached
@@ -324,7 +324,7 @@ const isSelected = (c: ModelChoice) =>
         <div>
           <label
             for="new-session-name"
-            class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
           >
             Name
           </label>
@@ -338,10 +338,10 @@ const isSelected = (c: ModelChoice) =>
         </div>
 
         <div>
-          <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          <span class="block text-caption uppercase tracking-eyebrow text-ink-subtle">
             Model
           </span>
-          <p class="mt-1 text-[11px] text-ink-dim">
+          <p class="mt-1 text-caption text-ink-dim">
             Cross-family swaps lock after this point — pick the right family now.
           </p>
           <div
@@ -370,7 +370,7 @@ const isSelected = (c: ModelChoice) =>
               :key="family"
             >
               <div
-                class="px-1 pb-1 text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+                class="px-1 pb-1 text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
               >
                 {{ family }}
               </div>
@@ -393,7 +393,7 @@ const isSelected = (c: ModelChoice) =>
                       {{ c.modelId }}
                     </span>
                   </div>
-                  <div class="mt-0.5 ml-4 text-[10px] text-ink-dim">
+                  <div class="mt-0.5 ml-4 text-eyebrow text-ink-dim">
                     {{ c.providerName }}
                   </div>
                 </button>
@@ -403,10 +403,10 @@ const isSelected = (c: ModelChoice) =>
         </div>
 
         <div>
-          <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          <span class="block text-caption uppercase tracking-eyebrow text-ink-subtle">
             Starting context (optional)
           </span>
-          <p class="mt-1 text-[11px] text-ink-dim">
+          <p class="mt-1 text-caption text-ink-dim">
             Attach a Markdown / text file to seed the conversation. Max 64 KiB.
           </p>
           <div class="mt-2 flex items-center gap-2">
@@ -425,7 +425,7 @@ const isSelected = (c: ModelChoice) =>
             <button
               v-if="contextContent"
               type="button"
-              class="rounded-sm border border-border-muted px-2 py-1 text-[11px] text-ink-dim hover:text-ink"
+              class="rounded-sm border border-border-muted px-2 py-1 text-caption text-ink-dim hover:text-ink"
               :data-testid="'new-session-context-clear'"
               @click="clearContext"
             >
@@ -434,7 +434,7 @@ const isSelected = (c: ModelChoice) =>
           </div>
           <div
             v-if="contextContent"
-            class="mt-2 rounded-sm border border-border-muted bg-surface-1 px-3 py-2 text-[11px] text-ink"
+            class="mt-2 rounded-sm border border-border-muted bg-surface-1 px-3 py-2 text-caption text-ink"
             :data-testid="'new-session-context-summary'"
           >
             <div class="font-mono">{{ contextFileName }}</div>
@@ -445,13 +445,13 @@ const isSelected = (c: ModelChoice) =>
           </div>
           <div
             v-if="contextError"
-            class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 text-[11px] text-signal-danger"
+            class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 text-caption text-signal-danger"
             role="alert"
           >
             {{ contextError }}
           </div>
           <fieldset class="mt-3 space-y-1.5">
-            <legend class="text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+            <legend class="text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
               Inject as
             </legend>
             <label class="flex items-center gap-2 text-xs text-ink">

@@ -33,7 +33,8 @@
  *   modal.
  *
  * Props:
- *   - familyIcon  — emoji or short label (rendered in the eyebrow)
+ *   - familyIcon  — permission family key (`bash` | `fs` | `credential` |
+ *                   `tool` | `network` | `lock`) → DS glyph in the eyebrow
  *   - familyLabel — e.g. "Bash command", "Filesystem", etc.
  *   - request     — the PermissionRequest to render (null = hidden)
  *   - queueLength — total pending count (renders "+N more" badge)
@@ -54,6 +55,7 @@
  * focus-trap instead of a hand-rolled overlay.
  */
 
+import { PERMISSION_FAMILY_ICONS } from '@/shell/icons';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { PermissionRequest } from '@/lib/types';
@@ -69,13 +71,20 @@ const props = withDefaults(
     allowAlwaysEnabled?: boolean;
     allowAlwaysLabel?: string;
     allowAlwaysDisabledTitle?: string;
+    /**
+     * Grant scope sent with an Allow-always, as `allow_always:<scope>`
+     * (the filesystem modal's radio: 'directory' | 'directory_rw').
+     * Empty / 'exact' sends the bare decision — the exact-resource grant.
+     */
+    allowAlwaysScope?: string;
   }>(),
   {
-    familyIcon: '🔒',
+    familyIcon: 'lock',
     queueLength: 0,
     allowAlwaysEnabled: true,
     allowAlwaysLabel: 'Allow always',
     allowAlwaysDisabledTitle: 'Disabled for dangerous ops. Enable in Settings → Permissions.',
+    allowAlwaysScope: '',
   },
 );
 
@@ -145,7 +154,12 @@ async function decide(decision: string) {
   lastError.value = null;
   clearTimer();
   try {
-    await client.permissions.resolve(req.request_id, decision);
+    const scope = props.allowAlwaysScope;
+    const wire =
+      decision === 'allow_always' && scope && scope !== 'exact'
+        ? `${decision}:${scope}`
+        : decision;
+    await client.permissions.resolve(req.request_id, wire);
     emit('resolved', req.request_id, decision);
   } catch (err) {
     if (isUnknownRequest(err)) {
@@ -195,8 +209,13 @@ defineExpose({ decide });
     <template v-if="request">
       <div data-testid="base-permission-modal">
       <!-- Eyebrow -->
-      <div class="flex items-center gap-1.5 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
-        <span aria-hidden="true">{{ familyIcon }}</span>
+      <div class="flex items-center gap-1.5 font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
+        <component
+          :is="PERMISSION_FAMILY_ICONS[familyIcon] ?? PERMISSION_FAMILY_ICONS.lock"
+          class="inline-block" :size="12"
+          aria-hidden="true"
+          data-testid="permission-family-icon"
+        />
         <span>{{ familyLabel }} — permission required</span>
       </div>
 
@@ -215,7 +234,7 @@ defineExpose({ decide });
       <!-- Dangerous-tier warning -->
       <div
         v-if="request.dangerous_tier"
-        class="mt-2 rounded-sm border border-signal-danger bg-surface-2 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="mt-2 rounded-sm border border-signal-danger bg-surface-2 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
         data-testid="perm-modal-danger-copy"
       >
@@ -229,7 +248,7 @@ defineExpose({ decide });
       <!-- Model reason -->
       <p
         v-if="request.reason"
-        class="mt-2 font-ui text-[12px] text-ink-muted line-clamp-2"
+        class="mt-2 font-ui text-small text-ink-muted line-clamp-2"
         data-testid="perm-modal-reason"
       >
         {{ request.reason }}
@@ -238,14 +257,14 @@ defineExpose({ decide });
       <!-- Error -->
       <div
         v-if="lastError"
-        class="mt-2 rounded-sm border border-signal-warn bg-surface-2 px-3 py-2 font-ui text-[12px] text-signal-warn"
+        class="mt-2 rounded-sm border border-signal-warn bg-surface-2 px-3 py-2 font-ui text-small text-signal-warn"
         role="alert"
       >
         {{ lastError }}
       </div>
 
       <!-- Buttons -->
-      <div class="mt-4 flex flex-col gap-2 font-ui text-[11px] uppercase tracking-[0.18em]">
+      <div class="mt-4 flex flex-col gap-2 font-ui text-caption uppercase tracking-eyebrow">
         <div class="grid grid-cols-2 gap-2">
           <button
             type="button"
@@ -281,7 +300,7 @@ defineExpose({ decide });
       <!-- Overflow badge -->
       <div
         v-if="extraPending > 0"
-        class="mt-3 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="mt-3 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
         data-testid="perm-modal-overflow"
       >
         +{{ extraPending }} more pending

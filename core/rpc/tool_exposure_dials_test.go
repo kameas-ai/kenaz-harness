@@ -187,6 +187,16 @@ func newExposureRig(t *testing.T, opts rigOptions) *exposureRig {
 		t.Fatal("newLLMStack wired no load core / chat runner over a real core and settings")
 	}
 	r.stack = stack
+	// Registered after core's Shutdown cleanup, so it runs first (cleanups
+	// are LIFO): a turn's driveRun keeps writing storage after the run is
+	// reported complete (the stream-checkpoint delete), so wait for every
+	// run's exit path before the database closes. Without this the race
+	// detector flags DeleteStreamCheckpoint against concreteDB.Close.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = stack.chatRunner.Shutdown(ctx)
+	})
 	registerSyntheticServer(t, stack, "outlook", 94)
 	registerSyntheticServer(t, stack, "filesystem", 14)
 	registerSyntheticServer(t, stack, harnessmcp.ServerName, 7)

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Suggestions } from '@/shell/icons';
 /**
  * LongSessionNudge — dismissible inline banner that appears when a session
  * crosses a turn-count or token-count threshold (v0.5.6 memory-trust-signals).
@@ -51,15 +52,15 @@ function handleDismiss() {
     data-testid="long-session-nudge"
   >
     <!-- Icon -->
-    <span class="mt-0.5 flex-shrink-0 text-[15px]" aria-hidden="true">💡</span>
+    <Suggestions :size="14" class="mt-0.5 flex-shrink-0 text-ink-muted" aria-hidden="true" />
 
     <!-- Content + actions -->
     <div class="flex min-w-0 flex-1 flex-col gap-2">
       <div>
-        <p class="font-ui text-[13px] font-medium text-ink">
+        <p class="font-ui text-ui font-medium text-ink">
           This conversation is getting long.
         </p>
-        <p class="font-ui text-[12px] text-ink-muted">
+        <p class="font-ui text-small text-ink-muted">
           Memory will carry forward what matters across new sessions.
         </p>
       </div>
@@ -67,7 +68,7 @@ function handleDismiss() {
       <div class="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          class="rounded-sm border border-accent-hairline px-2.5 py-1 font-ui text-[12px] text-accent hover:bg-accent-glow transition-fast"
+          class="rounded-sm border border-accent-hairline px-2.5 py-1 font-ui text-small text-accent hover:bg-accent-glow transition-fast"
           data-testid="long-session-nudge-branch"
           @click="handleBranch"
         >
@@ -75,7 +76,7 @@ function handleDismiss() {
         </button>
         <button
           type="button"
-          class="rounded-sm border border-accent px-2.5 py-1 font-ui text-[12px] text-accent hover:bg-accent-glow transition-fast"
+          class="rounded-sm border border-accent px-2.5 py-1 font-ui text-small text-accent hover:bg-accent-glow transition-fast"
           data-testid="long-session-nudge-new-session"
           @click="handleNewSession"
         >
@@ -83,7 +84,7 @@ function handleDismiss() {
         </button>
         <button
           type="button"
-          class="font-ui text-[12px] text-ink-muted hover:text-ink ml-auto transition-fast"
+          class="font-ui text-small text-ink-muted hover:text-ink ml-auto transition-fast"
           data-testid="long-session-nudge-dismiss"
           @click="handleDismiss"
         >

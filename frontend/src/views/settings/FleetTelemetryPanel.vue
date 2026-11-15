@@ -11,6 +11,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { FleetTelemetryStatus } from '@/lib/harnessClient';
+import type { MemberNotice } from '@/lib/types';
 
 const client = useHarnessClient();
 
@@ -21,6 +22,21 @@ const saving = ref(false);
 const errorMsg = ref('');
 const status = ref<FleetTelemetryStatus | null>(null);
 let statusTimer: ReturnType<typeof setInterval> | undefined;
+
+// The Agent Telemetry notice Fleet serves on the kenaz-harness surface
+// (contract-harness-sync §17.2, §17.7). null until a text is registered —
+// today always — so nothing shows. When one is shown, a level chosen below
+// carries its edition, and Fleet records that the member saw it.
+const telemetryNotice = ref<MemberNotice | null>(null);
+
+async function loadTelemetryNotice() {
+  try {
+    const v = await client.fleet.memberNotices();
+    telemetryNotice.value = v.notices.find((n) => n.family === 'agent-telemetry') ?? null;
+  } catch {
+    telemetryNotice.value = null; // served mode / signed out: no notice
+  }
+}
 
 async function refreshStatus() {
   try {
@@ -73,6 +89,7 @@ onMounted(async () => {
     errorMsg.value = String(err);
   }
   void refreshStatus();
+  void loadTelemetryNotice();
   statusTimer = setInterval(() => void refreshStatus(), 15000);
 });
 
@@ -115,7 +132,9 @@ async function saveConsent(level: 'none' | 'aggregate' | 'full') {
   saving.value = true;
   errorMsg.value = '';
   try {
-    await client.fleet.setTelemetryConsent(level);
+    const edition = telemetryNotice.value?.edition;
+    if (edition) await client.fleet.setTelemetryConsent(level, edition);
+    else await client.fleet.setTelemetryConsent(level);
     consentLevel.value = level;
     void refreshStatus();
   } catch (err) {
@@ -137,6 +156,17 @@ async function saveConsent(level: 'none' | 'aggregate' | 'full') {
         machine's id. It is not anonymous. No conversation content, source
         code, file paths, API keys, or credentials are ever included.
       </p>
+    </div>
+
+    <!-- The Agent Telemetry notice, verbatim, once Fleet serves one. -->
+    <div
+      v-if="telemetryNotice"
+      class="rounded border border-border-muted p-3 space-y-1"
+      data-testid="telemetry-notice"
+    >
+      <p class="text-xs font-semibold text-ink">Notice</p>
+      <p class="text-xs text-ink whitespace-pre-wrap" data-testid="telemetry-notice-text">{{ telemetryNotice.text }}</p>
+      <p class="text-xs text-ink-muted">Choosing a level below records that you've seen this notice.</p>
     </div>
 
     <!-- Tier picker -->

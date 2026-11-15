@@ -94,7 +94,7 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
     <Transition name="fade">
       <div
         v-if="open"
-        class="fixed inset-0 z-40 bg-black/30"
+        class="fixed inset-0 z-40 bg-modal-overlay"
         data-testid="todo-side-panel-backdrop"
         aria-hidden="true"
         @click="$emit('close')"
@@ -114,12 +114,12 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
         <div
           class="flex items-center justify-between border-b border-border-muted px-4 py-3"
         >
-          <div class="flex items-center gap-2 font-ui text-[13px] text-ink">
+          <div class="flex items-center gap-2 font-ui text-ui text-ink">
             <CheckSquare class="h-4 w-4 text-accent" aria-hidden="true" />
             <span>Task list</span>
             <span
               v-if="todos.length > 0"
-              class="rounded-sm bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-ink-dim"
+              class="rounded-sm bg-surface-2 px-1.5 py-0.5 font-mono text-eyebrow text-ink-dim"
             >
               {{ todos.length }}
             </span>
@@ -144,8 +144,8 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
             data-testid="todo-empty"
           >
             <CheckSquare class="mb-3 h-8 w-8 text-ink-dim" aria-hidden="true" />
-            <p class="font-ui text-[12px] text-ink-muted">No tasks yet.</p>
-            <p class="mt-1 font-ui text-[11px] text-ink-dim">
+            <p class="font-ui text-small text-ink-muted">No tasks yet.</p>
+            <p class="mt-1 font-ui text-caption text-ink-dim">
               The model will add tasks here via kenaz__todo_write.
             </p>
           </div>
@@ -157,7 +157,7 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
             data-testid="todo-group-in-progress"
           >
             <h3
-              class="mb-2 font-ui text-[10px] uppercase tracking-[0.16em] text-ink-subtle"
+              class="mb-2 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
             >
               {{ statusLabel('in_progress') }}
             </h3>
@@ -173,14 +173,14 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
                   aria-hidden="true"
                 />
                 <span
-                  class="flex-1 font-ui text-[12px]"
+                  class="flex-1 font-ui text-small"
                   :class="priorityClass(item.priority)"
                 >
                   {{ item.content }}
                 </span>
                 <span
                   v-if="priorityBadge(item.priority)"
-                  class="rounded-sm px-1 font-ui text-[9px] uppercase tracking-[0.14em]"
+                  class="rounded-sm px-1 font-ui text-tag uppercase tracking-eyebrow"
                   :class="
                     item.priority === 'high'
                       ? 'bg-signal-warn/20 text-signal-warn'
@@ -200,7 +200,7 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
             data-testid="todo-group-pending"
           >
             <h3
-              class="mb-2 font-ui text-[10px] uppercase tracking-[0.16em] text-ink-subtle"
+              class="mb-2 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
             >
               {{ statusLabel('pending') }}
             </h3>
@@ -216,14 +216,14 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
                   aria-hidden="true"
                 />
                 <span
-                  class="flex-1 font-ui text-[12px] text-ink"
+                  class="flex-1 font-ui text-small text-ink"
                   :class="priorityClass(item.priority)"
                 >
                   {{ item.content }}
                 </span>
                 <span
                   v-if="priorityBadge(item.priority)"
-                  class="rounded-sm px-1 font-ui text-[9px] uppercase tracking-[0.14em]"
+                  class="rounded-sm px-1 font-ui text-tag uppercase tracking-eyebrow"
                   :class="
                     item.priority === 'high'
                       ? 'bg-signal-warn/20 text-signal-warn'
@@ -243,7 +243,7 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
             data-testid="todo-group-done"
           >
             <h3
-              class="mb-2 font-ui text-[10px] uppercase tracking-[0.16em] text-ink-subtle"
+              class="mb-2 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
             >
               {{ statusLabel('done') }}
             </h3>
@@ -258,7 +258,7 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
                   class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-signal-ok"
                   aria-hidden="true"
                 />
-                <span class="flex-1 font-ui text-[12px] text-ink-muted line-through">
+                <span class="flex-1 font-ui text-small text-ink-muted line-through">
                   {{ item.content }}
                 </span>
               </li>
@@ -271,7 +271,7 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
             data-testid="todo-group-cancelled"
           >
             <h3
-              class="mb-2 font-ui text-[10px] uppercase tracking-[0.16em] text-ink-subtle"
+              class="mb-2 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
             >
               {{ statusLabel('cancelled') }}
             </h3>
@@ -286,7 +286,7 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
                   class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-ink-dim"
                   aria-hidden="true"
                 />
-                <span class="flex-1 font-ui text-[12px] text-ink-dim line-through">
+                <span class="flex-1 font-ui text-small text-ink-dim line-through">
                   {{ item.content }}
                 </span>
               </li>

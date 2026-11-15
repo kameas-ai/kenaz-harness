@@ -30,6 +30,7 @@ import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
 import PeersPanel from '@/views/settings/PeersPanel.vue';
 import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
 import ModelCallTelemetryPanel from '@/views/settings/ModelCallTelemetryPanel.vue';
+import FleetDeviceNamePanel from '@/views/settings/FleetDeviceNamePanel.vue';
 // fix/served-agent-profiles-sep17: served workbenches had no route to
 // AgentsView at all (contracts/agents-served-rpc.md) — a served-mode user
 // could not configure named Sonnet/Opus/Fable delegation profiles.
@@ -47,6 +48,7 @@ import MCPHealthSettingsPanel from '@/views/settings/MCPHealthSettingsPanel.vue'
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import BranchAdvisorSettings from '@/components/settings/BranchAdvisorSettings.vue';
 import RiskRaterModelPicker from '@/components/settings/RiskRaterModelPicker.vue';
+import ModelSlotsPanel from '@/views/settings/ModelSlotsPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { accountSectionSubtitle, useFleetSession } from '@/lib/fleetSession';
 import { debouncedSave } from '@/lib/settings';
@@ -227,7 +229,7 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   'mcp-servers': { title: 'MCP servers', subtitle: 'Health behaviour for local MCP servers.' },
   peers: { title: 'Peers', subtitle: 'Trusted ACP agent peers — register, inspect, and revoke.' },
   sync: { title: 'Sync', subtitle: 'Cross-device settings sync — keep provider profiles, model prefs, MCP recipes, installed MCPs, and UI theme in sync across all your devices.' },
-  compliance: { title: 'Compliance', subtitle: 'Immutable fleet audit archival and local retention window (Team+ tier).' },
+  compliance: { title: 'Compliance', subtitle: 'Fleet audit archive status and local retention window.' },
   'crash-reporting': { title: 'Crash Reporting', subtitle: 'Configure error and crash-report telemetry consent.' },
   recommendations: { title: 'Recommendations', subtitle: 'Install, check and remove the local ML engine that powers branch, compact and model-switch suggestions.' },
   // dogfood 2026-10-05: this key was missing, so the pane fell through to
@@ -1099,10 +1101,11 @@ onMounted(() => {
          RPCs) and Agent Profiles (Agents_* — contracts/agents-served-rpc.md)
          are the settings served mode has. -->
     <FleetTelemetryPanel />
+    <ModelSlotsPanel />
     <AgentsView />
     <NotAvailableInServedMode
       feature="Other settings"
-      reason="Apart from Fleet telemetry and Agent Profiles above, settings are read and written through desktop-only RPCs. Workbench-level configuration lives in Kenaz on the host."
+      reason="Apart from Fleet telemetry, Models and Agent Profiles above, settings are read and written through desktop-only RPCs. Workbench-level configuration lives in Kenaz on the host."
     />
   </div>
   <SettingsShell
@@ -1181,9 +1184,17 @@ onMounted(() => {
       data-testid="settings-account-pane"
     >
       <AccountPanel />
+      <!-- Fleet ER-43: the device name Fleet admins see, next to the device
+           info above. Desktop-only, like the panels below. -->
+      <section>
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-3">
+          Device name
+        </h2>
+        <FleetDeviceNamePanel />
+      </section>
       <!-- fleet-integrity-observability WP09: telemetry consent control. -->
       <section>
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-3">
           Fleet Telemetry
         </h2>
         <FleetTelemetryPanel />
@@ -1192,14 +1203,14 @@ onMounted(() => {
            stats pull + retention, and the default-off "Share model-call
            telemetry with Fleet" opt-in, next to the Fleet sharing controls. -->
       <section>
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-3">
           Model-call telemetry
         </h2>
         <ModelCallTelemetryPanel />
       </section>
       <!-- fleet-integrity-observability WP08: unit-sync conflict + error surface. -->
       <section>
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-3">
           Unit Sync
         </h2>
         <UnitConflictsPanel />
@@ -1284,7 +1295,7 @@ onMounted(() => {
       data-testid="settings-form"
     >
       <section>
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Theme
         </h2>
         <div class="mt-2 inline-flex rounded-sm border border-border" role="radiogroup">
@@ -1294,20 +1305,20 @@ onMounted(() => {
             type="button"
             role="radio"
             :aria-checked="settings.theme === t.value"
-            class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+            class="px-3 py-1.5 font-ui text-small border-r border-border last:border-r-0 transition-colors"
             :class="settings.theme === t.value
               ? 'bg-surface-3 text-ink'
               : 'bg-surface-1 text-ink-muted hover:text-ink'"
             @click="setTheme(t.value)"
           >
             {{ t.label }}
-            <span v-if="t.note" class="ml-1 text-[10px] text-ink-subtle">({{ t.note }})</span>
+            <span v-if="t.note" class="ml-1 text-eyebrow text-ink-subtle">({{ t.note }})</span>
           </button>
         </div>
       </section>
 
       <section data-testid="rendering-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Rendering
         </h2>
         <div
@@ -1321,7 +1332,7 @@ onMounted(() => {
             type="button"
             role="radio"
             :aria-checked="(settings.markdownExtensions ?? 'all') === opt.value"
-            class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+            class="px-3 py-1.5 font-ui text-small border-r border-border last:border-r-0 transition-colors"
             :class="(settings.markdownExtensions ?? 'all') === opt.value
               ? 'bg-surface-3 text-ink'
               : 'bg-surface-1 text-ink-muted hover:text-ink'"
@@ -1331,17 +1342,17 @@ onMounted(() => {
             {{ opt.label }}
           </button>
         </div>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           Disable on slow machines if heavy diagrams or math feel laggy.
           <span class="font-mono">basic</span> turns off both KaTeX and Mermaid.
         </p>
       </section>
 
       <section>
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Route restoration
         </h2>
-        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+        <label class="mt-2 flex items-center gap-3 font-ui text-small text-ink">
           <input
             type="checkbox"
             class="accent-accent"
@@ -1351,16 +1362,16 @@ onMounted(() => {
           />
           Restore the last visited route on launch
         </label>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           Last route: <span class="font-mono">{{ settings.lastRoute }}</span>
         </p>
       </section>
 
       <section data-testid="auto-title-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Sessions
         </h2>
-        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+        <label class="mt-2 flex items-center gap-3 font-ui text-small text-ink">
           <input
             type="checkbox"
             class="accent-accent"
@@ -1370,14 +1381,14 @@ onMounted(() => {
           />
           Auto-title new sessions using the active model
         </label>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           When on, the harness asks the model to generate a short title for
           each new session after the first exchange. You can override or
           clear it at any time.
         </p>
 
         <!-- model-moves-transcript-01PMCH01 WP03 — model-visible move fidelity. -->
-        <label class="mt-4 flex items-center gap-3 font-ui text-[12px] text-ink">
+        <label class="mt-4 flex items-center gap-3 font-ui text-small text-ink">
           <input
             type="checkbox"
             class="accent-accent"
@@ -1387,7 +1398,7 @@ onMounted(() => {
           />
           Send the model its own reasoning chain as history
         </label>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           When on, each request carries the full trajectory of the previous
           turns — what the model tried, which tools it called, what they
           returned and why it changed course — in your provider's native
@@ -1405,10 +1416,10 @@ onMounted(() => {
       <!-- system-prompt-layers WP04: user chat custom instructions,
            appended as the final layer of every chat system prompt. -->
       <section data-testid="chat-custom-instructions-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Chat — Custom instructions
         </h2>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           Standing instructions added to the end of every chat's system
           prompt — after the built-in role and environment context. Use it
           for lasting preferences (tone, language, formatting). Applies on
@@ -1417,7 +1428,7 @@ onMounted(() => {
         <textarea
           v-model="chatCustomInstructions"
           rows="5"
-          class="mt-2 w-full rounded-sm border border-accent-hairline bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
+          class="mt-2 w-full rounded-sm border border-accent-hairline bg-surface-1 px-3 py-2 font-ui text-small text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
           placeholder="e.g. Always answer in British English. Prefer tables over long prose."
           data-testid="chat-custom-instructions-input"
           @change="saveChatCustomInstructions"
@@ -1429,10 +1440,10 @@ onMounted(() => {
            embeddings for memory pin/search.  Bedrock and Anthropic-direct are
            deferred (different API shape / no embeddings endpoint). -->
       <section data-testid="embedder-config-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Memory — Embedder
         </h2>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           Memory features require an embedder. Select an OpenAI or OpenRouter
           provider to enable memory pinning and search. Bedrock and
           Anthropic-direct providers do not support embeddings and are excluded.
@@ -1449,16 +1460,16 @@ onMounted(() => {
           aria-live="polite"
           data-testid="no-embedder-provider-banner"
         >
-          <p class="font-ui text-[12px] font-semibold text-signal-warn">
+          <p class="font-ui text-small font-semibold text-signal-warn">
             No memory provider configured
           </p>
-          <p class="mt-1 font-ui text-[11px] text-ink-muted">
+          <p class="mt-1 font-ui text-caption text-ink-muted">
             Memory features (pin, semantic search, retrieval) need an embedding
             provider. Your current providers don't support embeddings:
           </p>
           <ul
             v-if="embedderEligibility.skippedKinds.length > 0"
-            class="mt-1 list-disc list-inside font-ui text-[11px] text-ink-muted"
+            class="mt-1 list-disc list-inside font-ui text-caption text-ink-muted"
             data-testid="no-embedder-skipped-kinds"
           >
             <li
@@ -1468,14 +1479,14 @@ onMounted(() => {
               {{ skippedKindLabel(kind) }}
             </li>
           </ul>
-          <p class="mt-2 font-ui text-[11px] text-ink-muted">
+          <p class="mt-2 font-ui text-caption text-ink-muted">
             OpenRouter gives you cheap models for chat AND embeddings in one
             API key.
           </p>
           <div class="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              class="font-ui text-[12px] rounded-sm border border-accent bg-surface-1 text-accent px-3 py-1.5 hover:bg-surface-2"
+              class="font-ui text-small rounded-sm border border-accent bg-surface-1 text-accent px-3 py-1.5 hover:bg-surface-2"
               data-testid="no-embedder-add-openrouter"
               @click="goToProviders('openrouter')"
             >
@@ -1483,7 +1494,7 @@ onMounted(() => {
             </button>
             <button
               type="button"
-              class="font-ui text-[12px] rounded-sm border border-border bg-surface-1 text-ink-muted px-3 py-1.5 hover:bg-surface-2"
+              class="font-ui text-small rounded-sm border border-border bg-surface-1 text-ink-muted px-3 py-1.5 hover:bg-surface-2"
               data-testid="no-embedder-see-all-providers"
               @click="goToProviders()"
             >
@@ -1497,13 +1508,13 @@ onMounted(() => {
           <div class="grid gap-1">
             <label
               for="embedder-provider-select"
-              class="font-ui text-[11px] text-ink-muted"
+              class="font-ui text-caption text-ink-muted"
             >
               Provider
             </label>
             <select
               id="embedder-provider-select"
-              class="font-ui text-[12px] rounded-sm border border-border bg-surface-1 text-ink px-2 py-1.5"
+              class="font-ui text-small rounded-sm border border-border bg-surface-1 text-ink px-2 py-1.5"
               :value="embedderProfileId"
               data-testid="embedder-provider-select"
               @change="onEmbedderProviderChange"
@@ -1530,7 +1541,7 @@ onMounted(() => {
           <div class="grid gap-1">
             <label
               for="embedder-model-input"
-              class="font-ui text-[11px] text-ink-muted"
+              class="font-ui text-caption text-ink-muted"
             >
               Model override
               <span class="text-ink-subtle">(leave blank for per-provider default)</span>
@@ -1538,7 +1549,7 @@ onMounted(() => {
             <input
               id="embedder-model-input"
               type="text"
-              class="font-ui text-[12px] rounded-sm border border-border bg-surface-1 text-ink px-2 py-1.5"
+              class="font-ui text-small rounded-sm border border-border bg-surface-1 text-ink px-2 py-1.5"
               placeholder="e.g. text-embedding-3-small"
               :value="embedderModelOverride"
               data-testid="embedder-model-input"
@@ -1550,7 +1561,7 @@ onMounted(() => {
           <div class="flex items-center gap-3">
             <button
               type="button"
-              class="font-ui text-[12px] rounded-sm border border-border bg-surface-1 text-ink px-3 py-1.5 hover:bg-surface-2 disabled:opacity-50"
+              class="font-ui text-small rounded-sm border border-border bg-surface-1 text-ink px-3 py-1.5 hover:bg-surface-2 disabled:opacity-50"
               :disabled="embedderTestStatus === 'testing'"
               data-testid="embedder-test-button"
               @click="testEmbedder"
@@ -1559,14 +1570,14 @@ onMounted(() => {
             </button>
             <span
               v-if="embedderTestStatus === 'ok'"
-              class="font-ui text-[11px] text-signal-ok"
+              class="font-ui text-caption text-signal-ok"
               data-testid="embedder-test-ok"
             >
               Connection OK
             </span>
             <span
               v-else-if="embedderTestStatus === 'error'"
-              class="font-ui text-[11px] text-signal-danger"
+              class="font-ui text-caption text-signal-danger"
               data-testid="embedder-test-error"
             >
               {{ embedderTestError ?? 'Test failed' }}
@@ -1577,10 +1588,10 @@ onMounted(() => {
 
       <!-- Display settings (per-message-token-meter-01KR3PQR) -->
       <section data-testid="display-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Display
         </h2>
-        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+        <label class="mt-2 flex items-center gap-3 font-ui text-small text-ink">
           <input
             type="checkbox"
             class="accent-accent"
@@ -1590,7 +1601,7 @@ onMounted(() => {
           />
           Show per-message token meter
         </label>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           When on, each assistant message shows a small token-cost chip
           (prompt → completion = total tokens · cost in USD). Click the chip
           for a full breakdown. Default: off.
@@ -1605,10 +1616,10 @@ onMounted(() => {
       <AutonomyPanel />
 
       <section data-testid="search-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Search
         </h2>
-        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+        <label class="mt-2 flex items-center gap-3 font-ui text-small text-ink">
           <input
             type="checkbox"
             class="accent-accent"
@@ -1618,7 +1629,7 @@ onMounted(() => {
           />
           Enable cross-session search (Cmd+F)
         </label>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           When on, the Cmd+F modal queries the local FTS5 index across every
           session. Turning this off short-circuits the search and never
           touches the index — your message corpus stays out of any UI
@@ -1631,10 +1642,10 @@ onMounted(() => {
 
       <!-- multimodal-io-01KQ8TDF WP08 / FR-023 — multimodal input toggle. -->
       <section data-testid="multimodal-input-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Attachments
         </h2>
-        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+        <label class="mt-2 flex items-center gap-3 font-ui text-small text-ink">
           <input
             type="checkbox"
             class="accent-accent"
@@ -1644,7 +1655,7 @@ onMounted(() => {
           />
           Enable image and PDF attachments
         </label>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           When off, the paperclip button and drag-and-drop overlay are hidden and
           clipboard image/PDF pastes are ignored. The
           <span class="font-mono">HARNESS_MULTIMODAL_IN</span> env flag
@@ -1656,10 +1667,10 @@ onMounted(() => {
       <!-- multimodal-io-extended-01KQ8TD2 WP06/WP08 — generated image capture dials.
            Section hidden when HARNESS_MULTIMODAL_OUT=off (WP08 env gate). -->
       <section v-if="multimodalOutEnabled" data-testid="generated-image-capture-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Generated Image Capture
         </h2>
-        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+        <label class="mt-2 flex items-center gap-3 font-ui text-small text-ink">
           <input
             type="checkbox"
             class="accent-accent"
@@ -1669,20 +1680,20 @@ onMounted(() => {
           />
           Auto-capture model-generated images as artifacts
         </label>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           When on, images returned by generation APIs (DALL-E&nbsp;3, gpt-image-1,
           Titan Image) are automatically saved to the artifact store so you can
           revisit, promote, or export them later. Default: ON.
         </p>
 
-        <label class="mt-3 flex items-center gap-3 font-ui text-[12px] text-ink">
+        <label class="mt-3 flex items-center gap-3 font-ui text-small text-ink">
           <span class="shrink-0">Per-image byte cap (MiB)</span>
           <input
             type="number"
             min="1"
             :max="MAX_GENERATED_IMAGE_CAP_MIB"
             step="1"
-            class="w-24 rounded-sm border border-border-muted bg-surface-2 px-2 py-0.5 font-mono text-[12px] text-ink focus:border-accent focus:outline-none"
+            class="w-24 rounded-sm border border-border-muted bg-surface-2 px-2 py-0.5 font-mono text-small text-ink focus:border-accent focus:outline-none"
             :value="maxGeneratedImageMiB"
             data-testid="max-generated-image-mib-input"
             @change="onMaxGeneratedImageMiBInput"
@@ -1690,12 +1701,12 @@ onMounted(() => {
         </label>
         <p
           v-if="maxGeneratedImageMiBError"
-          class="mt-0.5 text-[11px] text-signal-danger"
+          class="mt-0.5 text-caption text-signal-danger"
           data-testid="max-generated-image-mib-error"
         >
           {{ maxGeneratedImageMiBError }}
         </p>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           Images larger than this cap are skipped during auto-capture.
           Default: {{ DEFAULT_MAX_GENERATED_IMAGE_MIB }} MiB.
         </p>
@@ -1706,10 +1717,10 @@ onMounted(() => {
         v-if="appInfo?.keychainRotationEnabled !== false"
         data-testid="auto-resume-key-rotation-section"
       >
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           API Key Rotation
         </h2>
-        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+        <label class="mt-2 flex items-center gap-3 font-ui text-small text-ink">
           <input
             type="checkbox"
             class="accent-accent"
@@ -1719,7 +1730,7 @@ onMounted(() => {
           />
           Auto-resume after rotating an API key
         </label>
-        <p class="mt-1 text-[11px] text-ink-muted">
+        <p class="mt-1 text-caption text-ink-muted">
           When a chat turn fails with an authentication error, the harness pauses
           and lets you rotate the API key. With this on, the failed turn is
           automatically redriven after a successful rotation. When off, you must
@@ -1728,10 +1739,10 @@ onMounted(() => {
       </section>
 
       <section>
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Storage
         </h2>
-        <dl class="mt-2 grid gap-2 font-ui text-[12px]" style="grid-template-columns: 12ch 1fr">
+        <dl class="mt-2 grid gap-2 font-ui text-small" style="grid-template-columns: 12ch 1fr">
           <dt class="text-ink-muted">Schema version</dt>
           <dd class="font-mono text-ink">{{ settings.schemaVersion }}</dd>
           <dt class="text-ink-muted">Window size</dt>
@@ -1742,10 +1753,10 @@ onMounted(() => {
       </section>
 
       <section data-testid="compaction-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Compaction
         </h2>
-        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+        <p class="mt-1 font-ui text-caption text-ink-muted">
           When a session approaches the model's context cap, the harness
           summarises older turns into a single message so the conversation
           can keep going. Pick a tier — see "What does this mean?" below
@@ -1763,7 +1774,7 @@ onMounted(() => {
             type="button"
             role="radio"
             :aria-checked="compactionTier === t"
-            class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors capitalize"
+            class="px-3 py-1.5 font-ui text-small border-r border-border last:border-r-0 transition-colors capitalize"
             :class="compactionTier === t
               ? 'bg-surface-3 text-ink'
               : 'bg-surface-1 text-ink-muted hover:text-ink'"
@@ -1776,7 +1787,7 @@ onMounted(() => {
 
         <button
           type="button"
-          class="mt-3 font-ui text-[11px] text-accent hover:underline"
+          class="mt-3 font-ui text-caption text-accent hover:underline"
           data-testid="compaction-explain-toggle"
           :aria-expanded="compactionExplainOpen"
           @click="compactionExplainOpen = !compactionExplainOpen"
@@ -1786,7 +1797,7 @@ onMounted(() => {
 
         <div
           v-if="compactionExplainOpen"
-          class="mt-2 rounded-sm border border-border bg-surface-1 p-3 font-ui text-[12px]"
+          class="mt-2 rounded-sm border border-border bg-surface-1 p-3 font-ui text-small"
           data-testid="compaction-explain-disclosure"
         >
           <div v-if="selectedTierExplain" class="space-y-1">
@@ -1797,7 +1808,7 @@ onMounted(() => {
               {{ selectedTierExplain.description }}
             </p>
             <dl
-              class="mt-2 grid gap-1 font-mono text-[11px] text-ink-muted"
+              class="mt-2 grid gap-1 font-mono text-caption text-ink-muted"
               style="grid-template-columns: 14ch 1fr"
               data-testid="compaction-explain-numerics"
             >
@@ -1829,13 +1840,13 @@ onMounted(() => {
         <div class="mt-4 grid gap-2" style="grid-template-columns: 14ch 1fr">
           <label
             for="compaction-model"
-            class="self-center font-ui text-[12px] text-ink-muted"
+            class="self-center font-ui text-small text-ink-muted"
           >
             Compaction model
           </label>
           <select
             id="compaction-model"
-            class="rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+            class="rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-small text-ink"
             data-testid="compaction-model-select"
             :value="compactionModelValue"
             @change="onCompactionModelChange"
@@ -1861,7 +1872,7 @@ onMounted(() => {
         <div class="mt-2 grid gap-2" style="grid-template-columns: 14ch 1fr">
           <label
             for="compaction-archive-days"
-            class="self-center font-ui text-[12px] text-ink-muted"
+            class="self-center font-ui text-small text-ink-muted"
           >
             Archive days
           </label>
@@ -1872,19 +1883,19 @@ onMounted(() => {
               min="7"
               max="365"
               :value="compactionArchiveDays"
-              class="w-24 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+              class="w-24 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-small text-ink"
               data-testid="compaction-archive-days-input"
               @input="onCompactionArchiveDaysInput"
             />
             <p
               v-if="compactionArchiveDaysError"
-              class="mt-1 font-ui text-[11px] text-signal-danger"
+              class="mt-1 font-ui text-caption text-signal-danger"
               role="alert"
               data-testid="compaction-archive-days-error"
             >
               {{ compactionArchiveDaysError }}
             </p>
-            <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+            <p v-else class="mt-1 font-ui text-caption text-ink-muted">
               Soft-archived originals are deleted after this many days. Default 90.
             </p>
           </div>
@@ -1893,7 +1904,7 @@ onMounted(() => {
         <div class="mt-2 grid gap-2" style="grid-template-columns: 14ch 1fr">
           <label
             for="compaction-recent-window"
-            class="self-center font-ui text-[12px] text-ink-muted"
+            class="self-center font-ui text-small text-ink-muted"
           >
             Recent window
           </label>
@@ -1903,19 +1914,19 @@ onMounted(() => {
               type="number"
               min="1"
               :value="compactionRecentWindow"
-              class="w-24 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+              class="w-24 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-small text-ink"
               data-testid="compaction-recent-window-input"
               @input="onCompactionRecentWindowInput"
             />
             <p
               v-if="compactionRecentWindowError"
-              class="mt-1 font-ui text-[11px] text-signal-danger"
+              class="mt-1 font-ui text-caption text-signal-danger"
               role="alert"
               data-testid="compaction-recent-window-error"
             >
               {{ compactionRecentWindowError }}
             </p>
-            <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+            <p v-else class="mt-1 font-ui text-caption text-ink-muted">
               Most-recent user-assistant pairs that compaction never touches. Default 4.
             </p>
           </div>
@@ -1926,10 +1937,10 @@ onMounted(() => {
       <RiskRaterModelPicker />
 
       <section data-testid="cost-notifications-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Cost notifications
         </h2>
-        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+        <p class="mt-1 font-ui text-caption text-ink-muted">
           Get a desktop notification when your monthly LLM spend hits
           50%, 80%, 100%, 150%, or 200% of the threshold below. Each
           tier fires at most once per calendar month. Hard caps live in
@@ -1938,13 +1949,13 @@ onMounted(() => {
         <div class="mt-3 grid gap-2" style="grid-template-columns: 14ch 1fr">
           <label
             for="monthly-cost-notify"
-            class="self-center font-ui text-[12px] text-ink-muted"
+            class="self-center font-ui text-small text-ink-muted"
           >
             Monthly threshold
           </label>
           <div>
             <div class="flex items-center gap-1.5">
-              <span class="font-mono text-[12px] text-ink-muted">$</span>
+              <span class="font-mono text-small text-ink-muted">$</span>
               <input
                 id="monthly-cost-notify"
                 type="number"
@@ -1953,21 +1964,21 @@ onMounted(() => {
                 step="0.01"
                 :value="monthlyCostNotifyUsd"
                 placeholder="0 (disabled)"
-                class="w-28 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+                class="w-28 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-small text-ink"
                 data-testid="monthly-cost-notify-input"
                 @input="onMonthlyCostNotifyInput"
               />
-              <span class="font-ui text-[11px] text-ink-muted">USD / month</span>
+              <span class="font-ui text-caption text-ink-muted">USD / month</span>
             </div>
             <p
               v-if="monthlyCostNotifyUsdError"
-              class="mt-1 font-ui text-[11px] text-signal-danger"
+              class="mt-1 font-ui text-caption text-signal-danger"
               role="alert"
               data-testid="monthly-cost-notify-error"
             >
               {{ monthlyCostNotifyUsdError }}
             </p>
-            <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+            <p v-else class="mt-1 font-ui text-caption text-ink-muted">
               Set to 0 to disable notifications. Maximum
               ${{ MAX_MONTHLY_COST_NOTIFY_USD }}.
             </p>
@@ -1976,10 +1987,10 @@ onMounted(() => {
       </section>
 
       <section data-testid="context-window-overrides-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Context window overrides
         </h2>
-        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+        <p class="mt-1 font-ui text-caption text-ink-muted">
           Override the backend-derived context-window size for a provider kind. Leave a field
           blank to use the curated catalog value. Changes take effect immediately in
           the session context meter.
@@ -1993,7 +2004,7 @@ onMounted(() => {
           >
             <label
               :for="`cw-override-${kind}`"
-              class="self-center font-ui text-[12px] text-ink-muted capitalize"
+              class="self-center font-ui text-small text-ink-muted capitalize"
             >
               {{ kind }}
             </label>
@@ -2003,7 +2014,7 @@ onMounted(() => {
               min="0"
               :placeholder="'catalog (default)'"
               :value="contextWindowOverrides[kind] || ''"
-              class="w-36 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+              class="w-36 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-small text-ink"
               :data-testid="`cw-override-${kind}`"
               @input="onContextWindowOverrideInput(kind, $event)"
             />
@@ -2013,14 +2024,14 @@ onMounted(() => {
 
       <!-- Branching UX dials (branching-ux-polish-01KQ8TD7 WP06) -->
       <section data-testid="branching-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Branching
         </h2>
         <!-- Auto-collapse -->
         <div class="mt-2 flex items-start justify-between gap-4">
           <div>
-            <p class="font-ui text-[12px] text-ink">Sidebar shows branches collapsed by default</p>
-            <p class="font-ui text-[11px] text-ink-dim">
+            <p class="font-ui text-small text-ink">Sidebar shows branches collapsed by default</p>
+            <p class="font-ui text-caption text-ink-dim">
               When on, parent sessions with branch children start collapsed in the left rail.
               Individual expand/collapse choices persist across sessions.
             </p>
@@ -2046,8 +2057,8 @@ onMounted(() => {
         <!-- Delete branches with parent -->
         <div class="mt-3 flex items-start justify-between gap-4">
           <div>
-            <p class="font-ui text-[12px] text-ink">Delete branches when their parent session is deleted (cascade)</p>
-            <p class="font-ui text-[11px] text-ink-dim">
+            <p class="font-ui text-small text-ink">Delete branches when their parent session is deleted (cascade)</p>
+            <p class="font-ui text-caption text-ink-dim">
               When on, deleting a parent session also removes all its branch descendants.
               When off (default), branches become independent root sessions.
             </p>
@@ -2073,10 +2084,10 @@ onMounted(() => {
         <!-- Max visible depth -->
         <div class="mt-3">
           <div class="flex items-center justify-between">
-            <p class="font-ui text-[12px] text-ink">Maximum branch depth visible in the sidebar</p>
-            <span class="font-mono text-[12px] text-ink" data-testid="max-branch-depth-value">{{ maxVisibleBranchDepth }}</span>
+            <p class="font-ui text-small text-ink">Maximum branch depth visible in the sidebar</p>
+            <span class="font-mono text-small text-ink" data-testid="max-branch-depth-value">{{ maxVisibleBranchDepth }}</span>
           </div>
-          <p class="font-ui text-[11px] text-ink-dim">
+          <p class="font-ui text-caption text-ink-dim">
             Sessions nested deeper than this number stop indenting further in the
             sidebar. Range 1–32; default 5.
           </p>
@@ -2096,13 +2107,13 @@ onMounted(() => {
 
       <!-- Model-authored agent graphs (model-authored-graphs-01PMGA01 UNIT-4/6) -->
       <section data-testid="graph-authoring-section">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Agent graphs
         </h2>
         <div class="mt-2 flex items-start justify-between gap-4">
           <div>
-            <p class="font-ui text-[12px] text-ink">Let the assistant draft new agent graphs</p>
-            <p class="font-ui text-[11px] text-ink-dim">
+            <p class="font-ui text-small text-ink">Let the assistant draft new agent graphs</p>
+            <p class="font-ui text-caption text-ink-dim">
               When on, a chat session may save a new agent graph as an unreviewed
               draft in your library — it cannot run until you open it and save it
               yourself, which marks it reviewed. When off (default), any attempt
@@ -2132,13 +2143,13 @@ onMounted(() => {
 
       <section data-testid="global-context-section">
         <div class="flex items-center justify-between">
-          <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
             Global context
             <span class="ml-1 text-ink-dim">({{ globalAttachments.length }})</span>
           </h2>
           <button
             type="button"
-            class="flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+            class="flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-caption text-accent hover:bg-accent-glow"
             data-testid="global-add-context"
             @click="openGlobalPicker"
           >
@@ -2146,14 +2157,14 @@ onMounted(() => {
             <span>Add context</span>
           </button>
         </div>
-        <p class="mt-1 font-ui text-[11px] text-ink-dim">
+        <p class="mt-1 font-ui text-caption text-ink-dim">
           Global context applies to every session in the harness. The
           resolved stream concatenates global → project → session, so
           ordering here affects the prefix every conversation receives.
         </p>
         <div
           v-if="globalAttachmentsError"
-          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
           role="alert"
           data-testid="global-attachments-error"
         >
@@ -2198,16 +2209,16 @@ onMounted(() => {
         v-if="!onboardingHarnessSelfMCPDisabled"
         data-testid="onboarding-section"
       >
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Onboarding
         </h2>
-        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+        <p class="mt-1 font-ui text-caption text-ink-muted">
           Reopen the configuration assistant to change providers, install MCP
           servers, or update Cedar policies with guided help.
         </p>
         <div
           v-if="onboardingError"
-          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
           role="alert"
           data-testid="onboarding-error"
         >
@@ -2216,7 +2227,7 @@ onMounted(() => {
         <button
           type="button"
           :disabled="onboardingReconfiguring"
-          class="mt-3 rounded-sm border border-accent bg-surface-1 px-3 py-2 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50"
+          class="mt-3 rounded-sm border border-accent bg-surface-1 px-3 py-2 font-ui text-small text-accent hover:bg-accent-glow disabled:opacity-50"
           data-testid="reconfigure-with-assistant"
           @click="reconfigureWithAssistant"
         >
@@ -2228,10 +2239,10 @@ onMounted(() => {
       <KeyboardShortcuts />
 
       <section v-if="appInfo">
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Harness build
         </h2>
-        <dl class="mt-2 grid gap-2 font-ui text-[12px]" style="grid-template-columns: 12ch 1fr">
+        <dl class="mt-2 grid gap-2 font-ui text-small" style="grid-template-columns: 12ch 1fr">
           <dt class="text-ink-muted">Build</dt>
           <dd class="font-mono text-ink">{{ appInfo.build }}</dd>
           <dt class="text-ink-muted">Commit</dt>

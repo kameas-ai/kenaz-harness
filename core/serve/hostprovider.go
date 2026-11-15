@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/harnessmodels"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
 	"github.com/kameas-ai/kenaz-harness/core/llm/custom"
@@ -256,4 +257,27 @@ func probeHostProfile(ctx context.Context, resolver *credref.Resolver, p corellm
 		return custom.ProbeResult{}, err
 	}
 	return res, nil
+}
+
+// HostModelDefaults reads the host layer of the harness model slots from
+// the process environment (KENAZ_HARNESS_SUBAGENT_MODEL,
+// KENAZ_HARNESS_ROLE_MODELS — delivered on kenaz-meta.env), for passing to
+// rpc.WithHostModelDefaults. Malformed values are logged and ignored; the
+// workbench still boots. Model ids are metadata, not secrets.
+func HostModelDefaults(get envprovider.Getenv, log *slog.Logger) harnessmodels.Overrides {
+	o, errs := harnessmodels.ParseHostEnv(get)
+	if log != nil {
+		for _, e := range errs {
+			log.Warn("harness.serve.host_models.ignored", "reason", e.Error())
+		}
+		if !o.IsZero() {
+			log.Info("harness.serve.host_models.configured",
+				"subagent_default", o.SubagentDefault,
+				"advisor", o.Roles.Advisor,
+				"compaction", o.Roles.Compaction,
+				"branch_advisor", o.Roles.BranchAdvisor,
+				"risk_rater", o.Roles.RiskRater)
+		}
+	}
+	return o
 }

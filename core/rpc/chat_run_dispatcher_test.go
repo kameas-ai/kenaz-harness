@@ -368,3 +368,38 @@ func TestLiveChatRunDispatcher_MissingRowIsAFailedRecordNotAnError(t *testing.T)
 		t.Error("Error is empty, want a reason naming the reload failure")
 	}
 }
+
+// LiveChatRunDispatcher is a scheduler.RunStartReporter: it marks the run
+// started once it is about to write the prompt turn, and not on a fire
+// that fails before that (here: the row is gone). The cron engine relies
+// on the mark to decide whether a Stop-cancelled one-shot is used up.
+func TestLiveChatRunDispatcher_MarksRunStartBeforePrompt(t *testing.T) {
+	stack := buildDispatcherTestStack(t, "ok")
+	seedChatRunRow(t, stack.store, "cr-mark", "hello")
+	d := NewChatRunDispatcher(ChatRunDispatcherDeps{
+		Store:          stack.store,
+		Sessions:       stack.sessionsAPI,
+		LLM:            stack.llmAPI,
+		Bus:            stack.bus,
+		DefaultProfile: func() string { return "test-profile" },
+		Timeout:        5 * time.Second,
+	})
+
+	ctx, marked := scheduler.WithDispatchMark(context.Background())
+	job := scheduler.Job{ID: "cr-mark", Kind: scheduler.JobKindChatRun, ChatRun: &scheduler.ChatRunSpec{ID: "cr-mark"}}
+	if rec, err := d.DispatchChatRun(ctx, job, time.Now().UTC()); err != nil || rec.Status != "completed" {
+		t.Fatalf("dispatch: rec=%+v err=%v", rec, err)
+	}
+	if !marked() {
+		t.Fatal("a dispatched run was not marked started")
+	}
+
+	ctx, marked = scheduler.WithDispatchMark(context.Background())
+	missing := scheduler.Job{ID: "cr-gone", Kind: scheduler.JobKindChatRun, ChatRun: &scheduler.ChatRunSpec{ID: "cr-gone"}}
+	if _, err := d.DispatchChatRun(ctx, missing, time.Now().UTC()); err != nil {
+		t.Fatalf("dispatch missing: %v", err)
+	}
+	if marked() {
+		t.Fatal("a fire that never reached the prompt was marked started")
+	}
+}

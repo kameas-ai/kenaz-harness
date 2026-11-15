@@ -26,7 +26,7 @@ const text = decodeUtf8(props.bytesB64);
 
 <template>
   <pre
-    class="whitespace-pre-wrap break-words font-mono text-[12px] text-ink bg-surface-1 border border-border-muted rounded-sm p-3 overflow-x-auto"
+    class="whitespace-pre-wrap break-words font-mono text-small text-ink bg-surface-1 border border-border-muted rounded-sm p-3 overflow-x-auto"
     data-testid="text-renderer"
   >{{ text }}</pre>
 </template>

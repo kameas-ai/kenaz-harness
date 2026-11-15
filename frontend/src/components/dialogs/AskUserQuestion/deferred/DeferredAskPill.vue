@@ -82,7 +82,7 @@ defineExpose({ pending, pendingCount, panelOpen });
     <!-- Pill button -->
     <button
       type="button"
-      class="flex items-center gap-1 rounded-full border border-accent bg-accent/10 px-3 py-1 font-ui text-[11px] text-accent hover:bg-accent/20"
+      class="flex items-center gap-1 rounded-full border border-accent bg-accent/10 px-3 py-1 font-ui text-caption text-accent hover:bg-accent/20"
       :aria-label="`${pendingCount} pending question${pendingCount > 1 ? 's' : ''} from model`"
       data-testid="deferred-ask-pill"
       @click="togglePanel"

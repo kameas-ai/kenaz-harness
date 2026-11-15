@@ -132,10 +132,10 @@ function mergePolicyLabel(mp: string) {
 <template>
   <div class="flex flex-col gap-4 p-4" data-testid="agents-view">
     <div class="flex items-center justify-between">
-      <h2 class="font-ui text-base font-semibold text-ink">Sub-agent Profiles</h2>
+      <h2 class="font-ui text-h3 font-semibold text-ink">Sub-agent Profiles</h2>
       <button
         type="button"
-        class="font-ui text-sm text-ink-link hover:underline"
+        class="font-ui text-sm text-accent hover:underline"
         data-testid="agents-new-btn"
         @click="openNew"
       >
@@ -155,7 +155,7 @@ function mergePolicyLabel(mp: string) {
 
     <div
       v-else-if="lastError"
-      class="rounded border border-status-error/30 bg-status-error/5 p-3 font-ui text-sm text-status-error"
+      class="rounded border border-signal-danger/30 bg-signal-danger/5 p-3 font-ui text-sm text-signal-danger-text"
       role="alert"
       data-testid="agents-error"
     >
@@ -165,7 +165,7 @@ function mergePolicyLabel(mp: string) {
     <template v-else>
       <!-- Bundled profiles section -->
       <section v-if="bundledProfiles.length > 0" aria-label="Built-in profiles">
-        <h3 class="mb-2 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h3 class="mb-2 font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Built-in
         </h3>
         <ul class="flex flex-col gap-2" data-testid="bundled-profile-list">
@@ -180,25 +180,25 @@ function mergePolicyLabel(mp: string) {
                 <div class="flex items-center gap-2">
                   <span class="font-ui text-sm font-medium text-ink">{{ profile.name }}</span>
                   <span
-                    class="rounded-full bg-accent/10 px-2 py-0.5 font-ui text-[10px] uppercase tracking-wide text-accent"
+                    class="rounded-full bg-accent/10 px-2 py-0.5 font-ui text-eyebrow uppercase tracking-wide text-accent"
                   >
                     Built-in
                   </span>
                   <span
-                    class="rounded-full bg-surface-2 px-2 py-0.5 font-ui text-[10px] text-ink-muted"
+                    class="rounded-full bg-surface-2 px-2 py-0.5 font-ui text-eyebrow text-ink-muted"
                   >
                     {{ mergePolicyLabel(profile.mergePolicy) }}
                   </span>
                 </div>
                 <p class="mt-1 font-ui text-xs text-ink-muted">{{ profile.description }}</p>
-                <p v-if="profile.model" class="mt-0.5 font-ui text-[11px] text-ink-subtle">
+                <p v-if="profile.model" class="mt-0.5 font-ui text-caption text-ink-subtle">
                   {{ profile.model }}
                 </p>
               </div>
               <div class="flex shrink-0 gap-2">
                 <button
                   type="button"
-                  class="font-ui text-xs text-ink-link hover:underline"
+                  class="font-ui text-xs text-accent hover:underline"
                   :data-testid="`profile-inspect-${profile.id}`"
                   @click="openProfile(profile)"
                 >
@@ -206,7 +206,7 @@ function mergePolicyLabel(mp: string) {
                 </button>
                 <button
                   type="button"
-                  class="font-ui text-xs text-ink-link hover:underline"
+                  class="font-ui text-xs text-accent hover:underline"
                   :data-testid="`profile-duplicate-${profile.id}`"
                   @click="duplicateProfile(profile)"
                 >
@@ -220,7 +220,7 @@ function mergePolicyLabel(mp: string) {
 
       <!-- User profiles section -->
       <section aria-label="User profiles">
-        <h3 class="mb-2 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h3 class="mb-2 font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           My Profiles
         </h3>
         <div
@@ -242,20 +242,20 @@ function mergePolicyLabel(mp: string) {
                 <div class="flex items-center gap-2">
                   <span class="font-ui text-sm font-medium text-ink">{{ profile.name }}</span>
                   <span
-                    class="rounded-full bg-surface-2 px-2 py-0.5 font-ui text-[10px] text-ink-muted"
+                    class="rounded-full bg-surface-2 px-2 py-0.5 font-ui text-eyebrow text-ink-muted"
                   >
                     {{ mergePolicyLabel(profile.mergePolicy) }}
                   </span>
                 </div>
                 <p class="mt-1 font-ui text-xs text-ink-muted">{{ profile.description }}</p>
-                <p v-if="profile.model" class="mt-0.5 font-ui text-[11px] text-ink-subtle">
+                <p v-if="profile.model" class="mt-0.5 font-ui text-caption text-ink-subtle">
                   {{ profile.model }}
                 </p>
               </div>
               <div class="flex shrink-0 gap-2">
                 <button
                   type="button"
-                  class="font-ui text-xs text-ink-link hover:underline"
+                  class="font-ui text-xs text-accent hover:underline"
                   :data-testid="`profile-edit-${profile.id}`"
                   @click="openProfile(profile)"
                 >
@@ -263,7 +263,7 @@ function mergePolicyLabel(mp: string) {
                 </button>
                 <button
                   type="button"
-                  class="font-ui text-xs text-status-error hover:underline"
+                  class="font-ui text-xs text-signal-danger-text hover:underline"
                   :data-testid="`profile-delete-${profile.id}`"
                   @click="handleDelete(profile.id)"
                 >

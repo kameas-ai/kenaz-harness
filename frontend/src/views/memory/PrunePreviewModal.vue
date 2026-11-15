@@ -51,14 +51,14 @@ function effectiveRows(): MemoryPruneRow[] {
       <div class="mb-3 flex items-center justify-between">
         <h3
           id="prune-preview-title"
-          class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle"
         >
           Prune preview
         </h3>
         <div class="flex items-center gap-2">
           <button
             type="button"
-            class="px-3 py-1 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            class="px-3 py-1 rounded-sm border border-border-muted font-ui text-caption uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
             data-testid="prune-preview-cancel"
             @click="emit('cancel')"
           >
@@ -66,7 +66,7 @@ function effectiveRows(): MemoryPruneRow[] {
           </button>
           <button
             type="button"
-            class="px-3 py-1 rounded-sm border border-signal-danger font-ui text-[11px] uppercase tracking-[0.18em] text-signal-danger hover:bg-surface-2 disabled:opacity-50"
+            class="px-3 py-1 rounded-sm border border-signal-danger font-ui text-caption uppercase tracking-eyebrow text-signal-danger hover:bg-surface-2 disabled:opacity-50"
             :disabled="running"
             data-testid="prune-preview-run"
             @click="emit('confirm')"
@@ -85,7 +85,7 @@ function effectiveRows(): MemoryPruneRow[] {
           </span>
           <template v-if="preview.stats.collapsed > 0">
             and collapse
-            <span class="font-mono font-medium text-signal-warning">
+            <span class="font-mono font-medium text-signal-warn-text">
               {{ preview.stats.collapsed }}
             </span>
           </template>
@@ -116,26 +116,26 @@ function effectiveRows(): MemoryPruneRow[] {
           :data-testid="`prune-row-${row.id}`"
         >
           <span
-            class="mt-0.5 flex-shrink-0 rounded-sm px-1.5 py-0.5 font-ui text-[9px] uppercase tracking-[0.12em]"
+            class="mt-0.5 flex-shrink-0 rounded-sm px-1.5 py-0.5 font-ui text-tag uppercase tracking-eyebrow"
             :class="
               row.action === 'drop'
                 ? 'border border-signal-danger text-signal-danger'
-                : 'border border-signal-warning text-signal-warning'
+                : 'border border-signal-warn text-signal-warn-text'
             "
           >
             {{ row.action }}
           </span>
           <div class="min-w-0 flex-1">
-            <p class="font-mono text-[11px] text-ink-dim truncate">
+            <p class="font-mono text-caption text-ink-dim truncate">
               {{ row.id }}
             </p>
             <p
               v-if="row.snippet"
-              class="mt-0.5 font-ui text-[11px] text-ink line-clamp-2"
+              class="mt-0.5 font-ui text-caption text-ink line-clamp-2"
             >
               "{{ row.snippet }}"
             </p>
-            <p class="mt-0.5 font-ui text-[10px] text-ink-subtle">
+            <p class="mt-0.5 font-ui text-eyebrow text-ink-subtle">
               reason: {{ row.reason }}
             </p>
           </div>
@@ -144,16 +144,16 @@ function effectiveRows(): MemoryPruneRow[] {
 
       <!-- Stats footer -->
       <div class="mt-3 flex flex-wrap gap-3 border-t border-border-muted pt-2">
-        <span class="font-mono text-[11px] text-ink-subtle" data-testid="prune-preview-kept">
+        <span class="font-mono text-caption text-ink-subtle" data-testid="prune-preview-kept">
           kept {{ preview.stats.kept }}
         </span>
-        <span class="font-mono text-[11px] text-ink-subtle" data-testid="prune-preview-dropped">
+        <span class="font-mono text-caption text-ink-subtle" data-testid="prune-preview-dropped">
           dropped {{ preview.stats.dropped }}
         </span>
-        <span v-if="preview.stats.collapsed > 0" class="font-mono text-[11px] text-ink-subtle">
+        <span v-if="preview.stats.collapsed > 0" class="font-mono text-caption text-ink-subtle">
           collapsed {{ preview.stats.collapsed }}
         </span>
-        <span v-if="preview.stats.pinned > 0" class="font-mono text-[11px] text-ink-subtle">
+        <span v-if="preview.stats.pinned > 0" class="font-mono text-caption text-ink-subtle">
           pinned (skipped) {{ preview.stats.pinned }}
         </span>
       </div>

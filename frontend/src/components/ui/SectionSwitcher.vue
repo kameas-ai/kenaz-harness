@@ -43,7 +43,7 @@ const route = useRoute();
       v-for="s in props.sections"
       :key="s.id"
       :to="{ path: `${props.basePath}/${s.id}`, query: route.query }"
-      class="rounded-sm border px-3 py-1 font-ui text-[12px]"
+      class="rounded-sm border px-3 py-1 font-ui text-small"
       :class="
         props.active === s.id
           ? 'border-accent bg-surface-2 text-accent'

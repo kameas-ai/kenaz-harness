@@ -19,12 +19,15 @@ name: Release
 #                                                        and served from
 #                                                        stage.downloads.kameas.ai.
 #
-#   tag  v*  (no -rc, e.g. v1.2.0)         prod         Stable release.
-#   OR   release event (release-please)                  Published to
+#   tag  v*  (no -rc, e.g. v1.2.0)         prod         Release on the PRERELEASE
+#   OR   release event (release-please)                  channel. Published to
 #   OR   workflow_dispatch with version=                 s3://kameas-ai-prod-releases-use2
 #                                                        and served from
-#                                                        downloads.kameas.ai.
-#                                                        ← unchanged from prior behavior
+#                                                        downloads.kameas.ai, but only
+#                                                        kenaz-harness/prerelease/
+#                                                        manifest.json moves. The
+#                                                        stable pointer moves only via
+#                                                        promote.yml (L09 release gate).
 #
 # DEPENDENCY: the dev and stage paths depend on a sibling PR in kameas-ai/kameas-infra
 # (kameas-ai/kameas-infra#74) that creates:
@@ -83,9 +86,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Match go.mod's `toolchain` line (go1.27.3: CVE-2026-111943 crypto/x509
-  # denylist). Bump here when go.mod's toolchain bumps.
-  GO_VERSION: '1.27.3'
+  # Match go.mod's `toolchain` line (go1.27.4: GO-2026-6859 net/http;
+  # go1.27.3 before it: CVE-2026-111943 crypto/x509 denylist). Bump here
+  # when go.mod's toolchain bumps.
+  GO_VERSION: '1.27.4'
   NODE_VERSION: '20'
   # Kameas ML engine pin (see the `pin kenaz-ml engine release` step in the
   # build job). Bumping the engine a harness build installs is a one-line
@@ -1541,7 +1545,13 @@ jobs:
       # fire `release: published`, so this does not re-trigger this workflow.
       # A Release that is ALREADY published (legacy, or a human published the
       # draft) is left as-is — its publish state and "latest" flag untouched.
-      - name: publish release (undraft + latest)
+      #
+      # Release gate (launch spec L09 R2): a new Release is published as a
+      # PRERELEASE and never marked "latest". GitHub's releases/latest (the
+      # README download link and scripts/install.sh) therefore keeps naming
+      # the newest version that promote.yml has moved to the stable channel;
+      # promote.yml clears the prerelease flag and marks it latest.
+      - name: publish release (undraft as prerelease)
         id: publish
         env:
           TAG: ${{ steps.create.outputs.tag }}
@@ -1572,22 +1582,12 @@ jobs:
           fi
 
           if [ "$DRAFT" = "true" ]; then
-            # "latest" only if no published, non-prerelease Release outranks
-            # this tag — re-running an OLD tag must not steal "latest" (same
-            # rule publish-s3 applies to the CDN pointer).
-            MAKE_LATEST=true
-            while IFS=$'\t' read -r _ t d pre; do
-              [ "$d" = false ] && [ "$pre" = false ] || continue
-              [ "$t" != "$TAG" ] || continue
-              if [ "$(semver_cmp "$t" "$TAG" 2>/dev/null || true)" = 1 ]; then
-                MAKE_LATEST=false
-                echo "Published $t outranks $TAG — not marking latest."
-                break
-              fi
-            done < "$ALL"
+            # Prerelease, not latest: only promote.yml makes a version
+            # stable (L09 R2). See the comment above this step.
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$ID" \
-              -F draft=false -f make_latest="$MAKE_LATEST" >/dev/null
-            echo "Published $TAG (make_latest=$MAKE_LATEST)."
+              -F draft=false -F prerelease=true -f make_latest=false >/dev/null
+            echo "Published $TAG as a prerelease. Promote it to stable with:"
+            echo "  gh workflow run promote.yml --ref main -f version=$TAG -f action=promote -f smoke_macos=<evidence> -f smoke_windows=<evidence>"
           else
             echo "::notice::Release $TAG was already published — publish state and latest flag left unchanged."
           fi
@@ -1774,7 +1774,15 @@ jobs:
 
       # The canonical kenaz-harness/manifest.json is the env's "latest"
       # pointer: core/update/manifest.go (auto-updater), the frontend update
-      # store and the docs download page all read it. Before this guard every
+      # store and the docs download page all read it.
+      #
+      # PROD IS DIFFERENT (release gate, launch spec L09 R2): a prod build
+      # moves the PRERELEASE pointer, kenaz-harness/prerelease/manifest.json,
+      # which the updater's `prerelease` channel reads. The stable pointer
+      # (kenaz-harness/manifest.json, the `stable` channel and the download
+      # page) moves only when someone dispatches promote.yml naming this
+      # version, after the soak and the macOS + Windows smoke. dev and stage
+      # keep moving their own canonical pointer as before. Before this guard every
       # run overwrote it, so re-running release.yml against an OLD tag (the
       # remedy check-release-integrity.sh gives for a zero-asset release; and
       # every workflow_dispatch resolves to prod) would have made that old
@@ -1785,7 +1793,7 @@ jobs:
       # manifest.json, uploaded in the step above) and the GitHub Release
       # assets are published either way — they are harmless — so a guard
       # exit 1 leaves the per-tag prefix complete and this job re-runnable.
-      - name: Guard — never move the stable pointer backwards
+      - name: Guard — never move the pointer backwards
         id: pointer
         env:
           VERSION:    ${{ needs.derive-version.outputs.version }}
@@ -1794,19 +1802,25 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/ci/lib/semver.sh
+          # prod moves the prerelease pointer; dev/stage their canonical one.
+          POINTER_KEY="kenaz-harness/manifest.json"
+          if [ "$TARGET_ENV" = prod ]; then
+            POINTER_KEY="kenaz-harness/prerelease/manifest.json"
+          fi
+          echo "key=$POINTER_KEY" >> "$GITHUB_OUTPUT"
           CUR_JSON="$RUNNER_TEMP/current-manifest.json"
           CUR=""
-          if aws s3 cp "s3://${BUCKET}/kenaz-harness/manifest.json" "$CUR_JSON" \
+          if aws s3 cp "s3://${BUCKET}/${POINTER_KEY}" "$CUR_JSON" \
                --no-progress 2>"$RUNNER_TEMP/current-manifest.err"; then
             # Malformed JSON → empty → treated as "nothing to protect".
             CUR="$(jq -r '.version // "" | strings' "$CUR_JSON" 2>/dev/null || true)"
             if [ -z "$CUR" ]; then
               # The pointer EXISTS but carries no string version ({}, 0-byte,
               # garbage, numeric) — advancing is right, but never silently.
-              echo "::warning::canonical s3://${BUCKET}/kenaz-harness/manifest.json exists but has no string .version — nothing orderable to protect; advancing to $VERSION"
+              echo "::warning::pointer s3://${BUCKET}/${POINTER_KEY} exists but has no string .version — nothing orderable to protect; advancing to $VERSION"
             fi
           elif grep -Eq '\(404\)|NoSuchKey|does not exist|Not Found' "$RUNNER_TEMP/current-manifest.err"; then
-            echo "No canonical manifest in ${BUCKET} yet — first publish to this env."
+            echo "No ${POINTER_KEY} in ${BUCKET} yet — first publish to this pointer."
           else
             # Fail closed: a pointer we cannot read is a pointer we must not
             # blindly overwrite. The per-tag prefix (binaries + manifest) has
@@ -1814,7 +1828,7 @@ jobs:
             # (A nonexistent BUCKET also yields "Not Found" above and is
             # treated as first publish — harmless: the canonical cp that
             # follows fails on the same missing bucket.)
-            echo "::error::could not read s3://${BUCKET}/kenaz-harness/manifest.json to compare versions:"
+            echo "::error::could not read s3://${BUCKET}/${POINTER_KEY} to compare versions:"
             sed 's/^/  /' "$RUNNER_TEMP/current-manifest.err"
             exit 1
           fi
@@ -1823,27 +1837,29 @@ jobs:
           fi
           DECISION="$(pointer_decision "$TARGET_ENV" "$VERSION" "$CUR")"
           if [ "$DECISION" = hold ]; then
-            echo "::warning title=Stable pointer held::publishing $VERSION, which is OLDER than the current ${TARGET_ENV} pointer ${CUR}. Per-tag assets are published; kenaz-harness/manifest.json is NOT moved and $VERSION is filed into index.json at its historical position, not the top."
+            echo "::warning title=Pointer held::publishing $VERSION, which is OLDER than the current ${TARGET_ENV} pointer ${CUR}. Per-tag assets are published; ${POINTER_KEY} is NOT moved and $VERSION is filed into index.json at its historical position, not the top."
             echo "move=false" >> "$GITHUB_OUTPUT"
           else
             echo "Pointer decision: advance (${TARGET_ENV}: '${CUR:-<none>}' -> ${VERSION})"
             echo "move=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload manifest at canonical path (short cache)
+      - name: Upload manifest at the pointer path (short cache)
         env:
           BUCKET: ${{ needs.resolve-env.outputs.bucket }}
           MOVE_POINTER: ${{ steps.pointer.outputs.move }}
+          POINTER_KEY: ${{ steps.pointer.outputs.key }}
         run: |
           set -euo pipefail
           # (The per-tag copy was uploaded with the binaries, before the guard.)
           if [ "$MOVE_POINTER" != "true" ]; then
-            echo "Stable pointer held (see guard step) — canonical manifest.json left unchanged."
+            echo "Pointer held (see guard step) — ${POINTER_KEY} left unchanged."
             exit 0
           fi
-          # The download page fetches /kenaz-harness/manifest.json at runtime.
+          # dev/stage: the download page fetches /kenaz-harness/manifest.json
+          # at runtime. prod: the prerelease pointer (see the guard step).
           # Short cache so a fresh release shows up within minutes.
-          aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/kenaz-harness/manifest.json" \
+          aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/${POINTER_KEY}" \
             --cache-control 'public, max-age=120, must-revalidate' \
             --content-type 'application/json' \
             --metadata-directive REPLACE \
@@ -1902,6 +1918,9 @@ jobs:
                   'tag': tag,
                   'version': os.environ['VERSION'],
                   'env': target_env,
+                  # prod builds start on the prerelease channel; promote.yml
+                  # rewrites this to 'stable' when it promotes the version.
+                  'channel': 'prerelease' if target_env == 'prod' else target_env,
                   # Held (older) version: its commit time, so it sorts into
                   # its historical slot rather than to the top.
                   'released_at': os.environ['HELD_RELEASED_AT'] if held else os.environ['NOW'],
@@ -1929,6 +1948,6 @@ jobs:
           set -euo pipefail
           INV=$(aws cloudfront create-invalidation \
             --distribution-id "${CF_DIST_ID}" \
-            --paths '/kenaz-harness/manifest.json' '/kenaz-harness/index.json' '/kenaz-harness/*' \
+            --paths '/kenaz-harness/manifest.json' '/kenaz-harness/prerelease/manifest.json' '/kenaz-harness/index.json' '/kenaz-harness/*' \
             --query 'Invalidation.Id' --output text)
           echo "Invalidation: $INV"

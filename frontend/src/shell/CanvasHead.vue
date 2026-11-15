@@ -20,37 +20,35 @@ defineProps<{
 </script>
 
 <template>
-  <header class="px-6 pt-6 pb-4 border-b border-border-muted bg-surface-0">
+  <!--
+    Mirrors the DS v0.13.0 `.canvas-head` rules (styles/components.css):
+    mono breadcrumb at --type-small-size in --ink-subtle, a Geist 600
+    title at the DS page-title size, mono subtitle. Padding is the DS
+    canvas inset (--space-24 / --space-32).
+  -->
+  <header class="px-8 pt-6 pb-4 border-b border-border-muted bg-surface-0">
     <div
       v-if="number && section"
-      class="flex items-baseline gap-2 text-ink-subtle"
+      class="mb-2 flex items-baseline gap-1.5 font-mono text-small tracking-meta text-ink-subtle"
     >
-      <span class="font-ui text-[11px] font-medium uppercase tracking-[0.18em]">
-        {{ number }}
-      </span>
+      <span>{{ number }}</span>
       <span class="text-ink-dim">/</span>
-      <span class="font-ui text-[11px] font-medium uppercase tracking-[0.18em]">
-        {{ section }}
-      </span>
+      <span class="uppercase">{{ section }}</span>
     </div>
     <!--
-      Serif register (DS 0.6 paper direction / spec 071 FR-004). Mirrors
-      the DS's own `.canvas-head__title` rule: sanctioned context #1 is
-      "page/view titles", and every view in this shell renders its title
-      through this component, so wiring serif here covers the app-wide
-      requirement in one place — same pattern kenaz/frontend gets for
-      free from the DS's Shell/CanvasHead. Never applied to rail, toolbar,
-      tables, or buttons.
+      Page title. Every view renders its title through this component, so
+      this is the app-wide page-title rule. DS 0.12 retired the serif;
+      the face is --font-heading (Geist). The DS sets the page title to a
+      literal 28px in `.canvas-head__title` and publishes no token for it
+      (design gap, see fleet design-gaps/harness.md).
     -->
-    <h1
-      class="font-serif text-[28px] font-medium tracking-tight text-ink"
-      :class="number && section ? 'mt-2' : ''"
-    >
+    <!-- css-tokens-allow-next-line: DS .canvas-head__title is a literal 28px with no --type-* token (design gap) -->
+    <h1 class="font-heading text-[28px] font-semibold tracking-hero text-ink">
       {{ title }}
     </h1>
     <p
       v-if="subtitle"
-      class="mt-1 max-w-prose font-ui text-sm leading-relaxed text-ink-muted"
+      class="mt-1 max-w-prose font-mono text-small tracking-meta text-ink-subtle"
     >
       {{ subtitle }}
     </p>

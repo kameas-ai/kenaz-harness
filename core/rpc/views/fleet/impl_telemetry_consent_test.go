@@ -19,16 +19,24 @@ import (
 
 // fakeOptInPusher is a race-safe fake of optInPusher.
 type fakeOptInPusher struct {
-	mu    sync.Mutex
-	calls []corefleet.ConsentLevel
-	err   error
+	mu       sync.Mutex
+	calls    []corefleet.ConsentLevel
+	editions []string
+	err      error
 }
 
-func (f *fakeOptInPusher) Push(_ context.Context, level corefleet.ConsentLevel) error {
+func (f *fakeOptInPusher) PushWithNotice(_ context.Context, level corefleet.ConsentLevel, noticeEdition string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, level)
+	f.editions = append(f.editions, noticeEdition)
 	return f.err
+}
+
+func (f *fakeOptInPusher) editionsSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.editions...)
 }
 
 func (f *fakeOptInPusher) snapshot() []corefleet.ConsentLevel {
@@ -154,5 +162,22 @@ func TestImpl_SetTelemetryConsent_InvalidLevel_RejectedBeforeAnything(t *testing
 	}
 	if got := tc.Level(); got != corefleet.ConsentNone {
 		t.Errorf("local tier = %q, want unchanged (none, the default)", got)
+	}
+}
+
+// TestImpl_SetTelemetryConsentWithNotice_PassesTheShownEdition: the edition
+// the panel showed reaches the pusher (which sends notice_version
+// "kenaz-harness/<edition>", contract-harness-sync §17.2); without one, none.
+func TestImpl_SetTelemetryConsentWithNotice_PassesTheShownEdition(t *testing.T) {
+	fake := &fakeOptInPusher{}
+	impl := &Impl{Consent: newEnterpriseConsent(t), OptIns: fake}
+	if err := impl.SetTelemetryConsentWithNotice(context.Background(), "aggregate", "agent-telemetry/v4"); err != nil {
+		t.Fatal(err)
+	}
+	if err := impl.SetTelemetryConsent(context.Background(), "none"); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.editionsSnapshot(); len(got) != 2 || got[0] != "agent-telemetry/v4" || got[1] != "" {
+		t.Fatalf("editions = %q", got)
 	}
 }

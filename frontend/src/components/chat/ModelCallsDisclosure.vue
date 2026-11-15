@@ -106,7 +106,7 @@ const summary = computed(() => {
   <div class="relative" @keydown.esc="close">
     <button
       type="button"
-      class="uppercase tracking-[0.14em] text-ink-subtle hover:text-ink-muted"
+      class="uppercase tracking-eyebrow text-ink-subtle hover:text-ink-muted"
       data-testid="model-calls-toggle"
       :aria-expanded="open"
       :aria-controls="open ? panelId : undefined"
@@ -120,7 +120,7 @@ const summary = computed(() => {
       :id="panelId"
       role="region"
       aria-label="Model calls"
-      class="absolute bottom-full right-0 z-20 mb-2 max-h-96 w-[34rem] max-w-[90vw] overflow-auto rounded-md border border-hairline bg-surface-1 p-3 text-xs shadow-lg normal-case tracking-normal"
+      class="absolute bottom-full right-0 z-20 mb-2 max-h-96 w-[34rem] max-w-[90vw] overflow-auto rounded-md border border-border-muted bg-surface-1 p-3 text-xs shadow-lg normal-case tracking-normal"
       data-testid="model-calls-panel"
     >
       <NotAvailableInServedMode
@@ -138,7 +138,7 @@ const summary = computed(() => {
         <p v-else-if="calls.length === 0" class="text-ink-muted" data-testid="model-calls-empty">
           No model calls recorded for this session yet.
         </p>
-        <ul v-else class="flex flex-col divide-y divide-hairline">
+        <ul v-else class="flex flex-col divide-y divide-border-muted">
           <li
             v-for="c in calls"
             :key="c.spanId"

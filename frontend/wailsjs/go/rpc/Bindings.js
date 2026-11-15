@@ -442,6 +442,10 @@ export function Contexts_ContextSearch(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Contexts_ContextSearch'](arg1, arg2, arg3);
 }
 
+export function Contexts_ContextShareStates(arg1) {
+  return window['go']['rpc']['Bindings']['Contexts_ContextShareStates'](arg1);
+}
+
 export function Contexts_ContextSyncStatus() {
   return window['go']['rpc']['Bindings']['Contexts_ContextSyncStatus']();
 }
@@ -594,6 +598,10 @@ export function Fleet_MLStatus() {
   return window['go']['rpc']['Bindings']['Fleet_MLStatus']();
 }
 
+export function Fleet_MemberNotices() {
+  return window['go']['rpc']['Bindings']['Fleet_MemberNotices']();
+}
+
 export function Fleet_MemorySyncContinueOlderNotes() {
   return window['go']['rpc']['Bindings']['Fleet_MemorySyncContinueOlderNotes']();
 }
@@ -618,8 +626,12 @@ export function Fleet_PendingApprovals() {
   return window['go']['rpc']['Bindings']['Fleet_PendingApprovals']();
 }
 
-export function Fleet_SetTelemetryConsent(arg1) {
-  return window['go']['rpc']['Bindings']['Fleet_SetTelemetryConsent'](arg1);
+export function Fleet_RespondMemberNotice(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Fleet_RespondMemberNotice'](arg1, arg2, arg3, arg4);
+}
+
+export function Fleet_SetTelemetryConsent(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Fleet_SetTelemetryConsent'](arg1, arg2);
 }
 
 export function Fleet_SetWorkflowEventsOptIn(arg1) {
@@ -1394,12 +1406,20 @@ export function Settings_DeleteMLLocalActivity() {
   return window['go']['rpc']['Bindings']['Settings_DeleteMLLocalActivity']();
 }
 
+export function Settings_DismissPolicyDefaultNotice() {
+  return window['go']['rpc']['Bindings']['Settings_DismissPolicyDefaultNotice']();
+}
+
 export function Settings_FleetCapabilities() {
   return window['go']['rpc']['Bindings']['Settings_FleetCapabilities']();
 }
 
 export function Settings_FleetConfigPullStatus() {
   return window['go']['rpc']['Bindings']['Settings_FleetConfigPullStatus']();
+}
+
+export function Settings_FleetDeviceKeysReauth() {
+  return window['go']['rpc']['Bindings']['Settings_FleetDeviceKeysReauth']();
 }
 
 export function Settings_FleetHealth() {
@@ -1440,6 +1460,10 @@ export function Settings_FleetSignInCancel() {
 
 export function Settings_FleetSignOut() {
   return window['go']['rpc']['Bindings']['Settings_FleetSignOut']();
+}
+
+export function Settings_FleetTeams() {
+  return window['go']['rpc']['Bindings']['Settings_FleetTeams']();
 }
 
 export function Settings_FleetTelemetryOptIns() {
@@ -1506,6 +1530,10 @@ export function Settings_GetFSWriteEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetFSWriteEnabled']();
 }
 
+export function Settings_GetFleetDeviceName() {
+  return window['go']['rpc']['Bindings']['Settings_GetFleetDeviceName']();
+}
+
 export function Settings_GetLocalRuntimeRAMOverrideGB() {
   return window['go']['rpc']['Bindings']['Settings_GetLocalRuntimeRAMOverrideGB']();
 }
@@ -1552,6 +1580,10 @@ export function Settings_GetPermissionMode() {
 
 export function Settings_GetPermissionsMigrationToastShown() {
   return window['go']['rpc']['Bindings']['Settings_GetPermissionsMigrationToastShown']();
+}
+
+export function Settings_GetPolicyDefault() {
+  return window['go']['rpc']['Bindings']['Settings_GetPolicyDefault']();
 }
 
 export function Settings_GetRiskRaterBenchmark() {
@@ -1646,6 +1678,10 @@ export function Settings_SetFSWriteEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetFSWriteEnabled'](arg1);
 }
 
+export function Settings_SetFleetDeviceName(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFleetDeviceName'](arg1);
+}
+
 export function Settings_SetLocalRuntimeRAMOverrideGB(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetLocalRuntimeRAMOverrideGB'](arg1);
 }
@@ -1692,6 +1728,10 @@ export function Settings_SetPermissionMode(arg1) {
 
 export function Settings_SetPermissionsMigrationToastShown(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetPermissionsMigrationToastShown'](arg1);
+}
+
+export function Settings_SetPolicyDefault(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetPolicyDefault'](arg1);
 }
 
 export function Settings_SetSaveArtifactEnabled(arg1) {

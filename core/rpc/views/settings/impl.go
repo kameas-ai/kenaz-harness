@@ -1532,9 +1532,12 @@ func defaultSettings() Settings {
 // SettingsStore. Get and Set delegate to LoadAll / SaveAll under
 // the store's own concurrency control.
 type API struct {
-	store           SettingsStore
-	auditSettingsMu sync.Mutex
-	auditSettings   AuditSettings
+	store SettingsStore
+	// deviceNamePushes tracks background device-name re-enrolls
+	// (fleet_device_name.go) so tests can wait for them to finish.
+	deviceNamePushes sync.WaitGroup
+	auditSettingsMu  sync.Mutex
+	auditSettings    AuditSettings
 	// fleet holds the optional fleet client and data dir. Populated via
 	// SetFleetClient during chassis boot; nil when fleet is not wired.
 	fleet *fleetState
@@ -1703,6 +1706,9 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 	//     SetModelCallTelemetry (the panel action). A stale copy must not
 	//     turn sharing back on without the user seeing the opt-in text
 	//     (legal D82).
+	//   - The Fleet device-name fields are written only by
+	//     SetFleetDeviceName, so a stale copy cannot turn sharing back on or
+	//     swap the name the org sees.
 	// The keep happens inside Update, under the store lock, so a
 	// confirmation or toggle landing between the read and the write cannot
 	// be reverted. If the stored settings cannot be read the save is
@@ -1714,6 +1720,14 @@ func (a *API) Set(ctx context.Context, s Settings) error {
 		s.ShareModelCallTelemetryWithFleet = cur.ShareModelCallTelemetryWithFleet
 		s.ShareModelCallTelemetryTextRevision = cur.ShareModelCallTelemetryTextRevision
 		s.ShareModelCallTelemetryAcceptedAt = cur.ShareModelCallTelemetryAcceptedAt
+		s.FleetDeviceNameHidden = cur.FleetDeviceNameHidden
+		s.FleetDeviceNameUseComputerName = cur.FleetDeviceNameUseComputerName
+		s.FleetDeviceNameCustom = cur.FleetDeviceNameCustom
+		s.FleetDeviceNameNeutral = cur.FleetDeviceNameNeutral
+		// The policy default changes what an agent may do without
+		// asking, so only its own action writes it (L09 R6).
+		s.PolicyDefault = cur.PolicyDefault
+		s.PolicyDefaultNoticeSeen = cur.PolicyDefaultNoticeSeen
 		*cur = s
 		return nil
 	}); err != nil {

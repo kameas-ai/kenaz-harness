@@ -37,7 +37,7 @@ const isEmpty = computed(() => props.binding === '' || props.binding == null);
 <template>
   <span
     v-if="isEmpty"
-    class="font-mono text-[11px] text-ink-dim"
+    class="font-mono text-caption text-ink-dim"
     aria-label="unbound"
   >
     —
@@ -46,7 +46,7 @@ const isEmpty = computed(() => props.binding === '' || props.binding == null);
     <kbd
       v-for="(part, i) in parts"
       :key="i"
-      class="inline-flex items-center justify-center rounded border border-border bg-surface-2 px-1 py-0.5 font-mono text-[11px] text-ink leading-none"
+      class="inline-flex items-center justify-center rounded border border-border bg-surface-2 px-1 py-0.5 font-mono text-caption text-ink leading-none"
     >{{ part }}</kbd>
   </span>
 </template>

@@ -68,7 +68,7 @@ const title = (() => {
     data-testid="session-cost-cell"
     :title="title"
   >
-    <span class="uppercase tracking-[0.14em] text-ink-subtle">cost</span>
+    <span class="uppercase tracking-eyebrow text-ink-subtle">cost</span>
     <span class="font-mono text-ink-muted tabular-nums">{{ label }}</span>
   </div>
 </template>

@@ -39,6 +39,17 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 // Fleet's OTLP receiver picks protobuf vs JSON decoding from Content-Type
 // alone (ml-producer-01MLPRD01 WP03).
 func (c *Client) doWithContentType(ctx context.Context, method, path, contentType string, body io.Reader) (*http.Response, error) {
+	var hdr http.Header
+	if contentType != "" {
+		hdr = http.Header{"Content-Type": {contentType}}
+	}
+	return c.doWithHeaders(ctx, method, path, hdr, body)
+}
+
+// doWithHeaders is do with extra request headers set on every attempt
+// (Content-Type, the step-up token on PUT keys). Authorization and
+// User-Agent are always set by this function and cannot be overridden.
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, extra http.Header, body io.Reader) (*http.Response, error) {
 	if c == nil || c.isNop {
 		return nil, ErrFleetDisabled
 	}
@@ -117,11 +128,13 @@ func (c *Client) doWithContentType(ctx context.Context, method, path, contentTyp
 				cancel()
 				return nil, errNoAccount
 			}
+			for k, vs := range extra {
+				for _, v := range vs {
+					req.Header.Add(k, v)
+				}
+			}
 			req.Header.Set("Authorization", "Bearer "+ts.AccessToken)
 			setUserAgent(req)
-			if contentType != "" {
-				req.Header.Set("Content-Type", contentType)
-			}
 
 			resp, err := c.httpClient.Do(req)
 			if err != nil {

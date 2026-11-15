@@ -77,9 +77,10 @@ type PruneCapable interface {
 // generic so a future chromem-go-backed implementation can replace it
 // without touching callers.
 type chromemStore struct {
-	// account returns who a new note belongs to (see account.go). Read under
-	// mu, called outside it; nil until wired.
-	account func() string
+	// account says who is using the device (see account.go). Read under mu,
+	// called outside it, because it reads the OS keychain, which can block on a
+	// prompt. nil until wired, and then nothing is filtered.
+	account func() AccountView
 
 	mu     sync.RWMutex
 	path   string
@@ -111,9 +112,9 @@ type ClockSetter interface {
 	SetClock(c *HLC)
 }
 
-// SetAccountSource installs the signed-in account's key ("" = signed out).
-// nil disables account stamping.
-func (s *chromemStore) SetAccountSource(fn func() string) {
+// SetAccountSource installs who is using the device. nil disables account
+// stamping and filtering.
+func (s *chromemStore) SetAccountSource(fn func() AccountView) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.account = fn
@@ -290,12 +291,13 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	}
 	// Before taking the lock: the source reads the OS keychain, which can block
 	// on a prompt, and recall must not wait on that.
-	s.mu.RLock()
-	accountSource := s.account
-	s.mu.RUnlock()
-	if chunk.Account == "" && accountSource != nil {
-		if chunk.Account = accountSource(); chunk.Account == "" {
-			chunk.Account = AccountSignedOut
+	sees := func(Chunk) bool { return true }
+	if view, ok := s.view(); ok {
+		sees = view.Sees
+		if chunk.Account == "" {
+			if chunk.Account = view.Stamp; chunk.Account == "" {
+				chunk.Account = AccountSignedOut
+			}
 		}
 	}
 	s.mu.Lock()
@@ -303,8 +305,14 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	cutoff := s.now().Add(-DedupWindow)
 	for i, c := range s.chunks {
 		if c.ID == chunk.ID {
+			if !sees(c) {
+				return fmt.Errorf("memory: chunk %q not found", chunk.ID)
+			}
 			s.chunks[i] = s.replaceLocked(c, chunk)
 			return s.saveLocked()
+		}
+		if !sees(c) {
+			continue // another account's note isn't a duplicate of this one
 		}
 		if c.ContentHash == chunk.ContentHash &&
 			c.ScopeKind == chunk.ScopeKind &&
@@ -379,10 +387,11 @@ func (s *chromemStore) replaceLocked(old, in Chunk) Chunk {
 }
 
 func (s *chromemStore) Delete(_ context.Context, id string) error {
+	sees := s.viewer()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, c := range s.chunks {
-		if c.ID == id {
+		if c.ID == id && sees(c) {
 			s.chunks = append(s.chunks[:i], s.chunks[i+1:]...)
 			return s.saveLocked()
 		}
@@ -393,10 +402,11 @@ func (s *chromemStore) Delete(_ context.Context, id string) error {
 // Remove deletes id and returns the removed row's final state, atomically
 // under s.mu (ChunkRemover, memory-sync-01MEMSY01 WP04).
 func (s *chromemStore) Remove(_ context.Context, id string) (Chunk, error) {
+	sees := s.viewer()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, c := range s.chunks {
-		if c.ID == id {
+		if c.ID == id && sees(c) {
 			prev := s.chunks
 			s.chunks = append(append([]Chunk(nil), s.chunks[:i]...), s.chunks[i+1:]...)
 			if err := s.saveLocked(); err != nil {
@@ -409,12 +419,41 @@ func (s *chromemStore) Remove(_ context.Context, id string) (Chunk, error) {
 	return Chunk{}, fmt.Errorf("memory: chunk %q not found", id)
 }
 
+// view reads who is using the device, without holding mu while it does.
+func (s *chromemStore) view() (AccountView, bool) {
+	s.mu.RLock()
+	source := s.account
+	s.mu.RUnlock()
+	if source == nil {
+		return AccountView{}, false
+	}
+	return source(), true
+}
+
+// viewer is the filter for this person's reads and changes.
+func (s *chromemStore) viewer() func(Chunk) bool {
+	view, ok := s.view()
+	if !ok {
+		return func(Chunk) bool { return true }
+	}
+	return view.Sees
+}
+
 func (s *chromemStore) List(_ context.Context, scopes ...ScopeFilter) ([]Chunk, error) {
+	return s.list(s.viewer(), scopes), nil
+}
+
+// ListAll implements SyncStore.
+func (s *chromemStore) ListAll(_ context.Context) ([]Chunk, error) {
+	return s.list(func(Chunk) bool { return true }, nil), nil
+}
+
+func (s *chromemStore) list(sees func(Chunk) bool, scopes []ScopeFilter) []Chunk {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Chunk, 0, len(s.chunks))
 	for _, c := range s.chunks {
-		if !matchesScope(c, scopes) {
+		if !sees(c) || !matchesScope(c, scopes) {
 			continue
 		}
 		out = append(out, c)
@@ -423,7 +462,7 @@ func (s *chromemStore) List(_ context.Context, scopes ...ScopeFilter) ([]Chunk, 
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
-	return out, nil
+	return out
 }
 
 func (s *chromemStore) Query(_ context.Context, embedding []float32, k int, scopes ...ScopeFilter) ([]Result, error) {
@@ -433,10 +472,14 @@ func (s *chromemStore) Query(_ context.Context, embedding []float32, k int, scop
 	if k <= 0 {
 		return nil, nil
 	}
+	sees := s.viewer()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	results := make([]Result, 0, len(s.chunks))
 	for _, c := range s.chunks {
+		if !sees(c) {
+			continue
+		}
 		if len(c.Embedding) == 0 || len(c.Embedding) != len(embedding) {
 			// Mismatched dims usually means the user switched embedder
 			// models; an empty vector is an EmbedPending chunk (pulled,
@@ -504,11 +547,12 @@ func (s *chromemStore) PromoteScope(_ context.Context, id, newScopeKind, newScop
 	default:
 		return fmt.Errorf("memory: promote: invalid scope kind %q", newScopeKind)
 	}
+	sees := s.viewer()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	idx := -1
 	for i, c := range s.chunks {
-		if c.ID == id {
+		if c.ID == id && sees(c) {
 			idx = i
 			break
 		}
@@ -543,10 +587,11 @@ func (s *chromemStore) SetPinned(_ context.Context, id string, pinned bool) erro
 	if id == "" {
 		return errors.New("memory: pin: id required")
 	}
+	sees := s.viewer()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.chunks {
-		if s.chunks[i].ID == id {
+		if s.chunks[i].ID == id && sees(s.chunks[i]) {
 			if s.chunks[i].Pinned == pinned {
 				return nil
 			}
@@ -574,11 +619,12 @@ func (s *chromemStore) MarkAccessed(_ context.Context, ids []string, at time.Tim
 	for _, id := range ids {
 		wanted[id] = struct{}{}
 	}
+	sees := s.viewer()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	dirty := false
 	for i := range s.chunks {
-		if _, ok := wanted[s.chunks[i].ID]; !ok {
+		if _, ok := wanted[s.chunks[i].ID]; !ok || !sees(s.chunks[i]) {
 			continue
 		}
 		// G-counter split (memory-sync-01MEMSY01): a recall on this
@@ -634,12 +680,13 @@ func (s *chromemStore) DeleteScope(_ context.Context, scope ScopeFilter) ([]Chun
 	if scope.Kind == "" {
 		return nil, nil
 	}
+	sees := s.viewer()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var gone []Chunk
 	kept := make([]Chunk, 0, len(s.chunks))
 	for _, c := range s.chunks {
-		if matchesScope(c, []ScopeFilter{scope}) {
+		if sees(c) && matchesScope(c, []ScopeFilter{scope}) {
 			gone = append(gone, c)
 			continue
 		}
@@ -717,10 +764,11 @@ type RecallFolder interface {
 
 // FoldRecall implements RecallFolder.
 func (s *chromemStore) FoldRecall(_ context.Context, id string, n int, at time.Time) error {
+	sees := s.viewer()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.chunks {
-		if s.chunks[i].ID != id {
+		if s.chunks[i].ID != id || !sees(s.chunks[i]) {
 			continue
 		}
 		if n > 0 {

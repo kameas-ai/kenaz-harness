@@ -29,7 +29,7 @@ const displayVersion = computed(() => {
 
 <template>
   <div
-    class="flex items-center gap-2 px-3 py-1 text-[11px] font-ui text-ink-muted"
+    class="flex items-center gap-2 px-3 py-1 text-caption font-ui text-ink-muted"
     role="status"
     aria-label="Harness build"
   >

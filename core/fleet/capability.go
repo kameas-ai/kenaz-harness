@@ -102,6 +102,15 @@ const (
 	// (ml-producer-01MLPRD01, spec §4 gate 2). Re-added after the
 	// 01NSYNC01 dead-code cleanup dropped it while it had no consumer.
 	CapHostedInference Capability = "hosted_inference"
+
+	// CapAuditLedgerRead is not a tier capability: Fleet sends the tier's
+	// real audit_log_immudb value under this key while legal D173 has it
+	// advertise audit_log_immudb as false to customer orgs (kenaz-fleet
+	// docs/contract-harness-sync.md §8.0.1). Consumer: the Compliance panel,
+	// which tells "archive withheld for your org" apart from "your plan
+	// lacks it" (ComplianceStatus.ArchiveWithheld) so a Team+ org is never
+	// shown an upgrade prompt. Wire value "audit_ledger_read".
+	CapAuditLedgerRead Capability = "audit_ledger_read"
 )
 
 // AllCapabilities returns every known Capability constant in declaration
@@ -138,6 +147,7 @@ func AllCapabilities() []Capability {
 		CapOrgGraphSharing,
 		CapMemorySync,
 		CapHostedInference,
+		CapAuditLedgerRead,
 	}
 }
 

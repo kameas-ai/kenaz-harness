@@ -11,6 +11,7 @@ package fleet
 // stub that answers "accepted" to everything.
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -65,10 +66,141 @@ type fakeMemoryFleet struct {
 	status429, status403 int
 	pushes               []memPushRequest
 	forgetAlls           int
+	// offerErasedBefore is Fleet's D157 signal on an empty-cursor pull.
+	offerErasedBefore string
+	// offerErasedReset answers the next empty-cursor pull with reset:true for
+	// this erased_before, once.
+	offerErasedReset string
+	// forceReject answers a push of these ids with the given refusal,
+	// modelling Fleet's D157 create checks (contract §11).
+	forceReject map[string]memPushResult
+	// dateOffset shifts the Date header it answers with.
+	dateOffset time.Duration
 	// pausedCategory, when set, models a staff org pause (kenaz-fleet
 	// #206): every memory route answers 403 org_paused EXCEPT the
 	// data-rights allowlist (forget-all here).
 	pausedCategory string
+
+	// notice models Fleet's person-view notice registry for the
+	// memory-access family on kenaz-harness (contract-harness-sync §17).
+	// nil = nothing registered: notice-text answers 404, as Fleet does
+	// today. noticeAcks is the ack store, keyed by the token's subject
+	// (the fake's stand-in for org+user). noticeAckStatus forces the next
+	// POST /me/notice-acks to answer with that status and noticeAckCode.
+	notice          *NoticeText
+	noticeAcks      map[string]NoticeAckState
+	noticeTextGets  int
+	noticeAckStatus int
+	noticeAckCode   string
+	// noticeTextFail / noticeAcksFail, when non-zero, answer every
+	// notice-text / GET notice-acks with that status and noticeFailBody,
+	// until cleared.
+	noticeTextFail int
+	noticeAcksFail int
+	noticeFailBody string
+}
+
+func (f *fakeMemoryFleet) setNoticeFailures(text, acks int, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.noticeTextFail, f.noticeAcksFail, f.noticeFailBody = text, acks, body
+}
+
+func (f *fakeMemoryFleet) setNotice(nt *NoticeText) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notice = nt
+}
+
+func (f *fakeMemoryFleet) noticeTextRequests() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.noticeTextGets
+}
+
+// tokenSubject is the sub claim of the request's bearer token.
+func tokenSubject(r *http.Request) string {
+	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var c struct {
+		Sub string `json:"sub"`
+	}
+	_ = json.Unmarshal(raw, &c)
+	return c.Sub
+}
+
+func (f *fakeMemoryFleet) serveNoticeLocked(w http.ResponseWriter, r *http.Request, body []byte) bool {
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/notice-text":
+		f.noticeTextGets++
+		if f.noticeTextFail != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(f.noticeTextFail)
+			_, _ = io.WriteString(w, f.noticeFailBody)
+			return true
+		}
+		q := r.URL.Query()
+		if f.notice == nil || q.Get("family") != f.notice.Family || q.Get("surface") != f.notice.Surface ||
+			(q.Get("edition") != "" && q.Get("edition") != f.notice.Edition) {
+			writeJSON(w, 404, map[string]any{"code": "notice_not_registered"})
+			return true
+		}
+		writeJSON(w, 200, f.notice)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/notice-acks":
+		if f.noticeAcksFail != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(f.noticeAcksFail)
+			_, _ = io.WriteString(w, f.noticeFailBody)
+			return true
+		}
+		fams := []NoticeAckState{}
+		if row, ok := f.noticeAcks[tokenSubject(r)]; ok {
+			fams = append(fams, row)
+		}
+		writeJSON(w, 200, map[string]any{"families": fams})
+	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/me/notice-acks":
+		if f.noticeAckStatus != 0 {
+			st, code := f.noticeAckStatus, f.noticeAckCode
+			f.noticeAckStatus, f.noticeAckCode = 0, ""
+			writeJSON(w, st, map[string]any{"code": code})
+			return true
+		}
+		var req struct{ Family, Edition, TextHash, Surface, Action string }
+		var raw map[string]string
+		_ = json.Unmarshal(body, &raw)
+		req.Family, req.Edition, req.TextHash = raw["family"], raw["edition"], raw["text_hash"]
+		req.Surface, req.Action = raw["surface"], raw["action"]
+		if f.notice == nil || req.Family != f.notice.Family || req.Edition != f.notice.Edition ||
+			req.TextHash != f.notice.TextHash || req.Surface != f.notice.Surface {
+			writeJSON(w, 422, map[string]any{"code": "notice_not_registered"})
+			return true
+		}
+		if req.Action != "ack" && req.Action != "withdraw" {
+			writeJSON(w, 422, map[string]any{"code": "invalid_action"})
+			return true
+		}
+		if f.noticeAcks == nil {
+			f.noticeAcks = map[string]NoticeAckState{}
+		}
+		at := f.now().UTC().Format(time.RFC3339)
+		row := NoticeAckState{Family: req.Family, Edition: req.Edition, TextHash: req.TextHash,
+			Surface: req.Surface, Action: req.Action, Acked: req.Action == "ack", ActedAt: at}
+		if row.Acked {
+			row.AckedSince = &at
+		}
+		f.noticeAcks[tokenSubject(r)] = row
+		writeJSON(w, 201, map[string]any{"family": row.Family, "edition": row.Edition, "action": row.Action, "acted_at": at})
+	default:
+		return false
+	}
+	return true
 }
 
 func (f *fakeMemoryFleet) setPaused(category string) {
@@ -159,7 +291,7 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests++
-	w.Header().Set("Date", f.now().UTC().Format(http.TimeFormat))
+	w.Header().Set("Date", f.now().Add(f.dateOffset).UTC().Format(http.TimeFormat))
 	if f.status429 > 0 {
 		f.status429--
 		w.Header().Set("Retry-After", "120")
@@ -185,6 +317,9 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, _ := io.ReadAll(r.Body)
+	if f.serveNoticeLocked(w, r, body) {
+		return
+	}
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/memory/settings":
 		writeJSON(w, 200, f.settingsLocked())
@@ -329,6 +464,12 @@ func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, memPullResponse{Enabled: true, Reset: true, ResetReason: reason, ErasedBefore: erased, Records: []memPullRecord{}})
 		return
 	}
+	if raw == "" && f.offerErasedReset != "" {
+		erased := f.offerErasedReset
+		f.offerErasedReset = ""
+		writeJSON(w, 200, memPullResponse{Enabled: true, Reset: true, ResetReason: "erased", ErasedBefore: erased, Records: []memPullRecord{}})
+		return
+	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit <= 0 {
 		limit = 200
@@ -346,6 +487,9 @@ func (f *fakeMemoryFleet) pullLocked(w http.ResponseWriter, r *http.Request) {
 		rows = rows[:limit]
 	}
 	out := memPullResponse{Enabled: true, Records: []memPullRecord{}, Cursor: raw, HasMore: more}
+	if raw == "" {
+		out.ErasedBefore = f.offerErasedBefore
+	}
 	var last int64
 	for _, rec := range rows {
 		last = rec.seq
@@ -433,6 +577,9 @@ func (f *fakeMemoryFleet) itemLocked(dev string, it memPushItem) memPushResult {
 	target := it.ID
 	if c, ok := f.aliases[it.ID]; ok {
 		target = c
+	}
+	if r, ok := f.forceReject[it.ID]; ok && it.Op != "forget" {
+		return r
 	}
 	if it.Op == "forget" {
 		rec := f.recs[target]

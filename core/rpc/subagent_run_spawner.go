@@ -124,6 +124,15 @@ type SubagentRunSpawnerDeps struct {
 	// Returns "" when no profile is configured, which fails the spawn
 	// (see below) rather than dispatching against an unspecified model.
 	DefaultProfile func() string
+	// DerivedModel is the served-mode fallback when DefaultProfile returns
+	// "" (fleet-workbench-next-plan-2026-11-10 B11): a workbench has no
+	// personal provider by construction, only the host-supplied one. It
+	// maps the sub-agent profile's declared model onto the session
+	// provider's model list (org / host subagent_default, else the
+	// declared model's size tier, else the derived default) and returns
+	// the profile + model to dispatch with. ok=false keeps the historical
+	// "no default LLM profile configured" failure. nil = desktop.
+	DerivedModel func(declaredModel string) (profileID, modelID string, ok bool)
 	// Timeout overrides defaultSubagentSpawnTimeout. Zero uses the default.
 	Timeout time.Duration
 
@@ -219,6 +228,12 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 		if deps.DefaultProfile != nil {
 			profileID = deps.DefaultProfile()
 		}
+		modelID := req.ModelID
+		if profileID == "" && deps.DerivedModel != nil {
+			if p, m, ok := deps.DerivedModel(req.ModelID); ok {
+				profileID, modelID = p, m
+			}
+		}
 		if profileID == "" {
 			return graphview.SpawnedRun{}, errors.New("subagent_run_spawner: no default LLM profile configured")
 		}
@@ -306,7 +321,7 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 		// package doc's "Containment" note — this is what keeps an
 		// interactive gate from either blocking the worker forever or
 		// silently falling through to allow).
-		subID, serr := deps.LLM.StartStream(runposture.Unattended(ctx), profileID, childSessionID, req.ModelID)
+		subID, serr := deps.LLM.StartStream(runposture.Unattended(ctx), profileID, childSessionID, modelID)
 		if serr != nil {
 			cancel()
 			if taskID != "" {
@@ -317,7 +332,8 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 
 		log.Info("rpc.subagent_run_spawner.started",
 			"branch_id", branchID, "child_session_id", childSessionID,
-			"sub_id", subID, "task_id", taskID)
+			"sub_id", subID, "task_id", taskID,
+			"profile_id", profileID, "model", modelID)
 
 		// stopStream is the ONE place that knows how to actually stop this
 		// run's underlying LLM stream. It backs two independent call
@@ -351,7 +367,19 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 		// its own streamCtx from context.Background() one layer up, so a
 		// cancelled inbound ctx can't cut this await short.
 		done := make(chan error, 1)
-		go awaitSubagentRun(subCh, cancel, subID, deps.Tasks, taskID, deps.Timeout, done, deps.BudgetOverrides, childSessionID, stopStream)
+		if req.OnRunDone == nil {
+			go awaitSubagentRun(subCh, cancel, subID, deps.Tasks, taskID, deps.Timeout, done, deps.BudgetOverrides, childSessionID, stopStream)
+		} else {
+			// Relay: the dispatcher's completion callback runs first, then
+			// the outcome is forwarded to Wait unchanged.
+			inner := make(chan error, 1)
+			go awaitSubagentRun(subCh, cancel, subID, deps.Tasks, taskID, deps.Timeout, inner, deps.BudgetOverrides, childSessionID, stopStream)
+			go func() {
+				err := <-inner
+				req.OnRunDone(err)
+				done <- err
+			}()
+		}
 
 		return graphview.SpawnedRun{
 			TaskID: taskID,

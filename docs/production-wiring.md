@@ -63,11 +63,10 @@ to the chassis; they reach the LLM through:
    `Settings.WebSearchEnabled` / `Settings.BashEnabled` predicate so a
    user-side toggle takes effect on the next chat turn. **Exception —
    served/workbench mode (`rpc.WithFleetGatedBash`, both served entry
-   points):** `kenaz__bash` ignores `Settings.BashEnabled` and is on iff
-   the org's fleet Cedar policy explicitly permits it — a `fleet-team/…`
-   permit on `use_tool` / `Tool::"kenaz__bash"` with no matching forbid
-   (`cedar.Engine.PermittedBySnippet`; the embedded default tool permit
-   does not count). See `docs/served-mode-boundary.md` § "Bash in
+   points):** `kenaz__bash` ignores `Settings.BashEnabled` and is on by default;
+   a Cedar forbid on `use_tool` / `Tool::"kenaz__bash"` (the org's fleet
+   rule set in practice) turns it off (`cedar.Engine.Probe`, decision
+   D-h). See `docs/served-mode-boundary.md` § "Bash in
    workbenches".
 
 3. **`core/toolloop.BuiltinPool`** — wraps the MCP pool. Built-in

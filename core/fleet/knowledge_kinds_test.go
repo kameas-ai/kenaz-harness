@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -88,19 +89,19 @@ func TestUnitSyncer_PullDown_LaneFilterSkipAndCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PullDown: %v (a foreign kind must never fail the lane)", err)
 	}
-	if applied != 2 {
-		t.Errorf("applied = %d, want 2 (doc + snippet)", applied)
+	if applied != 3 {
+		t.Errorf("applied = %d, want 3 (doc + snippet + the bootstrap project rendered as a doc)", applied)
 	}
 	st := s.Status()
-	if st.SkippedUnknownKinds != 6 {
-		t.Errorf("SkippedUnknownKinds = %d, want 6", st.SkippedUnknownKinds)
+	if st.SkippedUnknownKinds != 5 {
+		t.Errorf("SkippedUnknownKinds = %d, want 5", st.SkippedUnknownKinds)
 	}
 	if st.Cursor != "2026-10-06T10:00:00.5Z" {
 		t.Errorf("cursor = %q — the lane did not advance", st.Cursor)
 	}
 	queries, _ := srv.snapshot()
-	if len(queries) != 1 || !strings.Contains(queries[0], "kind=root%2Cdoc%2Csnippet%2Ctool_output") {
-		t.Errorf("unit lane pull query = %v, want the unit kind filter", queries)
+	if len(queries) != 1 || !strings.Contains(queries[0], "kind=root%2Cdoc%2Csnippet%2Ctool_output%2Cproject%2C") {
+		t.Errorf("unit lane pull query = %v, want the unit kinds plus bootstrap/legacy kinds", queries)
 	}
 	// A Curated node sharing unit_kind=doc never became a local unit.
 	all, _ := m.List(context.Background(), units.UnitFilter{})
@@ -406,5 +407,80 @@ func TestPush_CaseVariantUnitKeysStripped(t *testing.T) {
 				t.Errorf("caller metadata lost: %v", n.Metadata)
 			}
 		}
+	}
+}
+
+// Fleet ruling 2026-11-13: an allowlisted kind no lane owns (bootstrap,
+// legacy) is rendered as a doc — never silently dropped — and keeps its
+// wire kind as a label. Unknown kinds, capability words, curated kinds and
+// artifacts stay off the Unit lane.
+func TestUnitLane_AllowlistedUnknownKindsRenderAsDoc(t *testing.T) {
+	for _, k := range append(append([]string{}, bootstrapKinds...), legacyNodeKinds...) {
+		n := pulledNode("6b2f6f0e-0000-4000-8000-0000000000c1", k, "")
+		if !unitLaneAccepts(n) {
+			t.Errorf("kind %q skipped by the Unit lane", k)
+		}
+		n.UnitKind = "doc"
+		if !unitLaneAccepts(n) {
+			t.Errorf("kind %q with unit_kind doc skipped", k)
+		}
+		n.UnitKind = "artifact"
+		if unitLaneAccepts(n) {
+			t.Errorf("kind %q with unit_kind artifact accepted", k)
+		}
+		u, ok, err := NewUnitMapper("").PulledNodeToUnit(pulledNode("6b2f6f0e-0000-4000-8000-0000000000c2", k, ""))
+		if err != nil || !ok {
+			t.Fatalf("kind %q: map: ok=%v err=%v", k, ok, err)
+		}
+		if u.Kind != units.KindDoc {
+			t.Errorf("kind %q stored as %q, want doc", k, u.Kind)
+		}
+		var md map[string]string
+		if err := json.Unmarshal(u.Metadata, &md); err != nil || md[FleetKindMetaKey] != k {
+			t.Errorf("kind %q label not kept: %s", k, u.Metadata)
+		}
+	}
+	for _, k := range []string{"guidance", "skill", "brand-new-kind", "artifact"} {
+		if unitLaneAccepts(pulledNode("6b2f6f0e-0000-4000-8000-0000000000c3", k, "")) {
+			t.Errorf("kind %q accepted by the Unit lane", k)
+		}
+	}
+	for k, want := range map[string]string{"directive": "directive", "guidance": "guidance", "doc": "doc", "brand-new-kind": "doc", "": "doc", "skill": "doc"} {
+		if got := DisplayKind(k); got != want {
+			t.Errorf("DisplayKind(%q) = %q, want %q", k, got, want)
+		}
+	}
+	// The pull filter is the full allowlist minus the Curated lane's kinds,
+	// and only allowlisted kinds (Fleet 400s anything else on ?kind=).
+	for _, k := range unitLanePullKinds {
+		if !AllowlistedKind(k) || inSet(curatedKinds, k) {
+			t.Errorf("unit pull filter carries %q", k)
+		}
+	}
+	if got := len(unitLanePullKinds) + len(curatedKinds); got != 19 {
+		t.Errorf("lane filters cover %d kinds, want Fleet's 19", got)
+	}
+}
+
+// A cursor advanced under the old, narrower Unit-lane filter is dropped once
+// so the bootstrap / legacy nodes it filtered out are pulled; afterwards the
+// recorded filter keeps the cursor.
+func TestUnitSyncer_CursorResetWhenLaneFilterWidens(t *testing.T) {
+	dir := t.TempDir()
+	if err := saveUnitCursor(dir, "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a cursor from before the filter record existed.
+	if err := os.Remove(unitLaneSigPath(dir)); err != nil {
+		t.Fatal(err)
+	}
+	if s := NewUnitSyncer(nil, newUnitTestManager(), NewUnitMapper(""), nil, dir); s.Status().Cursor != "" {
+		t.Errorf("old-filter cursor kept: %q", s.Status().Cursor)
+	}
+	if err := saveUnitCursor(dir, "2026-02-02T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if s := NewUnitSyncer(nil, newUnitTestManager(), NewUnitMapper(""), nil, dir); s.Status().Cursor != "2026-02-02T00:00:00Z" {
+		t.Errorf("current-filter cursor dropped: %q", s.Status().Cursor)
 	}
 }

@@ -107,14 +107,14 @@ const headerSubtitle = computed(() =>
 
 <template>
   <section data-testid="audit-settings-panel">
-    <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+    <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
       Audit Log Retention
     </h2>
-    <p class="mt-1 font-ui text-[11px] text-ink-dim" data-testid="audit-settings-subtitle">
+    <p class="mt-1 font-ui text-caption text-ink-dim" data-testid="audit-settings-subtitle">
       {{ headerSubtitle }}
     </p>
 
-    <div v-if="loading" class="mt-4 font-ui text-[12px] text-ink-muted" data-testid="audit-settings-loading">
+    <div v-if="loading" class="mt-4 font-ui text-small text-ink-muted" data-testid="audit-settings-loading">
       Loading…
     </div>
 
@@ -135,15 +135,15 @@ const headerSubtitle = computed(() =>
             class="mt-0.5 shrink-0 accent-accent"
           />
           <span class="grid gap-0.5">
-            <span class="font-ui text-[12px] text-ink">{{ label }}</span>
-            <span class="font-ui text-[11px] text-ink-dim">{{ strategyDescriptions[val as AuditSettings['strategy']] }}</span>
+            <span class="font-ui text-small text-ink">{{ label }}</span>
+            <span class="font-ui text-caption text-ink-dim">{{ strategyDescriptions[val as AuditSettings['strategy']] }}</span>
           </span>
         </label>
       </div>
 
       <!-- Window days (hidden for keep_forever) -->
       <div v-if="showWindow" class="grid gap-1">
-        <label for="audit-window-days" class="font-ui text-[11px] uppercase tracking-[0.14em] text-ink-subtle">
+        <label for="audit-window-days" class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Retention window (days)
         </label>
         <input
@@ -152,10 +152,10 @@ const headerSubtitle = computed(() =>
           type="number"
           min="1"
           max="3650"
-          class="w-32 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+          class="w-32 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-small text-ink focus:outline-none focus:ring-1 focus:ring-accent"
           data-testid="audit-window-days"
         />
-        <p class="font-ui text-[11px] text-ink-dim">
+        <p class="font-ui text-caption text-ink-dim">
           Events older than {{ windowDays }} day{{ windowDays === 1 ? '' : 's' }} will be swept.
         </p>
       </div>
@@ -164,7 +164,7 @@ const headerSubtitle = computed(() =>
       <div
         v-if="error"
         role="alert"
-        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         data-testid="audit-settings-error"
       >
         {{ error }}
@@ -174,7 +174,7 @@ const headerSubtitle = computed(() =>
       <div
         v-if="saved"
         role="status"
-        class="rounded-sm border border-signal-success bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-success"
+        class="rounded-sm border border-signal-ok bg-surface-1 px-3 py-2 font-ui text-small text-signal-ok-text"
         data-testid="audit-settings-saved"
       >
         Retention settings saved.
@@ -185,7 +185,7 @@ const headerSubtitle = computed(() =>
         <button
           type="submit"
           :disabled="saving"
-          class="rounded-sm border border-border bg-surface-2 px-3 py-1.5 font-ui text-[12px] text-ink hover:bg-surface-3 disabled:opacity-50 transition-colors"
+          class="rounded-sm border border-border bg-surface-2 px-3 py-1.5 font-ui text-small text-ink hover:bg-surface-3 disabled:opacity-50 transition-colors"
           data-testid="audit-settings-save"
         >
           {{ saving ? 'Saving…' : 'Save' }}

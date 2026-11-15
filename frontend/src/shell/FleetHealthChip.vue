@@ -141,7 +141,7 @@ const tooltip = computed(() => {
 <template>
   <span
     v-if="visible"
-    class="text-[10px] px-1.5 py-0.5 rounded border"
+    class="text-eyebrow px-1.5 py-0.5 rounded border"
     :class="chipClass"
     :title="tooltip"
     data-testid="fleet-health-chip"

@@ -23,7 +23,7 @@ const viewingTaskId = ref<string | null>(null);
     <template v-if="viewingTaskId">
       <button
         type="button"
-        class="self-start mb-2 text-[11px] text-ink-muted hover:text-ink transition-colors underline"
+        class="self-start mb-2 text-caption text-ink-muted hover:text-ink transition-colors underline"
         data-testid="tasks-viewer-back-btn"
         @click="viewingTaskId = null"
       >

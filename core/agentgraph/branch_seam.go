@@ -94,6 +94,15 @@ type ForkRequest struct {
 	// conversation.Branch.SubagentBranch, which is a different, older
 	// flag for the branch-advisor recommendation feature).
 	ProfileID string
+
+	// OnRunDone, when non-nil, is called exactly once when the spawned
+	// child run reaches a terminal state (err nil on a clean finish), on
+	// the spawner's await goroutine — never on the caller's. It does not
+	// consume the outcome WaitForChildRun reports, so a dispatcher can
+	// clean up after a background sub-agent (worktree removal, overlap
+	// bookkeeping) without stealing the merge path's wait. Not called
+	// when the spawn itself fails: Fork returns that error instead.
+	OnRunDone func(err error)
 }
 
 // BranchHandle is what BranchSeam.Fork returns. Carries the IDs both
