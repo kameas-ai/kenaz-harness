@@ -923,7 +923,12 @@ export interface ContextShareStateView {
   layer: 'team' | 'org';
   /** The team a "team" share went to. */
   team_id?: string;
+  /** An org-wide share of this entry still waiting for an admin's review. */
+  pending_merge_request_id?: string;
 }
+
+/** Fleet's per-item push outcome (spec 018 H-3). */
+export type ContextPushStatus = 'published' | 'pending_review' | 'refused';
 
 export interface ContextPublishResult {
   accepted_nodes: number;
@@ -935,11 +940,23 @@ export interface ContextPublishResult {
    * core/rpc/views/contexts/impl.go).
    */
   effective_layer: 'team' | 'org';
+  /** The explicit audience sent: "team", or "org" (the whole organisation). */
+  audience?: 'team' | 'org' | '';
+  /** Fleet's per-item outcome. Absent from an older backend: derive it. */
+  status?: ContextPushStatus;
+  /** The merge request a pending_review opened (or kept). */
+  merge_request_id?: string;
+  /** The earlier request Fleet superseded because the content changed. */
+  superseded_merge_request_id?: string;
+  /** Refusal code as served, and the same in plain words. */
+  reason?: string;
+  reason_text?: string;
 }
 
 export interface ContextPromoteResult {
   updated_node_id: string;
   new_classification: 'org_shared';
+  status?: 'published';
 }
 
 export interface ContextSyncStatusView {

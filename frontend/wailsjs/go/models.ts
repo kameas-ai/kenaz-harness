@@ -1988,6 +1988,7 @@ export namespace contexts {
 	export class ContextPromoteResult {
 	    updated_node_id: string;
 	    new_classification: string;
+	    status: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ContextPromoteResult(source);
@@ -1997,6 +1998,7 @@ export namespace contexts {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.updated_node_id = source["updated_node_id"];
 	        this.new_classification = source["new_classification"];
+	        this.status = source["status"];
 	    }
 	}
 	export class ContextPublishRequest {
@@ -2028,6 +2030,12 @@ export namespace contexts {
 	    accepted_edges: number;
 	    conflicts: fleet.ContextPushConflict[];
 	    effective_layer: string;
+	    audience?: string;
+	    status: string;
+	    merge_request_id?: string;
+	    superseded_merge_request_id?: string;
+	    reason?: string;
+	    reason_text?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ContextPublishResult(source);
@@ -2039,6 +2047,12 @@ export namespace contexts {
 	        this.accepted_edges = source["accepted_edges"];
 	        this.conflicts = this.convertValues(source["conflicts"], fleet.ContextPushConflict);
 	        this.effective_layer = source["effective_layer"];
+	        this.audience = source["audience"];
+	        this.status = source["status"];
+	        this.merge_request_id = source["merge_request_id"];
+	        this.superseded_merge_request_id = source["superseded_merge_request_id"];
+	        this.reason = source["reason"];
+	        this.reason_text = source["reason_text"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2083,6 +2097,7 @@ export namespace contexts {
 	    node_id: string;
 	    layer: string;
 	    team_id?: string;
+	    pending_merge_request_id?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ContextShareStateView(source);
@@ -2093,6 +2108,7 @@ export namespace contexts {
 	        this.node_id = source["node_id"];
 	        this.layer = source["layer"];
 	        this.team_id = source["team_id"];
+	        this.pending_merge_request_id = source["pending_merge_request_id"];
 	    }
 	}
 	export class ContextSyncStatusView {

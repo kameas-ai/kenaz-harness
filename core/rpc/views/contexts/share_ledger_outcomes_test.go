@@ -128,8 +128,10 @@ func TestShareLedger_ConflictAndRejectionRecordNothing(t *testing.T) {
 		return map[string]any{"accepted_nodes": 0, "accepted_edges": 0, "conflicts": []any{},
 			"rejected": []any{map[string]any{"kind": "node", "id": id, "reason": "not_owner"}}}
 	})
-	if _, err := api.Context_Publish(ctx, publishReq("notes/rejected.md", "team", "team-backend")); err == nil {
-		t.Fatal("rejected publish: want an error")
+	// Spec 018 H-3: a per-item refusal is an outcome ("Refused: …"), not a
+	// failed call.
+	if res, err := api.Context_Publish(ctx, publishReq("notes/rejected.md", "team", "team-backend")); err != nil || res.Status != "refused" || res.Reason != "not_owner" || res.ReasonText == "" {
+		t.Fatalf("rejected publish: res=%+v err=%v, want status refused with a reason", res, err)
 	}
 	// Whole-batch refusal.
 	push.set(http.StatusForbidden, func(string) map[string]any {

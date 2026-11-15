@@ -125,6 +125,11 @@ type contextNodeInput struct {
 	UnitScope  string `json:"unit_scope,omitempty"`
 	ScopeID    string `json:"scope_id,omitempty"`
 	LoadPolicy string `json:"load_policy,omitempty"`
+	// Audience / Governed are the explicit audience (spec 018 FR-7,
+	// contract §1b): "team" with team_id, or "org" (Governed for
+	// admin-governed org_shared content). Absent = classification only.
+	Audience string `json:"audience,omitempty"`
+	Governed *bool  `json:"governed,omitempty"`
 }
 
 // contextEdgeInput is the client-side push shape for a single edge.
@@ -167,9 +172,16 @@ type ContextPushResult struct {
 	// user or org. Absent on the current server = everything accepted.
 	// Distinct from Conflicts (your own stale version).
 	Rejected []ContextPushRejection `json:"rejected,omitempty"`
+	// Results restates the outcome of every pushed node, in request order
+	// (spec 018 FR-7, contract §1b). Absent on an older Fleet.
+	Results []ContextPushItemResult `json:"results,omitempty"`
 	// WireNodeID is the fleet node UUID the pushed entry was stored under
 	// (harness-side, never decoded from the response — `json:"-"`).
 	WireNodeID string `json:"-"`
+	// Item is the outcome for the pushed entry's own node: Fleet's
+	// results[] row, or one derived from accepted / conflicts / rejected
+	// on an older Fleet (harness-side, `json:"-"`).
+	Item ContextPushItemResult `json:"-"`
 }
 
 // ContextPulledNode is a single node from GET /api/v1/context/pull.
@@ -535,6 +547,33 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	if !ok {
 		return nil, fmt.Errorf("fleet: context push: unsupported layer %q", entry.Layer)
 	}
+	// An explicit audience (spec 018 H-3) decides the classification, so
+	// the two can never contradict each other (400 audience_mismatch):
+	// team → team_shared in team_id; org governed → org_shared, no team;
+	// org not governed → team_shared in the org's default team.
+	var governed *bool
+	switch entry.Audience {
+	case "":
+	case AudienceTeam:
+		if entry.TeamID == nil || *entry.TeamID == "" {
+			return nil, ErrAudienceTeamNeedsTeam
+		}
+		classification = ClassTeamShared
+	case AudienceOrg:
+		g := entry.Governed
+		governed = &g
+		if g {
+			classification = ClassOrgShared
+			entry.TeamID = nil
+		} else {
+			classification = ClassTeamShared
+		}
+	default:
+		return nil, fmt.Errorf("fleet: context push: unsupported audience %q", entry.Audience)
+	}
+	if layer, ok := LayerForClassification(classification); ok {
+		entry.Layer = layer
+	}
 
 	// Capability gate.
 	switch classification {
@@ -581,6 +620,8 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		TeamID:         entry.TeamID,
 		Version:        entry.Version,
 		UnitKind:       curatedUnitKind,
+		Audience:       entry.Audience,
+		Governed:       governed,
 	}
 
 	// Build edges slice (two-phase: nodes first, then edges — FR-003).
@@ -615,6 +656,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		"node_id", wireID,
 		"classification", string(classification),
 		"team_id_present", entry.TeamID != nil,
+		"audience", entry.Audience,
 		"title_len", len(entry.Title),
 		"body_len", len(entry.Body),
 		"edge_count", len(edgeInputs),
@@ -687,22 +729,44 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		return nil, fmt.Errorf("fleet: context push parse response: %w", err)
 	}
 
-	// Per-item rejections (PR #173) are failures, never silent success. If
-	// the entry's own node was rejected the publish failed outright; edge
+	// The entry's own outcome: Fleet's results[] row (spec 018 H-3), or
+	// derived from accepted / conflicts / rejected on an older Fleet.
+	item := itemResultFor(result, wireID)
+	result.Item = item
+	result.WireNodeID = wireID
+
+	// A refused node is a failure, never silent success (PR #173). A
+	// version conflict keeps its own path below (conflicts[], the "not
+	// updated" copy); every other refusal fails the publish outright. Edge
 	// rejections leave the node published but are recorded as the push
 	// error so Context_SyncStatus shows them.
-	for _, r := range result.Rejected {
-		if r.Kind == "node" && r.ID == wireID {
-			s.mu.Lock()
+	if item.Status == PushStatusRefused && item.Reason != "version_conflict" {
+		s.mu.Lock()
+		if len(result.Rejected) > 0 {
 			s.lastPushErr = describeRejections(result.Rejected)
-			s.mu.Unlock()
-			logging.L().Warn("fleet.context.push.rejected",
-				"node_id", wireID,
-				"reason", r.Reason,
-				"rejected_count", len(result.Rejected),
-			)
-			return nil, &ContextPushRejectedError{NodeID: wireID, Reason: r.Reason}
+		} else {
+			s.lastPushErr = "refused: " + item.Reason
 		}
+		s.mu.Unlock()
+		logging.L().Warn("fleet.context.push.rejected",
+			"node_id", wireID,
+			"reason", item.Reason,
+			"rejected_count", len(result.Rejected),
+		)
+		return nil, &ContextPushRejectedError{NodeID: wireID, Reason: item.Reason}
+	}
+	if item.Status == PushStatusPendingReview {
+		// Nothing was written to the node: no location move, no
+		// "published" audit, no first-push signal. Not an error either.
+		s.mu.Lock()
+		s.lastPushErr = ""
+		s.lastConflicts = nil
+		s.mu.Unlock()
+		logging.L().Info("fleet.context.push.pending_review",
+			"node_id", wireID,
+			"merge_request_present", item.MergeRequest() != "",
+		)
+		return &result, nil
 	}
 
 	pushSelf := s.selfID()
@@ -724,7 +788,7 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	}
 	// An accepted push moves the node: record where it is now, so the
 	// share dialogs never read a stale pulled row right after a publish.
-	if result.AcceptedNodes > 0 && pushSelf != "" && !pushConflicted(result.Conflicts, wireID) {
+	if item.Status == PushStatusPublished && (result.AcceptedNodes > 0 || len(result.Results) > 0) && pushSelf != "" && !pushConflicted(result.Conflicts, wireID) {
 		if layer, ok := LayerForClassification(classification); ok {
 			s.adoptLocationsOwnerLocked(pushSelf)
 			team := ""
@@ -735,6 +799,12 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 				s.savePulledLocationsLocked(pushSelf)
 			}
 		}
+	}
+	if item.Status != PushStatusPublished {
+		// Refused on version (conflicts[] above): nothing was written, so
+		// no first-push signal and no "published" audit.
+		s.mu.Unlock()
+		return &result, nil
 	}
 	// fleet-welcome-01NWEL01 context_synced seam: capture the hook and mark
 	// it fired (under the lock for the once-guard), then invoke it outside the
@@ -760,7 +830,6 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 			Version:        entry.Version,
 		}, time.Now())
 
-	result.WireNodeID = wireID
 	return &result, nil
 }
 
@@ -1212,6 +1281,14 @@ func teamIDPtr(s string) *string {
 // Requires CapSharedTeamGraph (server enforces org-graph separately).
 // FR-201, FR-202.
 func (s *ContextGraphSyncer) Promote(ctx context.Context, localID string) (*ContextPromoteResult, error) {
+	return s.PromoteExpecting(ctx, localID, 0)
+}
+
+// PromoteExpecting is Promote with Fleet's expected_version (spec 018
+// FR-7a): expectedVersion > 0 is sent, and a node whose stored version
+// differs answers 409 node_changed (ErrContextNodeChanged) with nothing
+// promoted. 0 sends none.
+func (s *ContextGraphSyncer) PromoteExpecting(ctx context.Context, localID string, expectedVersion int) (*ContextPromoteResult, error) {
 	if err := s.canPushOrg(); err != nil {
 		return nil, err
 	}
@@ -1223,12 +1300,17 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, localID string) (*Cont
 		NodeID:           nodeID,
 		ToClassification: string(ClassOrgShared),
 	}
+	if expectedVersion > 0 {
+		v := expectedVersion
+		req.ExpectedVersion = &v
+	}
 
 	const promoteEndpoint = "/api/v1/context/promote"
 	logging.L().Info("fleet.context.promote.http.start",
 		"endpoint", promoteEndpoint,
 		"node_id", nodeID,
 		"to_classification", string(ClassOrgShared),
+		"expected_version_sent", req.ExpectedVersion != nil,
 	)
 
 	resp, err := s.client.PostJSON(ctx, promoteEndpoint, req)
@@ -1291,6 +1373,8 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, localID string) (*Cont
 			s.pulled[i].Classification = ClassOrgShared
 			s.pulled[i].Layer = contextpack.LayerOrg
 			s.pulled[i].SyncStatus = SyncStatusSynced
+			s.pulled[i].Audience, s.pulled[i].Governed = AudienceOrg, true
+			s.pulled[i].TeamID = nil
 		}
 	}
 	s.mu.Unlock()
@@ -1304,6 +1388,60 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, localID string) (*Cont
 		}, time.Now())
 
 	return &result, nil
+}
+
+// ── Default team (spec 018 H-3) ───────────────────────────────────────────────
+
+// defaultTeamTTL bounds how long the default-team answer is reused.
+const defaultTeamTTL = 2 * time.Minute
+
+// WithMeTeams overrides the /api/v1/me teams source (tests).
+func (s *ContextGraphSyncer) WithMeTeams(f func(ctx context.Context) ([]MeTeam, error)) *ContextGraphSyncer {
+	s.meTeams = f
+	return s
+}
+
+// DefaultTeamID returns the org's default (root) team id from GET
+// /api/v1/me, cached briefly per account. ok=false when it cannot be known
+// (lookup failed, an older Fleet with no is_default, the caller is not in
+// the default team): the caller then sends no explicit audience.
+//
+// Needed because the explicit audience must name the default team as
+// "org", never as "team" (contract §1b: 400 audience_mismatch).
+func (s *ContextGraphSyncer) DefaultTeamID(ctx context.Context) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	self := s.selfID()
+	s.mu.RLock()
+	cached, at, forUser := s.defaultTeam, s.defaultTeamAt, s.defaultTeamFor
+	s.mu.RUnlock()
+	if !at.IsZero() && time.Since(at) < defaultTeamTTL && strings.EqualFold(forUser, self) {
+		return cached, cached != ""
+	}
+	src := s.meTeams
+	if src == nil {
+		if s.client == nil || s.client.isNop {
+			return "", false
+		}
+		src = s.client.GetMeTeams
+	}
+	teams, err := src(ctx)
+	if err != nil {
+		logging.L().Info("fleet.context.default_team_unknown", "err", LogSafeErr(err))
+		return "", false
+	}
+	id := ""
+	for _, t := range teams {
+		if t.IsDefault && t.ID != "" {
+			id = t.ID
+			break
+		}
+	}
+	s.mu.Lock()
+	s.defaultTeam, s.defaultTeamAt, s.defaultTeamFor = id, time.Now(), self
+	s.mu.Unlock()
+	return id, id != ""
 }
 
 // ── Search / Export thin clients (gap #5) ──────────────────────────────────────

@@ -445,6 +445,13 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 	for _, c := range result.Conflicts {
 		conflicted[c.NodeID] = true
 	}
+	// Spec 018 results[]: anything not published was not written (a
+	// pending review or a refusal); it stays dirty.
+	for _, r := range result.Results {
+		if r.Status != "" && r.Status != PushStatusPublished {
+			conflicted[r.ID] = true
+		}
+	}
 	for _, r := range result.Rejected {
 		if r.Kind == "node" {
 			conflicted[r.ID] = true

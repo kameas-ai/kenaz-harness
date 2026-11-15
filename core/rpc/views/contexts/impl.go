@@ -558,8 +558,28 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 	if teamID != "" {
 		entry.TeamID = &teamID
 	}
+	entry.Audience, entry.Governed = a.publishAudience(ctx, layer, teamID)
 
 	result, err := a.syncer.PushEntry(ctx, entry, nil)
+	var rejected *fleet.ContextPushRejectedError
+	if errors.As(err, &rejected) {
+		// Fleet refused this item (results[] / rejected[]): a per-item
+		// outcome, shown as "Refused: <reason>", not a failed call.
+		logging.L().Warn("contexts.publish.refused", "node_id", wireID, "reason", rejected.Reason)
+		if rejected.Reason == "previously_rejected" {
+			if cerr := a.ledger().clearPending(wireID); cerr != nil {
+				logging.L().Warn("contexts.publish.share_record_failed", "node_id", wireID, "err", fleet.LogSafeErr(cerr))
+			}
+		}
+		return ContextPublishResult{
+			Conflicts:      []fleet.ContextPushConflict{},
+			EffectiveLayer: string(layer),
+			Audience:       entry.Audience,
+			Status:         fleet.PushStatusRefused,
+			Reason:         rejected.Reason,
+			ReasonText:     fleet.PushRefusalText(rejected.Reason),
+		}, nil
+	}
 	if err != nil {
 		logging.L().Warn("contexts.publish.failed",
 			"node_id", wireID,
@@ -570,32 +590,98 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		)
 		return ContextPublishResult{}, fmt.Errorf("contexts: publish: %w", err)
 	}
-	// Record only a share Fleet actually took: accepted, not conflicted
-	// (a conflict leaves the server copy where it was), and only for a
-	// known fleet user (a record nobody owns could never be read back, or
+	item := result.Item
+	// An "org" audience that is not governed is stored in the default team,
+	// so the layer stays "team" (the ledger keeps that team id).
+	effLayer := layer
+	// Record only a share Fleet reports published: not pending review, not
+	// refused or conflicted (a conflict leaves the server copy where it
+	// was), on an older Fleet only when it accepted the node, and only for
+	// a known fleet user (a record nobody owns could never be read back, or
 	// worse, would match another unknown-user read).
-	if user := a.currentUserID(); user != "" && result.AcceptedNodes > 0 && !conflictedNode(result.Conflicts, wireID) {
-		rec := shareRecord{UserID: user, Layer: string(layer), SharedAt: time.Now().UTC(), Version: req.Version}
-		if layer == contextpack.LayerTeam {
+	published := item.Status == fleet.PushStatusPublished && !conflictedNode(result.Conflicts, wireID) &&
+		(len(result.Results) > 0 || result.AcceptedNodes > 0)
+	user := a.currentUserID()
+	if user != "" && published {
+		rec := shareRecord{UserID: user, Layer: string(effLayer), SharedAt: time.Now().UTC(), Version: req.Version}
+		if effLayer == contextpack.LayerTeam {
 			rec.TeamID = teamID
 		}
 		if err := a.ledger().put(wireID, rec); err != nil {
 			logging.L().Warn("contexts.publish.share_record_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
 		}
+		if err := a.ledger().clearPending(wireID); err != nil {
+			logging.L().Warn("contexts.publish.share_record_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
+		}
+	}
+	out := ContextPublishResult{
+		AcceptedNodes:  result.AcceptedNodes,
+		AcceptedEdges:  result.AcceptedEdges,
+		Conflicts:      result.Conflicts,
+		EffectiveLayer: string(effLayer),
+		Audience:       entry.Audience,
+		Status:         item.Status,
+		Reason:         item.Reason,
+	}
+	if out.Conflicts == nil {
+		out.Conflicts = []fleet.ContextPushConflict{}
+	}
+	if item.Status == fleet.PushStatusRefused {
+		out.ReasonText = fleet.PushRefusalText(item.Reason)
+	}
+	if item.Status == fleet.PushStatusPendingReview {
+		out.MergeRequestID = item.MergeRequest()
+		if user != "" && out.MergeRequestID != "" {
+			prev, had := a.ledger().getPending(wireID, user)
+			if had && prev.MergeRequestID != out.MergeRequestID {
+				out.SupersededMergeRequestID = prev.MergeRequestID
+			}
+			if err := a.ledger().putPending(wireID, user, out.MergeRequestID, time.Now().UTC()); err != nil {
+				logging.L().Warn("contexts.publish.share_record_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
+			}
+		}
 	}
 	logging.L().Info("contexts.publish.done",
 		"node_id", wireID,
-		"effective_layer", string(layer),
+		"effective_layer", string(effLayer),
+		"audience", entry.Audience,
+		"status", item.Status,
 		"accepted_nodes", result.AcceptedNodes,
 		"accepted_edges", result.AcceptedEdges,
 		"conflict_count", len(result.Conflicts),
 	)
-	return ContextPublishResult{
-		AcceptedNodes:  result.AcceptedNodes,
-		AcceptedEdges:  result.AcceptedEdges,
-		Conflicts:      result.Conflicts,
-		EffectiveLayer: string(layer),
-	}, nil
+	return out, nil
+}
+
+// publishAudience picks the explicit audience for a publish (spec 018 H-3,
+// contract §1b):
+//   - org layer: "org", governed (admin-governed org content; a member's
+//     write of their own team entry opens a merge request instead);
+//   - team layer in the org's default team: "org", not governed (the
+//     default team is the whole organisation; naming it "team" is 400
+//     audience_mismatch);
+//   - any other team: "team".
+//
+// When the default team cannot be known no audience is sent for a team
+// share: the classification alone means what it always meant.
+func (a *API) publishAudience(ctx context.Context, layer contextpack.Layer, teamID string) (string, bool) {
+	switch layer {
+	case contextpack.LayerOrg:
+		return fleet.AudienceOrg, true
+	case contextpack.LayerTeam:
+		if teamID == "" {
+			return "", false
+		}
+		def, ok := a.syncer.DefaultTeamID(ctx)
+		if !ok {
+			return "", false
+		}
+		if strings.EqualFold(def, teamID) {
+			return fleet.AudienceOrg, false
+		}
+		return fleet.AudienceTeam, false
+	}
+	return "", false
 }
 
 // conflictedNode reports whether conflicts include the pushed node.
@@ -618,9 +704,19 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 		return ContextPromoteResult{}, err
 	}
 
-	logging.L().Info("contexts.promote.start", "node_id", a.syncer.WireNodeID(nodeID))
+	wireID := a.syncer.WireNodeID(nodeID)
+	// Spec 018 FR-7a: send expected_version when Fleet's own row for this
+	// node is on record (the location index, refreshed by every pull and
+	// accepted push). Never a guess: with no row, none is sent.
+	expected := 0
+	if user := a.currentUserID(); user != "" {
+		if loc, ok := ownPulledLocations(a.syncer.PulledShareLocations(), user)[wireID]; ok {
+			expected = loc.Version
+		}
+	}
+	logging.L().Info("contexts.promote.start", "node_id", wireID, "expected_version_sent", expected > 0)
 
-	result, err := a.syncer.Promote(ctx, nodeID)
+	result, err := a.syncer.PromoteExpecting(ctx, nodeID, expected)
 	if err != nil {
 		logging.L().Warn("contexts.promote.failed",
 			"node_id", a.syncer.WireNodeID(nodeID),
@@ -638,10 +734,14 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 		}); err != nil {
 			logging.L().Warn("contexts.promote.share_record_failed", "node_id", result.Node.ID, "err", fleet.LogSafeErr(err))
 		}
+		if err := a.ledger().clearPending(wireID); err != nil {
+			logging.L().Warn("contexts.promote.share_record_failed", "node_id", result.Node.ID, "err", fleet.LogSafeErr(err))
+		}
 	}
 	return ContextPromoteResult{
 		UpdatedNodeID:     result.Node.ID,
 		NewClassification: string(result.Node.Classification),
+		Status:            fleet.PushStatusPublished,
 	}, nil
 }
 
@@ -680,6 +780,10 @@ func (a *API) Context_ShareStates(_ context.Context, nodeIDs []string) ([]Contex
 		wireID := a.syncer.WireNodeID(id)
 		rec, hasRec := a.ledger().get(wireID, user)
 		loc, hasLoc := byID[wireID]
+		pendingID := ""
+		if p, ok := a.ledger().getPending(wireID, user); ok {
+			pendingID = p.MergeRequestID
+		}
 		// Newer = higher Fleet node version. Never a timestamp: the row's
 		// time would be Fleet's and the ledger's this device's, and a
 		// skewed clock would hide a move made on the dashboard.
@@ -695,11 +799,12 @@ func (a *API) Context_ShareStates(_ context.Context, nodeIDs []string) ([]Contex
 					logging.L().Warn("contexts.share_states.ledger_update_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
 				}
 			}
+			view.PendingMergeRequestID = pendingID
 			out = append(out, view)
 			continue
 		}
 		if hasRec {
-			out = append(out, ContextShareStateView{NodeID: id, Layer: rec.Layer, TeamID: rec.TeamID})
+			out = append(out, ContextShareStateView{NodeID: id, Layer: rec.Layer, TeamID: rec.TeamID, PendingMergeRequestID: pendingID})
 		}
 	}
 	return out, nil

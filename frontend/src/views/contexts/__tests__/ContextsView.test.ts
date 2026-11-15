@@ -721,7 +721,7 @@ describe('ContextsView', () => {
       );
     });
 
-    it('disables org-wide for a known member, and enables it for an admin or unknown roles', async () => {
+    it('offers org-wide to everyone, with a review note for a known member (spec 018 H-3)', async () => {
       const tree: ContextNode = {
         name: '',
         path: '',
@@ -750,8 +750,8 @@ describe('ContextsView', () => {
         await w.find('[data-testid=context-publish-btn]').trigger('click');
         await flushPromises();
         const org = w.find('[data-testid=context-publish-layer-org]').element as HTMLInputElement;
-        expect(org.disabled).toBe(blocked);
-        expect(w.find('[data-testid=context-publish-org-admin-only]').exists()).toBe(blocked);
+        expect(org.disabled).toBe(false);
+        expect(w.find('[data-testid=context-publish-org-review-note]').exists()).toBe(blocked);
         w.unmount();
       }
     });
@@ -823,6 +823,128 @@ describe('ContextsView', () => {
       expect(result.text()).toContain('Not updated');
       expect(result.text()).not.toContain('Published');
       expect(result.classes()).toContain('text-signal-warning');
+    });
+
+    // Spec 018 H-3: Fleet's per-item outcome, in plain words.
+    for (const [label, res, want, tone] of [
+      [
+        'waiting for review, with the merge request id',
+        { accepted_nodes: 0, accepted_edges: 0, conflicts: [], effective_layer: 'org', audience: 'org', status: 'pending_review', merge_request_id: 'mr-7' },
+        'Waiting for review (request mr-7)',
+        'text-signal-warning',
+      ],
+      [
+        'refused: the team no longer exists',
+        { accepted_nodes: 0, accepted_edges: 0, conflicts: [], effective_layer: 'team', status: 'refused', reason: 'team_not_found', reason_text: 'That team no longer exists' },
+        'Refused: That team no longer exists',
+        'text-signal-danger',
+      ],
+      [
+        'refused: previously rejected',
+        { accepted_nodes: 0, accepted_edges: 0, conflicts: [], effective_layer: 'org', status: 'refused', reason: 'previously_rejected', reason_text: 'This exact text was already rejected' },
+        'Refused: This exact text was already rejected',
+        'text-signal-danger',
+      ],
+      [
+        'published to the whole organisation via the default team',
+        { accepted_nodes: 1, accepted_edges: 0, conflicts: [], effective_layer: 'team', audience: 'org', status: 'published' },
+        'Published to your organisation',
+        'text-signal-success',
+      ],
+    ] as const) {
+      it(`shows the per-item outcome: ${label}`, async () => {
+        const tree: ContextNode = {
+          name: '',
+          path: '',
+          kind: 'folder',
+          children: [{ name: 'note.md', path: 'note.md', kind: 'file' }],
+        };
+        const publishSpy = vi.fn(async (): Promise<ContextPublishResult> => ({ ...res, conflicts: [] }) as unknown as ContextPublishResult);
+        const { client } = provide({
+          tree,
+          files: { 'note.md': '# note' },
+          syncStatus: { cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: true },
+          publishSpy,
+        });
+        const w = mount(ContextsView, {
+          global: { provide: { [HarnessClientKey as symbol]: client } },
+        });
+        await flushPromises();
+        await w.find('[data-testid="context-node-note.md"]').trigger('click');
+        await flushPromises();
+        await w.find('[data-testid=context-publish-btn]').trigger('click');
+        await flushPromises();
+        await w.find('[data-testid=context-publish-confirm-ok]').trigger('click');
+        await flushPromises();
+        const result = w.find('[data-testid=context-publish-result]');
+        expect(result.text()).toContain(want);
+        expect(result.classes()).toContain(tone);
+        if (res.status !== 'published') expect(result.text()).not.toContain('Published');
+      });
+    }
+
+    it('labels pulled entries with the audience Fleet serves', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [
+          {
+            name: 'team',
+            path: 'team',
+            kind: 'folder',
+            children: [
+              { name: 'Runbook', path: 'team/_fleet/a', kind: 'file', audience: 'team' },
+              { name: 'Glossary', path: 'team/_fleet/b', kind: 'file', audience: 'org' },
+            ],
+          },
+          {
+            name: 'org',
+            path: 'org',
+            kind: 'folder',
+            children: [{ name: 'Policy', path: 'org/_fleet/c', kind: 'file', audience: 'org', governed: true }],
+          },
+          { name: 'note.md', path: 'note.md', kind: 'file' },
+        ],
+      };
+      const { client } = provide({
+        tree,
+        files: { 'note.md': '# note' },
+        syncStatus: { cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: true },
+      });
+      const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+      await flushPromises();
+      await w.find('[data-testid="context-node-team"]').trigger('click');
+      await w.find('[data-testid="context-node-org"]').trigger('click');
+      await flushPromises();
+      const label = (p: string) => w.find(`[data-testid="context-audience-${p}"]`);
+      expect(label('team/_fleet/a').text()).toBe('Team');
+      expect(label('team/_fleet/b').text()).toBe('Organisation');
+      expect(label('org/_fleet/c').text()).toBe('Organisation · admin-governed');
+      expect(label('note.md').exists()).toBe(false);
+    });
+
+    it('notes an org-wide share still waiting for review when the dialog opens', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'note.md', path: 'note.md', kind: 'file' }],
+      };
+      const { client } = provide({
+        tree,
+        files: { 'note.md': '# note' },
+        syncStatus: { cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: true },
+        shareStates: async (ids: string[]) =>
+          ids.map((id) => ({ node_id: id, layer: 'team' as const, team_id: 't1', pending_merge_request_id: 'mr-3' })),
+      });
+      const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+      await flushPromises();
+      await w.find('[data-testid="context-node-note.md"]').trigger('click');
+      await flushPromises();
+      await w.find('[data-testid=context-publish-btn]').trigger('click');
+      await flushPromises();
+      expect(w.find('[data-testid=context-publish-pending-note]').text()).toContain('request mr-3');
     });
 
     it('shows sync pull error in status strip', async () => {
@@ -1519,24 +1641,40 @@ describe('ContextsView folder share/promote batch dialog (knowledge-home-01DOGF0
     expect(w.find('[data-testid=folder-share-dialog]').text()).not.toContain('Published to');
   });
 
-  it('moves the folder dialog back to team if the org option becomes blocked', async () => {
-    const { client } = provide({ tree, files, syncStatus: status(true) });
-    const w = mount(FolderShareDialog, {
-      props: { folder: tree, mode: 'share', disabledReason: null, orgPublishBlocked: false },
-      global: { provide: { [HarnessClientKey as symbol]: client } },
+  it('fails a folder entry Fleet refused, with the reason in plain words, and finishes the rest', async () => {
+    let n = 0;
+    const publishSpy = vi.fn(async (req: ContextPublishRequest): Promise<ContextPublishResult> => {
+      n++;
+      return n === 1
+        ? { accepted_nodes: 0, accepted_edges: 0, conflicts: [], effective_layer: req.layer, status: 'refused', reason: 'team_not_found', reason_text: 'That team no longer exists' }
+        : { accepted_nodes: 0, accepted_edges: 0, conflicts: [], effective_layer: req.layer, status: 'pending_review', merge_request_id: `mr-${n}` };
     });
-    await w.find('[data-testid=folder-share-layer-org]').setValue(true);
-    await w.setProps({ orgPublishBlocked: true });
-    expect((w.find('[data-testid=folder-share-layer-team]').element as HTMLInputElement).checked).toBe(true);
-    expect((w.find('[data-testid=folder-share-layer-org]').element as HTMLInputElement).checked).toBe(false);
+    const { client } = provide({ tree, files, syncStatus: status(true), publishSpy });
+    const w = await openDialog(client, 'context-publish-btn');
+    await w.find('[data-testid=folder-share-confirm]').trigger('click');
+    await flushPromises();
+    const text = w.find('[data-testid=folder-share-dialog]').text();
+    expect(text).toContain('Refused: That team no longer exists');
+    expect(text).toContain('Waiting for review (request mr-2)');
   });
 
-  it('disables org-wide in the folder dialog for a known member', async () => {
+  it('shows the review note on org-wide in the folder dialog only for a known member', async () => {
+    const { client } = provide({ tree, files, syncStatus: status(true) });
+    const w = mount(FolderShareDialog, {
+      props: { folder: tree, mode: 'share', disabledReason: null, orgNeedsReview: false },
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    expect(w.find('[data-testid=folder-share-org-review-note]').exists()).toBe(false);
+    await w.setProps({ orgNeedsReview: true });
+    expect(w.find('[data-testid=folder-share-org-review-note]').exists()).toBe(true);
+  });
+
+  it('keeps org-wide available in the folder dialog for a known member (review, not blocked)', async () => {
     const { client } = provide({ tree, files, syncStatus: status(true), roles: ['org_member'] });
     const w = await openDialog(client, 'context-publish-btn');
     const org = w.find('[data-testid=folder-share-layer-org]').element as HTMLInputElement;
-    expect(org.disabled).toBe(true);
-    expect(w.find('[data-testid=folder-share-org-admin-only]').exists()).toBe(true);
+    expect(org.disabled).toBe(false);
+    expect(w.find('[data-testid=folder-share-org-review-note]').exists()).toBe(true);
   });
 
   it('(a) lists the folder entries recursively and batches only the checked ones', async () => {
