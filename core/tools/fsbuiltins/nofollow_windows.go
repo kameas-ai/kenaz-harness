@@ -12,17 +12,35 @@ package fsbuiltins
 // handle a different file from the checked path, or leaves a link in a
 // component, and is refused with ErrPathChanged.
 //
-// Residual risk (documented in the PR): the check follows the open, so a
-// swap made and reverted again between the open and the check is not
-// seen, and a write's temp-file create and rename are by path after the
-// directory handle was verified, so a swap inside that window can still
-// land them in the target. Each needs the agent to win a race against
-// syscalls issued back to back; the unix builds have no such window.
+// Residual risks (documented in the PR):
+//   - The check follows the open, so a swap made and reverted again
+//     between the open and the check is not seen.
+//   - A write's temp-file create and rename are by path after the
+//     directory handle was verified, so a swap inside that window can
+//     still land them in the target.
+//   - A write's missing parent directories are created by os.MkdirAll, by
+//     path, BEFORE the verification: a swap made before it can create
+//     empty directories inside the target before the write is refused.
+//     No file content lands there.
+//   - Junctions: since Go 1.23 (winsymlink) filepath.EvalSymlinks no
+//     longer resolves mount-point reparse points, so the gate judges a
+//     path through a pre-existing junction lexically, and this layer then
+//     refuses it as a swap (a false refusal; the I/O never goes through
+//     the junction). Volume mount points (a mount-point reparse point
+//     whose target is \??\Volume{GUID}\) are told apart by reading the
+//     reparse data and are allowed: they are a mounted volume, not a link
+//     to another directory.
+//
+// Each race needs the agent to win against syscalls issued back to back;
+// the unix builds have no such window.
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode/utf16"
 
 	"golang.org/x/sys/windows"
 )
@@ -114,7 +132,57 @@ func isLinkInfo(p string, li os.FileInfo) bool {
 		return false
 	}
 	const nameSurrogate = 0x20000000 // IsReparseTagNameSurrogate
-	return fd.Reserved0&nameSurrogate != 0
+	if fd.Reserved0&nameSurrogate == 0 {
+		return false
+	}
+	if fd.Reserved0 == windows.IO_REPARSE_TAG_MOUNT_POINT {
+		vol, err := isVolumeMountPoint(p)
+		if err != nil {
+			return true // cannot tell: fail closed
+		}
+		return !vol
+	}
+	return true
+}
+
+// isVolumeMountPoint reads p's mount-point reparse data and reports
+// whether its target is a volume (\??\Volume{GUID}\) rather than a
+// directory (a junction).
+func isVolumeMountPoint(p string) (bool, error) {
+	name, err := windows.UTF16PtrFromString(p)
+	if err != nil {
+		return false, err
+	}
+	h, err := windows.CreateFile(name, 0,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
+		windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return false, err
+	}
+	defer windows.CloseHandle(h)
+	buf := make([]byte, windows.MAXIMUM_REPARSE_DATA_BUFFER_SIZE)
+	var n uint32
+	if err := windows.DeviceIoControl(h, windows.FSCTL_GET_REPARSE_POINT, nil, 0, &buf[0], uint32(len(buf)), &n, nil); err != nil {
+		return false, err
+	}
+	// REPARSE_DATA_BUFFER: tag u32, length u16, reserved u16, then the
+	// MountPointReparseBuffer: substitute name offset and length (bytes,
+	// into the path buffer that starts at byte 16), print name offset and
+	// length.
+	if n < 16 || binary.LittleEndian.Uint32(buf[0:4]) != windows.IO_REPARSE_TAG_MOUNT_POINT {
+		return false, nil
+	}
+	off := 16 + int(binary.LittleEndian.Uint16(buf[8:10]))
+	ln := int(binary.LittleEndian.Uint16(buf[10:12]))
+	if ln%2 != 0 || off+ln > int(n) {
+		return false, errors.New("malformed mount-point reparse data")
+	}
+	u := make([]uint16, ln/2)
+	for i := range u {
+		u[i] = binary.LittleEndian.Uint16(buf[off+2*i:])
+	}
+	sub := strings.ToLower(string(utf16.Decode(u)))
+	return strings.HasPrefix(sub, `\??\volume{`), nil
 }
 
 // openInDir opens name in the verified directory dir. A link at name is

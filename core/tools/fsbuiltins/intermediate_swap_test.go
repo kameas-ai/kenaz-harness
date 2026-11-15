@@ -242,3 +242,106 @@ func jsonOf(m map[string]any) (string, error) {
 	b, err := json.Marshal(m)
 	return string(b), err
 }
+
+// grepLinks plants links in proj/sub and greps it through the real gate.
+func grepLinks(t *testing.T, s *swapRig, links map[string]string) map[string]any {
+	t.Helper()
+	root := filepath.Join(s.proj, "sub")
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return call(t, fsbuiltins.NewGrepTool(fsbuiltins.Options{Gate: s.gate}), map[string]any{"pattern": "needle", "path": root})
+}
+
+func matchCount(m map[string]any) int {
+	ms, _ := m["matches"].([]any)
+	return len(ms)
+}
+
+// Links to files inside the tree grep was allowed on are read with no new
+// check: five of them raise no prompt beyond grep's own.
+func TestGrep_InTreeLinksDoNotPrompt(t *testing.T) {
+	s := newSwapRig(t)
+	links := map[string]string{}
+	for _, n := range []string{"l1", "l2", "l3", "l4", "l5"} {
+		links[n] = filepath.Join(s.proj, "sub", "f.txt")
+	}
+	s.allowOnce()
+	m := grepLinks(t, s, links)
+	if isError(m) {
+		t.Fatal(m["error"])
+	}
+	if n := len(s.r.prompts()); n != 1 {
+		t.Fatalf("prompts = %d, want 1 (grep's own root only)", n)
+	}
+	if got := matchCount(m); got != 6 {
+		t.Fatalf("matches = %d, want 6 (f.txt and five links to it)", got)
+	}
+}
+
+// A link to a file outside the tree is judged by the gate: one prompt.
+func TestGrep_OutsideLinkPromptsOnce(t *testing.T) {
+	s := newSwapRig(t)
+	out := filepath.Join(t.TempDir(), "out.txt")
+	if err := os.WriteFile(out, []byte("outside needle"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.allowOnce()
+	s.allowOnce()
+	m := grepLinks(t, s, map[string]string{"out": out})
+	if isError(m) {
+		t.Fatal(m["error"])
+	}
+	if n := len(s.r.prompts()); n != 2 {
+		t.Fatalf("prompts = %d, want 2 (root + the outside link)", n)
+	}
+	if got := matchCount(m); got != 2 {
+		t.Fatalf("matches = %d, want 2", got)
+	}
+}
+
+// Past the cap, links out of the tree are skipped and reported, not
+// prompted for one by one.
+func TestGrep_OutsideLinksAreCapped(t *testing.T) {
+	s := newSwapRig(t)
+	links := map[string]string{}
+	for _, n := range []string{"o1", "o2", "o3", "o4", "o5", "o6"} {
+		out := filepath.Join(t.TempDir(), n+".txt")
+		if err := os.WriteFile(out, []byte("outside needle"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		links[n] = out
+	}
+	for i := 0; i < 4; i++ {
+		s.allowOnce()
+	}
+	m := grepLinks(t, s, links)
+	if isError(m) {
+		t.Fatal(m["error"])
+	}
+	if n := len(s.r.prompts()); n != 4 {
+		t.Fatalf("prompts = %d, want 4 (root + 3 capped link checks)", n)
+	}
+	if v, _ := m["skipped_links"].(float64); v != 3 {
+		t.Fatalf("skipped_links = %v, want 3", m["skipped_links"])
+	}
+	note, _ := m["note"].(string)
+	if !strings.Contains(note, "3 links pointing outside "+filepath.Join(s.proj, "sub")+" were skipped") {
+		t.Fatalf("note = %q", note)
+	}
+}
+
+// A link to a directory is skipped without a prompt.
+func TestGrep_DirLinkSkippedWithoutPrompt(t *testing.T) {
+	s := newSwapRig(t)
+	s.allowOnce()
+	m := grepLinks(t, s, map[string]string{"d": t.TempDir()})
+	if isError(m) {
+		t.Fatal(m["error"])
+	}
+	if n := len(s.r.prompts()); n != 1 {
+		t.Fatalf("prompts = %d, want 1 (grep's own root only)", n)
+	}
+}

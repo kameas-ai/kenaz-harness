@@ -782,7 +782,18 @@ type grepMatch struct {
 type grepResult struct {
 	Matches   []grepMatch `json:"matches"`
 	Truncated bool        `json:"truncated"`
+	// SkippedLinks counts in-tree links to files outside the grep root
+	// that were not read because the per-call cap on judging them
+	// (maxOutsideLinkChecks) was reached; Note says so in words.
+	SkippedLinks int    `json:"skipped_links,omitempty"`
+	Note         string `json:"note,omitempty"`
 }
+
+// maxOutsideLinkChecks caps how many in-tree links to files outside the
+// grep root one grep call sends to the gate (each may prompt). Links past
+// the cap are skipped and counted, so a tree full of links out (a pnpm
+// store, a monorepo) cannot raise a prompt storm.
+const maxOutsideLinkChecks = 3
 
 func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 	if t.enabled != nil && !t.enabled() {
@@ -874,6 +885,7 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	}
 	defer rootF.Close()
 
+	outsideChecked, outsideSkipped := 0, 0
 	walkErr := walkNoFollow(rootF, canonical, func(path string, d fs.DirEntry, parent *os.File) error {
 		if d.IsDir() {
 			return nil
@@ -889,12 +901,30 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
 			// grep has always read the file an in-tree link points to.
-			// The link's target is judged by the gate as a read of its
-			// own (it may lie outside the directory the grep was allowed
-			// on) and read at the location the gate judged, no-follow.
-			_, target, gerr := gateCheckPath(ctx, t.gate, corefs.OpRead, display(path))
-			if gerr != nil {
-				return nil // denied or unresolvable: skipped
+			// Resolve it first: a link to anything but a regular file is
+			// skipped without asking. A target inside the root grep was
+			// allowed on is read with no new check — the same judgement
+			// as a regular file in the tree. Only a target that leaves
+			// the tree is judged by the gate as a read of its own, at
+			// most maxOutsideLinkChecks times per call.
+			target, ok := corefs.ResolveFor(corefs.OpRead, path)
+			if !ok {
+				return nil
+			}
+			if li, lerr := os.Lstat(target); lerr != nil || !li.Mode().IsRegular() {
+				return nil // a directory, device, dangling or looping link
+			}
+			if !insideDir(target, canonical) {
+				if outsideChecked >= maxOutsideLinkChecks {
+					outsideSkipped++
+					return nil
+				}
+				outsideChecked++
+				_, judged, gerr := gateCheckPath(ctx, t.gate, corefs.OpRead, display(path))
+				if gerr != nil {
+					return nil // denied or unresolvable: skipped
+				}
+				target = judged
 			}
 			f, oerr := openCheckedForRead(target)
 			if oerr != nil {
@@ -921,7 +951,26 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 		return errResult("grep: walk: " + walkErr.Error()), nil
 	}
 
-	return okResult(grepResult{Matches: matches, Truncated: truncated}), nil
+	res := grepResult{Matches: matches, Truncated: truncated}
+	if outsideSkipped > 0 {
+		res.SkippedLinks = outsideSkipped
+		what := "links pointing outside %s were skipped"
+		if outsideSkipped == 1 {
+			what = "link pointing outside %s was skipped"
+		}
+		res.Note = fmt.Sprintf("%d "+what+"; grep a link's target directly to search it", outsideSkipped, shown)
+	}
+	return okResult(res), nil
+}
+
+// insideDir reports whether p is dir or lies below it (both cleaned,
+// resolved paths).
+func insideDir(p, dir string) bool {
+	if p == dir {
+		return true
+	}
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // ─── write_file ─────────────────────────────────────────────────────────────

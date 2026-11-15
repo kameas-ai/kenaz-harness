@@ -145,3 +145,43 @@ func TestNoFollowPrimitives_MutationIsCaught(t *testing.T) {
 		})
 	}
 }
+
+// A parent swapped for a link between the temp file's create and the
+// rename does not redirect the rename: renameat runs in the directory
+// handle that was opened, so the file lands in the real directory (now
+// moved aside) and nothing reaches the link's target.
+func TestAtomicWrite_SwapBeforeRenameStaysInOpenedDir(t *testing.T) {
+	for _, m := range noFollowModes() {
+		t.Run(m.name, func(t *testing.T) {
+			m.set(t)
+			checked, state := swapScenario(t)
+			proj := filepath.Dir(filepath.Dir(checked))
+			// swapScenario already swapped proj; put it back, then swap
+			// again from the seam.
+			if err := os.Remove(proj); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(proj+".moved", proj); err != nil {
+				t.Fatal(err)
+			}
+			beforeRename = func() {
+				if err := os.Rename(proj, proj+".moved"); err != nil {
+					t.Error(err)
+				}
+				if err := os.Symlink(state, proj); err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(func() { beforeRename = nil })
+			if err := atomicWrite(filepath.Join(filepath.Dir(checked), "w.txt"), []byte("w"), 0o600); err != nil {
+				t.Fatalf("atomicWrite: %v", err)
+			}
+			if got := stateEntries(t, state); got != "f.txt" {
+				t.Fatalf("state/sub = %q, the rename followed the swap", got)
+			}
+			if b, err := os.ReadFile(filepath.Join(proj+".moved", "sub", "w.txt")); err != nil || string(b) != "w" {
+				t.Fatalf("file not in the opened directory: %q, %v", b, err)
+			}
+		})
+	}
+}

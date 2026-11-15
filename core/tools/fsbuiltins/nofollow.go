@@ -196,6 +196,9 @@ func atomicWrite(path string, data []byte, mode fs.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close tmp: %w", err)
 	}
+	if beforeRename != nil {
+		beforeRename()
+	}
 	if err := renameInDir(dir, tmpName, base); err != nil {
 		if errors.Is(err, ErrPathChanged) {
 			return err
@@ -205,6 +208,10 @@ func atomicWrite(path string, data []byte, mode fs.FileMode) error {
 	committed = true
 	return nil
 }
+
+// beforeRename is a test seam between the temp file's create and the
+// rename; nil outside tests.
+var beforeRename func()
 
 func randSuffix() string {
 	var b [8]byte
