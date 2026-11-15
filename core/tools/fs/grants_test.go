@@ -252,13 +252,13 @@ func TestE2E1_ReadAfterDirectoryWriteGrant(t *testing.T) {
 func TestGrantCoverage_SkipsDangerousQueued(t *testing.T) {
 	t.Parallel()
 	g := NewGate(GateOptions{})
-	granted := cedar.PendingRequest{RequestID: "a", Family: cedar.FamilyFilesystem, Surface: cedar.PromptSurface{FS: &cedar.FSPromptSurface{Op: "write", CanonicalPath: "/srv/p/a"}}}
+	granted := cedar.PendingRequest{RequestID: "a", Family: cedar.FamilyFilesystem, Surface: cedar.PromptSurface{FS: &cedar.FSPromptSurface{Op: "write", CanonicalPath: "/srv/p/a", CheckedPath: "/srv/p/a", CheckedDir: "/srv/p"}}}
 	match := g.GrantCoverage(granted, cedar.ScopeDirectory)
 	if match == nil {
 		t.Fatal("directory grant covers nothing")
 	}
 	mk := func(op, path string, dangerous bool) cedar.PendingRequest {
-		return cedar.PendingRequest{RequestID: path + op, Family: cedar.FamilyFilesystem, Surface: cedar.PromptSurface{FS: &cedar.FSPromptSurface{Op: op, CanonicalPath: path, Dangerous: dangerous}}}
+		return cedar.PendingRequest{RequestID: path + op, Family: cedar.FamilyFilesystem, Surface: cedar.PromptSurface{FS: &cedar.FSPromptSurface{Op: op, CanonicalPath: path, CheckedPath: path, Dangerous: dangerous}}}
 	}
 	cases := []struct {
 		req  cedar.PendingRequest

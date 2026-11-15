@@ -73,6 +73,10 @@ type PromptSurface struct {
 	// ResolvedPath is where CanonicalPath really lands (symlinks of its
 	// existing prefix resolved); it keys the registry's allow-once cache.
 	ResolvedPath string
+	// CheckedPath / CheckedDir are the check-time resolutions grants bind
+	// (see cedar.FSPromptSurface); "" when the path could not be resolved.
+	CheckedPath string
+	CheckedDir  string
 }
 
 // Prompter is the interface the gate calls to surface an interactive
@@ -174,6 +178,11 @@ type Gate struct {
 	// transientMu protects transientGrants.
 	transientMu     sync.RWMutex
 	transientGrants map[transientKey]time.Time
+
+	// afterCheck, when set (tests only), runs after the Cedar passes and
+	// before the prompt surface is built: the window in which a link can
+	// be retargeted after the check.
+	afterCheck func()
 }
 
 // transientKey identifies one transient grant.
@@ -235,15 +244,19 @@ func (g *Gate) EvaluatePath(ctx context.Context, op Op, rawPath string) (d cedar
 	if err != nil {
 		return cedar.Decision{}, "", err
 	}
-	resolved, ok := resolveFor(op, canonical)
-	d, err = g.evaluate(ctx, op, canonical, resolved)
+	resolved, resolvedDir, ok := resolveForWithDir(op, canonical)
+	d, err = g.evaluate(ctx, op, canonical, resolved, resolvedDir, ok)
 	if err == nil && !ok {
 		resolved = ""
 	}
 	return d, resolved, err
 }
 
-func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) (cedar.Decision, error) {
+// evaluate judges op on canonical. resolved and resolvedDir are the
+// check-time resolutions of the path and of its directory (taken together
+// in EvaluatePath); nothing here resolves the path again, so a grant can
+// only bind what was checked.
+func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved, resolvedDir string, resolvedOK bool) (cedar.Decision, error) {
 
 	// resolved is where op really acts (resolveFor). Remembered grants
 	// bind it, transient grants key on it, and the state, dangerous-tier,
@@ -333,6 +346,10 @@ func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) 
 	// on its own (E2E-3): the grant may predate a retargeted link (a
 	// grant on /tmp/pl, then ln -sfn <DataDir>/policy /tmp/pl), or the
 	// policy may simply be broad. Ask, with the privileged banner.
+	if g.afterCheck != nil {
+		g.afterCheck()
+	}
+
 	if d.Outcome == cedar.Allow && priv.inside {
 		d.Outcome = cedar.NotApplicable
 		d.Reason = "a policy allow does not cover the harness state directory"
@@ -370,6 +387,13 @@ func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) 
 			Privileged:        priv.copy,
 			ResolvedPath:      shownResolved(canonical, resolved),
 		}
+		// What a grant would bind: the check-time resolutions, never a
+		// fresh one (a parent link retargeted after the check must not
+		// move "Allow always (this directory)" onto an unshown directory).
+		if resolvedOK {
+			surface.CheckedPath = resolved
+			surface.CheckedDir = resolvedDir
+		}
 		resp, perr := g.opts.Prompter.Prompt(ctx, surface)
 		if perr != nil {
 			// Prompt error → deny (fail-safe).
@@ -397,7 +421,7 @@ func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved string) 
 				d.Reason = "dangerous path: allow-always requires AllowDangerousPersist override"
 				return d, nil
 			}
-			grants, note := g.grantsFor(op, canonical, resp)
+			grants, note := g.grantsFor(op, canonical, surface.CheckedPath, surface.CheckedDir, resp)
 			if len(grants) == 0 {
 				// Nothing persistable (privileged path, or a path a
 				// policy literal cannot carry): this session only, as
