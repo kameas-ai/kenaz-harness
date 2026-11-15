@@ -187,6 +187,15 @@ func resolveFor(op Op, canonical string) (string, bool) {
 	return filepath.Join(rp, filepath.Base(canonical)), ok
 }
 
+// ResolveFor is resolveFor for callers outside the package that do I/O
+// with no gate wired (fsbuiltins' nil-gate test path): the location op on
+// canonical really acts, with every link the gate would follow resolved,
+// so a no-follow open of it does not trip over a benign alias such as
+// macOS's /var -> /private/var.
+func ResolveFor(op Op, canonical string) (string, bool) {
+	return resolveFor(op, canonical)
+}
+
 // resolveForWithDir is resolveFor plus the resolved directory a "this
 // directory" grant names, taken at the same moment. For a write the
 // directory is the one resolveFor already resolved; for a read (which
