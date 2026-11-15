@@ -22,25 +22,23 @@ package fsbuiltins
 //     path, BEFORE the verification: a swap made before it can create
 //     empty directories inside the target before the write is refused.
 //     No file content lands there.
-//   - Junctions: since Go 1.23 (winsymlink) filepath.EvalSymlinks no
-//     longer resolves mount-point reparse points, so the gate judges a
-//     path through a pre-existing junction lexically, and this layer then
-//     refuses it as a swap (a false refusal; the I/O never goes through
-//     the junction). Volume mount points (a mount-point reparse point
-//     whose target is \??\Volume{GUID}\) are told apart by reading the
-//     reparse data and are allowed: they are a mounted volume, not a link
-//     to another directory.
+//   - Junctions and volume mount points: since Go 1.23 (winsymlink)
+//     filepath.EvalSymlinks no longer resolves mount-point reparse points,
+//     so the gate judges a path through one lexically, and this layer then
+//     refuses it as a swap. That is a false refusal for a path through a
+//     real junction or a folder-mounted volume (C:\mnt\data -> a second
+//     disk): the I/O never goes through it. The workaround is the
+//     volume's drive letter (or the junction's real target). Mount points
+//     are not told apart from junctions by their target, because an agent
+//     can create a junction to \??\Volume{GUID}\any\path without privilege.
 //
 // Each race needs the agent to win against syscalls issued back to back;
 // the unix builds have no such window.
 
 import (
-	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
-	"unicode/utf16"
 
 	"golang.org/x/sys/windows"
 )
@@ -131,58 +129,22 @@ func isLinkInfo(p string, li os.FileInfo) bool {
 	if fd.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
 		return false
 	}
-	const nameSurrogate = 0x20000000 // IsReparseTagNameSurrogate
-	if fd.Reserved0&nameSurrogate == 0 {
-		return false
-	}
-	if fd.Reserved0 == windows.IO_REPARSE_TAG_MOUNT_POINT {
-		vol, err := isVolumeMountPoint(p)
-		if err != nil {
-			return true // cannot tell: fail closed
-		}
-		return !vol
-	}
-	return true
+	return isLinkReparse(fd.FileAttributes, fd.Reserved0)
 }
 
-// isVolumeMountPoint reads p's mount-point reparse data and reports
-// whether its target is a volume (\??\Volume{GUID}\) rather than a
-// directory (a junction).
-func isVolumeMountPoint(p string) (bool, error) {
-	name, err := windows.UTF16PtrFromString(p)
-	if err != nil {
-		return false, err
+// isLinkReparse classifies a directory entry by its attributes and
+// reparse tag: a reparse point whose tag is a name surrogate (symlinks,
+// junctions AND volume mount points — IO_REPARSE_TAG_MOUNT_POINT covers
+// all three, and a junction aimed at \??\Volume{GUID}\any\path needs no
+// privilege to create, so the target cannot be trusted to tell them
+// apart) is a link. Other reparse points (OneDrive placeholders, dedup)
+// are the file itself.
+func isLinkReparse(attrs, tag uint32) bool {
+	if attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+		return false
 	}
-	h, err := windows.CreateFile(name, 0,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
-		windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
-	if err != nil {
-		return false, err
-	}
-	defer windows.CloseHandle(h)
-	buf := make([]byte, windows.MAXIMUM_REPARSE_DATA_BUFFER_SIZE)
-	var n uint32
-	if err := windows.DeviceIoControl(h, windows.FSCTL_GET_REPARSE_POINT, nil, 0, &buf[0], uint32(len(buf)), &n, nil); err != nil {
-		return false, err
-	}
-	// REPARSE_DATA_BUFFER: tag u32, length u16, reserved u16, then the
-	// MountPointReparseBuffer: substitute name offset and length (bytes,
-	// into the path buffer that starts at byte 16), print name offset and
-	// length.
-	if n < 16 || binary.LittleEndian.Uint32(buf[0:4]) != windows.IO_REPARSE_TAG_MOUNT_POINT {
-		return false, nil
-	}
-	off := 16 + int(binary.LittleEndian.Uint16(buf[8:10]))
-	ln := int(binary.LittleEndian.Uint16(buf[10:12]))
-	if ln%2 != 0 || off+ln > int(n) {
-		return false, errors.New("malformed mount-point reparse data")
-	}
-	u := make([]uint16, ln/2)
-	for i := range u {
-		u[i] = binary.LittleEndian.Uint16(buf[off+2*i:])
-	}
-	sub := strings.ToLower(string(utf16.Decode(u)))
-	return strings.HasPrefix(sub, `\??\volume{`), nil
+	const nameSurrogate = 0x20000000 // IsReparseTagNameSurrogate
+	return tag&nameSurrogate != 0
 }
 
 // openInDir opens name in the verified directory dir. A link at name is
