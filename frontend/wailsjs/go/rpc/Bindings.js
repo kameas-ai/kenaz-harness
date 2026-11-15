@@ -1406,6 +1406,10 @@ export function Settings_DeleteMLLocalActivity() {
   return window['go']['rpc']['Bindings']['Settings_DeleteMLLocalActivity']();
 }
 
+export function Settings_DismissPolicyDefaultNotice() {
+  return window['go']['rpc']['Bindings']['Settings_DismissPolicyDefaultNotice']();
+}
+
 export function Settings_FleetCapabilities() {
   return window['go']['rpc']['Bindings']['Settings_FleetCapabilities']();
 }
@@ -1578,6 +1582,10 @@ export function Settings_GetPermissionsMigrationToastShown() {
   return window['go']['rpc']['Bindings']['Settings_GetPermissionsMigrationToastShown']();
 }
 
+export function Settings_GetPolicyDefault() {
+  return window['go']['rpc']['Bindings']['Settings_GetPolicyDefault']();
+}
+
 export function Settings_GetRiskRaterBenchmark() {
   return window['go']['rpc']['Bindings']['Settings_GetRiskRaterBenchmark']();
 }
@@ -1720,6 +1728,10 @@ export function Settings_SetPermissionMode(arg1) {
 
 export function Settings_SetPermissionsMigrationToastShown(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetPermissionsMigrationToastShown'](arg1);
+}
+
+export function Settings_SetPolicyDefault(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetPolicyDefault'](arg1);
 }
 
 export function Settings_SetSaveArtifactEnabled(arg1) {

@@ -6060,3 +6060,17 @@ export interface ServerSchemaCost {
   sendableTokenEst: number;
   tools: ToolSchemaCost[];
 }
+
+/**
+ * Launch spec L09: the host policy default (core/rpc/policy_default.go
+ * PolicyDefaultView). "starter": reads and edits inside the workspace run
+ * without asking; shell commands, web requests and writes outside the
+ * workspace ask. "legacy": the behaviour before the starter policy, kept
+ * on installs that predate it until the person accepts the new default.
+ * "workbench": served mode, where the VM is the boundary.
+ */
+export interface PolicyDefaultView {
+  mode: 'starter' | 'legacy' | 'workbench' | string;
+  noticeSeen: boolean;
+  upgraded: boolean;
+}

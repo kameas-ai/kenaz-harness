@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	cedarlib "github.com/cedar-policy/cedar-go"
@@ -130,6 +131,15 @@ type GateOptions struct {
 	// it is the agent's own working area, not harness state, so paths
 	// under it are never privileged.
 	WorkspaceDir func() string
+	// StarterDefaults, when set and returning true, applies the host
+	// starter policy (launch spec L09 D1, Option B) to requests no policy
+	// or grant decided: reads are allowed, and writes that land inside
+	// WorkspaceDir are allowed. Everything else still prompts. It never
+	// overrides a Cedar forbid, and never allows a dangerous-tier path,
+	// harness state, or a path that could not be resolved. Read per call,
+	// so switching the default applies to the next request. Gate.
+	// SetStarterDefaults installs it after construction.
+	StarterDefaults func() bool
 }
 
 // HarnessStateDirs returns the state directories GateOptions.StateDirs
@@ -183,6 +193,51 @@ type Gate struct {
 	// before the prompt surface is built: the window in which a link can
 	// be retargeted after the check.
 	afterCheck func()
+
+	// starter is the live StarterDefaults reader (see GateOptions).
+	starter atomic.Pointer[func() bool]
+}
+
+// SetStarterDefaults installs (or, with nil, removes) the host starter
+// policy reader described on GateOptions.StarterDefaults.
+func (g *Gate) SetStarterDefaults(fn func() bool) {
+	if g == nil {
+		return
+	}
+	if fn == nil {
+		g.starter.Store(nil)
+		return
+	}
+	g.starter.Store(&fn)
+}
+
+func (g *Gate) starterActive() bool {
+	fn := g.starter.Load()
+	return fn != nil && (*fn)()
+}
+
+// starterAllows reports whether the host starter policy answers a request
+// no policy or grant decided, and why. Reads anywhere, and writes whose
+// lexical path and real location both sit inside the agent workspace.
+func (g *Gate) starterAllows(op Op, canonical, resolved string, resolvedOK, dangerous bool, priv privilege) (bool, string) {
+	if !resolvedOK || dangerous || priv.inside || !g.starterActive() {
+		return false, ""
+	}
+	switch op {
+	case OpRead:
+		return true, "starter policy: reads are allowed"
+	case OpWrite:
+		ws := g.workspace()
+		if ws == "" {
+			return false, ""
+		}
+		rws := resolvedOrSelf(ws)
+		inLexical := lexicalWithinOrEqual(canonical, ws) || lexicalWithinOrEqual(canonical, rws)
+		if inLexical && lexicalWithinOrEqual(unaliasDarwin(resolved), unaliasDarwin(rws)) {
+			return true, "starter policy: edits inside the workspace are allowed"
+		}
+	}
+	return false, ""
 }
 
 // transientKey identifies one transient grant.
@@ -370,6 +425,13 @@ func (g *Gate) evaluate(ctx context.Context, op Op, canonical, resolved, resolve
 		// denies rather than silently allowing — so folding Confirm in
 		// here is safe by construction, not merely convenient.
 		//
+		// Host starter policy (L09): reads, and edits inside the
+		// workspace, need no prompt when nothing above decided them.
+		if ok, why := g.starterAllows(op, canonical, resolved, resolvedOK, dangerous, priv); ok {
+			d.Outcome = cedar.Allow
+			d.Reason = why
+			return d, nil
+		}
 		// Check transient cache first.
 		if g.hasTransientGrant(op, canonical, resolved) {
 			d.Outcome = cedar.Allow

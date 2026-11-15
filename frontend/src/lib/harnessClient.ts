@@ -229,6 +229,7 @@ import type {
   SessionToolExposure,
   LoadToolsResult,
   ServerSchemaCost,
+  PolicyDefaultView,
 } from './types';
 
 /**
@@ -602,6 +603,10 @@ interface WailsBindingsLike {
   Settings_SetBashAllowlistMigrated(migrated: boolean): Promise<void>;
   Settings_GetPermissionsMigrationToastShown(): Promise<boolean>;
   Settings_SetPermissionsMigrationToastShown(shown: boolean): Promise<void>;
+  // Launch spec L09 host policy default (desktop only).
+  Settings_GetPolicyDefault?(): Promise<PolicyDefaultView>;
+  Settings_SetPolicyDefault?(mode: string): Promise<void>;
+  Settings_DismissPolicyDefaultNotice?(): Promise<void>;
   // WP05 credential-gate strictness dial
   Settings_GetCedarStrictCredentialMode(): Promise<boolean>;
   Settings_SetCedarStrictCredentialMode(enabled: boolean): Promise<void>;
@@ -2477,6 +2482,16 @@ export interface SettingsClient {
   getPermissionsMigrationToastShown(): Promise<boolean>;
   /** Mark the migration toast as shown. */
   setPermissionsMigrationToastShown(shown: boolean): Promise<void>;
+  /**
+   * Launch spec L09: the host policy default — "starter", "legacy" (an
+   * install that predates the starter policy), or "workbench" (served).
+   * Optional: absent on clients with no desktop backend.
+   */
+  getPolicyDefault?(): Promise<PolicyDefaultView>;
+  /** Switch the host policy default ("starter" | "legacy"). */
+  setPolicyDefault?(mode: 'starter' | 'legacy'): Promise<void>;
+  /** Dismiss the first-run policy notice without changing the default. */
+  dismissPolicyDefaultNotice?(): Promise<void>;
 
   // ── WP05 credential-gate strictness dial ──────────────────────────
 
@@ -4851,6 +4866,21 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetPermissionsMigrationToastShown(),
       setPermissionsMigrationToastShown: (shown) =>
         b().Settings_SetPermissionsMigrationToastShown(shown),
+      getPolicyDefault: async () => {
+        const bb = b();
+        if (!bb.Settings_GetPolicyDefault) throw new Error('policy default is not available');
+        return bb.Settings_GetPolicyDefault();
+      },
+      setPolicyDefault: async (mode) => {
+        const bb = b();
+        if (!bb.Settings_SetPolicyDefault) throw new Error('policy default is not available');
+        return bb.Settings_SetPolicyDefault(mode);
+      },
+      dismissPolicyDefaultNotice: async () => {
+        const bb = b();
+        if (!bb.Settings_DismissPolicyDefaultNotice) return;
+        return bb.Settings_DismissPolicyDefaultNotice();
+      },
       getCedarStrictCredentialMode: () =>
         b().Settings_GetCedarStrictCredentialMode(),
       setCedarStrictCredentialMode: (enabled) =>

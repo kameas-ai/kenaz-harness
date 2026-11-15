@@ -15,6 +15,13 @@ type Resolution struct {
 	Tool   string
 	Policy ToolPolicy
 	Reason string
+	// AskDespitePermit, set only with PolicyConfirmEach, means a Cedar
+	// permit on its own does not answer this call: the person is asked
+	// unless a grant they gave (session or "always allow") or a Cedar
+	// forbid decides it. The host starter policy sets it for the built-in
+	// network tools, which the embedded default bundle permits for every
+	// kenaz tool (launch spec L09, StarterNetworkResolver).
+	AskDespitePermit bool
 }
 
 // MCPPool is the narrow surface the chassis-side chat runner adapts

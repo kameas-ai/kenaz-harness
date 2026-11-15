@@ -9,6 +9,7 @@ import ConnectionLostBanner from '@/components/ui/ConnectionLostBanner.vue';
 import LockdownBanner from '@/components/ui/LockdownBanner.vue';
 import SessionExpiredBanner from '@/components/ui/SessionExpiredBanner.vue';
 import BootHealthBanner from '@/components/ui/BootHealthBanner.vue';
+import PolicyDefaultNotice from '@/components/permissions/PolicyDefaultNotice.vue';
 import SearchModal from '@/components/search/SearchModal.vue';
 import SearchPalette from '@/components/search/SearchPalette.vue';
 import CheatSheetModal from '@/components/shortcuts/CheatSheetModal.vue';
@@ -248,6 +249,8 @@ onBeforeUnmount(() => {
         <SessionExpiredBanner />
         <!-- agent-loop-robustness-parity WP08: boot-health init-error banner. -->
         <BootHealthBanner />
+        <!-- Launch spec L09 R7: which policy default is active (first run). -->
+        <PolicyDefaultNotice />
         <ConnectionLostBanner v-if="isLost" />
         <div
           v-if="isStarting"

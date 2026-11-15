@@ -448,7 +448,11 @@ func (a *kernelToolAdapter) dispatchCall(ctx context.Context, call coreag.ToolCa
 		case string(toolloop.PolicyConfirmEach):
 			// confirm-each-enforcement-01PMAG05 WP01/WP02/WP03/WP05: the
 			// third verdict finally does something.
-			res, proceed, err := a.resolveConfirmEach(ctx, call, server, tool, v.Reason)
+			cctx := ctx
+			if v.AskDespitePermit {
+				cctx = context.WithValue(ctx, askDespitePermitKey{}, true)
+			}
+			res, proceed, err := a.resolveConfirmEach(cctx, call, server, tool, v.Reason)
 			if err != nil {
 				return coreag.ToolResult{}, err
 			}
@@ -630,6 +634,15 @@ func promptSkipSet(knobs autonomy.ResolvedKnobs) toolloop.PromptSkipSet {
 // There is no timeout on rung 6: an unanswered confirmation parks the
 // run until the user answers, the batch is cancelled, or ctx is
 // cancelled (owner decision 1). Do not add a deadline here.
+// askDespitePermitKey marks a confirm_each verdict whose Cedar permit must
+// not skip the prompt (PermVerdict.AskDespitePermit).
+type askDespitePermitKey struct{}
+
+func askDespitePermit(ctx context.Context) bool {
+	v, _ := ctx.Value(askDespitePermitKey{}).(bool)
+	return v
+}
+
 func (a *kernelToolAdapter) resolveConfirmEach(
 	ctx context.Context,
 	call coreag.ToolCall,
@@ -670,6 +683,13 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 			}, false, nil
 
 		case cedar.Allow:
+			if askDespitePermit(ctx) {
+				// Host starter policy (L09): the embedded bundle permits
+				// every kenaz tool, so a permit cannot answer a network
+				// call here. Fall through to the grant / prompt rungs;
+				// a forbid above still denies.
+				break
+			}
 			a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
 				SessionID: a.sessionID,
 				Server:    server,

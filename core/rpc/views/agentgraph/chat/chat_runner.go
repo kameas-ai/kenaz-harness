@@ -836,6 +836,10 @@ type PermVerdict struct {
 	Tool   string
 	Policy string // "auto_allow" | "confirm_each" | "deny"
 	Reason string
+	// AskDespitePermit mirrors toolloop.Resolution.AskDespitePermit: on a
+	// confirm_each verdict, a Cedar permit alone does not skip the prompt
+	// (the host starter policy's network tools).
+	AskDespitePermit bool
 }
 
 // pausedTurn stores the state captured when a chat run is interrupted by

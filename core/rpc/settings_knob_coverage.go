@@ -476,6 +476,18 @@ func init() {
 			"whether 'Allow always' is offered for dangerous-tier ops.",
 	)
 	knobcoverage.Register[settings.Settings](
+		"PolicyDefault",
+		"read by core/rpc/policy_default.go (policyDefault.StarterActive), "+
+			"which the fs gate (corefs.Gate.SetStarterDefaults), the network-tool "+
+			"resolver (toolloop.StarterNetworkResolver) and the bash allowlist "+
+			"seeding consult per request (launch spec L09).",
+	)
+	knobcoverage.Register[settings.Settings](
+		"PolicyDefaultNoticeSeen",
+		"read by Settings_GetPolicyDefault; PolicyDefaultNotice.vue shows the "+
+			"first-run policy notice until it is set (L09 R7).",
+	)
+	knobcoverage.Register[settings.Settings](
 		"BashAllowlistMigrated",
 		"read by the first-boot bash-allowlist migration runner to "+
 			"suppress its one-time UI toast after the migration has run.",

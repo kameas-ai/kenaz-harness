@@ -213,6 +213,22 @@ type Settings struct {
 	// Set to true after the toast is shown so it never shows again.
 	PermissionsMigrationToastShown bool `json:"permissionsMigrationToastShown,omitempty"`
 
+	// PolicyDefault is the host policy default (launch spec L09 D1):
+	// "starter" (reads and in-workspace edits run; shell commands, network
+	// calls and writes outside the workspace ask) or "legacy" (the
+	// behaviour before the starter policy: every file read and write
+	// asks, network calls run without asking). Empty means not decided
+	// yet: the first boot of this build decides it once — a fresh install
+	// gets "starter", an existing install "legacy" until the person
+	// accepts the new default (R6). Ignored in served (workbench) mode,
+	// where the VM is the boundary. Written only by the policy-default
+	// action, never by a whole-settings save.
+	PolicyDefault string `json:"policyDefault,omitempty"`
+
+	// PolicyDefaultNoticeSeen records that the person dismissed or
+	// answered the first-run notice saying which default is active (R7).
+	PolicyDefaultNoticeSeen bool `json:"policyDefaultNoticeSeen,omitempty"`
+
 	// CedarStrictCredentialMode controls NotApplicable handling in the
 	// credstore Cedar gate (mission cedar-credential-policy-01KQ8TDE,
 	// WP05). When false (default / lenient), a NotApplicable Cedar
@@ -1229,6 +1245,12 @@ func (s Settings) EffectiveCodeBlockMinBytes() int {
 	}
 	return s.CodeBlockMinBytes
 }
+
+// Policy default values (Settings.PolicyDefault).
+const (
+	PolicyDefaultStarter = "starter"
+	PolicyDefaultLegacy  = "legacy"
+)
 
 // ConfirmEachEnabled is the user-facing form of the WP05 modal flag.
 // Defaults to true on a fresh install (zero-value ConfirmEachDisabled)
