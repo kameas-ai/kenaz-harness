@@ -37,9 +37,12 @@ type manifestAsset struct {
 // stableManifestURL and prereleaseManifestURL are the production
 // manifest endpoints. Tests override them via Config.ManifestURL.
 //
-// These point at the release CDN (downloads.kameas.ai), which is where
-// release.yml publishes the per-product manifest. The stage CNAME backs
-// the prerelease (release-candidate) channel.
+// Both point at the prod release CDN (downloads.kameas.ai), where
+// release.yml publishes the per-product manifest. A new release moves only
+// the prerelease pointer (kenaz-harness/prerelease/manifest.json); the
+// stable pointer moves when promote.yml promotes that version after its
+// soak (launch spec L09 release gate). Until the first prerelease pointer
+// exists the prerelease URL 404s and Check falls back to stable.
 //
 // frontend/src/components/updates/useUpdateStore.ts's MANIFEST_URL
 // constant (the Layer-3 direct-fetch fallback) must equal
@@ -50,7 +53,7 @@ type manifestAsset struct {
 // block; pinned here by TestStableManifestURL_MatchesFrontendConstant.
 const (
 	stableManifestURL     = "https://downloads.kameas.ai/kenaz-harness/manifest.json"
-	prereleaseManifestURL = "https://stage.downloads.kameas.ai/kenaz-harness/manifest.json"
+	prereleaseManifestURL = "https://downloads.kameas.ai/kenaz-harness/prerelease/manifest.json"
 )
 
 // channelManifestURL returns the manifest URL for the given channel.

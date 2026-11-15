@@ -25,7 +25,13 @@
 // # Manifest schema
 //
 // Stable channel:  https://downloads.kameas.ai/kenaz-harness/manifest.json
-// Prerelease:      https://stage.downloads.kameas.ai/kenaz-harness/manifest.json
+// Prerelease:      https://downloads.kameas.ai/kenaz-harness/prerelease/manifest.json
+//
+// Every release lands on prerelease first; promote.yml moves the stable
+// pointer to a named version after the soak, and rolls it back the same
+// way. The updater only offers versions newer than the running one, so a
+// rollback stops offering the bad version; it does not downgrade installs
+// that already took it.
 //
 // JSON shape (only the fields used here; assets carry os/arch as the
 // canonical match keys, matched against runtime.GOOS/GOARCH):

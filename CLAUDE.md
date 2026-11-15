@@ -58,7 +58,8 @@ The decision boundary: **if the working tree had observable wrong behaviour or a
 |---|---|---|
 | `pr-title.yml` | PR open/edit | Conventional Commits gate (single source of truth for the bump computation) |
 | `pr.yml` | PR push | Go lint+vet+codegen drift, Go tests `-race -short`, Frontend tests + typecheck |
-| `tag-on-merge.yml` | push to `main` | Reads the squash-commit subject, computes next tag, pushes the tag, creates the GitHub Release, dispatches `release.yml` for binary builds |
+| `tag-on-merge.yml` | manual dispatch (or push to `main` when `AUTO_RELEASE=true`) | Reads the squash-commit subject, computes next tag, pushes the tag, creates the GitHub Release, dispatches `release.yml` for binary builds (prerelease channel) |
+| `promote.yml` | manual dispatch | Moves the stable channel to a named version after the soak + smoke, or rolls it back |
 | `release.yml` | tag push or `workflow_dispatch` | Cross-platform signed builds (macOS .dmg + Windows NSIS + Linux AppImage), publish to env-specific S3 (dev/stage/prod chosen by trigger) |
 
 ### Runner pool policy
@@ -105,17 +106,29 @@ The harness is a desktop app; its "environments" are the env-specific S3 + Cloud
 
 | Trigger | Env | Channel |
 |---|---|---|
-| **push to `main`** (any commit) | **dev** | rolling "latest" → `s3://kameas-ai-dev-releases-use2` → dev.downloads.kameas.ai |
+| **push to `main`**, only when repo var `AUTO_RELEASE=true` | **dev** | rolling "latest" → `s3://kameas-ai-dev-releases-use2` → dev.downloads.kameas.ai |
 | **tag `v*-rc*`** (e.g. `v1.2.0-rc1`) | **stage** | release candidate → `s3://kameas-ai-stage-releases-use2` → stage.downloads.kameas.ai |
-| **tag `v*`** (no `-rc`) **or** `workflow_dispatch` with `version=` | **prod** | stable → `s3://kameas-ai-prod-releases-use2` → prod.downloads.kameas.ai |
+| **tag `v*`** (no `-rc`) **or** `workflow_dispatch` with `version=` | **prod, prerelease channel** | `s3://kameas-ai-prod-releases-use2/kenaz-harness/<tag>/` + the **prerelease** pointer `kenaz-harness/prerelease/manifest.json`; GitHub Release marked prerelease |
+| **`promote.yml`** dispatch naming the version | **prod, stable channel** | moves `kenaz-harness/manifest.json` (updater `stable`, download page, GitHub `releases/latest`) |
+
+**Release gate (launch spec L09).** A release reaches `stable` users only through a `prerelease` stop. Release on merge is opt-in: `tag-on-merge.yml` runs on a manual dispatch, or on push to `main` only when `AUTO_RELEASE` is `true` (off as of 2026-11-15). Either way the tag it cuts publishes to the **prerelease** channel only. The updater's `prerelease` channel (`core/update/manifest.go`) reads that pointer, and falls back to stable while it does not exist. Installed apps default to `stable`; the channel is in **Settings → Updates**. Founders' machines should run `prerelease` (L09 R5).
 
 **Develop → promote ladder:**
-1. **Develop** locally with `wails dev` + the test commands under *Local dev commands*. Open a PR; `pr.yml` (lint/vet/codegen-drift, `-race -short` Go tests, frontend tests+typecheck) is the gate.
-2. **Merge → main** ⇒ a **dev** rolling build is published automatically (every merge, incl. `chore`/`docs`). Smoke it from the dev channel.
-3. **Stage (optional RC):** push a `v<X.Y.Z>-rc1` tag manually ⇒ a **stage** release-candidate build. Soak it.
-4. **Prod:** a stable `v<X.Y.Z>` tag ⇒ a **prod** build. `tag-on-merge.yml` auto-cuts this stable tag from a `feat:`/`fix:` PR — so a normal feature merge yields **both** a dev rolling build (from the push) **and**, once the tag lands, a prod build. To gate prod behind an RC, push the `-rc` tag (and soak) **before** the stable tag, or land the work as a no-bump prefix (`chore`/`docs`/`refactor`) so only the dev rolling build is produced until you choose to tag.
+1. **Develop** locally with `wails dev` + the test commands under *Local dev commands*. Open a PR; `pr.yml` is the gate.
+2. **Merge → main.** Nothing is published unless `AUTO_RELEASE=true` (then a dev rolling build).
+3. **Stage (optional RC):** push a `v<X.Y.Z>-rc1` tag manually ⇒ a stage build for manual download. No updater channel reads it.
+4. **Release:** a stable `v<X.Y.Z>` tag (from `tag-on-merge.yml`) ⇒ a prod build on the **prerelease** channel.
+5. **Promote to stable** after the soak (repo var `STABLE_SOAK_HOURS`, default 24 h since the per-tag manifest's `released_at`) and the release smoke on macOS and Windows:
+   ```bash
+   gh workflow run promote.yml -R kameas-ai/kenaz-harness --ref main \
+     -f version=v<X.Y.Z> -f action=promote \
+     -f smoke_macos='<OS version, installer file, result or link>' \
+     -f smoke_windows='<OS version, installer file, result or link>'
+   ```
+   It refuses a version that is unpublished, too young, older than current stable, or missing either smoke note; it records each promotion in `kenaz-harness/promotions.json` and the run summary.
+6. **Rollback:** `gh workflow run promote.yml --ref main -f version=<earlier tag> -f action=rollback -f reason='<why>'`. The updater only offers versions newer than the running one, so a rollback **stops offering** the bad version; it does not downgrade installs that already took it.
 
-Note: `tag-on-merge` cutting the stable tag immediately means **a `feat:`/`fix:` merge ships to prod downloads without a stage stop** unless you deliberately RC-tag first. Treat that as the default and plan RC soak explicitly when a release warrants it.
+Never dispatch `tag-on-merge`, `release` or `promote` from an agent session; those are owner actions.
 
 ---
 
@@ -564,5 +577,5 @@ The harness sub-agent system creates `.claude/worktrees/agent-<id>/` worktrees t
 6. `gh pr create --base main --head release/v<X.Y.Z> --title "feat: v<X.Y.Z> — <theme>"` (NOT `release(…)`).
 7. Wait for `pr.yml` + `pr-title.yml` green. Fix any CI issues with a follow-up commit on the same branch.
 8. `gh pr merge <num> --squash --delete-branch`.
-9. `tag-on-merge.yml` auto-tags + dispatches `release.yml`. Verify the tag is pushed and the GitHub Release is created (the latter is failing today — see "Self-hosted runner gotcha" above).
+9. The owner dispatches `tag-on-merge.yml`, which tags + dispatches `release.yml` (prerelease channel). Verify the tag is pushed and the GitHub Release is created, then commit the upgrade snapshot for the new tag. After the soak, the owner dispatches `promote.yml`.
 10. Archive shipped specs to `kitty-specs/_archive/`. Update `docs/roadmap.md`. Open follow-up PRs for any tracked patch-lane items.

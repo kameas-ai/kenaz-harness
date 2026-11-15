@@ -34,10 +34,22 @@ func releaseWorkflowCDNBase(t *testing.T, target string) string {
 // stage-downloads.kameas.ai — NXDOMAIN — from #168 (2026-06-11) to
 // 2026-10-07; a DNS failure is not errManifestNotFound, so the stable
 // fallback never ran and every Prerelease-channel update check failed.
+//
+// Since the L09 release gate both channels live on the prod CDN: a prod
+// build moves kenaz-harness/prerelease/manifest.json (release.yml's
+// publish-s3 guard step) and promote.yml moves kenaz-harness/manifest.json.
 func TestChannelManifestURLs_MatchReleaseWorkflowCDN(t *testing.T) {
 	const path = "/kenaz-harness/manifest.json"
-	if want := releaseWorkflowCDNBase(t, "stage") + path; prereleaseManifestURL != want {
-		t.Errorf("prereleaseManifestURL = %q, want %q (release.yml stage CDN_BASE)", prereleaseManifestURL, want)
+	const prereleasePath = "/kenaz-harness/prerelease/manifest.json"
+	if want := releaseWorkflowCDNBase(t, "prod") + prereleasePath; prereleaseManifestURL != want {
+		t.Errorf("prereleaseManifestURL = %q, want %q (release.yml prod CDN_BASE + prerelease pointer)", prereleaseManifestURL, want)
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("read release.yml: %v", err)
+	}
+	if !regexp.MustCompile(`POINTER_KEY="kenaz-harness/prerelease/manifest\.json"`).Match(raw) {
+		t.Errorf("release.yml no longer publishes prod builds to kenaz-harness/prerelease/manifest.json; the prerelease channel would read nothing")
 	}
 	if want := releaseWorkflowCDNBase(t, "prod") + path; stableManifestURL != want {
 		t.Errorf("stableManifestURL = %q, want %q (release.yml prod CDN_BASE)", stableManifestURL, want)
