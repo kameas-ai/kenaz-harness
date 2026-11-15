@@ -2272,7 +2272,9 @@ func New(c *core.Core, opts ...Option) *API {
 	// Launch spec L09: decide the host policy default before any tool can
 	// run. Served (workbench) mode — the WithFleetGatedBash entry points —
 	// never applies the starter policy.
-	a.policyDefault = newPolicyDefault(settingsImpl.Store(), opt.fleetGatedBash)
+	// Under `go test` the decision is not persisted: the store may be the
+	// developer's real settings file (check-tests-are-hermetic.sh).
+	a.policyDefault = newPolicyDefault(settingsImpl.Store(), opt.fleetGatedBash, flag.Lookup("test.v") == nil)
 	// fleet-workbench-next-plan-2026-11-10 B11: model slots. The session
 	// provider a served workbench derives from is its host profile; the
 	// desktop path has none, so nothing is derived there (its slots keep
@@ -6759,8 +6761,9 @@ func newLLMStack(
 	// Launch spec L09: the host starter policy's network leg. Inert until
 	// New() installs the policy default (stack.starterNet.SetActive), and
 	// never installed in served mode.
-	starterNet := toolloop.NewStarterNetworkResolver(toolloop.NewMergedResolver(staticPerms, sessionArm))
-	perms := toolloop.PermissionResolver(starterNet)
+	perms := toolloop.NewMergedResolver(staticPerms, sessionArm)
+	starterNet := toolloop.NewStarterNetworkResolver(perms)
+	perms = starterNet
 	// WP03 — pre/post-tool-use hooks and audit emission. core/hooks
 	// only exposes pre_send / post_send for chat-pipeline events;
 	// there is no pre_tool_use / post_tool_use surface there yet, so

@@ -112,3 +112,15 @@ func TestPolicyDefault_Resolution(t *testing.T) {
 		}
 	})
 }
+
+func TestPolicyDefault_NoPersistDecidesWithoutWriting(t *testing.T) {
+	api := settings.NewAPI(nil)
+	pd := newPolicyDefault(api.Store(), false, false)
+	if !pd.StarterActive() {
+		t.Fatal("fresh store: want starter")
+	}
+	got, _ := api.Store().LoadAll()
+	if got.PolicyDefault != "" {
+		t.Fatalf("persist=false wrote %q", got.PolicyDefault)
+	}
+}

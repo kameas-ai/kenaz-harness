@@ -58,14 +58,28 @@ type policyDefault struct {
 // first-boot marker this build's predecessors always set
 // (BashAllowlistMigrated, set by the bash allowlist migration on the
 // first boot of every cedar-era build, or FirstRunOnboardingCompleted).
-func newPolicyDefault(store settings.SettingsStore, served bool) *policyDefault {
+//
+// persist=false decides the same way without writing the store: rpc.New
+// passes it under `go test`, whose settings store can be the developer's
+// real file (check-tests-are-hermetic.sh).
+func newPolicyDefault(store settings.SettingsStore, served bool, persist ...bool) *policyDefault {
 	p := &policyDefault{store: store, served: served}
 	if served || store == nil {
 		return p
 	}
 	var mode string
 	var upgraded bool
-	err := settings.Update(store, func(s *settings.Settings) error {
+	decide := settings.Update
+	if len(persist) > 0 && !persist[0] {
+		decide = func(st settings.SettingsStore, fn func(*settings.Settings) error) error {
+			cur, err := st.LoadAll()
+			if err != nil {
+				return err
+			}
+			return fn(&cur)
+		}
+	}
+	err := decide(store, func(s *settings.Settings) error {
 		switch s.PolicyDefault {
 		case settings.PolicyDefaultStarter, settings.PolicyDefaultLegacy:
 		default:
