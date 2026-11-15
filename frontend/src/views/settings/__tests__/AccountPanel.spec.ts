@@ -338,6 +338,18 @@ describe('AccountPanel', () => {
 describe('AccountPanel — degraded session (fleet-session-truth-01DOGF0A FR-3)', () => {
   beforeEach(() => _resetFleetSessionForTest());
 
+  it('says plainly when Fleet refused this device id even after a new one was made', async () => {
+    const client = buildClient(session('degraded', prodProfile, { reason: 'node_id_invalid', autoRetry: false }));
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="account-degraded"]').text()).toContain("Fleet refused this device's id");
+    const msg = wrapper.find('[data-testid="error-msg"]');
+    expect(msg.text()).toContain('even after the app made a new one');
+    expect(msg.text()).not.toContain('node_id_invalid');
+  });
+
   it('a failed identity refresh with valid tokens keeps the identity and offers Retry, not Sign in', async () => {
     const client = buildClient(session('degraded', prodProfile, { reason: 'network' }));
     const wrapper = mount(AccountPanel, {

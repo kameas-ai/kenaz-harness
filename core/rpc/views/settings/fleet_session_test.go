@@ -10,6 +10,7 @@ package settings
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -318,6 +319,8 @@ func TestClassifyEnrollError(t *testing.T) {
 		expired bool
 	}{
 		{fleet.ErrUserNotProvisioned, FleetReasonNotProvisioned, false},
+		{fleet.ErrNodeIDInvalid, FleetReasonNodeIDInvalid, false},
+		{fmt.Errorf("wrapped: %w", fleet.ErrNodeIDInvalid), FleetReasonNodeIDInvalid, false},
 		{fleet.ErrFleetUnreachable, FleetReasonNetwork, false},
 		{fleet.ErrTokenExpired, FleetReasonSessionExpired, true},
 		{fleet.ErrNotSignedIn, FleetReasonSessionExpired, true},
@@ -329,6 +332,18 @@ func TestClassifyEnrollError(t *testing.T) {
 		if reason != c.reason || expired != c.expired {
 			t.Errorf("classify(%v) = (%q,%v), want (%q,%v)", c.err, reason, expired, c.reason, c.expired)
 		}
+	}
+}
+
+// A device id Fleet refuses even after a re-mint stops automatic retries:
+// retrying cannot help (fleet.ErrNodeIDInvalid).
+func TestRecordEnrollOutcome_NodeIDInvalidStopsAutoRetry(t *testing.T) {
+	a := &API{fleet: &fleetState{}}
+	a.recordEnrollOutcome(nil, fleet.ErrNodeIDInvalid)
+	a.fleet.mu.RLock()
+	defer a.fleet.mu.RUnlock()
+	if !a.fleet.sess.autoRetryStopped || a.fleet.sess.reason != FleetReasonNodeIDInvalid || !a.fleet.sess.nextRetryAt.IsZero() {
+		t.Fatalf("session track = %+v", a.fleet.sess)
 	}
 }
 

@@ -223,10 +223,68 @@ func (er enrollResponse) displayName() string {
 //
 // The envelope may also carry a "details" object (e.g. zitadel_user_id
 // on user_not_provisioned); that is real identity data and deliberately
-// not unmarshalled here — enrollIdentity only ever needs Code + Message.
+// not unmarshalled here — enrollIdentity only needs Code + Message, plus
+// details.field, the NAME of the field a 400 invalid_request refused.
 type enrollErrorEnvelope struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	Details struct {
+		Field string `json:"field"`
+	} `json:"details"`
+}
+
+// ErrNodeIDInvalid: Fleet refused this device's node_id as invalid, and a
+// freshly minted one too. Shown in Settings › Account.
+var ErrNodeIDInvalid = errors.New("fleet: Fleet refused this device's id, even after this app made a new one. Try again later, or ask your administrator")
+
+// errEnrollNodeIDInvalid: one enroll got 400 invalid_request naming
+// node_id (Fleet enforces 1–128 printable ASCII, no spaces). The stored id
+// is corrupt; enrollRepairingNodeID re-mints it once.
+var errEnrollNodeIDInvalid = errors.New("fleet: enroll: node_id refused as invalid")
+
+// nodeIDRefused reports a 400 invalid_request that names node_id.
+func nodeIDRefused(status int, body []byte) bool {
+	if status != http.StatusBadRequest {
+		return false
+	}
+	var env enrollErrorEnvelope
+	if json.Unmarshal(body, &env) != nil || env.Code != "invalid_request" {
+		return false
+	}
+	return env.Details.Field == "node_id" || strings.HasPrefix(strings.TrimSpace(env.Message), "node_id")
+}
+
+// enrollRepairingNodeID enrolls; when Fleet refuses the stored node_id as
+// invalid it treats that id as corrupt, mints and persists a new one the
+// way first enroll does (NodeID), and retries ONCE. A second refusal is
+// ErrNodeIDInvalid. No other error ever re-mints.
+func (c *Client) enrollRepairingNodeID(ctx context.Context, nodeID, platform, version string) (Identity, error) {
+	id, err := c.enrollIdentity(ctx, nodeID, platform, version)
+	if !errors.Is(err, errEnrollNodeIDInvalid) {
+		return id, err
+	}
+	if c.dataDir == "" {
+		return Identity{}, ErrNodeIDInvalid
+	}
+	logging.L().Warn("fleet.enroll.node_id_invalid_reminting", "old_len", len(nodeID))
+	if cerr := ClearNodeID(c.dataDir); cerr != nil {
+		logging.L().Error("fleet.enroll.node_id_clear_failed", "err", cerr.Error())
+		return Identity{}, fmt.Errorf("%w (%v)", ErrNodeIDInvalid, cerr)
+	}
+	fresh, merr := NodeID(c.dataDir)
+	if merr != nil {
+		logging.L().Error("fleet.enroll.node_id_mint_failed", "err", merr.Error())
+		return Identity{}, fmt.Errorf("%w (%v)", ErrNodeIDInvalid, merr)
+	}
+	id, err = c.enrollIdentity(ctx, fresh, platform, version)
+	if errors.Is(err, errEnrollNodeIDInvalid) {
+		logging.L().Error("fleet.enroll.node_id_invalid_after_remint")
+		return Identity{}, ErrNodeIDInvalid
+	}
+	if err == nil {
+		logging.L().Info("fleet.enroll.node_id_reminted")
+	}
+	return id, err
 }
 
 // orgIDToString converts the fleet org_id (which may be a JSON number or string)
@@ -312,6 +370,10 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		}
 	}
 
+	if nodeIDRefused(status, respBody) {
+		logging.L().Warn("fleet.enroll.node_id_refused", "status", status)
+		return Identity{}, errEnrollNodeIDInvalid
+	}
 	if status != http.StatusOK {
 		preview := string(respBody)
 		if len(preview) > 800 {

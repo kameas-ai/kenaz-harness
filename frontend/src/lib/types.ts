@@ -5227,7 +5227,7 @@ export interface FleetSyncView {
  */
 export interface FleetSessionView {
   state: FleetSessionState;
-  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled | node_removed */
+  /** Machine reason code: network | not_provisioned | server_error | not_configured | session_expired | sign_in_failed | sign_in_cancelled | node_removed | node_id_invalid */
   reason?: string;
   /** Raw error text behind `reason` (humanize before showing). */
   message?: string;
