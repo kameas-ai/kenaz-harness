@@ -131,15 +131,6 @@ type GateOptions struct {
 	// it is the agent's own working area, not harness state, so paths
 	// under it are never privileged.
 	WorkspaceDir func() string
-	// StarterDefaults, when set and returning true, applies the host
-	// starter policy (launch spec L09 D1, Option B) to requests no policy
-	// or grant decided: reads are allowed, and writes that land inside
-	// WorkspaceDir are allowed. Everything else still prompts. It never
-	// overrides a Cedar forbid, and never allows a dangerous-tier path,
-	// harness state, or a path that could not be resolved. Read per call,
-	// so switching the default applies to the next request. Gate.
-	// SetStarterDefaults installs it after construction.
-	StarterDefaults func() bool
 }
 
 // HarnessStateDirs returns the state directories GateOptions.StateDirs
@@ -194,12 +185,18 @@ type Gate struct {
 	// be retargeted after the check.
 	afterCheck func()
 
-	// starter is the live StarterDefaults reader (see GateOptions).
+	// starter is the live host starter-policy reader (SetStarterDefaults).
 	starter atomic.Pointer[func() bool]
 }
 
 // SetStarterDefaults installs (or, with nil, removes) the host starter
-// policy reader described on GateOptions.StarterDefaults.
+// policy reader (launch spec L09 D1, Option B). While fn returns true, a
+// request no policy or grant decided is allowed when it is a read, or a
+// write that lands inside WorkspaceDir; everything else still prompts. It
+// never overrides a Cedar forbid, and never allows a dangerous-tier path,
+// harness state, or a path that could not be resolved. fn is read per
+// call, so switching the default applies to the next request. core/rpc
+// installs it on the host only, never in served (workbench) mode.
 func (g *Gate) SetStarterDefaults(fn func() bool) {
 	if g == nil {
 		return
