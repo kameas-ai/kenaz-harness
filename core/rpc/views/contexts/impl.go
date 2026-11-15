@@ -610,8 +610,13 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		if err := a.ledger().put(wireID, rec); err != nil {
 			logging.L().Warn("contexts.publish.share_record_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
 		}
-		if err := a.ledger().clearPending(wireID); err != nil {
-			logging.L().Warn("contexts.publish.share_record_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
+		// Only an org-wide (governed) publish settles a pending org-wide
+		// review: the node is now org content. A team share leaves the merge
+		// request open on Fleet, so its record stays ("Waiting for review").
+		if entry.Audience == fleet.AudienceOrg && entry.Governed {
+			if err := a.ledger().clearPending(wireID); err != nil {
+				logging.L().Warn("contexts.publish.share_record_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
+			}
 		}
 	}
 	out := ContextPublishResult{
@@ -783,6 +788,14 @@ func (a *API) Context_ShareStates(_ context.Context, nodeIDs []string) ([]Contex
 		pendingID := ""
 		if p, ok := a.ledger().getPending(wireID, user); ok {
 			pendingID = p.MergeRequestID
+			// Fleet now holds the node as org content (the request was
+			// accepted, or an admin published it): the review is over.
+			if hasLoc && loc.Layer == contextpack.LayerOrg {
+				pendingID = ""
+				if err := a.ledger().clearPending(wireID); err != nil {
+					logging.L().Warn("contexts.share_states.ledger_update_failed", "node_id", wireID, "err", fleet.LogSafeErr(err))
+				}
+			}
 		}
 		// Newer = higher Fleet node version. Never a timestamp: the row's
 		// time would be Fleet's and the ledger's this device's, and a

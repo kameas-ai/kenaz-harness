@@ -1070,6 +1070,13 @@ onBeforeUnmount(() => {
     >
       {{ publishOutcomeView.text }}
       <span
+        v-if="publishOutcomeView.status === 'published' && publishResult.audience !== 'org' && publishPendingId"
+        class="text-signal-warning ml-2"
+        data-testid="context-publish-still-pending"
+      >
+        · the org-wide request {{ publishPendingId }} is still waiting for review
+      </span>
+      <span
         v-if="publishResult.superseded_merge_request_id"
         class="text-ink-muted ml-2"
         data-testid="context-publish-superseded"

@@ -219,3 +219,25 @@ func TestPublish_PreviouslyRejectedClearsPending(t *testing.T) {
 		t.Fatalf("after previously_rejected: %+v", got)
 	}
 }
+
+// A later TEAM share keeps the pending org-wide review: the merge request
+// is still open on Fleet. Only an org-wide publish settles it.
+func TestPublish_TeamShareKeepsPendingOrgReview(t *testing.T) {
+	api, push := resultsRig(t)
+	ctx := context.Background()
+	const path = "notes/keep.md"
+	if _, err := api.Context_Publish(ctx, publishReq(path, "team", "team-backend")); err != nil {
+		t.Fatal(err)
+	}
+	push.set(itemReply("pending_review", "", "mr-5"))
+	if _, err := api.Context_Publish(ctx, publishReq(path, "org", "")); err != nil {
+		t.Fatal(err)
+	}
+	push.set(itemReply("published", "", ""))
+	if _, err := api.Context_Publish(ctx, publishReq(path, "team", "team-backend")); err != nil {
+		t.Fatal(err)
+	}
+	if got := shareStates(t, api, path); len(got) != 1 || got[0].PendingMergeRequestID != "mr-5" {
+		t.Fatalf("after a team share: %+v, want the org-wide review still pending", got)
+	}
+}

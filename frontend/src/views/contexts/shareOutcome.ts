@@ -33,7 +33,7 @@ function whereText(res: ContextPublishResult): string {
 
 export function publishOutcome(res: ContextPublishResult): ShareOutcome {
   const conflicts = res.conflicts?.length ?? 0;
-  const status = res.status ?? (res.accepted_nodes === 0 && conflicts > 0 ? 'refused' : 'published');
+  const status: string = res.status ?? (res.accepted_nodes === 0 && conflicts > 0 ? 'refused' : 'published');
   if (status === 'pending_review') {
     const id = res.merge_request_id ? ` (request ${res.merge_request_id})` : '';
     return { status, tone: 'warning', text: `Waiting for review${id}` };
@@ -43,6 +43,10 @@ export function publishOutcome(res: ContextPublishResult): ShareOutcome {
       return { status, tone: 'warning', text: VERSION_CONFLICT };
     }
     return { status, tone: 'danger', text: `Refused: ${res.reason_text || 'Fleet refused it'}` };
+  }
+  if (status !== 'published') {
+    // A status this build does not know is never reported as success.
+    return { status: 'refused', tone: 'warning', text: `Fleet returned an unexpected result: ${status}` };
   }
   let text = `Published to ${whereText(res)}`;
   if (conflicts > 0) text += ` · ${conflicts} version conflict${conflicts === 1 ? '' : 's'}`;

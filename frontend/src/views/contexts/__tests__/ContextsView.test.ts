@@ -924,6 +924,36 @@ describe('ContextsView', () => {
       expect(label('note.md').exists()).toBe(false);
     });
 
+    it('keeps showing the org-wide review after a team share', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'note.md', path: 'note.md', kind: 'file' }],
+      };
+      const publishSpy = vi.fn(async (req: ContextPublishRequest): Promise<ContextPublishResult> => ({
+        accepted_nodes: 1, accepted_edges: 0, conflicts: [], effective_layer: req.layer, audience: 'team', status: 'published',
+      }));
+      const { client } = provide({
+        tree,
+        files: { 'note.md': '# note' },
+        syncStatus: { cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: true },
+        publishSpy,
+        shareStates: async (ids: string[]) =>
+          ids.map((id) => ({ node_id: id, layer: 'team' as const, team_id: 't1', pending_merge_request_id: 'mr-4' })),
+      });
+      const w = mount(ContextsView, { global: { provide: { [HarnessClientKey as symbol]: client } } });
+      await flushPromises();
+      await w.find('[data-testid="context-node-note.md"]').trigger('click');
+      await flushPromises();
+      await w.find('[data-testid=context-publish-btn]').trigger('click');
+      await flushPromises();
+      await w.find('[data-testid=context-publish-confirm-ok]').trigger('click');
+      await flushPromises();
+      expect(w.find('[data-testid=context-publish-result]').text()).toContain('Published to your team');
+      expect(w.find('[data-testid=context-publish-still-pending]').text()).toContain('mr-4');
+    });
+
     it('notes an org-wide share still waiting for review when the dialog opens', async () => {
       const tree: ContextNode = {
         name: '',

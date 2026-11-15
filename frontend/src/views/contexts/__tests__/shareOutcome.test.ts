@@ -20,5 +20,8 @@ describe('publishOutcome (spec 018 H-3)', () => {
     ).toEqual({ status: 'refused', tone: 'danger', text: 'Refused: That team no longer exists' });
     expect(publishOutcome({ ...base, status: 'refused', reason: 'version_conflict' }).tone).toBe('warning');
     expect(publishOutcome({ ...base, status: 'published', audience: 'org' }).text).toBe('Published to your organisation');
+    const odd = publishOutcome({ ...base, status: 'queued' as unknown as 'published' });
+    expect(odd.tone).toBe('warning');
+    expect(odd.text).toBe('Fleet returned an unexpected result: queued');
   });
 });
