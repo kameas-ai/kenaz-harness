@@ -16,6 +16,7 @@ import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MemorySyncStatus } from '@/lib/types';
 import OrgPausedBanner from '@/components/ui/OrgPausedBanner.vue';
 import MemoryAccessNotice from '@/views/settings/MemoryAccessNotice.vue';
+import { MEMORY_SYNC_DISCLOSURE_POINTS } from '@/views/settings/memorySyncDisclosure';
 
 const client = useHarnessClient();
 
@@ -130,7 +131,7 @@ async function runInheritedErase() {
   }
 }
 
-async function dismissNotice(notice: 'inherited_erase' | 'inherited_opt_out') {
+async function dismissNotice(notice: 'inherited_erase' | 'inherited_opt_out' | 'disclosure_update') {
   busy.value = true;
   errorMsg.value = '';
   try {
@@ -141,6 +142,14 @@ async function dismissNotice(notice: 'inherited_erase' | 'inherited_opt_out') {
     busy.value = false;
   }
 }
+
+// The corrected disclosure (v0.106.2) only shows while sync is off, so members
+// who turned sync on under the earlier text get it once here. Informational:
+// acknowledging it records a local ack for this account and changes nothing
+// about sync; nothing new is sent to Fleet (see MemoryConsentVersion).
+const showDisclosureUpdate = computed(
+  () => !!status.value?.enabled && !status.value?.disclosureAcked,
+);
 
 async function continueOlderNotes() {
   busy.value = true;
@@ -269,26 +278,12 @@ async function confirmDisable() {
           Fleet and to your other signed-in devices, so they follow you.
         </p>
         <ul class="list-disc pl-5 space-y-0.5">
-          <li data-testid="memory-sync-disclosure-view">
-            Only you can view your synced notes in Fleet today. Kameas staff have no view of note
-            content in the product.
-          </li>
-          <li data-testid="memory-sync-disclosure-storage">
-            They're stored on Kameas servers in a form Kameas can read. They're encrypted in transit
-            and at rest, but not end-to-end, and our systems read them to keep your devices in sync.
-          </li>
-          <li data-testid="memory-sync-disclosure-org">
-            Your organization's admins and team leads can't read them unless your organization turns
-            that on and you first acknowledge a notice. Only notes synced after that point would be
-            readable, and you'd be able to see who read them.
-          </li>
-          <li data-testid="memory-sync-disclosure-connector">
-            If your organization enables the Kameas connector and you opt in, apps you connect to it
-            can read and update these notes.
-          </li>
-          <li data-testid="memory-sync-disclosure-leave">
-            If you leave or are removed from your organization, your synced notes are deleted from
-            Fleet.
+          <li
+            v-for="point in MEMORY_SYNC_DISCLOSURE_POINTS"
+            :key="point.id"
+            :data-testid="`memory-sync-disclosure-${point.id}`"
+          >
+            {{ point.text }}
           </li>
           <li>Session memory never leaves this device. Project memory does not sync yet.</li>
           <li>
@@ -330,6 +325,32 @@ async function confirmDisable() {
     <!-- On: readout + disable (the disable / delete-from-Fleet path stays
          enabled while paused). -->
     <div v-else-if="status.enabled" class="space-y-2 text-small" data-testid="memory-sync-on">
+      <div
+        v-if="showDisclosureUpdate"
+        class="space-y-2 rounded-sm border border-border-muted p-3"
+        data-testid="memory-sync-disclosure-update"
+      >
+        <h3 class="font-medium">What changed about memory sync</h3>
+        <ul class="list-disc pl-5 space-y-0.5 text-ink-muted">
+          <li
+            v-for="point in MEMORY_SYNC_DISCLOSURE_POINTS"
+            :key="point.id"
+            :data-testid="`memory-sync-disclosure-update-${point.id}`"
+          >
+            {{ point.text }}
+          </li>
+        </ul>
+        <p class="text-ink-muted">You can turn sync off at any time below.</p>
+        <button
+          type="button"
+          class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          :disabled="busy"
+          data-testid="memory-sync-disclosure-update-ack"
+          @click="dismissNotice('disclosure_update')"
+        >
+          I have read this
+        </button>
+      </div>
       <p data-testid="memory-sync-scopes-on">
         Syncing: {{ status.scopes.map(scopeLabel).join(', ') || '—' }}
       </p>

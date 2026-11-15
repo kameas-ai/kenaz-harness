@@ -70,6 +70,13 @@ type MemorySyncStatusView struct {
 	// NoticeHoldReason is unread, text_refused or check_failed.
 	NoticeHold       bool   `json:"noticeHold"`
 	NoticeHoldReason string `json:"noticeHoldReason,omitempty"`
+	// DisclosureAcked: this account has acknowledged the current revision of
+	// the memory-sync disclosure on this device (recorded locally, never sent
+	// to Fleet). While sync is on and this is false the panel shows the
+	// one-time "What changed about memory sync" notice. It never gates sync.
+	DisclosureAcked bool `json:"disclosureAcked"`
+	// DisclosureRevision is the disclosure revision this build shows.
+	DisclosureRevision string `json:"disclosureRevision"`
 }
 
 // SetMemorySync installs the lane (nil uninstalls).
@@ -101,6 +108,8 @@ func memorySyncView(s fleet.MemorySyncStatus) MemorySyncStatusView {
 		PausedCategory:        s.PausedCategory,
 		NoticeHold:            s.NoticeHold,
 		NoticeHoldReason:      s.NoticeHoldReason,
+		DisclosureAcked:       s.DisclosureAcked,
+		DisclosureRevision:    fleet.MemoryDisclosureRevision,
 	}
 	if f := s.Fleet; f != nil {
 		if f.Scopes != nil {
@@ -117,7 +126,10 @@ func memorySyncView(s fleet.MemorySyncStatus) MemorySyncStatusView {
 func (a *API) FleetMemorySyncStatus(ctx context.Context) (MemorySyncStatusView, error) {
 	ms := a.memorySync.Load()
 	if ms == nil {
-		return MemorySyncStatusView{Scopes: []string{}, CurrentConsentVersion: fleet.MemoryConsentVersion}, nil
+		return MemorySyncStatusView{
+			Scopes: []string{}, CurrentConsentVersion: fleet.MemoryConsentVersion,
+			DisclosureRevision: fleet.MemoryDisclosureRevision,
+		}, nil
 	}
 	return memorySyncView(ms.Status(ctx)), nil
 }

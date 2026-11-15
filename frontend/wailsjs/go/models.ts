@@ -8649,6 +8649,8 @@ export namespace settings {
 	    pausedCategory?: string;
 	    noticeHold: boolean;
 	    noticeHoldReason?: string;
+	    disclosureAcked: boolean;
+	    disclosureRevision: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MemorySyncStatusView(source);
@@ -8681,6 +8683,8 @@ export namespace settings {
 	        this.pausedCategory = source["pausedCategory"];
 	        this.noticeHold = source["noticeHold"];
 	        this.noticeHoldReason = source["noticeHoldReason"];
+	        this.disclosureAcked = source["disclosureAcked"];
+	        this.disclosureRevision = source["disclosureRevision"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

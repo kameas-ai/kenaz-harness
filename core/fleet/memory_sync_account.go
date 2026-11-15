@@ -226,11 +226,21 @@ func (m *MemorySync) ContinueOlderNotes(_ context.Context) error {
 const (
 	MemoryNoticeInheritedErase  = "inherited_erase"
 	MemoryNoticeInheritedOptOut = "inherited_opt_out"
+	// MemoryNoticeDisclosureUpdate: "I have read this" on the corrected
+	// disclosure (MemoryDisclosureRevision). Recorded for the signed-in
+	// account, locally; nothing is sent to Fleet and sync state is untouched.
+	MemoryNoticeDisclosureUpdate = "disclosure_update"
 )
+
+// covers reports whether the ack is for revision rev.
+func (a *MemoryDisclosureAck) covers(rev string) bool {
+	return a != nil && a.Revision == rev
+}
 
 // DismissNotice clears a notice for the account it belongs to.
 func (m *MemorySync) DismissNotice(_ context.Context, notice string) error {
-	if notice != MemoryNoticeInheritedErase && notice != MemoryNoticeInheritedOptOut {
+	if notice != MemoryNoticeInheritedErase && notice != MemoryNoticeInheritedOptOut &&
+		notice != MemoryNoticeDisclosureUpdate {
 		return fmt.Errorf("fleet: memory sync: unknown notice %q", notice)
 	}
 	m.cycleMu.Lock()
@@ -238,6 +248,13 @@ func (m *MemorySync) DismissNotice(_ context.Context, notice string) error {
 	scope, err := m.ensureAccount()
 	if err != nil {
 		return err
+	}
+	if notice == MemoryNoticeDisclosureUpdate {
+		// Every account reads the disclosure for itself, so this isn't limited
+		// to the legacy owner. ensureAccount made the state this account's.
+		return m.update(func(s *memSyncState) {
+			s.DisclosureAck = &MemoryDisclosureAck{Revision: MemoryDisclosureRevision, At: m.now().UTC()}
+		})
 	}
 	if scope.Account != scope.LegacyOwner {
 		return nil // not this account's to dismiss

@@ -4112,7 +4112,9 @@ export interface FleetClient {
    * Fleet first; confirm must then be exactly "forget-all".
    */
   memorySyncContinueOlderNotes(): Promise<MemorySyncStatus>;
-  memorySyncDismissNotice(notice: 'inherited_erase' | 'inherited_opt_out'): Promise<MemorySyncStatus>;
+  memorySyncDismissNotice(
+    notice: 'inherited_erase' | 'inherited_opt_out' | 'disclosure_update',
+  ): Promise<MemorySyncStatus>;
   memorySyncDisable(deleteFromFleet: boolean, confirm: string): Promise<MemorySyncStatus>;
   /** Cloud ML consent panel state: a fresh GET /me/ml read (ml-producer-01MLPRD01 WP01). */
   mlStatus(): Promise<MLStatus>;

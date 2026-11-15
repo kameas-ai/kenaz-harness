@@ -5015,6 +5015,14 @@ export interface MemorySyncStatus {
   noticeHold?: boolean;
   /** unread | text_refused | check_failed */
   noticeHoldReason?: string;
+  /**
+   * This account has acknowledged the current memory-sync disclosure revision
+   * on this device (local only, never sent to Fleet). While sync is on and
+   * this is false, the panel shows the one-time "What changed" notice.
+   */
+  disclosureAcked?: boolean;
+  /** The disclosure revision this build shows (for example "2026-11-14"). */
+  disclosureRevision?: string;
 }
 
 /**
