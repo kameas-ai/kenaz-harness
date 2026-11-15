@@ -47,7 +47,7 @@ function formatTime(s: number | undefined): string {
 </script>
 
 <template>
-  <div class="flex items-center gap-3 font-ui text-[11px] text-ink-subtle" data-testid="subagent-budget-meter">
+  <div class="flex items-center gap-3 font-ui text-caption text-ink-subtle" data-testid="subagent-budget-meter">
     <!-- Token meter -->
     <div class="flex items-center gap-1">
       <span>Tokens:</span>
@@ -58,7 +58,7 @@ function formatTime(s: number | undefined): string {
         <div class="h-1.5 w-20 overflow-hidden rounded-full bg-surface-2">
           <div
             class="h-full rounded-full transition-all"
-            :class="(tokenPct ?? 0) >= 90 ? 'bg-status-error' : 'bg-accent'"
+            :class="(tokenPct ?? 0) >= 90 ? 'bg-signal-danger' : 'bg-accent'"
             :style="{ width: `${tokenPct ?? 0}%` }"
             :data-testid="`token-bar-${tokenPct ?? 0}`"
           />
@@ -76,7 +76,7 @@ function formatTime(s: number | undefined): string {
         <div class="h-1.5 w-16 overflow-hidden rounded-full bg-surface-2">
           <div
             class="h-full rounded-full transition-all"
-            :class="(timePct ?? 0) >= 90 ? 'bg-status-error' : 'bg-accent'"
+            :class="(timePct ?? 0) >= 90 ? 'bg-signal-danger' : 'bg-accent'"
             :style="{ width: `${timePct ?? 0}%` }"
           />
         </div>

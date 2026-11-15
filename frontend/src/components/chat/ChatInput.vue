@@ -26,7 +26,8 @@
  */
 
 import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue';
-import { Paperclip, X, FileText } from 'lucide-vue-next';
+import { Paperclip } from 'lucide-vue-next';
+import { X, FileText } from '@/shell/icons';
 import { useDropZone } from '@vueuse/core';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { isServedMode } from '@/lib/useServedMode';
@@ -1205,7 +1206,7 @@ const acceptedTypes =
       <div
         v-for="(p, idx) in pending"
         :key="p.attachmentId"
-        class="relative flex items-center gap-2 px-2 py-1 rounded-md border border-border-muted bg-surface-2 font-ui text-[12px] text-ink"
+        class="relative flex items-center gap-2 px-2 py-1 rounded-md border border-border-muted bg-surface-2 font-ui text-small text-ink"
         :data-testid="`pending-attachment-${idx}`"
       >
         <img
@@ -1235,7 +1236,7 @@ const acceptedTypes =
     <!-- error banner -->
     <div
       v-if="localError || errorBanner"
-      class="mb-2 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+      class="mb-2 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-small text-signal-warn"
       role="alert"
       data-testid="chat-input-error"
     >
@@ -1246,7 +1247,7 @@ const acceptedTypes =
          while the backend is unreachable so sends can't silently fail. -->
     <div
       v-if="connectionLost"
-      class="mb-2 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+      class="mb-2 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-ink-muted"
       role="status"
       data-testid="chat-input-connection-lost"
     >
@@ -1257,7 +1258,7 @@ const acceptedTypes =
          a reason other than a lost connection (e.g. no provider configured). -->
     <div
       v-if="props.disabled && !connectionLost && props.disabledHint"
-      class="mb-2 rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+      class="mb-2 rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-small text-ink-muted"
       role="status"
       data-testid="chat-input-disabled-hint"
     >
@@ -1282,7 +1283,7 @@ const acceptedTypes =
         :value="internal"
         :disabled="isDisabled"
         :placeholder="placeholder ?? 'Send a message — Enter to send, Shift+Enter for newline. Drop files or use @path.'"
-        class="block w-full resize-none bg-surface-2 text-ink font-ui text-sm leading-relaxed rounded-md border border-border-muted px-3 py-2 pr-10 outline-none focus:border-accent disabled:opacity-60 disabled:cursor-not-allowed"
+        class="block w-full resize-none bg-surface-2 text-ink font-ui text-sm leading-relaxed rounded-md border border-border-muted px-3 py-2 pr-8 outline-none focus:border-accent disabled:opacity-60 disabled:cursor-not-allowed"
         rows="3"
         aria-label="Message"
         aria-multiline="true"
@@ -1332,7 +1333,7 @@ const acceptedTypes =
         <li
           v-for="(opt, i) in atState.options"
           :key="opt"
-          class="px-3 py-1 font-mono text-[12px] cursor-pointer"
+          class="px-3 py-1 font-mono text-small cursor-pointer"
           :class="i === atState.activeIndex ? 'bg-surface-2 text-accent' : 'text-ink hover:bg-surface-2'"
           :data-testid="`at-filepath-option-${i}`"
           @click="commitAtPath(opt)"
@@ -1351,21 +1352,21 @@ const acceptedTypes =
       @created="createBranchModalOpen = false"
     />
 
-    <div class="mt-2 flex items-center justify-between font-mono text-[11px] text-ink-subtle">
+    <div class="mt-2 flex items-center justify-between font-mono text-caption text-ink-subtle">
       <div aria-live="polite">
         <span>{{ tokenLabel }}</span>
         <span aria-hidden="true" class="px-2 text-ink-dim">·</span>
         <span>{{ costLabel }}</span>
         <span
           v-if="streaming"
-          class="ml-3 text-accent uppercase tracking-[0.18em]"
+          class="ml-3 text-accent uppercase tracking-eyebrow"
           aria-live="polite"
         >
           streaming…
         </span>
         <span
           v-if="(queueDepth ?? 0) > 0"
-          class="ml-3 text-ink-muted uppercase tracking-[0.18em]"
+          class="ml-3 text-ink-muted uppercase tracking-eyebrow"
           aria-live="polite"
           :data-testid="'composer-queue-depth'"
         >
@@ -1376,7 +1377,7 @@ const acceptedTypes =
         <button
           v-if="streaming"
           type="button"
-          class="px-3 py-1 rounded-md border border-signal-danger text-signal-danger font-ui text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+          class="px-3 py-1 rounded-md border border-signal-danger text-signal-danger font-ui text-caption uppercase tracking-eyebrow hover:bg-surface-2"
           aria-label="Cancel stream"
           @click="cancel"
         >
@@ -1384,7 +1385,7 @@ const acceptedTypes =
         </button>
         <button
           type="submit"
-          class="px-3 py-1 rounded-md border border-accent text-accent font-ui text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="px-3 py-1 rounded-md border border-accent text-accent font-ui text-caption uppercase tracking-eyebrow hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
           :disabled="!canSend"
           :aria-label="streaming ? 'Queue message — sends after the current turn finishes' : 'Send message'"
         >

@@ -15,6 +15,7 @@
  * device-keys-handoff-01DEVKH01 WP02): same affordance — signing in again
  * registers this install as a new device.
  */
+import { X } from '@/shell/icons';
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { fleetSession } from '@/lib/fleetSession';
@@ -82,7 +83,7 @@ function dismiss() {
       data-testid="session-expired-dismiss"
       @click="dismiss"
     >
-      ✕
+      <X class="inline-block" :size="12" aria-hidden="true" />
     </button>
   </div>
 </template>

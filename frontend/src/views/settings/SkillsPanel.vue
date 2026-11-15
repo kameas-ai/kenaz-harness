@@ -115,14 +115,14 @@ async function saveRename(skill: SkillItem): Promise<void> {
 
 <template>
   <section data-testid="skills-panel">
-    <h3 class="mb-2 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+    <h3 class="mb-2 font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
       Fleet Skills
     </h3>
 
     <!-- Load error -->
     <div
       v-if="loadError"
-      class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="skills-load-error"
     >
@@ -132,7 +132,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
     <!-- Loading -->
     <div
       v-if="loading"
-      class="font-ui text-[12px] text-ink-muted"
+      class="font-ui text-small text-ink-muted"
       role="status"
       data-testid="skills-loading"
     >
@@ -145,7 +145,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
       class="rounded-md border border-border-muted bg-surface-1 px-4 py-5 text-center"
       data-testid="skills-empty"
     >
-      <p class="font-ui text-[12px] text-ink-muted">
+      <p class="font-ui text-small text-ink-muted">
         No fleet skills installed. Browse Capabilities (Skills) to install skills.
       </p>
     </div>
@@ -157,7 +157,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
       data-testid="skills-table"
     >
       <thead>
-        <tr class="border-b border-border-muted text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <tr class="border-b border-border-muted text-caption uppercase tracking-eyebrow text-ink-subtle">
           <th class="px-3 py-2 font-ui font-medium">Trigger</th>
           <th class="px-3 py-2 font-ui font-medium">Description</th>
           <th class="px-3 py-2 font-ui font-medium">Source</th>
@@ -174,11 +174,11 @@ async function saveRename(skill: SkillItem): Promise<void> {
           <!-- Trigger column -->
           <td class="px-3 py-2">
             <div class="flex flex-col gap-0.5">
-              <code class="font-mono text-[12px] text-ink">/{{ effectiveTrigger(skill) }}</code>
+              <code class="font-mono text-small text-ink">/{{ effectiveTrigger(skill) }}</code>
               <!-- Original trigger when local alias is set -->
               <span
                 v-if="skill.localTrigger"
-                class="font-ui text-[10px] text-ink-subtle"
+                class="font-ui text-eyebrow text-ink-subtle"
                 :data-testid="`skill-canonical-trigger-${skill.id}`"
               >
                 (canonical: /{{ skill.trigger }})
@@ -186,7 +186,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
               <!-- Shadowed warning (FR-401) -->
               <span
                 v-if="skill.shadowed"
-                class="mt-0.5 rounded-sm bg-signal-warn-soft px-1.5 py-0.5 font-ui text-[10px] font-medium text-signal-warn"
+                class="mt-0.5 rounded-sm bg-signal-warn-soft px-1.5 py-0.5 font-ui text-eyebrow font-medium text-signal-warn"
                 :data-testid="`skill-shadowed-badge-${skill.id}`"
               >
                 Shadowed — /{{ skill.trigger }} is taken by a personal command
@@ -195,7 +195,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
           </td>
 
           <!-- Description -->
-          <td class="px-3 py-2 font-ui text-[12px] text-ink-muted max-w-xs truncate">
+          <td class="px-3 py-2 font-ui text-small text-ink-muted max-w-xs truncate">
             {{ skill.description || '—' }}
           </td>
 
@@ -205,14 +205,14 @@ async function saveRename(skill: SkillItem): Promise<void> {
               <!-- Org-managed badge (FR-302) -->
               <span
                 v-if="skill.orgManaged"
-                class="rounded-sm bg-signal-info-soft px-1.5 py-0.5 font-ui text-[10px] font-medium text-signal-info"
+                class="rounded-sm bg-signal-info-soft px-1.5 py-0.5 font-ui text-eyebrow font-medium text-signal-info"
                 :data-testid="`skill-orgmanaged-badge-${skill.id}`"
               >
                 Org-managed
               </span>
               <span
                 v-else
-                class="rounded-sm bg-surface-2 px-1.5 py-0.5 font-ui text-[10px] text-ink-muted"
+                class="rounded-sm bg-surface-2 px-1.5 py-0.5 font-ui text-eyebrow text-ink-muted"
               >
                 {{ skill.version ? `v${skill.version}` : 'catalog' }}
               </span>
@@ -236,7 +236,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
               />
               <button
                 type="button"
-                class="h-6 rounded-sm bg-accent px-2 font-ui text-[10px] font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+                class="h-6 rounded-sm bg-accent px-2 font-ui text-eyebrow font-medium text-white hover:bg-accent/90 disabled:opacity-50"
                 :disabled="busyIds.has(skill.id)"
                 :data-testid="`skill-rename-save-btn-${skill.id}`"
                 @click="saveRename(skill)"
@@ -245,7 +245,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
               </button>
               <button
                 type="button"
-                class="h-6 rounded-sm px-2 font-ui text-[10px] text-ink-muted hover:bg-surface-2"
+                class="h-6 rounded-sm px-2 font-ui text-eyebrow text-ink-muted hover:bg-surface-2"
                 :data-testid="`skill-rename-cancel-btn-${skill.id}`"
                 @click="cancelRename(skill.id)"
               >
@@ -261,7 +261,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
               <!-- Rename trigger button — shown for all skills; useful to clear a shadow -->
               <button
                 type="button"
-                class="h-6 rounded-sm border border-border-muted px-2 font-ui text-[10px] text-ink-muted hover:bg-surface-2"
+                class="h-6 rounded-sm border border-border-muted px-2 font-ui text-eyebrow text-ink-muted hover:bg-surface-2"
                 :data-testid="`skill-rename-btn-${skill.id}`"
                 @click="startRename(skill)"
               >
@@ -271,7 +271,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
               <button
                 v-if="!skill.orgManaged"
                 type="button"
-                class="h-6 rounded-sm border border-signal-danger/40 px-2 font-ui text-[10px] text-signal-danger hover:bg-signal-danger/10 disabled:opacity-50"
+                class="h-6 rounded-sm border border-signal-danger/40 px-2 font-ui text-eyebrow text-signal-danger hover:bg-signal-danger/10 disabled:opacity-50"
                 :disabled="busyIds.has(skill.id)"
                 :data-testid="`skill-uninstall-btn-${skill.id}`"
                 @click="uninstall(skill)"

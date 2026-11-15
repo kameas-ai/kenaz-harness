@@ -44,6 +44,22 @@ been migrated to a token utility (`bg-surface-0`, `text-ink`, etc., which
 resolve automatically per the active theme and don't need a `dark:` twin
 at all — prefer that where you can).
 
+## What the DS provides (v0.13.0)
+
+- Colour, spacing (`--space-*`), type (`--type-*`), radius (`--radius-*`)
+  and family (`--font-ui|mono|heading`) tokens — mapped onto Tailwind in
+  `frontend/tailwind.config.ts` (`text-caption`, `p-3`, `rounded-sm`,
+  `tracking-eyebrow`, `font-heading`, `bg-signal-warn-soft`, …).
+- Geist / Geist Mono woff2 files — `fonts.css` points into the package.
+- The icon registry — `src/shell/dsIcon.ts` renders `ICON_REGISTRY`
+  glyphs as Vue components; `src/shell/icons.ts` is the one place call
+  sites import icons from. Glyphs the DS lacks stay on Lucide there.
+
+After a bump: `npm run typecheck && npm test && npm run check:css-tokens`,
+then grep the DS CHANGELOG for removed assets (0.12 removed the
+Newsreader font file, which `fonts.css` referenced — the build fails
+until the `@font-face` is removed).
+
 ## Future
 
 If the DS ever ships its own `--motion-*` tokens, drop the HARNESS-LOCAL

@@ -16,7 +16,7 @@
  */
 
 import { onMounted, onBeforeUnmount, watch } from 'vue';
-import { X } from 'lucide-vue-next';
+import { X } from '@/shell/icons';
 
 const props = defineProps<{
   open: boolean;
@@ -89,7 +89,7 @@ watch(
         class="flex items-center justify-between px-3 py-2 border-b border-border-muted bg-surface-1 rounded-t-md"
       >
         <span
-          class="font-ui text-[12px] text-ink truncate max-w-[60ch]"
+          class="font-ui text-small text-ink truncate max-w-[60ch]"
           data-testid="image-lightbox-filename"
         >
           {{ filename || 'image' }}

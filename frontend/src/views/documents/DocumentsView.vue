@@ -469,11 +469,11 @@ onMounted(async () => {
 
     <div class="px-6 py-3 flex flex-wrap items-center gap-3 border-b border-border-muted">
       <label class="flex items-center gap-2">
-        <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">Session</span>
+        <span class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Session</span>
         <!-- Not v-model: see syncSessionSelect. -->
         <select
           ref="sessionSelect"
-          class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink max-w-[22rem]"
+          class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink max-w-[22rem]"
           data-testid="documents-session-select"
           :disabled="sessions.length === 0"
           @change="sessionId = ($event.target as HTMLSelectElement).value"
@@ -484,7 +484,7 @@ onMounted(async () => {
       <button
         v-if="sessions.length > 0"
         type="button"
-        class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
+        class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
         data-testid="documents-create-session-inline"
         :disabled="creatingSession"
         title="Create a new session for documents (no model needed)"
@@ -494,7 +494,7 @@ onMounted(async () => {
       </button>
       <span
         v-if="sessions.length > 0 && createSessionError"
-        class="font-ui text-[11px] text-signal-danger"
+        class="font-ui text-caption text-signal-danger"
         role="alert"
         data-testid="documents-create-session-inline-error"
       >
@@ -502,7 +502,7 @@ onMounted(async () => {
       </span>
       <button
         type="button"
-        class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow disabled:opacity-50"
+        class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-caption text-accent hover:bg-accent-glow disabled:opacity-50"
         data-testid="documents-new"
         :disabled="!sessionId"
         @click="startCreate"
@@ -511,19 +511,19 @@ onMounted(async () => {
       </button>
       <button
         type="button"
-        class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
+        class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
         data-testid="documents-refresh"
         :disabled="!sessionId || listLoading"
         @click="loadDocuments"
       >
         Refresh
       </button>
-      <span class="font-ui text-[11px] text-ink-subtle">
+      <span class="font-ui text-caption text-ink-subtle">
         A session sees its own documents and global ones.
       </span>
     </div>
 
-    <div v-if="sessionsError" class="px-6 py-3 font-ui text-[12px] text-signal-danger" role="alert" data-testid="documents-sessions-error">
+    <div v-if="sessionsError" class="px-6 py-3 font-ui text-small text-signal-danger" role="alert" data-testid="documents-sessions-error">
       Could not load sessions: {{ sessionsError }}
     </div>
     <div
@@ -531,23 +531,23 @@ onMounted(async () => {
       class="px-6 py-6 space-y-3 max-w-xl"
       data-testid="documents-no-sessions"
     >
-      <p class="font-ui text-[12px] text-ink-muted">
+      <p class="font-ui text-small text-ink-muted">
         Documents belong to a session. Create one here to start writing — it does not need a model or
         provider, and you can chat in it later once one is configured.
       </p>
       <form class="flex flex-wrap items-center gap-2" @submit.prevent="createSession">
         <label class="flex items-center gap-2">
-          <span class="font-ui text-[11px] text-ink-muted">Session name</span>
+          <span class="font-ui text-caption text-ink-muted">Session name</span>
           <input
             v-model="newSessionName"
             type="text"
-            class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+            class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-small text-ink"
             data-testid="documents-new-session-name"
           />
         </label>
         <button
           type="submit"
-          class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow disabled:opacity-50"
+          class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-caption text-accent hover:bg-accent-glow disabled:opacity-50"
           data-testid="documents-create-session"
           :disabled="creatingSession"
         >
@@ -556,7 +556,7 @@ onMounted(async () => {
       </form>
       <p
         v-if="createSessionError"
-        class="font-ui text-[11px] text-signal-danger"
+        class="font-ui text-caption text-signal-danger"
         role="alert"
         data-testid="documents-create-session-error"
       >
@@ -567,23 +567,23 @@ onMounted(async () => {
     <div v-else class="flex-1 min-h-0 grid grid-cols-[minmax(16rem,22rem)_1fr]">
       <!-- left: list + site builder -->
       <aside class="min-h-0 overflow-y-auto border-r border-border-muted">
-        <div v-if="listError" class="px-4 py-3 font-ui text-[12px] text-signal-danger" role="alert" data-testid="documents-list-error">
+        <div v-if="listError" class="px-4 py-3 font-ui text-small text-signal-danger" role="alert" data-testid="documents-list-error">
           {{ listError }}
         </div>
-        <div v-else-if="listLoading && documents.length === 0" class="px-4 py-3 font-ui text-[12px] text-ink-muted">
+        <div v-else-if="listLoading && documents.length === 0" class="px-4 py-3 font-ui text-small text-ink-muted">
           Loading…
         </div>
         <div
           v-else-if="documents.length === 0"
-          class="px-4 py-4 font-ui text-[12px] text-ink-muted"
+          class="px-4 py-4 font-ui text-small text-ink-muted"
           data-testid="documents-empty"
         >
           No documents in this session yet. Ask the assistant to write one (it saves with
-          <span class="font-mono text-[11px]">kenaz__save_document</span>), or create one with New document.
+          <span class="font-mono text-caption">kenaz__save_document</span>), or create one with New document.
         </div>
         <div
           v-else-if="visibleDocuments.length === 0"
-          class="px-4 py-4 font-ui text-[12px] text-ink-muted"
+          class="px-4 py-4 font-ui text-small text-ink-muted"
           data-testid="documents-no-match"
         >
           No documents match “{{ (props.query ?? '').trim() }}”.
@@ -609,8 +609,8 @@ onMounted(async () => {
               :data-testid="`documents-open-${d.id}`"
               @click="openDocument(d.id)"
             >
-              <div class="font-ui text-[13px] text-ink">{{ d.title }}</div>
-              <div class="font-ui text-[11px] text-ink-subtle">
+              <div class="font-ui text-ui text-ink">{{ d.title }}</div>
+              <div class="font-ui text-caption text-ink-subtle">
                 v{{ d.version }} · {{ d.scope }} · {{ formatWhen(d.updatedAt) }}
               </div>
             </button>
@@ -618,45 +618,45 @@ onMounted(async () => {
         </ul>
 
         <section class="px-4 py-4 border-t border-border-muted space-y-2" data-testid="documents-site-panel">
-          <h2 class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">Build a knowledge site</h2>
-          <p class="font-ui text-[11px] text-ink-muted">
+          <h2 class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Build a knowledge site</h2>
+          <p class="font-ui text-caption text-ink-muted">
             {{ selected.size }} selected. Builds a static site into your workspace. Nothing is uploaded.
           </p>
           <label class="block">
-            <span class="font-ui text-[11px] text-ink-muted">Site name</span>
+            <span class="font-ui text-caption text-ink-muted">Site name</span>
             <input
               v-model.trim="siteSlug"
               type="text"
               placeholder="team-handbook"
-              class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-mono text-[11px] text-ink"
+              class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-mono text-caption text-ink"
               data-testid="documents-site-slug"
             />
           </label>
-          <p v-if="siteSlug && !slugLooksValid" class="font-ui text-[11px] text-signal-warn">
+          <p v-if="siteSlug && !slugLooksValid" class="font-ui text-caption text-signal-warn">
             Lowercase letters, digits and single hyphens, at most 40 characters.
           </p>
           <label class="block">
-            <span class="font-ui text-[11px] text-ink-muted">Catalog title (optional)</span>
+            <span class="font-ui text-caption text-ink-muted">Catalog title (optional)</span>
             <input
               v-model="siteTitle"
               type="text"
-              class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink"
+              class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink"
               data-testid="documents-site-title"
             />
           </label>
-          <p v-if="exportsDir" class="font-ui text-[11px] text-ink-subtle break-all">
+          <p v-if="exportsDir" class="font-ui text-caption text-ink-subtle break-all">
             Writes to <span class="font-mono">{{ exportsDir }}/{{ siteSlug || '&lt;site-name&gt;' }}</span>
           </p>
           <button
             type="button"
-            class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow disabled:opacity-50"
+            class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-caption text-accent hover:bg-accent-glow disabled:opacity-50"
             data-testid="documents-build-site"
             :disabled="!canBuild"
             @click="buildSite"
           >
             {{ building ? 'Building…' : 'Build site' }}
           </button>
-          <div v-if="siteError" class="font-ui text-[11px] text-signal-danger" role="alert" data-testid="documents-site-error">
+          <div v-if="siteError" class="font-ui text-caption text-signal-danger" role="alert" data-testid="documents-site-error">
             {{ siteError }}
           </div>
         </section>
@@ -664,20 +664,20 @@ onMounted(async () => {
 
       <!-- right: reader / editor / build result -->
       <main class="min-h-0 overflow-y-auto px-6 py-4 space-y-4">
-        <div v-if="docError" class="font-ui text-[12px] text-signal-danger" role="alert" data-testid="documents-open-error">
+        <div v-if="docError" class="font-ui text-small text-signal-danger" role="alert" data-testid="documents-open-error">
           {{ docError }}
         </div>
 
         <section v-if="site" class="rounded-sm border border-border-muted bg-surface-1 px-4 py-3 space-y-3" data-testid="documents-site-result">
           <div class="flex items-baseline justify-between gap-3">
-            <h2 class="font-ui text-[13px] text-ink">
+            <h2 class="font-ui text-ui text-ink">
               Site built locally — {{ site.documents }} {{ site.documents === 1 ? 'document' : 'documents' }}
             </h2>
-            <span class="font-ui text-[11px] text-ink-muted" data-testid="documents-site-not-published">
+            <span class="font-ui text-caption text-ink-muted" data-testid="documents-site-not-published">
               Not published. Nothing was uploaded.
             </span>
           </div>
-          <dl class="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1 font-ui text-[11px]">
+          <dl class="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1 font-ui text-caption">
             <dt class="text-ink-subtle">Site folder</dt>
             <dd class="font-mono text-ink break-all" data-testid="documents-site-dir">{{ site.siteDir }}</dd>
             <dt class="text-ink-subtle">Serve this folder</dt>
@@ -689,25 +689,25 @@ onMounted(async () => {
           </dl>
 
           <div class="space-y-2" data-testid="documents-serve-instructions">
-            <h3 class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">Serve it yourself</h3>
-            <p class="font-ui text-[11px] text-ink-muted">
+            <h3 class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Serve it yourself</h3>
+            <p class="font-ui text-caption text-ink-muted">
               The site is plain static files. Serve only the <span class="font-mono">public</span> folder;
               <span class="font-mono">kameas-site.json</span> sits beside it and is not part of the site.
             </p>
-            <p class="font-ui text-[11px] text-ink-muted">
+            <p class="font-ui text-caption text-ink-muted">
               Preview it where the files are{{ served ? ' (inside this workbench, run it in a workbench terminal)' : '' }},
               then open http://localhost:8080/ there:
             </p>
-            <pre class="rounded-sm bg-surface-2 px-3 py-2 font-mono text-[11px] text-ink whitespace-pre-wrap break-all" data-testid="documents-serve-local">python3 -m http.server 8080 --bind 127.0.0.1 --directory {{ shellQuote(site.publicDir) }}</pre>
-            <p class="font-ui text-[11px] text-ink-muted">
+            <pre class="rounded-sm bg-surface-2 px-3 py-2 font-mono text-caption text-ink whitespace-pre-wrap break-all" data-testid="documents-serve-local">python3 -m http.server 8080 --bind 127.0.0.1 --directory {{ shellQuote(site.publicDir) }}</pre>
+            <p class="font-ui text-caption text-ink-muted">
               Host it: copy the contents of the <span class="font-mono">public</span> folder to any static web host you
               control — an nginx or Apache document root, an object-storage bucket configured for static websites, or an
               internal file server. Every page is self-contained and declares its own Content-Security-Policy, so no
               server headers or build step are needed.
             </p>
-            <p class="font-ui text-[11px] text-ink-muted">Or move the single-file bundle and unpack it where it will be served:</p>
-            <pre class="rounded-sm bg-surface-2 px-3 py-2 font-mono text-[11px] text-ink whitespace-pre-wrap break-all" data-testid="documents-serve-bundle">mkdir -p {{ siteName }} &amp;&amp; tar -xzf {{ shellQuote(site.bundle) }} -C {{ siteName }}   # then serve {{ siteName }}/public</pre>
-            <p v-if="inWorkbenchMount" class="font-ui text-[11px] text-ink-muted" data-testid="documents-serve-workbench">
+            <p class="font-ui text-caption text-ink-muted">Or move the single-file bundle and unpack it where it will be served:</p>
+            <pre class="rounded-sm bg-surface-2 px-3 py-2 font-mono text-caption text-ink whitespace-pre-wrap break-all" data-testid="documents-serve-bundle">mkdir -p {{ siteName }} &amp;&amp; tar -xzf {{ shellQuote(site.bundle) }} -C {{ siteName }}   # then serve {{ siteName }}/public</pre>
+            <p v-if="inWorkbenchMount" class="font-ui text-caption text-ink-muted" data-testid="documents-serve-workbench">
               These paths are inside this workbench. <span class="font-mono">/workspace</span> is the folder you shared
               with the workbench, so on your computer the site is in that folder under
               <span class="font-mono">{{ site.siteDir.replace(/^\/workspace\//, '') }}</span>.
@@ -715,19 +715,19 @@ onMounted(async () => {
           </div>
 
           <div v-if="site.warnings.length" class="space-y-1" data-testid="documents-site-warnings">
-            <h3 class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">Markdown copies lost formatting</h3>
-            <ul class="font-ui text-[11px] text-signal-warn list-disc pl-4">
+            <h3 class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Markdown copies lost formatting</h3>
+            <ul class="font-ui text-caption text-signal-warn list-disc pl-4">
               <li v-for="w in site.warnings" :key="w.documentId">
                 {{ titleFor(w.documentId) }}: {{ w.warnings.join('; ') }}
               </li>
             </ul>
-            <p class="font-ui text-[11px] text-ink-subtle">The HTML pages are unaffected.</p>
+            <p class="font-ui text-caption text-ink-subtle">The HTML pages are unaffected.</p>
           </div>
         </section>
 
         <div
           v-if="mode === 'idle' && !site && !docError"
-          class="font-ui text-[12px] text-ink-muted"
+          class="font-ui text-small text-ink-muted"
           data-testid="documents-idle"
         >
           Open a document to read it, or select documents on the left to build a site.
@@ -737,8 +737,8 @@ onMounted(async () => {
         <section v-if="mode === 'read' && current" class="space-y-3" data-testid="documents-reader">
           <div class="flex items-baseline justify-between gap-3">
             <div>
-              <h2 class="font-ui text-[15px] text-ink" data-testid="documents-reader-title">{{ current.title }}</h2>
-              <div class="font-ui text-[11px] text-ink-subtle">
+              <h2 class="font-ui text-h3 text-ink" data-testid="documents-reader-title">{{ current.title }}</h2>
+              <div class="font-ui text-caption text-ink-subtle">
                 Version {{ current.version }} · {{ current.scope }} · updated {{ formatWhen(current.updatedAt) }} ·
                 {{ current.byteSize }} bytes
               </div>
@@ -746,7 +746,7 @@ onMounted(async () => {
             <div class="flex gap-2">
               <button
                 type="button"
-                class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+                class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-caption text-accent hover:bg-accent-glow"
                 data-testid="documents-edit"
                 @click="startEdit"
               >
@@ -754,7 +754,7 @@ onMounted(async () => {
               </button>
               <button
                 type="button"
-                class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2 hover:text-ink"
+                class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink-muted hover:bg-surface-2 hover:text-ink"
                 @click="closeDocument"
               >
                 Close
@@ -768,34 +768,34 @@ onMounted(async () => {
         <section v-if="mode === 'edit' || mode === 'create'" class="space-y-3" data-testid="documents-editor">
           <div class="flex flex-wrap items-end gap-3">
             <label v-if="mode === 'create'" class="flex-1 min-w-[14rem]">
-              <span class="font-ui text-[11px] text-ink-muted">Title</span>
+              <span class="font-ui text-caption text-ink-muted">Title</span>
               <input
                 v-model="title"
                 type="text"
-                class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+                class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-small text-ink"
                 data-testid="documents-title"
               />
             </label>
-            <h2 v-else class="flex-1 font-ui text-[15px] text-ink">
-              {{ title }} <span class="font-ui text-[11px] text-ink-subtle">editing from version {{ baseVersion }}</span>
+            <h2 v-else class="flex-1 font-ui text-h3 text-ink">
+              {{ title }} <span class="font-ui text-caption text-ink-subtle">editing from version {{ baseVersion }}</span>
             </h2>
             <label v-if="mode === 'create'" class="flex items-center gap-2">
-              <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">Source</span>
+              <span class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Source</span>
               <select
                 v-model="format"
-                class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink"
+                class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink"
                 data-testid="documents-format"
               >
                 <option value="markdown">Markdown</option>
                 <option value="html">HTML</option>
               </select>
             </label>
-            <span v-else class="font-ui text-[11px] text-ink-subtle">Source: HTML (as stored)</span>
+            <span v-else class="font-ui text-caption text-ink-subtle">Source: HTML (as stored)</span>
           </div>
 
           <div
             v-if="conflict"
-            class="rounded-sm border border-signal-warn px-3 py-2 font-ui text-[12px] text-ink space-y-2"
+            class="rounded-sm border border-signal-warn px-3 py-2 font-ui text-small text-ink space-y-2"
             role="alert"
             data-testid="documents-conflict"
           >
@@ -807,7 +807,7 @@ onMounted(async () => {
             <div class="flex flex-wrap gap-2">
               <button
                 type="button"
-                class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-[11px] text-ink hover:bg-surface-2"
+                class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-caption text-ink hover:bg-surface-2"
                 data-testid="documents-conflict-reload"
                 @click="reloadLatest"
               >
@@ -816,7 +816,7 @@ onMounted(async () => {
               <button
                 v-if="conflict.latestVersion !== null"
                 type="button"
-                class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 text-[11px] text-accent hover:bg-accent-glow"
+                class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 text-caption text-accent hover:bg-accent-glow"
                 data-testid="documents-conflict-keep"
                 @click="keepMineOnLatest"
               >
@@ -827,27 +827,27 @@ onMounted(async () => {
 
           <div class="grid grid-cols-2 gap-4">
             <label class="block">
-              <span class="font-ui text-[11px] text-ink-muted">{{ format === 'markdown' ? 'Markdown' : 'HTML' }}</span>
+              <span class="font-ui text-caption text-ink-muted">{{ format === 'markdown' ? 'Markdown' : 'HTML' }}</span>
               <textarea
                 v-model="source"
                 spellcheck="false"
-                class="mt-1 w-full h-[60vh] rounded-sm border border-border-muted bg-surface-1 px-3 py-2 font-mono text-[12px] text-ink"
+                class="mt-1 w-full h-[60vh] rounded-sm border border-border-muted bg-surface-1 px-3 py-2 font-mono text-small text-ink"
                 data-testid="documents-source"
               />
             </label>
             <div>
-              <div class="flex items-center justify-between font-ui text-[11px] text-ink-muted">
+              <div class="flex items-center justify-between font-ui text-caption text-ink-muted">
                 <span>Preview — exactly what will be saved</span>
                 <span v-if="preview">{{ preview.byteSize }} bytes</span>
               </div>
               <p
                 v-if="preview?.sanitized"
-                class="mt-1 font-ui text-[11px] text-signal-warn"
+                class="mt-1 font-ui text-caption text-signal-warn"
                 data-testid="documents-sanitized-note"
               >
                 Scripts, embeds, event handlers or external resources were removed. Images must be embedded as data URIs.
               </p>
-              <p v-if="previewError" class="mt-1 font-ui text-[11px] text-signal-danger" role="alert" data-testid="documents-preview-error">
+              <p v-if="previewError" class="mt-1 font-ui text-caption text-signal-danger" role="alert" data-testid="documents-preview-error">
                 {{ previewError }}
               </p>
               <div class="mt-1">
@@ -856,13 +856,13 @@ onMounted(async () => {
             </div>
           </div>
 
-          <div v-if="saveError" class="font-ui text-[12px] text-signal-danger" role="alert" data-testid="documents-save-error">
+          <div v-if="saveError" class="font-ui text-small text-signal-danger" role="alert" data-testid="documents-save-error">
             {{ saveError }}
           </div>
           <div class="flex gap-2">
             <button
               type="button"
-              class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50"
+              class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-small text-accent hover:bg-accent-glow disabled:opacity-50"
               data-testid="documents-save"
               :disabled="saving || !!conflict"
               @click="save"
@@ -871,7 +871,7 @@ onMounted(async () => {
             </button>
             <button
               type="button"
-              class="rounded-sm border border-border-muted bg-surface-1 px-3 py-1 font-ui text-[12px] text-ink-muted hover:bg-surface-2 hover:text-ink"
+              class="rounded-sm border border-border-muted bg-surface-1 px-3 py-1 font-ui text-small text-ink-muted hover:bg-surface-2 hover:text-ink"
               @click="cancelEdit"
             >
               Cancel

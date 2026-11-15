@@ -8,6 +8,8 @@
  * unknown the view defaults to "bash".
  */
 
+import type { Component } from 'vue';
+import { PERMISSION_FAMILY_ICONS, AlertTriangle } from '@/shell/icons';
 import { computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
@@ -20,16 +22,16 @@ import BlockedPermissionRequestsPanel from '@/views/settings/BlockedPermissionRe
 
 type Family = 'bash' | 'fs' | 'credential' | 'tool' | 'blocked';
 
-const TABS: ReadonlyArray<{ id: Family; label: string; icon: string }> = [
-  { id: 'bash', label: 'Bash', icon: '⚡' },
-  { id: 'fs', label: 'Filesystem', icon: '📁' },
-  { id: 'credential', label: 'Credentials', icon: '🔑' },
-  { id: 'tool', label: 'Tools', icon: '🔧' },
+const TABS: ReadonlyArray<{ id: Family; label: string; icon: Component }> = [
+  { id: 'bash', label: 'Bash', icon: PERMISSION_FAMILY_ICONS.bash },
+  { id: 'fs', label: 'Filesystem', icon: PERMISSION_FAMILY_ICONS.fs },
+  { id: 'credential', label: 'Credentials', icon: PERMISSION_FAMILY_ICONS.credential },
+  { id: 'tool', label: 'Tools', icon: PERMISSION_FAMILY_ICONS.tool },
   // model-scheduled-jobs-01PMSJ01 WP07: pending blocked_permission_requests
   // (denied filesystem writes/reads, including unattended scheduled runs
   // that had nobody to ask) — distinct from the "Allow always" grant lists
   // the other four tabs show.
-  { id: 'blocked', label: 'Blocked', icon: '🚧' },
+  { id: 'blocked', label: 'Blocked', icon: AlertTriangle },
 ];
 
 const route = useRoute();
@@ -95,7 +97,7 @@ watch(
           role="tab"
           :aria-selected="activeFamily === tab.id"
           :class="[
-            'px-3 py-2 -mb-px font-ui text-[11px] uppercase tracking-[0.18em] border-b-2 transition-colors',
+            'px-3 py-2 -mb-px font-ui text-caption uppercase tracking-eyebrow border-b-2 transition-colors',
             activeFamily === tab.id
               ? 'border-accent text-accent'
               : 'border-transparent text-ink-muted hover:text-ink',
@@ -103,7 +105,7 @@ watch(
           :data-testid="`permissions-tab-${tab.id}`"
           @click="selectTab(tab.id)"
         >
-          <span aria-hidden="true">{{ tab.icon }}</span>
+          <component :is="tab.icon" class="mr-1 inline-block align-[-1px]" :size="12" aria-hidden="true" />
           {{ tab.label }}
         </button>
       </div>

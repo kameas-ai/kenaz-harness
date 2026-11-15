@@ -1,23 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Browser-tab favicon for docs.kameas.ai. Dark rounded square so the
-  mark stays legible on browsers that show favicons against a light
-  tab strip; cream dot-grid on top using the same 4x4 layout as the
-  navbar logo, with the dots scaled up further for 16×16 / 32×32
-  rendering. Same #F4F1EA cream / #0A0A0B surface as the rest of
-  the Kenaz design language.
+  Browser-tab favicon for the harness (desktop index.html + served.html).
+  Geometry is the Kenaz design system's mark as of @kameas-ai/kenaz-design-system
+  v0.13.0 (src/assets/svg/kenaz-mark-inline.svg, scripts/render-brand-rasters.py):
+  5x5 lattice at 8 + 12i, rune M 44 8 L 18 32 L 44 56 (square caps, miter
+  join), nodes 4, 8, 12, 18 and 24 cut out. Colours and weights follow the
+  DS app-icon raster spec for small sizes (ink-theme --surface-0 tile with
+  22% corner radius, --ink-dim lattice r 2.6, --accent rune 4.2): the
+  favicon is an OS / browser surface, so like the app icon it cannot follow
+  data-theme. The mark sits in a 66% box, centred, as in the app icon.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="12" ry="12" fill="#0A0A0B"/>
-  <g fill="#F4F1EA">
-    <circle cx="14" cy="14" r="6"/>
-    <circle cx="32" cy="14" r="6"/>
-    <circle cx="50" cy="14" r="6"/>
-    <circle cx="14" cy="32" r="6"/>
-    <circle cx="32" cy="32" r="6"/>
-    <circle cx="50" cy="32" r="6"/>
-    <circle cx="14" cy="50" r="6"/>
-    <circle cx="32" cy="50" r="6"/>
-    <circle cx="50" cy="50" r="6"/>
+  <rect width="64" height="64" rx="14" ry="14" fill="#0A0A0B"/>
+  <g transform="translate(10.88 10.88) scale(0.66)">
+    <g fill="#48484F"><circle cx="8" cy="8" r="2.6"/><circle cx="20" cy="8" r="2.6"/><circle cx="32" cy="8" r="2.6"/><circle cx="56" cy="8" r="2.6"/><circle cx="8" cy="20" r="2.6"/><circle cx="20" cy="20" r="2.6"/><circle cx="44" cy="20" r="2.6"/><circle cx="56" cy="20" r="2.6"/><circle cx="8" cy="32" r="2.6"/><circle cx="32" cy="32" r="2.6"/><circle cx="44" cy="32" r="2.6"/><circle cx="56" cy="32" r="2.6"/><circle cx="8" cy="44" r="2.6"/><circle cx="20" cy="44" r="2.6"/><circle cx="44" cy="44" r="2.6"/><circle cx="56" cy="44" r="2.6"/><circle cx="8" cy="56" r="2.6"/><circle cx="20" cy="56" r="2.6"/><circle cx="32" cy="56" r="2.6"/><circle cx="56" cy="56" r="2.6"/></g>
+    <path d="M 44 8 L 18 32 L 44 56" stroke="#C8A56A" stroke-width="4.2" stroke-linecap="square" stroke-linejoin="miter" stroke-miterlimit="8" fill="none"/>
   </g>
 </svg>

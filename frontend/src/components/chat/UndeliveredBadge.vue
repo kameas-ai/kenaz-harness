@@ -58,13 +58,13 @@ const retryingCopy = computed(() => {
 
 <template>
   <div
-    class="mt-1 flex flex-col items-end gap-1 font-ui text-[11px]"
+    class="mt-1 flex flex-col items-end gap-1 font-ui text-caption"
     role="status"
     data-testid="undelivered-badge"
   >
     <div class="flex items-center gap-2 text-signal-danger">
       <span
-        class="rounded-sm border border-signal-danger px-1.5 py-[1px] text-[10px] uppercase tracking-[0.18em]"
+        class="rounded-sm border border-signal-danger px-1.5 py-[1px] text-eyebrow uppercase tracking-eyebrow"
         data-testid="undelivered-label"
       >
         Not delivered
@@ -102,7 +102,7 @@ const retryingCopy = computed(() => {
       <button
         v-else
         type="button"
-        class="px-2 py-0.5 rounded-md border border-accent text-accent uppercase tracking-[0.18em] text-[10px] hover:bg-surface-2"
+        class="px-2 py-0.5 rounded-md border border-accent text-accent uppercase tracking-eyebrow text-eyebrow hover:bg-surface-2"
         data-testid="undelivered-retry"
         @click="emit('retry')"
       >

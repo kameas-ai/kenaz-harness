@@ -411,7 +411,7 @@ defineExpose({
   >
     <div
       v-if="adapter.nodes.length === 0"
-      class="absolute inset-0 z-10 flex items-center justify-center font-ui text-[12px] text-ink-muted"
+      class="absolute inset-0 z-10 flex items-center justify-center font-ui text-small text-ink-muted"
       data-testid="canvas-empty"
     >
       {{ writable ? 'Drag a kind from the palette to start.' : 'No nodes to draw yet.' }}
@@ -419,7 +419,7 @@ defineExpose({
 
     <div
       v-if="notice"
-      class="absolute inset-x-2 top-2 z-20 rounded-sm border border-signal-warn bg-surface-1 px-2 py-1 font-ui text-[11px] text-signal-warn"
+      class="absolute inset-x-2 top-2 z-20 rounded-sm border border-signal-warn bg-surface-1 px-2 py-1 font-ui text-caption text-signal-warn"
       data-testid="canvas-notice"
       role="status"
     >
@@ -433,7 +433,7 @@ defineExpose({
       <button
         type="button"
         :disabled="!canDelete"
-        class="rounded-sm border border-border-muted bg-surface-1 px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.14em] text-ink-muted hover:bg-surface-2 disabled:opacity-40"
+        class="rounded-sm border border-border-muted bg-surface-1 px-2 py-0.5 font-ui text-caption uppercase tracking-eyebrow text-ink-muted hover:bg-surface-2 disabled:opacity-40"
         data-testid="canvas-delete"
         @click="deleteSelection"
       >
@@ -443,7 +443,7 @@ defineExpose({
 
     <div
       v-if="rejection"
-      class="absolute inset-x-2 bottom-2 z-20 rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 font-ui text-[11px] text-signal-danger"
+      class="absolute inset-x-2 bottom-2 z-20 rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 font-ui text-caption text-signal-danger"
       data-testid="canvas-edge-rejected"
       role="alert"
     >

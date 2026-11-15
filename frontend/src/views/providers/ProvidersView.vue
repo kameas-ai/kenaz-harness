@@ -242,11 +242,11 @@ const inlineTestClass = computed(() =>
       -->
       <div
         v-if="readOnly && hostProviders.length > 0"
-        class="mb-4 rounded-md border border-accent-hairline bg-surface-1 px-4 py-3 font-ui text-[12px]"
+        class="mb-4 rounded-md border border-accent-hairline bg-surface-1 px-4 py-3 font-ui text-small"
         role="status"
         :data-testid="'host-provider-notice'"
       >
-        <div class="uppercase tracking-[0.18em] text-[11px] text-ink-subtle">
+        <div class="uppercase tracking-eyebrow text-caption text-ink-subtle">
           Configured by the host
         </div>
         <p class="mt-1 text-ink">
@@ -258,11 +258,11 @@ const inlineTestClass = computed(() =>
 
       <div
         v-else-if="readOnly"
-        class="mb-4 rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-[12px]"
+        class="mb-4 rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-small"
         role="status"
         :data-testid="'no-host-provider-notice'"
       >
-        <div class="uppercase tracking-[0.18em] text-[11px] text-signal-warn">
+        <div class="uppercase tracking-eyebrow text-caption text-signal-warn">
           No provider configured
         </div>
         <p class="mt-1 text-ink">
@@ -299,7 +299,7 @@ const inlineTestClass = computed(() =>
       >
         <thead>
           <tr
-            class="border-b border-border-muted text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="border-b border-border-muted text-caption uppercase tracking-eyebrow text-ink-subtle"
           >
             <th scope="col" class="px-4 py-2 font-ui font-medium">Name</th>
             <th scope="col" class="px-4 py-2 font-ui font-medium">Source</th>
@@ -367,11 +367,11 @@ const inlineTestClass = computed(() =>
           >
             <div>
               <div
-                class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+                class="text-caption uppercase tracking-eyebrow text-ink-subtle"
               >
                 {{ editingProvider ? 'EDIT PROVIDER' : 'ADD PROVIDER' }}
               </div>
-              <h2 class="mt-1 font-ui text-lg font-semibold text-ink">
+              <h2 class="mt-1 font-ui text-title font-semibold text-ink">
                 {{
                   editingProvider
                     ? `Edit ${editingProvider.name || editingProvider.id}`

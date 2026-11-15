@@ -155,7 +155,7 @@ watch(
     >
       <h2
         id="reintegration-modal-title"
-        class="font-ui text-base font-semibold text-ink"
+        class="font-ui text-h3 font-semibold text-ink"
       >
         Bring back to parent
       </h2>
@@ -173,7 +173,7 @@ watch(
       <!-- error -->
       <div
         v-else-if="lastError"
-        class="mt-4 rounded-md border border-signal-warn bg-surface-0 px-3 py-2 font-ui text-[12px] text-signal-warn"
+        class="mt-4 rounded-md border border-signal-warn bg-surface-0 px-3 py-2 font-ui text-small text-signal-warn"
         role="alert"
         data-testid="reintegration-error"
       >
@@ -201,7 +201,7 @@ watch(
       <div v-else-if="proposal" class="mt-4 flex flex-col gap-3">
         <!-- meta line -->
         <div
-          class="flex items-center gap-3 font-ui text-[11px] text-ink-subtle"
+          class="flex items-center gap-3 font-ui text-caption text-ink-subtle"
           data-testid="reintegration-meta"
         >
           <span data-testid="reintegration-model">Model: {{ proposal.model }}</span>
@@ -226,7 +226,7 @@ watch(
       <!-- error banner while committing -->
       <div
         v-if="lastError && !loading && proposal !== null"
-        class="mt-3 rounded-md border border-signal-warn bg-surface-0 px-3 py-2 font-ui text-[12px] text-signal-warn"
+        class="mt-3 rounded-md border border-signal-warn bg-surface-0 px-3 py-2 font-ui text-small text-signal-warn"
         role="alert"
         data-testid="reintegration-commit-error"
       >
@@ -260,7 +260,7 @@ watch(
         <button
           v-if="!isEmpty && proposal !== null"
           type="button"
-          class="rounded-md bg-accent-strong px-3 py-1 font-ui text-sm text-on-accent disabled:opacity-50"
+          class="rounded-md bg-accent px-3 py-1 font-ui text-sm text-surface-0 disabled:opacity-50"
           :disabled="loading || submitting || editedSummary.trim().length === 0"
           data-testid="reintegration-confirm"
           @click="confirm"

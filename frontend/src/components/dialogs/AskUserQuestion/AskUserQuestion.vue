@@ -281,7 +281,7 @@ defineExpose({ queue, submit, cancel, answer, reconcile });
       >
         <!-- Eyebrow -->
         <div
-          class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle"
           data-testid="ask-dialog-eyebrow"
         >
           Question from model
@@ -354,7 +354,7 @@ defineExpose({ queue, submit, cancel, answer, reconcile });
           <!-- Fallback for unknown kinds (forward-compat) -->
           <div
             v-else
-            class="font-ui text-[12px] text-signal-warn"
+            class="font-ui text-small text-signal-warn"
             data-testid="ask-dialog-unknown-kind"
           >
             Unsupported question kind: {{ head.kind }}
@@ -364,7 +364,7 @@ defineExpose({ queue, submit, cancel, answer, reconcile });
         <!-- Error -->
         <div
           v-if="lastError"
-          class="mt-3 rounded-sm border border-signal-warn bg-surface-2 px-3 py-2 font-ui text-[12px] text-signal-warn"
+          class="mt-3 rounded-sm border border-signal-warn bg-surface-2 px-3 py-2 font-ui text-small text-signal-warn"
           role="alert"
           data-testid="ask-dialog-error"
         >
@@ -373,7 +373,7 @@ defineExpose({ queue, submit, cancel, answer, reconcile });
 
         <!-- Actions -->
         <div
-          class="mt-5 flex items-center gap-2 font-ui text-[11px] uppercase tracking-[0.18em]"
+          class="mt-5 flex items-center gap-2 font-ui text-caption uppercase tracking-eyebrow"
           data-testid="ask-dialog-actions"
         >
           <button
@@ -399,7 +399,7 @@ defineExpose({ queue, submit, cancel, answer, reconcile });
         <!-- Queue overflow badge -->
         <div
           v-if="extraPending > 0"
-          class="mt-3 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="mt-3 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
           data-testid="ask-dialog-queue-badge"
         >
           +{{ extraPending }} more pending

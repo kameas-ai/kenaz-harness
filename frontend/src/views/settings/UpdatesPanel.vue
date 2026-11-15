@@ -329,11 +329,11 @@ async function onUnskip(version: string) {
 <template>
   <section data-testid="updates-panel">
     <h2
-      class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+      class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle"
     >
       Updates
     </h2>
-    <p class="mt-1 font-ui text-[11px] text-ink-dim">
+    <p class="mt-1 font-ui text-caption text-ink-dim">
       Auto-update preferences for new Kenaz releases. Checks query the
       GitHub release feed; downloads are signed and verified before
       install.
@@ -341,7 +341,7 @@ async function onUnskip(version: string) {
 
     <div
       v-if="bannerMessage"
-      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="updates-error"
     >
@@ -355,7 +355,7 @@ async function onUnskip(version: string) {
       data-testid="updates-status-block"
     >
       <div class="flex items-start justify-between gap-3">
-        <div class="grid gap-1 font-ui text-[12px]">
+        <div class="grid gap-1 font-ui text-small">
           <p class="text-ink" data-testid="updates-current-version">
             You're running Kenaz
             <span class="font-mono text-ink"
@@ -368,7 +368,7 @@ async function onUnskip(version: string) {
               class="font-mono"
               :class="
                 autoCheckLabel === 'on'
-                  ? 'text-signal-success'
+                  ? 'text-signal-ok-text'
                   : 'text-ink-muted'
               "
               data-testid="updates-auto-check-label"
@@ -384,7 +384,7 @@ async function onUnskip(version: string) {
         </div>
         <button
           type="button"
-          class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-[11px] uppercase tracking-[0.14em] text-accent hover:bg-accent-glow disabled:opacity-50 transition-colors"
+          class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-caption uppercase tracking-eyebrow text-accent hover:bg-accent-glow disabled:opacity-50 transition-colors"
           :disabled="checking"
           data-testid="updates-check-now"
           @click="onCheckNow"
@@ -399,7 +399,7 @@ async function onUnskip(version: string) {
         class="mt-3 flex items-center justify-between gap-3 rounded-sm border border-accent-hairline bg-surface-2 px-3 py-2"
         data-testid="updates-available-panel"
       >
-        <div class="font-ui text-[12px] text-ink">
+        <div class="font-ui text-small text-ink">
           <span class="font-mono">{{ status.availableVersion }}</span>
           available
           <a
@@ -413,7 +413,7 @@ async function onUnskip(version: string) {
         </div>
         <button
           type="button"
-          class="rounded-sm border border-accent bg-accent px-3 py-1 font-ui text-[11px] uppercase tracking-[0.14em] text-surface-0 hover:bg-accent-strong disabled:opacity-50 transition-colors"
+          class="rounded-sm border border-accent bg-accent px-3 py-1 font-ui text-caption uppercase tracking-eyebrow text-surface-0 hover:bg-accent disabled:opacity-50 transition-colors"
           :disabled="installing"
           data-testid="updates-install"
           @click="onInstallAvailable"
@@ -464,7 +464,7 @@ async function onUnskip(version: string) {
           ></div>
         </div>
         <p
-          class="mt-1 font-ui text-[11px] text-ink-muted"
+          class="mt-1 font-ui text-caption text-ink-muted"
           data-testid="updates-progress-label"
         >
           <template v-if="isDownloading && !isIndeterminateDownload"
@@ -491,7 +491,7 @@ async function onUnskip(version: string) {
 
     <div class="mt-6 grid gap-4" data-testid="updates-preferences">
       <div>
-        <label class="flex items-center gap-3 font-ui text-[12px] text-ink">
+        <label class="flex items-center gap-3 font-ui text-small text-ink">
           <input
             type="checkbox"
             class="accent-accent"
@@ -501,7 +501,7 @@ async function onUnskip(version: string) {
           />
           Automatically check for updates
         </label>
-        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+        <p class="mt-1 font-ui text-caption text-ink-muted">
           When on, the harness polls the release feed at the configured
           interval and notifies you of available updates.
         </p>
@@ -509,7 +509,7 @@ async function onUnskip(version: string) {
 
       <div>
         <p
-          class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle"
+          class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle"
         >
           Update channel
         </p>
@@ -524,7 +524,7 @@ async function onUnskip(version: string) {
             type="button"
             role="radio"
             :aria-checked="currentChannel === opt.value"
-            class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+            class="px-3 py-1.5 font-ui text-small border-r border-border last:border-r-0 transition-colors"
             :class="
               currentChannel === opt.value
                 ? 'bg-surface-3 text-ink'
@@ -536,7 +536,7 @@ async function onUnskip(version: string) {
             {{ opt.label }}
           </button>
         </div>
-        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+        <p class="mt-1 font-ui text-caption text-ink-muted">
           Prerelease builds get features sooner but may have rough edges.
         </p>
       </div>
@@ -544,14 +544,14 @@ async function onUnskip(version: string) {
       <div>
         <label
           for="updates-interval-select"
-          class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle"
+          class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle"
         >
           Check interval
         </label>
         <div class="mt-2">
           <select
             id="updates-interval-select"
-            class="rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+            class="rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-small text-ink"
             :value="currentIntervalSec"
             data-testid="updates-interval-select"
             @change="onIntervalChange"
@@ -573,7 +573,7 @@ async function onUnskip(version: string) {
     <div class="mt-6" data-testid="updates-skipped-section">
       <button
         type="button"
-        class="flex items-center gap-2 font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle hover:text-ink"
+        class="flex items-center gap-2 font-ui text-caption uppercase tracking-eyebrow text-ink-subtle hover:text-ink"
         :aria-expanded="skippedOpen"
         data-testid="updates-skipped-toggle"
         @click="skippedOpen = !skippedOpen"
@@ -597,10 +597,10 @@ async function onUnskip(version: string) {
             :key="v"
             class="flex items-center justify-between px-3 py-2"
           >
-            <span class="font-mono text-[12px] text-ink">{{ v }}</span>
+            <span class="font-mono text-small text-ink">{{ v }}</span>
             <button
               type="button"
-              class="font-ui text-[11px] text-accent hover:underline"
+              class="font-ui text-caption text-accent hover:underline"
               :data-testid="`updates-unskip-${v}`"
               @click="onUnskip(v)"
             >
@@ -610,7 +610,7 @@ async function onUnskip(version: string) {
         </ul>
         <p
           v-else
-          class="font-ui text-[12px] text-ink-muted"
+          class="font-ui text-small text-ink-muted"
           data-testid="updates-skipped-empty"
         >
           No skipped versions

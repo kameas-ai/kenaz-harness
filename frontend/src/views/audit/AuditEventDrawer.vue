@@ -10,6 +10,7 @@
  * Navigation: previous / next buttons cycle through the visible entries
  * list supplied by the parent. Wraps cleanly at ends.
  */
+import { X } from '@/shell/icons';
 import { computed } from 'vue';
 import CrossReferenceLink from '@/components/audit/CrossReferenceLink.vue';
 import TraceLink from '@/components/audit/TraceLink.vue';
@@ -103,7 +104,7 @@ const traceId = computed(() => {
       @click.self="emit('close')"
     >
       <!-- Backdrop -->
-      <div class="absolute inset-0 bg-black/20" @click="emit('close')" />
+      <div class="absolute inset-0 bg-modal-overlay" @click="emit('close')" />
 
       <!-- Panel -->
       <aside
@@ -112,14 +113,14 @@ const traceId = computed(() => {
       >
         <!-- Header -->
         <div class="flex items-center justify-between px-5 py-3 border-b border-border-muted">
-          <h2 class="font-ui text-[12px] uppercase tracking-widest text-ink-muted">
+          <h2 class="font-ui text-small uppercase tracking-widest text-ink-muted">
             Audit Event
           </h2>
           <div class="flex items-center gap-2">
             <!-- Prev / Next navigation -->
             <button
               type="button"
-              class="px-2 py-1 text-[11px] font-ui rounded-sm border border-border text-ink-muted hover:text-ink disabled:opacity-40"
+              class="px-2 py-1 text-caption font-ui rounded-sm border border-border text-ink-muted hover:text-ink disabled:opacity-40"
               :disabled="!hasPrev"
               aria-label="Previous entry"
               @click="navigate(-1)"
@@ -128,7 +129,7 @@ const traceId = computed(() => {
             </button>
             <button
               type="button"
-              class="px-2 py-1 text-[11px] font-ui rounded-sm border border-border text-ink-muted hover:text-ink disabled:opacity-40"
+              class="px-2 py-1 text-caption font-ui rounded-sm border border-border text-ink-muted hover:text-ink disabled:opacity-40"
               :disabled="!hasNext"
               aria-label="Next entry"
               @click="navigate(1)"
@@ -137,45 +138,45 @@ const traceId = computed(() => {
             </button>
             <button
               type="button"
-              class="px-2 py-1 text-[11px] font-ui rounded-sm border border-border text-ink-muted hover:text-ink"
+              class="px-2 py-1 text-caption font-ui rounded-sm border border-border text-ink-muted hover:text-ink"
               aria-label="Close drawer"
               @click="emit('close')"
             >
-              ✕
+              <X class="inline-block" :size="12" aria-hidden="true" />
             </button>
           </div>
         </div>
 
         <!-- Content -->
-        <div class="flex-1 overflow-y-auto px-5 py-4 space-y-3 font-ui text-[12px]">
+        <div class="flex-1 overflow-y-auto px-5 py-4 space-y-3 font-ui text-small">
           <!-- Event ID -->
           <div>
             <span class="text-ink-muted">Event ID</span>
-            <p class="mt-0.5 font-mono text-[11px] text-ink break-all">{{ entry.id }}</p>
+            <p class="mt-0.5 font-mono text-caption text-ink break-all">{{ entry.id }}</p>
           </div>
 
           <!-- Kind -->
           <div>
             <span class="text-ink-muted">Kind</span>
-            <p class="mt-0.5 font-mono text-[11px] text-ink">{{ entry.subject }}</p>
+            <p class="mt-0.5 font-mono text-caption text-ink">{{ entry.subject }}</p>
           </div>
 
           <!-- Category -->
           <div>
             <span class="text-ink-muted">Category</span>
-            <p class="mt-0.5 uppercase tracking-wide text-[11px] text-ink">{{ entry.category }}</p>
+            <p class="mt-0.5 uppercase tracking-wide text-caption text-ink">{{ entry.category }}</p>
           </div>
 
           <!-- Timestamp -->
           <div>
             <span class="text-ink-muted">Emitted At</span>
-            <p class="mt-0.5 font-mono text-[11px] text-ink">{{ entry.timestamp }}</p>
+            <p class="mt-0.5 font-mono text-caption text-ink">{{ entry.timestamp }}</p>
           </div>
 
           <!-- Payload hash prefix -->
           <div v-if="entry.trailing">
             <span class="text-ink-muted">Payload Hash (first 4 bytes)</span>
-            <p class="mt-0.5 font-mono text-[11px] text-ink">{{ entry.trailing }}</p>
+            <p class="mt-0.5 font-mono text-caption text-ink">{{ entry.trailing }}</p>
           </div>
 
           <!-- risk-rated-autonomy-01PMRA01 WP10: tool-confirm-decision
@@ -186,13 +187,13 @@ const traceId = computed(() => {
           <template v-if="entry.tool_confirm_decision">
             <div data-testid="audit-drawer-tool-confirm">
               <span class="text-ink-muted">Deciding layer</span>
-              <p class="mt-0.5 font-mono text-[11px] text-ink">
+              <p class="mt-0.5 font-mono text-caption text-ink">
                 {{ layerLabel(entry.tool_confirm_decision.layer) }}
               </p>
             </div>
             <div v-if="entry.tool_confirm_decision.score !== undefined">
               <span class="text-ink-muted">Risk score</span>
-              <p class="mt-0.5 font-mono text-[11px] text-ink">
+              <p class="mt-0.5 font-mono text-caption text-ink">
                 {{ entry.tool_confirm_decision.tier ?? 'unknown' }} · {{ entry.tool_confirm_decision.score }}/100
                 <span v-if="entry.tool_confirm_decision.threshold" class="text-ink-muted">
                   (threshold {{ entry.tool_confirm_decision.threshold }})
@@ -201,7 +202,7 @@ const traceId = computed(() => {
             </div>
             <div v-if="entry.tool_confirm_decision.layer === 3">
               <span class="text-ink-muted">Rater</span>
-              <p class="mt-0.5 font-mono text-[11px] text-ink" data-testid="audit-drawer-rater-detail">
+              <p class="mt-0.5 font-mono text-caption text-ink" data-testid="audit-drawer-rater-detail">
                 {{ entry.tool_confirm_decision.model || 'offline floor (no live model)' }}
                 <span v-if="entry.tool_confirm_decision.prompt_version" class="text-ink-muted">
                   · {{ entry.tool_confirm_decision.prompt_version }}
@@ -237,7 +238,7 @@ const traceId = computed(() => {
           </div>
 
           <!-- Navigation hints -->
-          <div class="pt-2 text-[10px] text-ink-muted border-t border-border-muted">
+          <div class="pt-2 text-eyebrow text-ink-muted border-t border-border-muted">
             {{ currentIndex + 1 }} of {{ entries.length }}
           </div>
         </div>

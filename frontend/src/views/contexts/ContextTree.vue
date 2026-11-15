@@ -132,7 +132,7 @@ function onDeleteClick() {
         spellcheck="false"
         autocomplete="off"
         aria-label="Rename"
-        class="min-w-0 flex-1 rounded-sm border border-border-muted bg-surface-1 px-1.5 py-0.5 font-ui text-[12px] text-ink focus:border-accent focus:outline-none"
+        class="min-w-0 flex-1 rounded-sm border border-border-muted bg-surface-1 px-1.5 py-0.5 font-ui text-small text-ink focus:border-accent focus:outline-none"
         :data-testid="`context-rename-input-${node.path}`"
         @keydown.enter.prevent="confirmRename"
         @keydown.esc.prevent="cancelRename"
@@ -168,7 +168,7 @@ function onDeleteClick() {
         <span class="truncate">{{ node.name }}</span>
         <span
           v-if="audience"
-          class="shrink-0 rounded-sm border border-border-muted px-1 font-ui text-[10px] text-ink-subtle"
+          class="shrink-0 rounded-sm border border-border-muted px-1 font-ui text-eyebrow text-ink-subtle"
           :title="`Shared with: ${audience}`"
           :data-testid="`context-audience-${node.path}`"
         >{{ audience }}</span>

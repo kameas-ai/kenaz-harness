@@ -104,7 +104,7 @@ async function start(): Promise<void> {
     <div v-if="!running && !status">
       <button
         type="button"
-        class="font-ui text-sm px-3 py-1.5 rounded-sm bg-accent text-on-accent disabled:opacity-50"
+        class="font-ui text-sm px-3 py-1.5 rounded-sm bg-accent text-surface-0 disabled:opacity-50"
         :disabled="consented.length === 0"
         data-testid="bootstrap-start"
         @click="start"
@@ -123,7 +123,7 @@ async function start(): Promise<void> {
       Starting…
     </p>
 
-    <p v-if="error" class="font-ui text-xs text-signal-warning" data-testid="bootstrap-error">
+    <p v-if="error" class="font-ui text-xs text-signal-warn-text" data-testid="bootstrap-error">
       {{ error }}
     </p>
 

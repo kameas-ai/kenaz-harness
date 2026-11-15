@@ -203,7 +203,7 @@ watch(
       <li
         v-for="(p, i) in list"
         :key="`${i}:${p}`"
-        class="inline-flex items-center gap-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-[11px] text-ink"
+        class="inline-flex items-center gap-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-caption text-ink"
         :data-testid="`dirpicker-chip-${i}`"
       >
         <input
@@ -212,7 +212,7 @@ watch(
           v-model="editingValue"
           type="text"
           :aria-label="`Edit directory path ${i + 1}`"
-          class="min-w-[12rem] bg-transparent font-mono text-[11px] text-ink focus:outline-none"
+          class="min-w-[12rem] bg-transparent font-mono text-caption text-ink focus:outline-none"
           spellcheck="false"
           autocomplete="off"
           :data-testid="`dirpicker-edit-${i}`"
@@ -222,7 +222,7 @@ watch(
         <button
           v-else
           type="button"
-          class="text-left font-mono text-[11px] text-ink hover:text-accent"
+          class="text-left font-mono text-caption text-ink hover:text-accent"
           :data-testid="`dirpicker-chip-text-${i}`"
           @click="startEdit(i)"
         >
@@ -243,7 +243,7 @@ watch(
     <div class="flex items-center gap-2">
       <button
         type="button"
-        class="inline-flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink-dim hover:text-ink hover:bg-surface-2"
+        class="inline-flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink-dim hover:text-ink hover:bg-surface-2"
         :data-testid="inputId ? `dirpicker-add-${inputId}` : 'dirpicker-add'"
         @click="openPicker"
       >
@@ -252,7 +252,7 @@ watch(
       </button>
       <span
         v-if="list.length === 0"
-        class="font-ui text-[11px] text-ink-subtle"
+        class="font-ui text-caption text-ink-subtle"
         :data-testid="inputId ? `dirpicker-empty-${inputId}` : 'dirpicker-empty'"
       >
         No directories yet — click <span class="font-mono">Add directory</span>.

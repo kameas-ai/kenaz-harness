@@ -11,7 +11,7 @@
  * grep result costs one row of chat instead of scrolling the answer off
  * the screen.
  *
- * Visual register: the ArtifactChip idiom (rounded-sm, border-muted,
+ * Visual register: the ArtifactChip idiom (rounded-sm, border-border-muted,
  * surface-1, 11px font-ui, monospace for the machine-readable parts)
  * with a status dot on the leading edge. Colours come from the signal
  * ramp so both themes track automatically:
@@ -122,7 +122,7 @@ const dotClass = computed(() => {
 
 const shellClass = computed(() => {
   const base =
-    'w-full flex items-center gap-2 rounded-sm border px-2 py-1 font-ui text-[11px] text-left transition-fast';
+    'w-full flex items-center gap-2 rounded-sm border px-2 py-1 font-ui text-caption text-left transition-fast';
   if (props.chip.status === 'error') {
     return `${base} border-signal-danger bg-signal-danger-soft text-ink`;
   }
@@ -177,11 +177,11 @@ function toggle() {
         <AlertTriangle
           v-if="chip.status === 'error'"
           :size="12"
-          class="text-signal-danger"
+          class="inline-block text-signal-danger"
           aria-hidden="true"
         />
         <span
-          class="uppercase tracking-[0.14em] text-[10px]"
+          class="uppercase tracking-eyebrow text-eyebrow"
           :class="chip.status === 'error' ? 'text-signal-danger' : 'text-ink-subtle'"
           data-testid="tool-chip-status"
         >
@@ -191,7 +191,7 @@ function toggle() {
           :is="expanded ? ChevronDown : ChevronRight"
           v-if="expandable"
           :size="12"
-          class="text-ink-subtle"
+          class="inline-block text-ink-subtle"
           aria-hidden="true"
         />
       </span>
@@ -200,7 +200,7 @@ function toggle() {
     <RouterLink
       v-if="forkSessionId"
       :to="`/sessions/${encodeURIComponent(forkSessionId)}`"
-      class="mt-1 inline-block font-ui text-[11px] text-ink-subtle hover:text-accent underline-offset-2 hover:underline"
+      class="mt-1 inline-block font-ui text-caption text-ink-subtle hover:text-accent underline-offset-2 hover:underline"
       data-testid="tool-chip-open-branch"
     >
       Open branch
@@ -210,7 +210,7 @@ function toggle() {
          its own box and is capped at OUTPUT_CAP characters. -->
     <pre
       v-if="expanded && expandable"
-      class="mt-1 max-h-64 overflow-auto rounded-sm border bg-surface-0 px-2 py-1.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words"
+      class="mt-1 max-h-64 overflow-auto rounded-sm border bg-surface-0 px-2 py-1.5 font-mono text-caption leading-relaxed whitespace-pre-wrap break-words"
       :class="isError ? 'border-signal-danger text-ink' : 'border-border-muted text-ink-muted'"
       :role="isError ? 'alert' : undefined"
       data-testid="tool-chip-output"

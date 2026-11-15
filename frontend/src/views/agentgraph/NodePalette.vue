@@ -257,13 +257,13 @@ defineExpose({ filterText });
     <div class="border-b border-border-muted px-3 py-2">
       <div class="mb-2 flex items-center justify-between">
         <span
-          class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim"
+          class="font-ui text-caption uppercase tracking-eyebrow text-ink-dim"
           >Node palette</span
         >
         <div class="flex items-center gap-1">
           <button
             type="button"
-            class="rounded-sm border border-border-muted px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            class="rounded-sm border border-border-muted px-1.5 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
             data-testid="palette-doctor"
             @click="onDoctor"
           >
@@ -271,7 +271,7 @@ defineExpose({ filterText });
           </button>
           <button
             type="button"
-            class="rounded-sm border border-border-muted px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2 disabled:opacity-50 disabled:cursor-wait"
+            class="rounded-sm border border-border-muted px-1.5 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2 disabled:opacity-50 disabled:cursor-wait"
             data-testid="palette-reload"
             :disabled="reloading"
             @click="onReload"
@@ -285,7 +285,7 @@ defineExpose({ filterText });
         type="text"
         placeholder="Filter kinds…"
         aria-label="Filter node types"
-        class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink placeholder:text-ink-dim"
+        class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-small text-ink placeholder:text-ink-dim"
         data-testid="palette-filter"
       />
 
@@ -300,12 +300,12 @@ defineExpose({ filterText });
       >
         <div class="flex items-center justify-between">
           <span
-            class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-muted"
+            class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-muted"
             >Node-override diagnostics</span
           >
           <button
             type="button"
-            class="font-ui text-[10px] text-ink-dim hover:text-ink"
+            class="font-ui text-eyebrow text-ink-dim hover:text-ink"
             data-testid="diagnostics-close"
             @click="diagnosticsOpen = false"
           >
@@ -315,14 +315,14 @@ defineExpose({ filterText });
 
         <div
           v-if="diagnosticsLoading"
-          class="font-ui text-[11px] text-ink-dim"
+          class="font-ui text-caption text-ink-dim"
           data-testid="diagnostics-loading"
         >
           Checking…
         </div>
         <div
           v-else-if="diagnosticsError"
-          class="font-ui text-[11px] text-signal-danger"
+          class="font-ui text-caption text-signal-danger"
           role="alert"
           data-testid="diagnostics-error"
         >
@@ -331,7 +331,7 @@ defineExpose({ filterText });
         <template v-else>
           <dl
             v-if="doctorReport"
-            class="grid grid-cols-2 gap-x-3 gap-y-0.5 font-ui text-[11px]"
+            class="grid grid-cols-2 gap-x-3 gap-y-0.5 font-ui text-caption"
             data-testid="diagnostics-doctor"
           >
             <dt class="text-ink-subtle">Shipped</dt>
@@ -362,11 +362,11 @@ defineExpose({ filterText });
             <li
               v-for="o in userOverrides"
               :key="o.filename"
-              class="flex items-center gap-2 font-ui text-[11px]"
+              class="flex items-center gap-2 font-ui text-caption"
               :data-testid="`override-row-${o.filename}`"
             >
               <span
-                :class="o.status === 'error' ? 'text-signal-danger' : 'text-signal-success'"
+                :class="o.status === 'error' ? 'text-signal-danger' : 'text-signal-ok-text'"
                 :data-testid="`override-status-${o.filename}`"
                 >{{ o.status }}</span
               >
@@ -382,7 +382,7 @@ defineExpose({ filterText });
           </ul>
           <p
             v-else
-            class="font-ui text-[11px] text-ink-dim"
+            class="font-ui text-caption text-ink-dim"
             data-testid="diagnostics-overrides-empty"
           >
             No user-override files found.
@@ -391,7 +391,7 @@ defineExpose({ filterText });
 
         <div
           v-if="lastReloadResult"
-          class="border-t border-border-muted pt-2 font-ui text-[11px] text-ink-muted"
+          class="border-t border-border-muted pt-2 font-ui text-caption text-ink-muted"
           data-testid="diagnostics-reload-diff"
         >
           <span v-if="reloadDiffEmpty" data-testid="reload-diff-none">No changes.</span>
@@ -421,21 +421,21 @@ defineExpose({ filterText });
     <div class="min-h-0 flex-1 overflow-y-auto px-2 py-1">
       <div
         v-if="store.loading.value && grouped.length === 0"
-        class="px-2 py-2 font-ui text-[11px] text-ink-dim"
+        class="px-2 py-2 font-ui text-caption text-ink-dim"
         data-testid="palette-loading"
       >
         Loading catalog…
       </div>
       <div
         v-else-if="store.error.value"
-        class="px-2 py-2 font-ui text-[11px] text-signal-danger"
+        class="px-2 py-2 font-ui text-caption text-signal-danger"
         data-testid="palette-error"
       >
         {{ store.error.value }}
       </div>
       <div
         v-else-if="grouped.length === 0"
-        class="px-2 py-2 font-ui text-[11px] text-ink-dim"
+        class="px-2 py-2 font-ui text-caption text-ink-dim"
         data-testid="palette-empty"
       >
         No matches.
@@ -447,7 +447,7 @@ defineExpose({ filterText });
           :data-testid="`palette-category-${cat.category}`"
         >
           <div
-            class="px-1 py-0.5 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-muted"
+            class="px-1 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-muted"
           >
             {{ cat.label }}
           </div>
@@ -465,16 +465,16 @@ defineExpose({ filterText });
                 aria-disabled="true"
               >
                 <span
-                  class="inline-flex h-3 w-3 items-center justify-center rounded-full border border-border-muted text-[8px] text-ink-muted"
+                  class="inline-flex h-3 w-3 items-center justify-center rounded-full border border-border-muted text-eyebrow-xs text-ink-muted"
                   aria-hidden="true"
                   >i</span
                 >
                 <span
-                  class="font-ui text-[12px] uppercase tracking-[0.14em] opacity-60"
+                  class="font-ui text-small uppercase tracking-eyebrow opacity-60"
                   >{{ group.archetype.displayName || group.archetype.id }}</span
                 >
                 <span
-                  class="ml-auto rounded-sm border border-border-muted px-1 font-ui text-[9px] uppercase tracking-[0.18em] text-ink-muted"
+                  class="ml-auto rounded-sm border border-border-muted px-1 font-ui text-tag uppercase tracking-eyebrow text-ink-muted"
                   >abstract</span
                 >
               </div>
@@ -490,11 +490,11 @@ defineExpose({ filterText });
                   @click="emit('kind-select', { kind: kind.id })"
                 >
                   <span
-                    class="font-ui text-[12px] text-ink"
+                    class="font-ui text-small text-ink"
                     v-html="highlight(kind.displayName || kind.id)"
                   />
                   <span
-                    class="ml-auto font-mono text-[10px] text-ink-dim"
+                    class="ml-auto font-mono text-eyebrow text-ink-dim"
                     >{{ kind.id }}</span
                   >
                 </li>

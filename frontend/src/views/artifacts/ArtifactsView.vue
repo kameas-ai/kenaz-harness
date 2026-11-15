@@ -212,7 +212,7 @@ onMounted(() => {
       <div class="flex flex-wrap items-center gap-3">
         <div class="flex items-center gap-1" data-testid="artifacts-filter-scope">
           <span
-            class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
           >
             Scope
           </span>
@@ -220,7 +220,7 @@ onMounted(() => {
             v-for="s in SCOPES"
             :key="s"
             type="button"
-            class="rounded-sm border px-2 py-0.5 font-ui text-[11px]"
+            class="rounded-sm border px-2 py-0.5 font-ui text-caption"
             :class="
               scope === s
                 ? 'border-accent bg-surface-2 text-accent'
@@ -234,7 +234,7 @@ onMounted(() => {
         </div>
         <div class="flex items-center gap-1" data-testid="artifacts-filter-source">
           <span
-            class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
           >
             Source
           </span>
@@ -242,7 +242,7 @@ onMounted(() => {
             v-for="s in SOURCES"
             :key="s"
             type="button"
-            class="rounded-sm border px-2 py-0.5 font-ui text-[11px]"
+            class="rounded-sm border px-2 py-0.5 font-ui text-caption"
             :class="
               source === s
                 ? 'border-accent bg-surface-2 text-accent'
@@ -256,13 +256,13 @@ onMounted(() => {
         </div>
         <label class="flex items-center gap-2">
           <span
-            class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
           >
             Mime
           </span>
           <select
             v-model="mimePrefix"
-            class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink"
+            class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink"
             data-testid="artifacts-filter-mime"
             @change="pickMime(mimePrefix)"
           >
@@ -275,7 +275,7 @@ onMounted(() => {
 
       <div
         v-if="error"
-        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
         role="alert"
         data-testid="artifacts-error"
       >
@@ -298,7 +298,7 @@ onMounted(() => {
       >
         <thead>
           <tr
-            class="text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
           >
             <th class="px-3 py-1.5 font-medium">Source</th>
             <th
@@ -340,20 +340,20 @@ onMounted(() => {
             :data-testid="`artifacts-row-${a.id}`"
             @click="openPreview(a)"
           >
-            <td class="px-3 py-2 text-ink-dim font-mono text-[11px]">
+            <td class="px-3 py-2 text-ink-dim font-mono text-caption">
               {{ a.source }}
             </td>
             <td class="px-3 py-2 text-ink truncate max-w-[40ch]">
               {{ a.title }}
             </td>
-            <td class="px-3 py-2 text-ink-muted font-mono text-[11px]">
+            <td class="px-3 py-2 text-ink-muted font-mono text-caption">
               {{ a.mimeType }}
             </td>
-            <td class="px-3 py-2 text-ink-muted font-mono text-[11px]">
+            <td class="px-3 py-2 text-ink-muted font-mono text-caption">
               {{ fmtSize(a.byteSize) }}
             </td>
             <td class="px-3 py-2 text-ink-muted">{{ a.scopeKind }}</td>
-            <td class="px-3 py-2 text-ink-dim font-mono text-[11px]">
+            <td class="px-3 py-2 text-ink-dim font-mono text-caption">
               {{ fmtTimestamp(a.createdAt) }}
             </td>
           </tr>

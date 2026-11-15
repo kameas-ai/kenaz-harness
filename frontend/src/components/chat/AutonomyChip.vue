@@ -100,7 +100,7 @@ function onPanelChange() {
   <div class="relative inline-flex" data-testid="autonomy-chip">
     <button
       type="button"
-      class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.12em] transition-colors"
+      class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-ui text-caption uppercase tracking-eyebrow transition-colors"
       :class="
         isCustom
           ? 'border-accent text-accent bg-accent/10 hover:bg-accent/15'
@@ -115,7 +115,7 @@ function onPanelChange() {
       {{ tierLabel }}
       <span
         v-if="isCustom"
-        class="ml-0.5 text-[9px] font-normal not-italic text-ink-subtle"
+        class="ml-0.5 text-tag font-normal not-italic text-ink-subtle"
         data-testid="autonomy-chip-custom-badge"
       >
         custom
@@ -129,12 +129,12 @@ function onPanelChange() {
       data-testid="autonomy-chip-popover"
     >
       <div class="mb-2 flex items-center justify-between">
-        <h3 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h3 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Session autonomy
         </h3>
         <button
           type="button"
-          class="font-ui text-[11px] text-ink-muted hover:text-ink"
+          class="font-ui text-caption text-ink-muted hover:text-ink"
           data-testid="autonomy-chip-close"
           @click="open = false"
         >
@@ -150,7 +150,7 @@ function onPanelChange() {
 
     <div
       v-if="fetchError"
-      class="absolute right-0 top-full z-30 mt-1 rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 font-ui text-[10px] text-signal-danger"
+      class="absolute right-0 top-full z-30 mt-1 rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 font-ui text-eyebrow text-signal-danger"
       role="alert"
     >
       {{ fetchError }}

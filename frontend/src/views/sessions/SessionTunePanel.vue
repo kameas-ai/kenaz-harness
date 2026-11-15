@@ -169,14 +169,14 @@ async function onReset() {
   <div class="space-y-4" data-testid="session-tune-panel">
     <!-- Reasoning effort section -->
     <section v-if="showReasoning" class="space-y-2">
-      <h4 class="font-ui text-[11px] uppercase tracking-[0.15em] text-ink-subtle">
+      <h4 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Reasoning effort
       </h4>
 
       <!-- Effort string dropdown (OpenAI o-series) -->
       <div v-if="showEffortDropdown" class="space-y-1">
         <label
-          class="block font-ui text-[11px] text-ink-muted"
+          class="block font-ui text-caption text-ink-muted"
           for="effort-level-select"
         >
           Effort level
@@ -197,7 +197,7 @@ async function onReset() {
       <!-- Token budget input (Anthropic) -->
       <div v-if="showTokenBudget" class="space-y-1">
         <label
-          class="block font-ui text-[11px] text-ink-muted"
+          class="block font-ui text-caption text-ink-muted"
           for="token-budget-input"
         >
           Thinking token budget
@@ -212,11 +212,11 @@ async function onReset() {
             class="flex-1 rounded-sm border border-border bg-surface-1 px-2 py-1 font-mono text-xs text-ink focus:border-accent focus:outline-none"
             data-testid="token-budget-input"
           />
-          <span class="font-ui text-[11px] text-ink-muted">tokens</span>
+          <span class="font-ui text-caption text-ink-muted">tokens</span>
         </div>
       </div>
 
-      <p class="font-ui text-[10px] text-ink-subtle">
+      <p class="font-ui text-eyebrow text-ink-subtle">
         Session default — takes effect on the next message.
         Use <code class="font-mono">/effort</code> in chat for one-turn overrides.
       </p>
@@ -236,7 +236,7 @@ async function onReset() {
     <div class="flex items-center gap-2">
       <button
         type="button"
-        class="rounded-sm bg-accent px-3 py-1 font-ui text-[11px] text-white transition-colors hover:bg-accent/90 disabled:opacity-40"
+        class="rounded-sm bg-accent px-3 py-1 font-ui text-caption text-white transition-colors hover:bg-accent/90 disabled:opacity-40"
         data-testid="tune-panel-save"
         @click="onSave"
       >
@@ -244,7 +244,7 @@ async function onReset() {
       </button>
       <button
         type="button"
-        class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[11px] text-ink-muted transition-colors hover:text-ink"
+        class="rounded-sm border border-border-muted px-3 py-1 font-ui text-caption text-ink-muted transition-colors hover:text-ink"
         data-testid="tune-panel-reset"
         @click="onReset"
       >
@@ -252,7 +252,7 @@ async function onReset() {
       </button>
       <span
         v-if="saved"
-        class="font-ui text-[11px] text-signal-success"
+        class="font-ui text-caption text-signal-ok-text"
         data-testid="tune-panel-saved-badge"
       >
         Saved
@@ -261,7 +261,7 @@ async function onReset() {
 
     <p
       v-if="saveError"
-      class="font-ui text-[11px] text-signal-danger"
+      class="font-ui text-caption text-signal-danger"
       data-testid="tune-panel-error"
     >
       {{ saveError }}

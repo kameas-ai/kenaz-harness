@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onBeforeUnmount, h, type VNode } from 'vue';
 import { useRouter } from 'vue-router';
+import { Search } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { SearchHit, SearchHighlight } from '@/lib/harnessClient';
 import { useSearchPalette } from '@/lib/useSearchPalette';
@@ -287,7 +288,7 @@ onBeforeUnmount(() => {
   <!-- Rendered only when palette is open -->
   <div
     v-if="palette.isOpen.value"
-    class="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4"
+    class="fixed inset-0 z-50 flex items-start justify-center pt-12 px-4"
     role="dialog"
     aria-modal="true"
     aria-label="Search"
@@ -309,17 +310,7 @@ onBeforeUnmount(() => {
       <!-- Input row -->
       <div class="px-3 py-2 border-b border-border-muted flex items-center gap-2">
         <span class="text-ink-subtle shrink-0" aria-hidden="true">
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <path d="m21 21-4.35-4.35" />
-          </svg>
+          <Search class="inline-block" :size="16" />
         </span>
         <input
           ref="inputEl"
@@ -359,7 +350,7 @@ onBeforeUnmount(() => {
           v-for="c in ALL_CORPORA"
           :key="c"
           type="button"
-          class="px-2 py-0.5 rounded-full text-[11px] font-medium border transition-opacity"
+          class="px-2 py-0.5 rounded-full text-caption font-medium border transition-opacity"
           :class="[
             corpusBadgeClass(c),
             activeCorpora.size === 0 || activeCorpora.has(c)
@@ -406,7 +397,7 @@ onBeforeUnmount(() => {
             <!-- Corpus source badge -->
             <span
               v-if="hit.corpus"
-              class="px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0"
+              class="px-1.5 py-0.5 rounded text-eyebrow font-semibold shrink-0"
               :class="corpusBadgeClass(hit.corpus)"
               :data-testid="`search-palette-corpus-badge-${idx}`"
             >
@@ -468,8 +459,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .search-palette-highlight {
-  background-color: color-mix(in srgb, var(--color-accent-a, #f59e0b) 35%, transparent); /* css-tokens-allow: --color-accent-a fallback for older render paths */
-  border-radius: 2px;
+  background-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: var(--radius-xs);
   padding: 0 1px;
 }
 </style>

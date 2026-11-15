@@ -218,14 +218,14 @@ watch(overrides, (val) => {
     <div class="flex items-center justify-between">
       <h2
         id="keyboard-shortcuts-heading"
-        class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         Keyboard shortcuts
       </h2>
       <button
         v-if="Object.keys(overrides).filter((k) => overrides[k]).length > 0"
         type="button"
-        class="font-ui text-[11px] text-accent hover:underline"
+        class="font-ui text-caption text-accent hover:underline"
         data-testid="reset-all-btn"
         @click="resetAllConfirm = true"
       >
@@ -236,7 +236,7 @@ watch(overrides, (val) => {
     <!-- Reset-all confirm dialog -->
     <div
       v-if="resetAllConfirm"
-      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 p-3 font-ui text-[12px]"
+      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 p-3 font-ui text-small"
       role="alertdialog"
       aria-labelledby="reset-all-label"
       data-testid="reset-all-confirm"
@@ -270,7 +270,7 @@ watch(overrides, (val) => {
         v-model="searchQuery"
         type="search"
         placeholder="Filter shortcuts…"
-        class="w-full rounded-sm border border-border bg-surface-1 px-3 py-1.5 font-ui text-[12px] text-ink placeholder:text-ink-dim"
+        class="w-full rounded-sm border border-border bg-surface-1 px-3 py-1.5 font-ui text-small text-ink placeholder:text-ink-dim"
         aria-label="Filter shortcuts"
         data-testid="shortcut-search"
       />
@@ -279,7 +279,7 @@ watch(overrides, (val) => {
     <!-- Conflict resolution modal -->
     <div
       v-if="conflictingId && pendingBinding"
-      class="mt-3 rounded-sm border border-accent bg-surface-1 p-3 font-ui text-[12px]"
+      class="mt-3 rounded-sm border border-accent bg-surface-1 p-3 font-ui text-small"
       role="alertdialog"
       data-testid="shortcut-conflict-modal"
     >
@@ -314,7 +314,7 @@ watch(overrides, (val) => {
         :key="category"
         :data-testid="`shortcut-group-${category.toLowerCase()}`"
       >
-        <h3 class="mb-2 font-ui text-[10px] uppercase tracking-[0.2em] text-ink-dim">
+        <h3 class="mb-2 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim">
           {{ category }}
         </h3>
 
@@ -328,8 +328,8 @@ watch(overrides, (val) => {
           >
             <!-- Label + description -->
             <div class="min-w-0 flex-1">
-              <div class="font-ui text-[12px] text-ink">{{ sc.label }}</div>
-              <div class="font-ui text-[11px] text-ink-muted">{{ sc.description }}</div>
+              <div class="font-ui text-small text-ink">{{ sc.label }}</div>
+              <div class="font-ui text-caption text-ink-muted">{{ sc.description }}</div>
             </div>
 
             <!-- Capture mode -->
@@ -339,7 +339,7 @@ watch(overrides, (val) => {
               :data-testid="`capture-mode-${sc.id}`"
             >
               <div
-                class="rounded-sm border border-accent bg-surface-1 px-3 py-1 font-ui text-[11px] text-accent"
+                class="rounded-sm border border-accent bg-surface-1 px-3 py-1 font-ui text-caption text-accent"
                 tabindex="0"
                 autofocus
                 @keydown="onCaptureKeydown"
@@ -349,7 +349,7 @@ watch(overrides, (val) => {
               </div>
               <button
                 type="button"
-                class="font-ui text-[11px] text-ink-muted hover:text-ink"
+                class="font-ui text-caption text-ink-muted hover:text-ink"
                 :aria-label="`Cancel recording for ${sc.label}`"
                 @click="cancelCapture"
               >
@@ -362,7 +362,7 @@ watch(overrides, (val) => {
               <KeycapDisplay :binding="effectiveBinding(sc.id)" />
               <button
                 type="button"
-                class="font-ui text-[11px] text-accent hover:underline"
+                class="font-ui text-caption text-accent hover:underline"
                 :aria-label="`Record new binding for ${sc.label}`"
                 :data-testid="`record-btn-${sc.id}`"
                 @click="startCapture(sc.id)"
@@ -372,7 +372,7 @@ watch(overrides, (val) => {
               <button
                 v-if="overrides[sc.id]"
                 type="button"
-                class="font-ui text-[11px] text-ink-muted hover:text-ink"
+                class="font-ui text-caption text-ink-muted hover:text-ink"
                 :aria-label="`Reset ${sc.label} to default`"
                 :data-testid="`reset-btn-${sc.id}`"
                 @click="resetShortcut(sc.id)"
@@ -387,7 +387,7 @@ watch(overrides, (val) => {
       <!-- Empty-state when search yields nothing -->
       <p
         v-if="filteredGroups.size === 0"
-        class="font-ui text-[12px] text-ink-muted"
+        class="font-ui text-small text-ink-muted"
         data-testid="shortcut-empty-search"
       >
         No shortcuts match "{{ searchQuery }}".

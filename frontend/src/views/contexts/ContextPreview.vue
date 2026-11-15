@@ -128,12 +128,12 @@ defineExpose({ startEdit, cancelEdit, commitSave });
       v-if="path"
       class="px-4 py-2 border-b border-border-muted bg-surface-1 flex items-baseline gap-2"
     >
-      <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+      <span class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
         {{ editing ? 'Edit' : 'Preview' }}
       </span>
-      <span class="font-mono text-[12px] text-ink truncate flex-1">{{ path }}</span>
+      <span class="font-mono text-small text-ink truncate flex-1">{{ path }}</span>
       <span
-        class="font-ui text-[10px] text-ink-dim shrink-0"
+        class="font-ui text-eyebrow text-ink-dim shrink-0"
         data-testid="context-preview-tokens"
       >
         ~{{ tokenEstimate }} tokens
@@ -141,7 +141,7 @@ defineExpose({ startEdit, cancelEdit, commitSave });
       <button
         v-if="!editing && onSave"
         type="button"
-        class="font-ui text-[11px] text-ink-dim hover:text-accent transition-fast"
+        class="font-ui text-caption text-ink-dim hover:text-accent transition-fast"
         data-testid="context-preview-edit"
         @click="startEdit"
       >
@@ -177,7 +177,7 @@ defineExpose({ startEdit, cancelEdit, commitSave });
           v-model="draft"
           spellcheck="false"
           aria-label="Context file content"
-          class="flex-1 w-full px-6 py-4 font-mono text-[12px] leading-relaxed text-ink bg-surface-0 border-0 outline-none resize-none whitespace-pre-wrap"
+          class="flex-1 w-full px-6 py-4 font-mono text-small leading-relaxed text-ink bg-surface-0 border-0 outline-none resize-none whitespace-pre-wrap"
           data-testid="context-preview-editor"
           @keydown="onKeydown"
         />
@@ -185,7 +185,7 @@ defineExpose({ startEdit, cancelEdit, commitSave });
           class="border-t border-border-muted bg-surface-1 px-4 py-2 flex items-center gap-3"
         >
           <span
-            class="font-ui text-[10px] text-ink-dim"
+            class="font-ui text-eyebrow text-ink-dim"
             :class="draftOversize ? 'text-signal-danger' : ''"
             data-testid="context-preview-bytes"
           >
@@ -193,7 +193,7 @@ defineExpose({ startEdit, cancelEdit, commitSave });
           </span>
           <span
             v-if="saveError || draftOversize"
-            class="font-ui text-[11px] text-signal-danger flex-1 truncate"
+            class="font-ui text-caption text-signal-danger flex-1 truncate"
             role="alert"
             data-testid="context-preview-save-error"
           >
@@ -205,7 +205,7 @@ defineExpose({ startEdit, cancelEdit, commitSave });
           <span v-else class="flex-1" />
           <button
             type="button"
-            class="font-ui text-[11px] text-ink-dim hover:text-ink transition-fast"
+            class="font-ui text-caption text-ink-dim hover:text-ink transition-fast"
             data-testid="context-preview-cancel"
             @click="cancelEdit"
           >
@@ -213,7 +213,7 @@ defineExpose({ startEdit, cancelEdit, commitSave });
           </button>
           <button
             type="button"
-            class="font-ui text-[11px] text-accent hover:text-accent-muted transition-fast disabled:opacity-50"
+            class="font-ui text-caption text-accent hover:text-accent-muted transition-fast disabled:opacity-50"
             :disabled="saving || draftOversize"
             data-testid="context-preview-save"
             @click="commitSave"
@@ -224,7 +224,7 @@ defineExpose({ startEdit, cancelEdit, commitSave });
       </template>
       <pre
         v-else
-        class="px-6 py-4 font-mono text-[12px] leading-relaxed text-ink whitespace-pre-wrap"
+        class="px-6 py-4 font-mono text-small leading-relaxed text-ink whitespace-pre-wrap"
         data-testid="context-preview-content"
       >{{ content }}</pre>
     </div>

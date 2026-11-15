@@ -45,33 +45,33 @@ function formatBytes(n: number): string {
   >
     <div
       v-if="capReason === 'size'"
-      class="text-[12px] text-ink-muted"
+      class="text-small text-ink-muted"
       data-testid="unknown-binary-cap-size"
     >
       Preview unavailable for files &gt; 5 MB.
     </div>
     <div
       v-else-if="capReason === 'time'"
-      class="text-[12px] text-ink-muted"
+      class="text-small text-ink-muted"
       data-testid="unknown-binary-cap-time"
     >
       Preview timed out loading this file.
     </div>
     <div
       v-else
-      class="text-[12px] text-ink-muted"
+      class="text-small text-ink-muted"
       data-testid="unknown-binary-no-preview"
     >
       Preview not available for this file type.
     </div>
 
-    <div class="font-mono text-[11px] text-ink-dim">
+    <div class="font-mono text-caption text-ink-dim">
       {{ artifact.mimeType }} · {{ formatBytes(artifact.byteSize) }}
     </div>
 
     <button
       type="button"
-      class="rounded-sm border border-border-muted bg-surface-1 px-3 py-1.5 text-[12px] text-ink-muted hover:bg-surface-2 hover:text-ink"
+      class="rounded-sm border border-border-muted bg-surface-1 px-3 py-1.5 text-small text-ink-muted hover:bg-surface-2 hover:text-ink"
       data-testid="unknown-binary-open-external"
       @click="openExternally"
     >

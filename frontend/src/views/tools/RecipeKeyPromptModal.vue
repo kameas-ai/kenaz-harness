@@ -30,6 +30,7 @@
  */
 
 import { computed, nextTick, ref, watch } from 'vue';
+import { AlertTriangle, Check, ChevronRight, Suggestions } from '@/shell/icons';
 import type { Recipe, RecipeStatus, ConfigOption, MissingPrereq } from '@/lib/types';
 import DirectoryPicker from './DirectoryPicker.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -741,17 +742,17 @@ function onKeydown(event: KeyboardEvent) {
       >
         <div>
           <div
-            class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="text-caption uppercase tracking-eyebrow text-ink-subtle"
           >
             INSTALL TOOL
           </div>
-          <h2 class="mt-1 font-ui text-base font-semibold text-ink">
+          <h2 class="mt-1 font-ui text-h3 font-semibold text-ink">
             Install {{ recipe.displayName }}
           </h2>
         </div>
         <button
           type="button"
-          class="text-[11px] text-ink-dim hover:text-ink"
+          class="text-caption text-ink-dim hover:text-ink"
           data-testid="recipe-key-modal-close"
           @click="close"
         >
@@ -763,7 +764,7 @@ function onKeydown(event: KeyboardEvent) {
         ref="inputsContainer"
         class="flex-1 overflow-y-auto px-5 py-4 space-y-5 font-ui"
       >
-        <p class="text-[12px] text-ink-muted max-w-prose">
+        <p class="text-small text-ink-muted max-w-prose">
           {{ recipe.description }}
         </p>
 
@@ -777,17 +778,15 @@ function onKeydown(event: KeyboardEvent) {
           role="alert"
           data-testid="recipe-modal-prereq-banner"
         >
-          <div class="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-signal-warn">
-            <svg class="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-            </svg>
+          <div class="flex items-center gap-1.5 text-caption font-semibold uppercase tracking-eyebrow text-signal-warn">
+            <AlertTriangle class="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
             Missing runtime{{ runtimePrereqs.length > 1 ? 's' : '' }}
           </div>
           <ul class="space-y-1.5">
             <li
               v-for="p in runtimePrereqs"
               :key="p.name"
-              class="text-[12px] text-ink leading-snug"
+              class="text-small text-ink leading-snug"
               :data-testid="`recipe-modal-prereq-${p.name}`"
             >
               <span class="font-semibold">{{ p.name }}</span>
@@ -812,26 +811,24 @@ function onKeydown(event: KeyboardEvent) {
           :aria-label="`Setup required: ${fp.name}`"
           :data-testid="`recipe-modal-file-prereq-${fp.name}`"
         >
-          <div class="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-subtle">
-            <svg class="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-            </svg>
+          <div class="flex items-center gap-1.5 text-caption font-semibold uppercase tracking-eyebrow text-ink-subtle">
+            <Suggestions class="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
             Setup required: {{ fp.name }}
           </div>
 
           <!-- Steps list -->
           <div class="space-y-2">
-            <p class="text-[11px] text-ink-muted leading-snug">
+            <p class="text-caption text-ink-muted leading-snug">
               Complete these steps to create your OAuth credentials:
             </p>
             <ol class="space-y-1.5 list-none" data-testid="recipe-modal-file-prereq-steps">
               <li
                 v-for="(step, i) in fp.fileSetupGuide.steps"
                 :key="i"
-                class="flex items-start gap-2 text-[12px] text-ink leading-snug"
+                class="flex items-start gap-2 text-small text-ink leading-snug"
                 :data-testid="`recipe-modal-file-prereq-step-${i}`"
               >
-                <span class="flex-shrink-0 w-4 h-4 rounded-full bg-accent-glow border border-accent-hairline text-[9px] font-mono flex items-center justify-center text-accent mt-0.5">
+                <span class="flex-shrink-0 w-4 h-4 rounded-full bg-accent-glow border border-accent-hairline text-tag font-mono flex items-center justify-center text-accent mt-0.5">
                   {{ i + 1 }}
                 </span>
                 <span>{{ step }}</span>
@@ -845,16 +842,16 @@ function onKeydown(event: KeyboardEvent) {
             class="space-y-2"
             data-testid="recipe-modal-file-prereq-picker"
           >
-            <p class="text-[11px] text-ink-muted leading-snug">
+            <p class="text-caption text-ink-muted leading-snug">
               Select the downloaded credentials JSON using the button below.
               The file will be used from:
-              <code class="font-mono text-[11px] text-ink bg-surface-1 px-1 rounded-sm break-all" data-testid="recipe-modal-file-prereq-target-path">
+              <code class="font-mono text-caption text-ink bg-surface-1 px-1 rounded-sm break-all" data-testid="recipe-modal-file-prereq-target-path">
                 {{ fp.fileSetupGuide.targetPath }}
               </code>
             </p>
             <button
               type="button"
-              class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+              class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-small text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
               :disabled="filePicking[fp.name]"
               data-testid="recipe-modal-file-prereq-pick-btn"
               @click="pickCredentialsFile(fp)"
@@ -866,17 +863,15 @@ function onKeydown(event: KeyboardEvent) {
           <!-- Placed confirmation -->
           <div
             v-else
-            class="flex items-center gap-1.5 text-[12px] text-signal-ok"
+            class="flex items-center gap-1.5 text-small text-signal-ok"
             data-testid="recipe-modal-file-prereq-placed"
           >
-            <svg class="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M20 6 9 17l-5-5" />
-            </svg>
+            <Check class="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
             Credentials file detected — you can now click Install.
           </div>
 
           <!-- What happens next note -->
-          <p class="text-[11px] text-ink-subtle leading-snug max-w-prose">
+          <p class="text-caption text-ink-subtle leading-snug max-w-prose">
             After install, the server will open a browser sign-in once to authorise
             Gmail access. The token is saved locally and does not need to be
             re-entered.
@@ -888,7 +883,7 @@ function onKeydown(event: KeyboardEvent) {
             :href="fp.fileSetupGuide.docsUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="inline-block text-[11px] text-accent hover:text-accent-muted"
+            class="inline-block text-caption text-accent hover:text-accent-muted"
             data-testid="recipe-modal-file-prereq-docs-link"
           >
             Google Cloud setup guide →
@@ -908,20 +903,20 @@ function onKeydown(event: KeyboardEvent) {
           class="rounded-sm border border-accent-hairline bg-accent-glow/30 px-3 py-3 space-y-3"
           data-testid="recipe-modal-device-code-section"
         >
-          <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          <div class="text-caption uppercase tracking-eyebrow text-ink-subtle">
             Sign in to {{ recipe.displayName }}
           </div>
 
           <!-- Before device auth starts -->
           <template v-if="!deviceCode && !deviceDone">
-            <p class="text-[12px] text-ink-muted leading-snug max-w-prose">
+            <p class="text-small text-ink-muted leading-snug max-w-prose">
               Click below to start GitHub sign-in. You will see a short code to
               enter at <span class="font-mono text-ink">github.com/login/device</span>.
               No token to paste — just sign in once and the session is saved.
             </p>
             <button
               type="button"
-              class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+              class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-small text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
               :disabled="devicePolling"
               data-testid="recipe-modal-device-start-btn"
               @click="startDeviceSignIn"
@@ -932,7 +927,7 @@ function onKeydown(event: KeyboardEvent) {
 
           <!-- After beginDeviceAuth: show user_code + link; polling in progress -->
           <template v-if="deviceCode && !deviceDone">
-            <p class="text-[12px] text-ink-muted leading-snug">
+            <p class="text-small text-ink-muted leading-snug">
               Open <a
                 :href="deviceCode.verificationUri"
                 target="_blank"
@@ -946,13 +941,13 @@ function onKeydown(event: KeyboardEvent) {
               class="inline-flex items-center justify-center rounded-sm border border-accent-hairline bg-surface-1 px-4 py-2"
               data-testid="recipe-modal-device-user-code"
             >
-              <span class="font-mono text-xl font-bold tracking-widest text-ink select-all">
+              <span class="font-mono text-title font-bold tracking-widest text-ink select-all">
                 {{ deviceCode.userCode }}
               </span>
             </div>
             <p
               v-if="devicePolling"
-              class="text-[11px] text-ink-subtle leading-snug"
+              class="text-caption text-ink-subtle leading-snug"
               data-testid="recipe-modal-device-polling"
             >
               Waiting for you to approve in GitHub…
@@ -961,7 +956,7 @@ function onKeydown(event: KeyboardEvent) {
 
           <!-- Done (success handled by closing modal; this is a brief flash) -->
           <template v-if="deviceDone">
-            <p class="text-[12px] text-signal-ok">Signed in. Installing…</p>
+            <p class="text-small text-signal-ok">Signed in. Installing…</p>
           </template>
         </section>
 
@@ -972,15 +967,15 @@ function onKeydown(event: KeyboardEvent) {
           class="rounded-sm border border-accent-hairline bg-accent-glow/30 px-3 py-3 space-y-2"
           data-testid="recipe-modal-device-code-section"
         >
-          <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          <div class="text-caption uppercase tracking-eyebrow text-ink-subtle">
             Sign in via browser
           </div>
-          <p class="text-[12px] text-ink-muted leading-snug max-w-prose">
+          <p class="text-small text-ink-muted leading-snug max-w-prose">
             When you click Install, the server will open your browser and ask
             you to sign in (device code flow). No token to paste — just sign in
             once and the session is remembered automatically.
           </p>
-          <p class="text-[12px] text-ink-subtle leading-snug max-w-prose">
+          <p class="text-small text-ink-subtle leading-snug max-w-prose">
             Personal accounts work without any extra config. For work or school
             accounts you may need to expand "Advanced" below to set your Azure
             app ID.
@@ -999,18 +994,18 @@ function onKeydown(event: KeyboardEvent) {
           class="rounded-sm border border-accent-hairline bg-accent-glow/30 px-3 py-3 space-y-2"
           data-testid="recipe-modal-oauth-section"
         >
-          <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          <div class="text-caption uppercase tracking-eyebrow text-ink-subtle">
             Sign in
           </div>
           <!-- Fail-closed reason: the arm cannot complete a sign-in today. -->
           <p
             v-if="signInBlockedReason"
-            class="text-[12px] text-ink-muted leading-snug max-w-prose"
+            class="text-small text-ink-muted leading-snug max-w-prose"
             data-testid="recipe-modal-signin-blocked-reason"
           >
             {{ signInBlockedReason }}
           </p>
-          <p v-else-if="!isByoOAuth" class="text-[12px] text-ink-muted leading-snug max-w-prose">
+          <p v-else-if="!isByoOAuth" class="text-small text-ink-muted leading-snug max-w-prose">
             Sign in with your account in the browser — no token to paste. The
             harness stores the credential securely and refreshes it
             automatically.
@@ -1022,7 +1017,7 @@ function onKeydown(event: KeyboardEvent) {
                register or host this app. -->
           <p
             v-else
-            class="text-[12px] text-ink-muted leading-snug max-w-prose"
+            class="text-small text-ink-muted leading-snug max-w-prose"
             data-testid="recipe-modal-byo-oauth-notice"
           >
             This connector needs your own OAuth app —
@@ -1041,7 +1036,7 @@ function onKeydown(event: KeyboardEvent) {
           </p>
           <button
             type="button"
-            class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+            class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-small text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="signingIn || !!signInBlockedReason"
             data-testid="recipe-modal-signin-btn"
             @click="signIn"
@@ -1065,14 +1060,14 @@ function onKeydown(event: KeyboardEvent) {
           class="flex items-center gap-2 flex-wrap rounded-sm border border-border-muted bg-surface-1 px-3 py-2"
           data-testid="recipe-modal-policy-pointer"
         >
-          <span class="text-[11px] text-ink-muted">
+          <span class="text-caption text-ink-muted">
             Recommended Cedar policy:
-            <code class="font-mono text-[11px] text-ink">{{ recipe.recommendedPolicyTemplate }}</code>
+            <code class="font-mono text-caption text-ink">{{ recipe.recommendedPolicyTemplate }}</code>
           </span>
           <button
             v-if="policyInstalled !== true"
             type="button"
-            class="rounded-sm border border-accent-hairline bg-surface-0 px-2 py-0.5 text-[11px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+            class="rounded-sm border border-accent-hairline bg-surface-0 px-2 py-0.5 text-caption text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="policyInstalling"
             data-testid="recipe-modal-install-policy-btn"
             @click="installRecommendedPolicy"
@@ -1081,7 +1076,7 @@ function onKeydown(event: KeyboardEvent) {
           </button>
           <span
             v-else
-            class="text-[11px] text-signal-ok"
+            class="text-caption text-signal-ok"
             data-testid="recipe-modal-policy-installed-badge"
           >
             Installed
@@ -1100,7 +1095,7 @@ function onKeydown(event: KeyboardEvent) {
             <path d="M12 16v-4M12 8h.01" />
           </svg>
           <p
-            class="text-[12px] text-ink-muted leading-snug max-w-prose"
+            class="text-small text-ink-muted leading-snug max-w-prose"
             data-testid="recipe-modal-notice-text"
           >
             {{ recipe.warning }}
@@ -1115,15 +1110,13 @@ function onKeydown(event: KeyboardEvent) {
           data-testid="recipe-modal-warning"
         >
           <div
-            class="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] font-semibold text-signal-danger"
+            class="flex items-center gap-2 text-caption uppercase tracking-eyebrow font-semibold text-signal-danger"
           >
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-            </svg>
+            <AlertTriangle class="w-4 h-4" aria-hidden="true" />
             Hazard
           </div>
           <p
-            class="text-[12px] text-signal-danger leading-snug max-w-prose"
+            class="text-small text-signal-danger leading-snug max-w-prose"
             data-testid="recipe-modal-warning-text"
           >
             {{ recipe.warning }}
@@ -1138,7 +1131,7 @@ function onKeydown(event: KeyboardEvent) {
               class="accent-signal-danger w-4 h-4 mt-0.5"
               data-testid="recipe-modal-warning-ack"
             />
-            <span class="font-ui text-[12px] text-ink leading-snug">
+            <span class="font-ui text-small text-ink leading-snug">
               I understand the risk and accept that the model will have the access described above.
             </span>
           </label>
@@ -1155,7 +1148,7 @@ function onKeydown(event: KeyboardEvent) {
           data-testid="recipe-modal-env-section"
         >
           <h3
-            class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="text-caption uppercase tracking-eyebrow text-ink-subtle"
           >
             API Keys
           </h3>
@@ -1166,7 +1159,7 @@ function onKeydown(event: KeyboardEvent) {
           >
             <label
               :for="`recipe-key-${recipe.id}-${key.name}`"
-              class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+              class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
             >
               <span>{{ key.display }}</span>
               <span
@@ -1190,7 +1183,7 @@ function onKeydown(event: KeyboardEvent) {
               :href="key.docsUrl"
               target="_blank"
               rel="noopener"
-              class="inline-block text-[11px] text-accent hover:text-accent-muted"
+              class="inline-block text-caption text-accent hover:text-accent-muted"
               :data-testid="`recipe-key-docs-${key.name}`"
             >
               Get a key →
@@ -1209,20 +1202,18 @@ function onKeydown(event: KeyboardEvent) {
           @toggle="advancedOpen = ($event.target as HTMLDetailsElement).open"
         >
           <summary
-            class="flex items-center gap-2 cursor-pointer select-none px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-ink-subtle hover:text-ink list-none"
+            class="flex items-center gap-2 cursor-pointer select-none px-3 py-2 text-caption uppercase tracking-eyebrow text-ink-subtle hover:text-ink list-none"
             data-testid="recipe-modal-advanced-toggle"
           >
-            <svg
+            <ChevronRight
               class="w-3 h-3 flex-shrink-0 transition-transform"
               :class="{ 'rotate-90': advancedOpen }"
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"
-            >
-              <path d="m9 18 6-6-6-6" />
-            </svg>
+              aria-hidden="true"
+            />
             Advanced
           </summary>
           <div class="px-3 pb-3 pt-1 space-y-3 border-t border-border-muted">
-            <p class="text-[11px] text-ink-muted leading-snug max-w-prose">
+            <p class="text-caption text-ink-muted leading-snug max-w-prose">
               Optional — only needed for work or school accounts, or custom Azure app registrations.
             </p>
             <div
@@ -1232,7 +1223,7 @@ function onKeydown(event: KeyboardEvent) {
             >
               <label
                 :for="`recipe-key-adv-${recipe.id}-${key.name}`"
-                class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+                class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
               >
                 <span>{{ key.display }}</span>
               </label>
@@ -1251,7 +1242,7 @@ function onKeydown(event: KeyboardEvent) {
                 :href="key.docsUrl"
                 target="_blank"
                 rel="noopener"
-                class="inline-block text-[11px] text-accent hover:text-accent-muted"
+                class="inline-block text-caption text-accent hover:text-accent-muted"
                 :data-testid="`recipe-key-docs-${key.name}`"
               >
                 Learn more →
@@ -1267,7 +1258,7 @@ function onKeydown(event: KeyboardEvent) {
           data-testid="recipe-modal-config-section"
         >
           <h3
-            class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="text-caption uppercase tracking-eyebrow text-ink-subtle"
           >
             Configuration
           </h3>
@@ -1278,7 +1269,7 @@ function onKeydown(event: KeyboardEvent) {
             :data-testid="`recipe-config-row-${opt.name}`"
           >
             <label
-              class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+              class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
             >
               <span>{{ opt.display }}</span>
               <span
@@ -1289,7 +1280,7 @@ function onKeydown(event: KeyboardEvent) {
             </label>
             <p
               v-if="opt.description"
-              class="text-[11px] text-ink-muted max-w-prose"
+              class="text-caption text-ink-muted max-w-prose"
               :data-testid="`recipe-config-desc-${opt.name}`"
             >
               {{ opt.description }}
@@ -1320,7 +1311,7 @@ function onKeydown(event: KeyboardEvent) {
               <button
                 v-if="isPathStringOption(opt)"
                 type="button"
-                class="flex-shrink-0 rounded-sm border border-border-muted bg-surface-1 px-2 py-1.5 text-[11px] text-ink-dim hover:text-ink hover:border-accent"
+                class="flex-shrink-0 rounded-sm border border-border-muted bg-surface-1 px-2 py-1.5 text-caption text-ink-dim hover:text-ink hover:border-accent"
                 :aria-label="`Pick ${opt.display || opt.name} using file browser`"
                 :data-testid="`recipe-config-string-picker-${opt.name}`"
                 @click="pickFileForOption(opt)"
@@ -1349,11 +1340,11 @@ function onKeydown(event: KeyboardEvent) {
                 class="accent-accent w-4 h-4"
                 :data-testid="`recipe-config-bool-${opt.name}`"
               />
-              <span class="font-ui text-[12px] text-ink">{{ opt.display }}</span>
+              <span class="font-ui text-small text-ink">{{ opt.display }}</span>
             </label>
             <p
               v-if="defaultHintFor(opt)"
-              class="text-[11px] text-ink-subtle"
+              class="text-caption text-ink-subtle"
               :data-testid="`recipe-config-hint-${opt.name}`"
             >
               {{ defaultHintFor(opt) }}
@@ -1363,7 +1354,7 @@ function onKeydown(event: KeyboardEvent) {
 
         <div
           v-if="errorMsg"
-          class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 text-[11px] text-signal-danger"
+          class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 text-caption text-signal-danger"
           role="alert"
           data-testid="recipe-key-modal-error"
         >
@@ -1376,7 +1367,7 @@ function onKeydown(event: KeyboardEvent) {
       >
         <button
           type="button"
-          class="rounded-sm border border-border-muted px-3 py-1 text-[12px] text-ink-dim hover:text-ink"
+          class="rounded-sm border border-border-muted px-3 py-1 text-small text-ink-dim hover:text-ink"
           :disabled="submitting"
           @click="close"
         >
@@ -1385,7 +1376,7 @@ function onKeydown(event: KeyboardEvent) {
         <button
           type="button"
           :class="[
-            'rounded-sm px-3 py-1 text-[12px] disabled:opacity-50 disabled:cursor-not-allowed',
+            'rounded-sm px-3 py-1 text-small disabled:opacity-50 disabled:cursor-not-allowed',
             isHazard
               ? 'border border-signal-danger bg-signal-danger/10 text-signal-danger hover:bg-signal-danger/20'
               : 'border border-accent-hairline bg-surface-1 text-accent hover:bg-accent-glow',

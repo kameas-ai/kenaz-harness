@@ -134,7 +134,7 @@ function startedAgo(iso: string): string {
   >
     <button
       type="button"
-      class="w-full flex items-center gap-1 px-2 py-1 rounded-sm text-left font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle hover:text-ink"
+      class="w-full flex items-center gap-1 px-2 py-1 rounded-sm text-left font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle hover:text-ink"
       :aria-expanded="!collapsed"
       data-testid="workflow-runs-header"
       @click="toggleCollapsed"
@@ -142,14 +142,14 @@ function startedAgo(iso: string): string {
       <component
         :is="collapsed ? ChevronRight : ChevronDown"
         :size="11"
-        class="text-ink-dim"
+        class="inline-block text-ink-dim"
       />
-      <GitBranch :size="11" class="text-ink-dim" />
+      <GitBranch :size="11" class="inline-block text-ink-dim" />
       <span class="flex-1 hidden two-col:inline">
         Workflow runs ({{ runCount }})
       </span>
       <span
-        class="rounded-sm border border-accent-hairline px-1 text-[9px] tracking-[0.14em] text-accent hidden two-col:inline"
+        class="rounded-sm border border-accent-hairline px-1 text-tag tracking-eyebrow text-accent hidden two-col:inline"
         title="v0.3.0 beta surface"
       >
         BETA
@@ -187,7 +187,7 @@ function startedAgo(iso: string): string {
                 {{ run.workflowName }}
               </span>
               <span
-                class="ml-auto rounded-sm px-1 py-0.5 text-[9px] uppercase tracking-[0.14em]"
+                class="ml-auto rounded-sm px-1 py-0.5 text-tag uppercase tracking-eyebrow"
                 :class="statusPillClass(run.status)"
                 :data-testid="`workflow-run-pill-${run.runId}`"
               >
@@ -195,7 +195,7 @@ function startedAgo(iso: string): string {
               </span>
             </div>
             <div
-              class="text-[10px] text-ink-dim truncate hidden two-col:block"
+              class="text-eyebrow text-ink-dim truncate hidden two-col:block"
             >
               {{ startedAgo(run.startedAt) }}
               <template v-if="run.status === 'failed' && run.failedStepName">
@@ -219,7 +219,7 @@ function startedAgo(iso: string): string {
           <li
             v-for="step in run.steps"
             :key="`${run.runId}:${step.name}`"
-            class="flex items-baseline gap-2 text-[11px] font-ui"
+            class="flex items-baseline gap-2 text-caption font-ui"
             :data-testid="`workflow-run-step-${run.runId}-${step.name}`"
           >
             <span class="truncate flex-1 text-ink-muted">
@@ -227,7 +227,7 @@ function startedAgo(iso: string): string {
               <span class="text-ink-dim">({{ step.kind }})</span>
             </span>
             <span
-              class="text-[10px] uppercase tracking-[0.14em]"
+              class="text-eyebrow uppercase tracking-eyebrow"
               :class="stepStatusClass(step.status)"
             >
               {{ step.status }}

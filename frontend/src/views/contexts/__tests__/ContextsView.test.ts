@@ -822,7 +822,7 @@ describe('ContextsView', () => {
       const result = w.find('[data-testid=context-publish-result]');
       expect(result.text()).toContain('Not updated');
       expect(result.text()).not.toContain('Published');
-      expect(result.classes()).toContain('text-signal-warning');
+      expect(result.classes()).toContain('text-signal-warn-text');
     });
 
     // Spec 018 H-3: Fleet's per-item outcome, in plain words.
@@ -831,7 +831,7 @@ describe('ContextsView', () => {
         'waiting for review, with the merge request id',
         { accepted_nodes: 0, accepted_edges: 0, conflicts: [], effective_layer: 'org', audience: 'org', status: 'pending_review', merge_request_id: 'mr-7' },
         'Waiting for review (request mr-7)',
-        'text-signal-warning',
+        'text-signal-warn-text',
       ],
       [
         'refused: the team no longer exists',
@@ -849,7 +849,7 @@ describe('ContextsView', () => {
         'published to the whole organisation via the default team',
         { accepted_nodes: 1, accepted_edges: 0, conflicts: [], effective_layer: 'team', audience: 'org', status: 'published' },
         'Published to your organisation',
-        'text-signal-success',
+        'text-signal-ok-text',
       ],
     ] as const) {
       it(`shows the per-item outcome: ${label}`, async () => {

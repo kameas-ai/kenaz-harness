@@ -64,7 +64,7 @@ const visible = computed(() => !dismissed.value && errors.value.length > 0);
 <template>
   <div
     v-if="visible"
-    class="px-4 py-2 bg-surface-2 border-b border-signal-warning flex items-start justify-between gap-3"
+    class="px-4 py-2 bg-surface-2 border-b border-signal-warn flex items-start justify-between gap-3"
     role="alert"
   >
     <div class="flex flex-col gap-1">

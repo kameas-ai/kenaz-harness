@@ -20,6 +20,7 @@
  * zero non-test callers before this component was mounted.
  */
 
+import { Agent } from '@/shell/icons';
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { TaskRow } from '@/lib/types';
@@ -92,12 +93,12 @@ onUnmounted(() => {
   <button
     v-if="visible"
     type="button"
-    class="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-surface-raised border border-border-muted text-accent hover:text-ink transition-colors"
+    class="flex items-center gap-1 px-2 py-0.5 rounded text-caption font-mono bg-surface-2 border border-border-muted text-accent hover:text-ink transition-colors"
     title="Background tasks running — click to view"
     data-testid="background-task-chip"
     @click="emit('open-tasks')"
   >
-    <span class="animate-pulse" aria-hidden="true">⚙</span>
+    <Agent :size="12" class="inline-block animate-pulse" aria-hidden="true" />
     <span>{{ runningCount }} running</span>
   </button>
 </template>

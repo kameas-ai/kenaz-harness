@@ -187,18 +187,18 @@ defineExpose({ refresh });
 <template>
   <section data-testid="project-autonomy-panel">
     <div class="flex items-center justify-between">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Project autonomy
       </h2>
       <span
         v-if="isCustom"
-        class="rounded-sm border border-border-muted bg-surface-2 px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-muted"
+        class="rounded-sm border border-border-muted bg-surface-2 px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-muted"
         data-testid="project-autonomy-custom"
       >
         Custom
       </span>
     </div>
-    <p class="mt-1 font-ui text-[11px] text-ink-muted">
+    <p class="mt-1 font-ui text-caption text-ink-muted">
       Per-project tier override. Folds atop the global layer. Use
       "Inherit" to fall through to global. Sessions in this project may
       override further.
@@ -214,7 +214,7 @@ defineExpose({ refresh });
         type="button"
         role="radio"
         :aria-checked="selectedTier === null"
-        class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+        class="px-3 py-1.5 font-ui text-small border-r border-border last:border-r-0 transition-colors"
         :class="
           selectedTier === null
             ? 'bg-surface-3 text-ink'
@@ -231,7 +231,7 @@ defineExpose({ refresh });
         type="button"
         role="radio"
         :aria-checked="selectedTier === t"
-        class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+        class="px-3 py-1.5 font-ui text-small border-r border-border last:border-r-0 transition-colors"
         :class="
           selectedTier === t
             ? 'bg-surface-3 text-ink'
@@ -246,14 +246,14 @@ defineExpose({ refresh });
 
     <p
       v-if="selectedTier !== null"
-      class="mt-2 font-ui text-[12px] text-ink"
+      class="mt-2 font-ui text-small text-ink"
       data-testid="project-autonomy-tier-description"
     >
       {{ AUTONOMY_TIER_DESCRIPTIONS[selectedTier] }}
     </p>
     <p
       v-else
-      class="mt-2 font-ui text-[12px] text-ink-muted"
+      class="mt-2 font-ui text-small text-ink-muted"
       data-testid="project-autonomy-inherit-hint"
     >
       Inheriting from global —
@@ -267,7 +267,7 @@ defineExpose({ refresh });
     <div class="mt-4">
       <button
         type="button"
-        class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted hover:text-ink"
+        class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted hover:text-ink"
         data-testid="project-autonomy-advanced-toggle"
         :aria-expanded="advancedOpen"
         @click="advancedOpen = !advancedOpen"
@@ -286,13 +286,13 @@ defineExpose({ refresh });
         :key="k"
         class="rounded-sm border border-border-muted bg-surface-1 px-3 py-2"
       >
-        <label class="block font-ui text-[10px] uppercase tracking-[0.16em] text-ink-subtle">
+        <label class="block font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
           {{ AUTONOMY_KNOB_LABELS[k] }}
         </label>
         <div class="mt-1 flex items-center gap-2">
           <input
             type="text"
-            class="flex-1 rounded-sm border border-border bg-surface-2 px-2 py-1 font-mono text-[12px] text-ink"
+            class="flex-1 rounded-sm border border-border bg-surface-2 px-2 py-1 font-mono text-small text-ink"
             :value="knobDisplay(k)"
             :placeholder="
               projectLayer.overrides[k] === undefined ? '(inherit)' : ''
@@ -303,14 +303,14 @@ defineExpose({ refresh });
           <button
             v-if="projectLayer.overrides[k] !== undefined"
             type="button"
-            class="font-ui text-[10px] uppercase tracking-[0.14em] text-ink-subtle hover:text-ink"
+            class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle hover:text-ink"
             :data-testid="`project-autonomy-knob-reset-${k}`"
             @click="resetOverride(k)"
           >
             Reset
           </button>
         </div>
-        <p class="mt-1 font-ui text-[10px] text-ink-subtle">
+        <p class="mt-1 font-ui text-eyebrow text-ink-subtle">
           global: <span class="font-mono">{{ inheritedFromGlobal(k) }}</span>
         </p>
       </div>
@@ -318,7 +318,7 @@ defineExpose({ refresh });
 
     <div
       v-if="saveError"
-      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="project-autonomy-error"
     >

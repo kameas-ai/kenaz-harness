@@ -44,7 +44,7 @@ function pick(value: string) {
       type="button"
       role="radio"
       :aria-checked="modelValue === opt.value"
-      class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors capitalize"
+      class="px-3 py-1.5 font-ui text-small border-r border-border last:border-r-0 transition-colors capitalize"
       :class="modelValue === opt.value
         ? 'bg-surface-3 text-ink'
         : 'bg-surface-1 text-ink-muted hover:text-ink'"
@@ -52,7 +52,7 @@ function pick(value: string) {
       @click="pick(opt.value)"
     >
       {{ opt.label }}
-      <span v-if="opt.note" class="ml-1 text-[10px] text-ink-subtle normal-case">
+      <span v-if="opt.note" class="ml-1 text-eyebrow text-ink-subtle normal-case">
         ({{ opt.note }})
       </span>
     </button>

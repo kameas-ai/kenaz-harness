@@ -111,7 +111,7 @@ const evicted = computed(() => props.composition?.toolsEvicted ?? 0);
       v-if="open"
       :id="panelId"
       role="tooltip"
-      class="absolute bottom-full right-0 z-20 mb-2 w-64 rounded-md border border-hairline bg-surface-1 p-3 text-xs shadow-lg"
+      class="absolute bottom-full right-0 z-20 mb-2 w-64 rounded-md border border-border-muted bg-surface-1 p-3 text-xs shadow-lg"
       data-testid="context-composition-popover"
     >
       <template v-if="composition">
@@ -126,7 +126,7 @@ const evicted = computed(() => props.composition?.toolsEvicted ?? 0);
             <span class="text-ink-muted">{{ row.label }}</span>
             <span class="font-mono tabular-nums text-ink">{{ fmt(row.tokens) }}</span>
           </li>
-          <li class="mt-1 flex justify-between gap-3 border-t border-hairline pt-1">
+          <li class="mt-1 flex justify-between gap-3 border-t border-border-muted pt-1">
             <span class="text-ink-muted">Total (est.)</span>
             <span class="font-mono tabular-nums text-ink" data-testid="context-composition-total">{{ fmt(total) }}</span>
           </li>

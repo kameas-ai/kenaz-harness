@@ -23,6 +23,7 @@
  * how many recent runs stay verbatim (0–10), and what the summary of older
  * runs must remember. The server validates the same bounds.
  */
+import { X } from '@/shell/icons';
 import { ref, computed, watch, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { formatTokens, sendableTokens } from '@/lib/toolExposure';
@@ -284,7 +285,7 @@ async function handleSubmit() {
 <template>
   <!-- Overlay -->
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-modal-overlay"
     data-testid="scheduled-chat-form-modal"
     @click.self="emit('cancel')"
   >
@@ -300,7 +301,7 @@ async function handleSubmit() {
           data-testid="modal-close"
           @click="emit('cancel')"
         >
-          ✕
+          <X class="inline-block" :size="12" aria-hidden="true" />
         </button>
       </div>
 

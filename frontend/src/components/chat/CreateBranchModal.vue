@@ -139,7 +139,7 @@ defineExpose({ submit, recommendation });
     >
       <h2
         id="create-branch-modal-title"
-        class="font-ui text-base font-semibold text-ink"
+        class="font-ui text-h3 font-semibold text-ink"
       >
         Fork a branch
       </h2>
@@ -204,12 +204,12 @@ defineExpose({ submit, recommendation });
         >
           <div class="font-ui text-xs text-ink-subtle">Kernel recommends</div>
           <div class="font-ui text-sm text-ink">{{ recommendationLabel }}</div>
-          <div v-if="recommendation.notes" class="mt-1 font-ui text-[11px] text-ink-subtle">
+          <div v-if="recommendation.notes" class="mt-1 font-ui text-caption text-ink-subtle">
             {{ recommendation.notes }}
           </div>
           <div
             v-if="recommendation.crossProviderWarning"
-            class="mt-1 rounded bg-status-warn-bg p-1 font-ui text-[11px] text-status-warn-fg"
+            class="mt-1 rounded bg-signal-warn-soft p-1 font-ui text-caption text-signal-warn-text"
             data-testid="create-branch-cross-provider-warn"
           >
             {{ recommendation.crossProviderWarning }}
@@ -217,7 +217,7 @@ defineExpose({ submit, recommendation });
         </div>
         <div
           v-if="lastError"
-          class="font-ui text-xs text-status-error"
+          class="font-ui text-xs text-signal-danger-text"
           role="alert"
           data-testid="create-branch-error"
         >
@@ -236,7 +236,7 @@ defineExpose({ submit, recommendation });
         </button>
         <button
           type="button"
-          class="rounded-md bg-accent-strong px-3 py-1 font-ui text-sm text-on-accent disabled:opacity-50"
+          class="rounded-md bg-accent px-3 py-1 font-ui text-sm text-surface-0 disabled:opacity-50"
           :disabled="submitting || !parentSessionId"
           data-testid="create-branch-submit"
           @click="submit"

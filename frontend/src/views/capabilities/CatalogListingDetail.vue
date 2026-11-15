@@ -58,11 +58,11 @@ function openAlternative(to: string) {
 <template>
   <section class="space-y-3" :data-testid="`catalog-detail-${entry.kind}-${entry.id}`">
     <header v-if="mode === 'entry'">
-      <h3 class="font-ui text-[13px] font-semibold text-ink">{{ entry.slug }}</h3>
-      <p class="font-ui text-[11px] text-ink-muted">
+      <h3 class="font-ui text-ui font-semibold text-ink">{{ entry.slug }}</h3>
+      <p class="font-ui text-caption text-ink-muted">
         {{ kindInfo?.noun ?? entry.kind }} · fleet catalog
       </p>
-      <p class="mt-2 font-ui text-[12px] text-ink-muted" data-testid="catalog-detail-description">
+      <p class="mt-2 font-ui text-small text-ink-muted" data-testid="catalog-detail-description">
         {{ entry.description || 'No description.' }}
       </p>
     </header>
@@ -70,14 +70,14 @@ function openAlternative(to: string) {
     <template v-if="mode === 'entry'">
       <p
         v-if="residue"
-        class="font-ui text-[12px] text-ink-muted"
+        class="font-ui text-small text-ink-muted"
         data-testid="catalog-detail-residue"
       >
         <span class="text-ink">Downloaded — not active.</span> {{ residueText(entry.kind) }}
       </p>
       <p
         v-if="kindInfo"
-        class="font-ui text-[12px] text-ink-muted"
+        class="font-ui text-small text-ink-muted"
         data-testid="catalog-detail-unsupported"
       >
         {{ kindInfo.reason }}
@@ -86,7 +86,7 @@ function openAlternative(to: string) {
         <button
           v-if="kindInfo?.alternative"
           type="button"
-          class="rounded-sm border border-accent-hairline bg-surface-1 px-2.5 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+          class="rounded-sm border border-accent-hairline bg-surface-1 px-2.5 py-1 font-ui text-caption text-accent hover:bg-accent-glow"
           :data-testid="`catalog-detail-alternative-${entry.kind}`"
           @click="openAlternative(kindInfo.alternative.to)"
         >
@@ -95,7 +95,7 @@ function openAlternative(to: string) {
         <button
           v-if="residue"
           type="button"
-          class="rounded-sm border border-border-muted px-2.5 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
+          class="rounded-sm border border-border-muted px-2.5 py-1 font-ui text-caption text-ink-muted hover:bg-surface-2 disabled:opacity-50"
           :disabled="busy"
           :data-testid="`catalog-detail-remove-download-${entry.kind}-${entry.id}`"
           @click="emit('remove-download', entry)"
@@ -106,10 +106,10 @@ function openAlternative(to: string) {
     </template>
 
     <div
-      class="space-y-1 border-t border-border-muted pt-3 font-ui text-[11px] text-ink-muted"
+      class="space-y-1 border-t border-border-muted pt-3 font-ui text-caption text-ink-muted"
       :data-testid="`catalog-listing-${entry.kind}-${entry.id}`"
     >
-      <div class="text-[10px] uppercase tracking-[0.14em] text-ink-subtle">Fleet catalog listing</div>
+      <div class="text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Fleet catalog listing</div>
       <div>
         Visibility:
         <span class="text-ink" data-testid="catalog-listing-visibility">{{ VISIBILITY_LABELS[entry.visibility] ?? entry.visibility }}</span>
@@ -117,7 +117,7 @@ function openAlternative(to: string) {
       </div>
       <button
         type="button"
-        class="mt-1 rounded-sm border border-signal-danger px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-signal-danger hover:bg-surface-2 disabled:opacity-50"
+        class="mt-1 rounded-sm border border-signal-danger px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-signal-danger hover:bg-surface-2 disabled:opacity-50"
         :disabled="busy"
         :data-testid="`capability-withdraw-${entry.kind}-${entry.id}`"
         @click="emit('withdraw', entry)"

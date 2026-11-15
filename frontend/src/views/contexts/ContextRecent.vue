@@ -29,7 +29,7 @@ function basename(p: string): string {
     aria-label="Recently applied"
   >
     <header class="px-4 py-2 border-b border-border-muted">
-      <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+      <span class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
         Recently applied
       </span>
     </header>
@@ -47,13 +47,13 @@ function basename(p: string): string {
           @click="emit('select', p)"
         >
           <div class="truncate">{{ basename(p) }}</div>
-          <div class="font-mono text-[10px] text-ink-subtle truncate">{{ p }}</div>
+          <div class="font-mono text-eyebrow text-ink-subtle truncate">{{ p }}</div>
         </button>
       </li>
     </ul>
     <p
       v-else
-      class="px-4 py-3 font-ui text-[12px] text-ink-subtle"
+      class="px-4 py-3 font-ui text-small text-ink-subtle"
     >
       Files you attach to sessions will appear here.
     </p>

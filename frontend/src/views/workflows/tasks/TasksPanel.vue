@@ -22,6 +22,8 @@
  * Tasks_AbortBySession and Tasks_ListBySession.
  */
 
+import type { Component } from 'vue';
+import { SquareTerminal, Agent, Cpu, Circle } from '@/shell/icons';
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import type { TaskRow } from '@/lib/types';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -141,12 +143,12 @@ function ageLabel(ageMs: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-function kindIcon(kind: string): string {
+function kindIcon(kind: string): Component {
   switch (kind) {
-    case 'bash':     return '⚙';
-    case 'subagent': return '🤖';
-    case 'wails':    return '🖥';
-    default:         return '?';
+    case 'bash':     return SquareTerminal;
+    case 'subagent': return Agent;
+    case 'wails':    return Cpu;
+    default:         return Circle;
   }
 }
 </script>
@@ -159,12 +161,12 @@ function kindIcon(kind: string): string {
   >
     <!-- Header -->
     <div class="flex items-center justify-between">
-      <h2 class="font-ui text-[13px] uppercase tracking-[0.14em] text-ink-muted">
+      <h2 class="font-ui text-ui uppercase tracking-eyebrow text-ink-muted">
         Background Tasks
       </h2>
       <span
         v-if="runningCount > 0"
-        class="text-[11px] text-accent font-mono"
+        class="text-caption text-accent font-mono"
         data-testid="running-count"
       >
         {{ runningCount }} running
@@ -172,12 +174,12 @@ function kindIcon(kind: string): string {
     </div>
 
     <!-- Loading -->
-    <p v-if="loading" class="text-ink-muted text-[13px]">Loading…</p>
+    <p v-if="loading" class="text-ink-muted text-ui">Loading…</p>
 
     <!-- Error -->
     <p
       v-if="error"
-      class="text-signal-danger text-[13px]"
+      class="text-signal-danger text-ui"
       data-testid="tasks-error"
     >
       {{ error }}
@@ -186,7 +188,7 @@ function kindIcon(kind: string): string {
     <!-- Empty -->
     <p
       v-if="!loading && filtered.length === 0"
-      class="text-ink-muted text-[13px]"
+      class="text-ink-muted text-ui"
       data-testid="tasks-empty"
     >
       No background tasks.
@@ -201,15 +203,15 @@ function kindIcon(kind: string): string {
       <li
         v-for="task in filtered"
         :key="task.id"
-        class="border border-border-muted rounded-lg p-3 flex flex-col gap-1 bg-surface-raised"
+        class="border border-border-muted rounded-lg p-3 flex flex-col gap-1 bg-surface-2"
         :data-testid="`task-row-${task.id}`"
       >
         <!-- Top row: kind + description/cmd + status -->
         <div class="flex items-start justify-between gap-2">
           <div class="flex items-center gap-2 min-w-0">
-            <span class="text-[12px]" :title="task.kind">{{ kindIcon(task.kind) }}</span>
+            <span class="text-small" :title="task.kind"><component :is="kindIcon(task.kind)" class="inline-block" :size="12" aria-hidden="true" /></span>
             <span
-              class="text-[13px] font-mono truncate"
+              class="text-ui font-mono truncate"
               :title="task.cmd"
               data-testid="task-cmd"
             >
@@ -217,7 +219,7 @@ function kindIcon(kind: string): string {
             </span>
           </div>
           <span
-            class="text-[11px] font-mono shrink-0"
+            class="text-caption font-mono shrink-0"
             :class="statusClass(task.status)"
             data-testid="task-status"
           >
@@ -230,13 +232,13 @@ function kindIcon(kind: string): string {
 
         <!-- Bottom row: age + actions -->
         <div class="flex items-center justify-between gap-2">
-          <span class="text-[11px] text-ink-muted font-mono" data-testid="task-age">
+          <span class="text-caption text-ink-muted font-mono" data-testid="task-age">
             {{ ageLabel(task.ageMs) }}
           </span>
           <div class="flex items-center gap-2">
             <button
               type="button"
-              class="text-[11px] text-ink-muted hover:text-ink transition-colors underline"
+              class="text-caption text-ink-muted hover:text-ink transition-colors underline"
               data-testid="task-view-btn"
               @click="viewOutput(task.id)"
             >
@@ -245,7 +247,7 @@ function kindIcon(kind: string): string {
             <button
               v-if="task.status === 'running'"
               type="button"
-              class="text-[11px] text-signal-danger hover:brightness-90 transition-colors"
+              class="text-caption text-signal-danger hover:brightness-90 transition-colors"
               :disabled="abortingId === task.id"
               data-testid="task-abort-btn"
               @click="abort(task.id)"

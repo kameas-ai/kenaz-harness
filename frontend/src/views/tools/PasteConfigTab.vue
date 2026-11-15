@@ -168,7 +168,7 @@ async function doImport() {
       class="rounded-sm border border-signal-warn bg-signal-warn/10 px-4 py-3 space-y-2"
       data-testid="paste-skip-confirm"
     >
-      <p class="font-ui text-[12px] text-ink">
+      <p class="font-ui text-small text-ink">
         {{ skippableEntries.length }} entr{{ skippableEntries.length === 1 ? 'y is' : 'ies are' }}
         unsupported or malformed and will be skipped.
         Continue importing the {{ selectedCount }} selected {{ selectedCount === 1 ? 'entry' : 'entries' }}?
@@ -176,7 +176,7 @@ async function doImport() {
       <div class="flex gap-2">
         <button
           type="button"
-          class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-[12px] text-accent hover:bg-accent-glow"
+          class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-small text-accent hover:bg-accent-glow"
           data-testid="paste-skip-confirm-yes"
           @click="confirmSkipAndImport"
         >
@@ -184,7 +184,7 @@ async function doImport() {
         </button>
         <button
           type="button"
-          class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[12px] text-ink-dim hover:text-ink"
+          class="rounded-sm border border-border-muted px-3 py-1 font-ui text-small text-ink-dim hover:text-ink"
           data-testid="paste-skip-confirm-no"
           @click="showSkipConfirm = false"
         >
@@ -197,7 +197,7 @@ async function doImport() {
     <div class="space-y-2">
       <label
         for="paste-config-json"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         Paste Claude Desktop / Cursor mcpServers JSON
       </label>
@@ -207,7 +207,7 @@ async function doImport() {
         rows="8"
         spellcheck="false"
         autocomplete="off"
-        class="w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-2 font-mono text-[12px] text-ink focus:border-accent focus:outline-none resize-y"
+        class="w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-2 font-mono text-small text-ink focus:border-accent focus:outline-none resize-y"
         placeholder='{"mcpServers": {"brave-search": {"command": "npx", "args": [...]}}}'
         data-testid="paste-config-textarea"
       />
@@ -215,7 +215,7 @@ async function doImport() {
 
     <div
       v-if="translateError"
-      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="paste-translate-error"
     >
@@ -224,7 +224,7 @@ async function doImport() {
 
     <button
       type="button"
-      class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+      class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-small text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
       :disabled="translating || !rawJson.trim()"
       data-testid="paste-translate-btn"
       @click="translate"
@@ -234,7 +234,7 @@ async function doImport() {
 
     <!-- Translation report -->
     <div v-if="report" class="space-y-3" data-testid="paste-report">
-      <div class="flex gap-4 font-ui text-[11px] text-ink-muted">
+      <div class="flex gap-4 font-ui text-caption text-ink-muted">
         <span data-testid="paste-report-kept">kept: {{ report.kept_count }}</span>
         <span data-testid="paste-report-unsupported">unsupported: {{ report.unsupported_count }}</span>
         <span data-testid="paste-report-malformed">malformed: {{ report.malformed_count }}</span>
@@ -249,7 +249,7 @@ async function doImport() {
 
       <div
         v-if="report.entries.length === 0"
-        class="text-[12px] text-ink-muted"
+        class="text-small text-ink-muted"
         data-testid="paste-report-empty"
       >
         No entries found in the pasted config.
@@ -280,26 +280,26 @@ async function doImport() {
             />
           </div>
           <div>
-            <div class="font-ui text-[12px] text-ink">
+            <div class="font-ui text-small text-ink">
               {{ entry.original_name || entry.id }}
             </div>
             <div
               v-if="entry.reason"
-              class="mt-0.5 text-[11px] text-ink-muted"
+              class="mt-0.5 text-caption text-ink-muted"
               :data-testid="`paste-entry-reason-${entry.id}`"
             >
               {{ entry.reason }}
             </div>
             <div
               v-if="entry.status === 'collision_warning'"
-              class="mt-0.5 text-[11px] text-signal-warn"
+              class="mt-0.5 text-caption text-signal-warn"
               :data-testid="`paste-entry-shadow-warning-${entry.id}`"
             >
               This entry will shadow the existing recipe with the same id.
             </div>
           </div>
           <span
-            class="text-[10px] uppercase tracking-[0.16em]"
+            class="text-eyebrow uppercase tracking-eyebrow"
             :class="badgeClass(entry.status)"
             :data-testid="`paste-entry-status-${entry.id}`"
           >
@@ -315,7 +315,7 @@ async function doImport() {
       >
         <button
           type="button"
-          class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+          class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-small text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
           :disabled="!canImport"
           data-testid="paste-import-btn"
           @click="requestImport"
@@ -324,7 +324,7 @@ async function doImport() {
         </button>
         <span
           v-if="importSuccess"
-          class="text-[11px] text-signal-ok"
+          class="text-caption text-signal-ok"
           data-testid="paste-import-success"
         >
           Imported successfully.
@@ -333,7 +333,7 @@ async function doImport() {
 
       <div
         v-if="importError"
-        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
         data-testid="paste-import-error"
       >

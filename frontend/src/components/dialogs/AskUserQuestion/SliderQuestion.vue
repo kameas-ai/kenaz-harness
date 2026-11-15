@@ -45,10 +45,10 @@ function onInput(e: Event) {
 
 <template>
   <div data-testid="slider-question" class="space-y-2">
-    <div class="flex items-center justify-between font-ui text-[11px] text-ink-muted">
+    <div class="flex items-center justify-between font-ui text-caption text-ink-muted">
       <span>{{ min }}</span>
       <span
-        class="rounded-sm bg-accent/10 px-2 py-0.5 font-mono text-[13px] text-accent"
+        class="rounded-sm bg-accent/10 px-2 py-0.5 font-mono text-ui text-accent"
         data-testid="slider-question-value"
       >
         {{ value }}

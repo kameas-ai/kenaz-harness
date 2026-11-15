@@ -26,7 +26,7 @@
  */
 
 import { computed, ref } from 'vue';
-import { Archive, Layers, Lock } from 'lucide-vue-next';
+import { Archive, Layers, Lock, Pin } from '@/shell/icons';
 import { isServedMode } from '@/lib/useServedMode';
 import { STOP_CALLED_REASON } from '@/lib/delivery';
 import MarkdownBlock from './MarkdownBlock.vue';
@@ -386,7 +386,7 @@ const bubbleClass = computed(() => {
     return `${base} bg-transparent text-ink-muted italic${archived}`;
   }
   // tool — monospace EventStreamRow-style
-  return `font-mono text-[12px] text-ink-muted px-3 py-1${archived}`;
+  return `font-mono text-small text-ink-muted px-3 py-1${archived}`;
 });
 
 function onJumpToSummary() {
@@ -476,7 +476,7 @@ function onResumeClick() {
     <div :class="bubbleClass">
       <header
         v-if="!isTool"
-        class="font-ui text-[10px] uppercase tracking-[0.18em] mb-1 flex items-center"
+        class="font-ui text-eyebrow uppercase tracking-eyebrow mb-1 flex items-center"
         :class="isAssistant && streaming ? 'text-accent' : 'text-ink-subtle'"
       >
         <span>{{ roleLabel }}</span>
@@ -504,7 +504,7 @@ function onResumeClick() {
         <div v-if="rememberable" :class="['relative', flashConfirm ? '' : 'ml-auto']">
           <button
             type="button"
-            class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2"
+            class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-small px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2"
             :aria-label="'Remember this message'"
             :aria-haspopup="'menu'"
             :aria-expanded="menuOpen"
@@ -512,7 +512,7 @@ function onResumeClick() {
             @click="onPinClick"
             @pointerdown="onPinPointerDown"
           >
-            📌
+            <Pin class="inline-block" :size="12" aria-hidden="true" />
           </button>
           <PinMenu
             :open="menuOpen"
@@ -523,7 +523,7 @@ function onResumeClick() {
         </div>
         <button
           type="button"
-          class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1"
+          class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-small px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1"
           :class="rememberable || (saveable && messageId) ? '' : 'ml-auto'"
           aria-label="Copy message text"
           :data-testid="'copy-message-button'"
@@ -537,7 +537,7 @@ function onResumeClick() {
         >
           <button
             type="button"
-            class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1"
+            class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-small px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1"
             aria-label="Save as artifact"
             data-testid="save-artifact-button"
             @click="onSaveArtifact"
@@ -553,7 +553,7 @@ function onResumeClick() {
             <button
               type="button"
               role="menuitem"
-              class="block w-full px-3 py-1.5 text-left font-ui text-[12px] text-ink hover:bg-surface-2"
+              class="block w-full px-3 py-1.5 text-left font-ui text-small text-ink hover:bg-surface-2"
               data-testid="save-artifact-menu-save"
               @click="onSaveArtifact"
             >
@@ -567,7 +567,7 @@ function onResumeClick() {
         <button
           v-if="BRANCHING_POLISH_ENABLED && isAssistant && messageId && !servedMode"
           type="button"
-          class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1 disabled:opacity-40 disabled:cursor-not-allowed"
+          class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-small px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1 disabled:opacity-40 disabled:cursor-not-allowed"
           :disabled="!!streaming"
           :title="streaming ? 'Wait for the response to finish' : 'Branch from this turn'"
           :aria-label="'Branch from this turn'"
@@ -582,7 +582,7 @@ function onResumeClick() {
            synthetic summary row regardless of toggle state. -->
       <div
         v-if="isSummary"
-        class="mb-2 flex items-center gap-1.5 font-ui text-[11px] text-ink-muted"
+        class="mb-2 flex items-center gap-1.5 font-ui text-caption text-ink-muted"
         data-testid="message-summary-indicator"
       >
         <Layers class="h-3.5 w-3.5 text-accent" aria-hidden="true" />
@@ -595,7 +595,7 @@ function onResumeClick() {
       <!-- Archived row tag + jump-to-summary chip (WP07). -->
       <div
         v-if="isArchived"
-        class="mb-2 flex items-center gap-1.5 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="mb-2 flex items-center gap-1.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
         data-testid="message-archived-tag"
       >
         <Archive class="h-3 w-3" aria-hidden="true" />
@@ -603,7 +603,7 @@ function onResumeClick() {
         <button
           v-if="archivedFromSummaryId"
           type="button"
-          class="ml-2 normal-case tracking-normal text-[11px] text-accent hover:underline"
+          class="ml-2 normal-case tracking-normal text-caption text-accent hover:underline"
           data-testid="message-archived-jump"
           :data-summary-id="archivedFromSummaryId"
           @click="onJumpToSummary"
@@ -614,7 +614,7 @@ function onResumeClick() {
 
       <div
         v-if="reasoning"
-        class="mb-2 font-ui text-[11px] text-ink-subtle italic whitespace-pre-wrap"
+        class="mb-2 font-ui text-caption text-ink-subtle italic whitespace-pre-wrap"
         data-testid="message-reasoning"
       >
         {{ reasoning }}
@@ -625,10 +625,10 @@ function onResumeClick() {
         <li
           v-for="tc in toolCalls"
           :key="tc.id"
-          class="font-mono text-[12px] grid items-baseline gap-3"
+          class="font-mono text-small grid items-baseline gap-3"
           style="grid-template-columns: 14ch 1fr auto"
         >
-          <span class="uppercase tracking-[0.12em] text-[11px] text-accent flex items-center gap-1">
+          <span class="uppercase tracking-eyebrow text-caption text-accent flex items-center gap-1">
             tool · {{ tc.name }}
             <!-- Lock icon: visible when the tool call resolved a @secret: ref
                  (model-secret-references-01KW7M5A WP14). No tooltip text
@@ -675,7 +675,7 @@ function onResumeClick() {
           :message-id="messageId"
         />
       </template>
-      <span v-else class="font-mono text-[12px] text-ink-muted">
+      <span v-else class="font-mono text-small text-ink-muted">
         {{ content }}
       </span>
 
@@ -685,14 +685,14 @@ function onResumeClick() {
            this with a Resume button. -->
       <div
         v-if="stoppedByUser"
-        class="mt-2 font-ui text-[11px] text-ink-muted italic"
+        class="mt-2 font-ui text-caption text-ink-muted italic"
         data-testid="message-stopped-by-user"
       >
         Stopped by you — partial reply kept.
       </div>
       <div
         v-else-if="streamingError"
-        class="mt-2 font-ui text-[11px] text-ink-muted italic"
+        class="mt-2 font-ui text-caption text-ink-muted italic"
         data-testid="message-streaming-error"
       >
         Connection lost — message may be incomplete.
@@ -737,7 +737,7 @@ function onResumeClick() {
       -->
       <div
         v-if="isPartialOutputBubble"
-        class="mt-2 flex items-center gap-2 font-ui text-[11px] text-ink-subtle"
+        class="mt-2 flex items-center gap-2 font-ui text-caption text-ink-subtle"
         data-testid="message-partial-output-footer"
       >
         <span :data-failure-kind="streamingFailureKind || 'unknown'">

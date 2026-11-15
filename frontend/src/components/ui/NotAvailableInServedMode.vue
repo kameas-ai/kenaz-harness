@@ -42,7 +42,7 @@ const props = withDefaults(
 
 <template>
   <div
-    class="flex flex-col items-center justify-center h-full py-16 px-6 gap-4 text-center"
+    class="flex flex-col items-center justify-center h-full py-12 px-6 gap-4 text-center"
     data-testid="not-available-in-served-mode"
     role="status"
   >

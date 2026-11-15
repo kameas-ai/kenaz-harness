@@ -270,13 +270,13 @@ watch(
   background: var(--surface-2);
   color: var(--ink);
   border-radius: var(--radius-lg);
-  padding: 1.5rem 2rem;
+  padding: var(--space-24) var(--space-32);
   width: min(560px, 90vw);
-  box-shadow: 0 18px 60px var(--modal-shadow);
+  box-shadow: 0 24px 64px var(--modal-shadow);
 }
 .dialog-head h2 {
-  margin: 0 0 1rem;
-  font-size: 1.4rem;
+  margin: 0 0 var(--space-16);
+  font-size: var(--type-canvas-title-size);
 }
 .dialog-body p {
   line-height: 1.5;
@@ -287,16 +287,16 @@ watch(
 .dialog-fields {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  margin: 1rem 0;
+  gap: var(--space-12);
+  margin: var(--space-16) 0;
 }
 .dialog-field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-4);
 }
 .dialog-field input {
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-8) var(--space-12);
   background: var(--surface-3);
   border: 1px solid var(--border);
   color: inherit;
@@ -305,11 +305,11 @@ watch(
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 0.5rem;
-  margin-top: 1.25rem;
+  gap: var(--space-8);
+  margin-top: var(--space-20);
 }
 .dialog-actions button {
-  padding: 0.5rem 1rem;
+  padding: var(--space-8) var(--space-16);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: transparent;
@@ -324,15 +324,15 @@ watch(
 .starter-list {
   list-style: none;
   padding: 0;
-  margin: 1rem 0 0;
+  margin: var(--space-16) 0 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-8);
 }
 .starter-card {
   text-align: left;
   width: 100%;
-  padding: 0.75rem 1rem;
+  padding: var(--space-12) var(--space-16);
   background: var(--surface-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -340,25 +340,25 @@ watch(
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-4);
 }
 .starter-card strong {
-  font-size: 1rem;
+  font-size: var(--type-h3-size);
 }
 .starter-card span {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   color: var(--ink-muted);
 }
 .dialog-bootstrap-heading {
   font-weight: 600;
-  margin-bottom: 0.25rem;
+  margin-bottom: var(--space-4);
 }
 .dialog-bootstrap-sub {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   color: var(--ink-muted);
-  margin-bottom: 1rem;
+  margin-bottom: var(--space-16);
 }
 .dialog-bootstrap-actions {
-  margin-top: 1rem;
+  margin-top: var(--space-16);
 }
 </style>

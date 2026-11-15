@@ -51,7 +51,7 @@ onMounted(async () => {
         them in Fleet; anything unset is derived from the session's provider.
       </p>
     </div>
-    <p v-if="errorMsg" class="text-xs text-danger" data-testid="model-slots-error">{{ errorMsg }}</p>
+    <p v-if="errorMsg" class="text-xs text-signal-danger-text" data-testid="model-slots-error">{{ errorMsg }}</p>
     <table v-if="view" class="text-xs w-full">
       <tbody>
         <tr v-for="s in view.slots" :key="s.slot" :data-testid="`model-slot-${s.slot}`">
@@ -61,7 +61,7 @@ onMounted(async () => {
         </tr>
       </tbody>
     </table>
-    <ul v-if="view?.orgErrors?.length" class="text-xs text-danger list-disc pl-4" data-testid="model-slots-org-errors">
+    <ul v-if="view?.orgErrors?.length" class="text-xs text-signal-danger-text list-disc pl-4" data-testid="model-slots-org-errors">
       <li v-for="e in view.orgErrors" :key="e">{{ e }}</li>
     </ul>
   </section>

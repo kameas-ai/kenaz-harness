@@ -246,13 +246,13 @@ defineExpose({ assembleYaml });
   >
     <header class="flex items-baseline justify-between">
       <div>
-        <h3 class="font-ui text-base text-ink">New workflow from template</h3>
+        <h3 class="font-ui text-h3 text-ink">New workflow from template</h3>
         <p class="font-ui text-xs text-ink-muted">
           Pick a starter shape, fill in the blanks, save.
         </p>
       </div>
       <span
-        class="font-ui text-[10px] uppercase tracking-wide text-signal-warn"
+        class="font-ui text-eyebrow uppercase tracking-wide text-signal-warn"
         aria-label="beta surface"
       >
         beta

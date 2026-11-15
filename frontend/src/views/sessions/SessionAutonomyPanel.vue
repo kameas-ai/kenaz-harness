@@ -220,18 +220,18 @@ defineExpose({ refresh });
 <template>
   <section data-testid="session-autonomy-panel">
     <div class="flex items-center justify-between">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Session autonomy
       </h2>
       <span
         v-if="isCustom"
-        class="rounded-sm border border-border-muted bg-surface-2 px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-muted"
+        class="rounded-sm border border-border-muted bg-surface-2 px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-muted"
         data-testid="session-autonomy-custom"
       >
         Custom
       </span>
     </div>
-    <p class="mt-1 font-ui text-[11px] text-ink-muted">
+    <p class="mt-1 font-ui text-caption text-ink-muted">
       Per-session override. Folds atop project + global. Use Inherit
       to fall through. Reset clears every session-level override.
     </p>
@@ -246,7 +246,7 @@ defineExpose({ refresh });
         type="button"
         role="radio"
         :aria-checked="selectedTier === null"
-        class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+        class="px-3 py-1.5 font-ui text-small border-r border-border last:border-r-0 transition-colors"
         :class="
           selectedTier === null
             ? 'bg-surface-3 text-ink'
@@ -263,7 +263,7 @@ defineExpose({ refresh });
         type="button"
         role="radio"
         :aria-checked="selectedTier === t"
-        class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+        class="px-3 py-1.5 font-ui text-small border-r border-border last:border-r-0 transition-colors"
         :class="
           selectedTier === t
             ? 'bg-surface-3 text-ink'
@@ -280,7 +280,7 @@ defineExpose({ refresh });
       <button
         v-if="!sessionLayer.level && overrideKeys.length === 0 ? false : true"
         type="button"
-        class="font-ui text-[11px] text-ink-subtle hover:text-ink underline-offset-2 hover:underline"
+        class="font-ui text-caption text-ink-subtle hover:text-ink underline-offset-2 hover:underline"
         data-testid="session-autonomy-reset-all"
         @click="resetSession"
       >
@@ -290,7 +290,7 @@ defineExpose({ refresh });
 
     <p
       v-if="selectedTier !== null"
-      class="mt-2 font-ui text-[12px] text-ink"
+      class="mt-2 font-ui text-small text-ink"
       data-testid="session-autonomy-tier-description"
     >
       {{ AUTONOMY_TIER_DESCRIPTIONS[selectedTier] }}
@@ -299,7 +299,7 @@ defineExpose({ refresh });
     <div class="mt-4">
       <button
         type="button"
-        class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted hover:text-ink"
+        class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted hover:text-ink"
         data-testid="session-autonomy-advanced-toggle"
         :aria-expanded="advancedOpen"
         @click="advancedOpen = !advancedOpen"
@@ -313,7 +313,7 @@ defineExpose({ refresh });
       class="mt-3 overflow-x-auto"
       data-testid="session-autonomy-advanced-grid"
     >
-      <table class="w-full font-ui text-[11px]">
+      <table class="w-full font-ui text-caption">
         <thead>
           <tr class="text-left text-ink-subtle">
             <th class="pb-1 pr-3">Knob</th>
@@ -341,7 +341,7 @@ defineExpose({ refresh });
               <div class="flex items-center gap-2">
                 <input
                   type="text"
-                  class="w-32 rounded-sm border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-ink"
+                  class="w-32 rounded-sm border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-caption text-ink"
                   :value="knobDisplay(k)"
                   :aria-label="`${k} autonomy setting`"
                   :placeholder="
@@ -355,7 +355,7 @@ defineExpose({ refresh });
                 <button
                   v-if="sessionLayer.overrides[k] !== undefined"
                   type="button"
-                  class="text-[10px] uppercase tracking-[0.14em] text-ink-subtle hover:text-ink"
+                  class="text-eyebrow uppercase tracking-eyebrow text-ink-subtle hover:text-ink"
                   :data-testid="`session-autonomy-knob-reset-${k}`"
                   @click="resetOverride(k)"
                 >
@@ -382,7 +382,7 @@ defineExpose({ refresh });
 
     <div
       v-if="saveError"
-      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="session-autonomy-error"
     >

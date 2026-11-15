@@ -143,7 +143,7 @@ onBeforeUnmount(() => {
       v-for="(note, i) in notices"
       :key="`notice-${i}`"
       role="status"
-      class="rounded-sm border border-border-muted bg-surface-1 px-4 py-3 text-[12px] text-ink max-w-prose"
+      class="rounded-sm border border-border-muted bg-surface-1 px-4 py-3 text-small text-ink max-w-prose"
       data-testid="settings-issue-notice"
     >
       {{ note }}
@@ -162,14 +162,14 @@ onBeforeUnmount(() => {
     >
       <h2
         :class="[
-          'font-ui text-[13px] font-medium',
+          'font-ui text-ui font-medium',
           issue.severity === 'error' ? 'text-signal-danger' : 'text-signal-warn',
         ]"
         data-testid="settings-issue-title"
       >
         {{ issue.title }}
       </h2>
-      <p class="mt-1 text-[12px] text-ink-muted max-w-prose" data-testid="settings-issue-body">
+      <p class="mt-1 text-small text-ink-muted max-w-prose" data-testid="settings-issue-body">
         {{ issue.body }}
       </p>
 
@@ -179,13 +179,13 @@ onBeforeUnmount(() => {
         class="mt-3 rounded-sm border border-border-muted bg-surface-1 px-3 py-2"
         data-testid="settings-issue-confirm"
       >
-        <p class="text-[12px] text-ink max-w-prose" data-testid="settings-issue-confirm-body">
+        <p class="text-small text-ink max-w-prose" data-testid="settings-issue-confirm-body">
           {{ issue.fix.confirm.body }}
         </p>
         <div class="mt-2 flex items-center gap-3">
           <button
             type="button"
-            class="rounded px-3 py-1.5 text-[12px] font-ui border border-signal-danger text-signal-danger
+            class="rounded px-3 py-1.5 text-small font-ui border border-signal-danger text-signal-danger
                    hover:bg-signal-danger hover:text-white disabled:opacity-50 disabled:cursor-wait"
             :disabled="fixBusy[issue.id] ?? false"
             data-testid="settings-issue-confirm-run"
@@ -195,7 +195,7 @@ onBeforeUnmount(() => {
           </button>
           <button
             type="button"
-            class="rounded px-3 py-1.5 text-[12px] font-ui border border-border-muted
+            class="rounded px-3 py-1.5 text-small font-ui border border-border-muted
                    bg-surface-1 text-ink hover:bg-surface-2"
             data-testid="settings-issue-confirm-cancel"
             @click="setConfirming(issue.id, false)"
@@ -212,8 +212,8 @@ onBeforeUnmount(() => {
         <button
           v-if="issue.fix && !fixError[issue.id] && !confirming[issue.id]"
           type="button"
-          class="rounded px-3 py-1.5 text-[12px] font-ui bg-accent text-on-accent
-                 hover:bg-accent-hover disabled:opacity-50 disabled:cursor-wait"
+          class="rounded px-3 py-1.5 text-small font-ui bg-accent text-surface-0
+                 hover:bg-accent-muted disabled:opacity-50 disabled:cursor-wait"
           :disabled="fixBusy[issue.id] ?? false"
           data-testid="settings-issue-fix"
           @click="requestFix(issue)"
@@ -226,14 +226,14 @@ onBeforeUnmount(() => {
         <a
           v-if="issue.link"
           :href="`#${issue.link.to}`"
-          class="text-[12px] font-ui text-accent underline hover:no-underline"
+          class="text-small font-ui text-accent underline hover:no-underline"
           data-testid="settings-issue-link"
         >{{ issue.link.label }}</a>
       </div>
 
       <p
         v-if="fixError[issue.id]"
-        class="mt-3 text-[12px] text-signal-danger"
+        class="mt-3 text-small text-signal-danger"
         data-testid="settings-issue-fix-error"
       >
         The repair didn’t work: {{ fixError[issue.id] }}
@@ -242,7 +242,7 @@ onBeforeUnmount(() => {
       <template v-if="showManual(issue)">
         <ol
           v-if="issue.instructions && issue.instructions.length > 0"
-          class="mt-3 ml-5 list-decimal grid gap-1 text-[12px] text-ink max-w-prose"
+          class="mt-3 ml-5 list-decimal grid gap-1 text-small text-ink max-w-prose"
           data-testid="settings-issue-instructions"
         >
           <li v-for="(step, i) in issue.instructions" :key="i">{{ step }}</li>
@@ -250,7 +250,7 @@ onBeforeUnmount(() => {
         <div v-if="issue.diagnostics" class="mt-3 flex items-center gap-3">
           <button
             type="button"
-            class="rounded px-3 py-1.5 text-[12px] font-ui border border-border-muted
+            class="rounded px-3 py-1.5 text-small font-ui border border-border-muted
                    bg-surface-1 text-ink hover:bg-surface-2"
             data-testid="settings-issue-copy-diagnostics"
             @click="copyDiagnostics(issue)"
@@ -259,7 +259,7 @@ onBeforeUnmount(() => {
           </button>
           <span
             v-if="copyError[issue.id]"
-            class="text-[11px] text-signal-danger"
+            class="text-caption text-signal-danger"
             data-testid="settings-issue-copy-error"
           >{{ copyError[issue.id] }}</span>
         </div>

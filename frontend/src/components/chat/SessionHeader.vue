@@ -225,7 +225,7 @@ function cancelConfirm() {
 <template>
   <header
     data-testid="session-header"
-    class="flex items-center gap-2 px-4 py-2 border-b border-hairline"
+    class="flex items-center gap-2 px-4 py-2 border-b border-border-muted"
   >
     <input
       v-if="renaming"
@@ -343,7 +343,7 @@ function cancelConfirm() {
         data-testid="move-session-menu"
         class="absolute right-0 top-full mt-1 z-50 rounded-sm border border-border-muted bg-surface-0 shadow-lg py-1 min-w-[160px]"
       >
-        <div class="px-3 py-1 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+        <div class="px-3 py-1 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
           Move to…
         </div>
         <button
@@ -397,7 +397,7 @@ function cancelConfirm() {
     <div
       v-if="confirmOpen"
       data-testid="suggest-title-confirm-modal"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-modal-overlay"
       role="dialog"
       aria-modal="true"
     >

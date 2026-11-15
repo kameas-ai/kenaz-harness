@@ -176,10 +176,10 @@ watch(
     >
       <header class="flex items-center justify-between border-b border-border-muted px-4 py-3">
         <div>
-          <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          <div class="text-caption uppercase tracking-eyebrow text-ink-subtle">
             ADD CONTEXT
           </div>
-          <h2 class="mt-0.5 font-ui text-base font-semibold text-ink">
+          <h2 class="mt-0.5 font-ui text-h3 font-semibold text-ink">
             Pick from library
           </h2>
         </div>
@@ -189,7 +189,7 @@ watch(
           aria-label="Close"
           @click="close"
         >
-          <X :size="16" />
+          <X class="inline-block" :size="16" />
         </button>
       </header>
 
@@ -231,18 +231,18 @@ watch(
         <div class="flex-1 min-w-0">
           <span
             v-if="selectedPath"
-            class="block font-mono text-[11px] text-ink truncate"
+            class="block font-mono text-caption text-ink truncate"
             :title="selectedPath"
             data-testid="attachment-tree-selected"
           >
             {{ selectedPath }}
           </span>
-          <span v-else class="font-ui text-[11px] text-ink-dim">
+          <span v-else class="font-ui text-caption text-ink-dim">
             Select a file, or a folder to attach a whole module
           </span>
           <div
             v-if="addError"
-            class="mt-1 font-ui text-[11px] text-signal-danger"
+            class="mt-1 font-ui text-caption text-signal-danger"
             role="alert"
             data-testid="attachment-tree-add-error"
           >
@@ -252,7 +252,7 @@ watch(
         <div class="flex items-center gap-2">
           <button
             type="button"
-            class="rounded-sm px-3 py-1 font-ui text-[12px] text-ink-muted hover:text-ink"
+            class="rounded-sm px-3 py-1 font-ui text-small text-ink-muted hover:text-ink"
             :disabled="adding"
             @click="close"
           >
@@ -260,7 +260,7 @@ watch(
           </button>
           <button
             type="button"
-            class="rounded-sm border border-accent-hairline px-3 py-1 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50"
+            class="rounded-sm border border-accent-hairline px-3 py-1 font-ui text-small text-accent hover:bg-accent-glow disabled:opacity-50"
             :disabled="!selectedPath || adding"
             data-testid="attachment-tree-add"
             @click="onAdd"

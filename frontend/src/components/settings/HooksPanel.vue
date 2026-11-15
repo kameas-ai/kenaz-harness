@@ -65,7 +65,7 @@ function handleRemove(id: string): void {
       <!-- Error banner -->
       <div
         v-if="error"
-        class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
         data-testid="hooks-panel-error"
       >
@@ -73,7 +73,7 @@ function handleRemove(id: string): void {
       </div>
 
       <div class="flex items-center justify-between mb-3">
-        <p class="font-ui text-[12px] text-ink-muted">
+        <p class="font-ui text-small text-ink-muted">
           Configurable side-effects on chat-pipeline and lifecycle events.
         </p>
         <Button
@@ -88,7 +88,7 @@ function handleRemove(id: string): void {
       <!-- Loading -->
       <div
         v-if="loading"
-        class="font-ui text-[12px] text-ink-muted"
+        class="font-ui text-small text-ink-muted"
         role="status"
         data-testid="hooks-loading"
       >
@@ -104,7 +104,7 @@ function handleRemove(id: string): void {
         <p class="font-ui text-sm text-ink">
           No hooks configured yet.
         </p>
-        <p class="font-ui text-[12px] text-ink-muted mt-1 mb-4">
+        <p class="font-ui text-small text-ink-muted mt-1 mb-4">
           Install the starter memory hooks to get long-term memory across sessions,
           or add a custom shell or builtin hook.
         </p>
@@ -145,7 +145,7 @@ function handleRemove(id: string): void {
         >
           <thead>
             <tr
-              class="border-b border-border-muted text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+              class="border-b border-border-muted text-caption uppercase tracking-eyebrow text-ink-subtle"
             >
               <th class="px-3 py-2 font-ui font-medium">Name</th>
               <th class="px-3 py-2 font-ui font-medium">Event</th>
@@ -165,7 +165,7 @@ function handleRemove(id: string): void {
             >
               <td class="px-3 py-2 font-ui text-sm text-ink">
                 {{ h.name }}
-                <div class="font-mono text-[10px] text-ink-subtle">{{ h.id }}</div>
+                <div class="font-mono text-eyebrow text-ink-subtle">{{ h.id }}</div>
               </td>
               <td class="px-3 py-2 font-mono text-xs text-ink-muted">{{ h.event }}</td>
               <td class="px-3 py-2 font-mono text-xs text-ink-muted">
@@ -185,7 +185,7 @@ function handleRemove(id: string): void {
               <td class="px-3 py-2 text-right flex gap-1 items-center justify-end" @click.stop>
                 <button
                   type="button"
-                  class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-ink hover:bg-surface-3"
+                  class="px-2 py-1 rounded-sm border border-border-muted text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-ink hover:bg-surface-3"
                   :data-testid="`hook-edit-${h.id}`"
                   @click="emit('edit', h)"
                 >
@@ -193,7 +193,7 @@ function handleRemove(id: string): void {
                 </button>
                 <button
                   type="button"
-                  class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-signal-danger hover:bg-surface-3"
+                  class="px-2 py-1 rounded-sm border border-border-muted text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-signal-danger hover:bg-surface-3"
                   :data-testid="`hook-remove-${h.id}`"
                   @click="handleRemove(h.id)"
                 >

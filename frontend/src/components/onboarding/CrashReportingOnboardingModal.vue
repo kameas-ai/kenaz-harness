@@ -48,14 +48,14 @@ async function dismiss() {
 
 <template>
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-modal-overlay"
     role="dialog"
     aria-modal="true"
     aria-labelledby="crash-onboarding-title"
     data-testid="crash-reporting-onboarding-modal"
   >
-    <div class="bg-surface rounded-lg shadow-xl p-6 max-w-md w-full space-y-4">
-      <h2 id="crash-onboarding-title" class="text-base font-semibold text-ink">
+    <div class="bg-surface-1 rounded-lg shadow-xl p-6 max-w-md w-full space-y-4">
+      <h2 id="crash-onboarding-title" class="text-h3 font-semibold text-ink">
         Help improve Kenaz Harness
       </h2>
       <p class="text-sm text-ink-muted">

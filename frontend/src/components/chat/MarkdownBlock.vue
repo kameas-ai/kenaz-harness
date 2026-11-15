@@ -491,11 +491,11 @@ async function undoSave(): Promise<void> {
       >
         <span class="font-ui text-sm text-ink">
           Saved as
-          <code class="font-mono text-[12px] text-ink-muted">{{ undoToast.title }}</code>.
+          <code class="font-mono text-small text-ink-muted">{{ undoToast.title }}</code>.
         </span>
         <button
           type="button"
-          class="font-ui text-[12px] uppercase tracking-[0.14em] text-accent hover:underline ml-3"
+          class="font-ui text-small uppercase tracking-eyebrow text-accent hover:underline ml-3"
           data-testid="undo-toast-button"
           @click.stop="undoSave"
         >
@@ -640,7 +640,7 @@ async function undoSave(): Promise<void> {
 .md-body :deep(.code-header-bar) {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-8);
   background: var(--surface-2);
   border: 1px solid var(--border-muted);
   border-bottom: none;
@@ -651,7 +651,7 @@ async function undoSave(): Promise<void> {
 
 .md-body :deep(.code-header-lang) {
   font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: var(--type-eyebrow-size);
   text-transform: uppercase;
   letter-spacing: 0.16em;
   color: var(--ink-subtle);
@@ -660,13 +660,13 @@ async function undoSave(): Promise<void> {
 .md-body :deep(.code-header-actions) {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: var(--space-4);
   margin-left: auto;
 }
 
 .md-body :deep(.code-header-btn) {
   font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: var(--type-eyebrow-size);
   text-transform: uppercase;
   letter-spacing: 0.16em;
   padding: 0.15em 0.5em;
@@ -696,11 +696,11 @@ async function undoSave(): Promise<void> {
   z-index: 50;
   display: flex;
   align-items: center;
-  padding: 0.6rem 1rem;
+  padding: var(--space-10) var(--space-16);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-muted);
   background: var(--surface-1);
-  box-shadow: var(--shadow-lg, 0 4px 6px -1px rgb(0 0 0 / 0.1)); /* css-tokens-allow: shadow fallback for older render paths */
+  box-shadow: 0 6px 18px var(--modal-shadow);
 }
 
 .undo-fade-enter-active,

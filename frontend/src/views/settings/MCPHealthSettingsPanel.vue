@@ -58,7 +58,7 @@ onMounted(() => {
 <template>
   <section class="px-6 py-4" data-testid="mcp-health-settings-panel">
     <h2
-      class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3"
+      class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-3"
     >
       MCP server health
     </h2>
@@ -73,10 +73,10 @@ onMounted(() => {
         data-testid="mcp-auto-restart-row"
       >
         <div>
-          <div class="font-ui text-[13px] text-ink">
+          <div class="font-ui text-ui text-ink">
             Auto-restart on disconnect
           </div>
-          <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
+          <p class="mt-1 text-caption text-ink-muted max-w-prose">
             When enabled, the harness automatically restarts a local (stdio)
             MCP server after two consecutive failed health pings (default:
             on). Disable to leave an unresponsive server running for manual
@@ -85,7 +85,7 @@ onMounted(() => {
           </p>
           <div
             v-if="error"
-            class="mt-2 text-[11px] text-signal-danger"
+            class="mt-2 text-caption text-signal-danger"
             role="alert"
             data-testid="mcp-auto-restart-error"
           >

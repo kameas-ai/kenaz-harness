@@ -127,14 +127,14 @@ onBeforeUnmount(() => {
     <div v-else class="p-4">
       <div
         v-if="pdfJsLoading"
-        class="text-center text-[12px] text-ink-muted"
+        class="text-center text-small text-ink-muted"
         data-testid="pdf-renderer-loading"
       >
         Loading PDF…
       </div>
       <div
         v-else-if="pdfJsError"
-        class="text-center text-[12px] text-signal-danger"
+        class="text-center text-small text-signal-danger"
         data-testid="pdf-renderer-error"
       >
         Could not render PDF: {{ pdfJsError }}

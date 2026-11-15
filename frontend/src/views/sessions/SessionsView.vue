@@ -1947,7 +1947,7 @@ async function onShared() {
         <button
           v-if="fleetSyncAvailable"
           type="button"
-          class="flex items-center gap-1.5 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] transition-colors"
+          class="flex items-center gap-1.5 rounded px-2 py-0.5 font-ui text-caption uppercase tracking-eyebrow transition-colors"
           :class="isSyncEnabled
             ? 'bg-accent/15 text-accent border border-accent/40'
             : 'bg-surface-2 text-ink-muted border border-border-muted hover:bg-surface-3'"
@@ -1966,7 +1966,7 @@ async function onShared() {
         <!-- Context-sync failure badge (fleet-session-truth-01DOGF0A FR-6) -->
         <span
           v-if="fleetSyncAvailable && (syncFailure || syncUnsupported)"
-          class="rounded px-2 py-0.5 font-ui text-[11px] text-signal-warn border border-signal-warn/40 bg-surface-2"
+          class="rounded px-2 py-0.5 font-ui text-caption text-signal-warn border border-signal-warn/40 bg-surface-2"
           role="status"
           :title="syncFailureTitle"
           data-testid="session-sync-degraded"
@@ -1977,7 +1977,7 @@ async function onShared() {
         <button
           v-if="shareAvailable"
           type="button"
-          class="flex items-center gap-1 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] text-ink-muted border border-border-muted bg-surface-2 hover:bg-surface-3 transition-colors"
+          class="flex items-center gap-1 rounded px-2 py-0.5 font-ui text-caption uppercase tracking-eyebrow text-ink-muted border border-border-muted bg-surface-2 hover:bg-surface-3 transition-colors"
           data-testid="session-share-btn"
           @click="onOpenShare"
         >
@@ -1990,7 +1990,7 @@ async function onShared() {
         <button
           v-if="purgeRemoteAvailable"
           type="button"
-          class="flex items-center gap-1 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] text-danger border border-danger/40 bg-surface-2 hover:bg-danger/10 transition-colors"
+          class="flex items-center gap-1 rounded px-2 py-0.5 font-ui text-caption uppercase tracking-eyebrow text-signal-danger-text border border-signal-danger/40 bg-surface-2 hover:bg-signal-danger/10 transition-colors"
           :disabled="purgingRemote"
           data-testid="session-purge-remote-btn"
           @click="onPurgeRemote"
@@ -2002,7 +2002,7 @@ async function onShared() {
         <div v-if="inboxItems.length > 0" class="relative ml-auto">
           <button
             type="button"
-            class="rounded-full bg-accent px-2 py-0.5 font-ui text-[10px] text-white"
+            class="rounded-full bg-accent px-2 py-0.5 font-ui text-eyebrow text-white"
             data-testid="session-inbox-badge"
             :aria-expanded="inboxOpen"
             @click="inboxOpen = !inboxOpen"
@@ -2025,10 +2025,10 @@ async function onShared() {
     <div class="flex flex-col min-h-0">
       <div
         v-if="providersLoaded && providers.length === 0 && surfaceState === 'loaded'"
-        class="mx-6 my-3 rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-[12px]"
+        class="mx-6 my-3 rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-small"
         role="status"
       >
-        <div class="text-signal-warn uppercase tracking-[0.18em] text-[11px]">
+        <div class="text-signal-warn uppercase tracking-eyebrow text-caption">
           No provider configured
         </div>
         <p class="mt-1 text-ink">
@@ -2036,7 +2036,7 @@ async function onShared() {
         </p>
         <button
           type="button"
-          class="mt-2 px-3 py-1 rounded-md border border-accent text-accent text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+          class="mt-2 px-3 py-1 rounded-md border border-accent text-accent text-caption uppercase tracking-eyebrow hover:bg-surface-2"
           @click="gotoProviders"
         >
           Configure providers
@@ -2045,10 +2045,10 @@ async function onShared() {
 
       <div
         v-else-if="activeProviderUnsupported && surfaceState === 'loaded'"
-        class="mx-6 my-3 rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-[12px]"
+        class="mx-6 my-3 rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-small"
         role="status"
       >
-        <div class="text-signal-warn uppercase tracking-[0.18em] text-[11px]">
+        <div class="text-signal-warn uppercase tracking-eyebrow text-caption">
           Provider not yet supported
         </div>
         <p class="mt-1 text-ink">
@@ -2057,7 +2057,7 @@ async function onShared() {
         </p>
         <button
           type="button"
-          class="mt-2 px-3 py-1 rounded-md border border-accent text-accent text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+          class="mt-2 px-3 py-1 rounded-md border border-accent text-accent text-caption uppercase tracking-eyebrow hover:bg-surface-2"
           @click="gotoProviders"
         >
           Configure providers
@@ -2071,12 +2071,12 @@ async function onShared() {
       >
         <div class="max-w-md text-center">
           <div
-            class="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-md border border-accent-hairline bg-surface-1 text-accent text-3xl"
+            class="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-md border border-accent-hairline bg-surface-1 text-accent text-hero"
             aria-hidden="true"
           >
             +
           </div>
-          <h2 class="font-ui text-xl font-semibold text-ink">
+          <h2 class="font-ui text-title font-semibold text-ink">
             Start your first conversation
           </h2>
           <p class="mt-2 font-ui text-sm text-ink-muted">
@@ -2090,7 +2090,7 @@ async function onShared() {
             <button
               v-if="!hasAnyProvider"
               type="button"
-              class="rounded-md border border-accent text-accent px-4 py-2 text-xs uppercase tracking-[0.18em] font-ui hover:bg-surface-2"
+              class="rounded-md border border-accent text-accent px-4 py-2 text-xs uppercase tracking-eyebrow font-ui hover:bg-surface-2"
               @click="gotoProviders"
             >
               {{ servedMode ? 'Provider status' : 'Configure providers' }}
@@ -2098,7 +2098,7 @@ async function onShared() {
             <button
               v-else
               type="button"
-              class="rounded-md border border-accent bg-surface-1 text-accent px-4 py-2 text-xs uppercase tracking-[0.18em] font-ui hover:bg-surface-2"
+              class="rounded-md border border-accent bg-surface-1 text-accent px-4 py-2 text-xs uppercase tracking-eyebrow font-ui hover:bg-surface-2"
               :data-testid="'welcome-new-session'"
               @click="openNewSession"
             >
@@ -2115,12 +2115,12 @@ async function onShared() {
       >
         <div class="max-w-md text-center">
           <div
-            class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle"
           >
             {{ sessionList.length }}
             {{ sessionList.length === 1 ? 'session' : 'sessions' }} ready
           </div>
-          <h2 class="mt-2 font-ui text-lg font-semibold text-ink">
+          <h2 class="mt-2 font-ui text-title font-semibold text-ink">
             Pick a session from the rail
           </h2>
           <p class="mt-1 font-ui text-sm text-ink-muted">
@@ -2129,7 +2129,7 @@ async function onShared() {
           </p>
           <button
             type="button"
-            class="mt-5 rounded-md border border-accent text-accent px-4 py-2 text-xs uppercase tracking-[0.18em] font-ui hover:bg-surface-2"
+            class="mt-5 rounded-md border border-accent text-accent px-4 py-2 text-xs uppercase tracking-eyebrow font-ui hover:bg-surface-2"
             @click="openNewSession"
           >
             New session
@@ -2144,11 +2144,11 @@ async function onShared() {
       >
         <div class="max-w-md text-center">
           <div
-            class="font-ui text-[11px] uppercase tracking-[0.18em] text-signal-warn"
+            class="font-ui text-caption uppercase tracking-eyebrow text-signal-warn"
           >
             Gone
           </div>
-          <h2 class="mt-2 font-ui text-lg font-semibold text-ink">
+          <h2 class="mt-2 font-ui text-title font-semibold text-ink">
             This session doesn't exist
           </h2>
           <p class="mt-1 font-ui text-sm text-ink-muted">
@@ -2159,14 +2159,14 @@ async function onShared() {
             <button
               v-if="sessionList.length > 0"
               type="button"
-              class="rounded-md border border-border-muted text-ink px-4 py-2 text-xs uppercase tracking-[0.18em] font-ui hover:bg-surface-2"
+              class="rounded-md border border-border-muted text-ink px-4 py-2 text-xs uppercase tracking-eyebrow font-ui hover:bg-surface-2"
               @click="router.push('/sessions')"
             >
               Back to sessions
             </button>
             <button
               type="button"
-              class="rounded-md border border-accent text-accent px-4 py-2 text-xs uppercase tracking-[0.18em] font-ui hover:bg-surface-2"
+              class="rounded-md border border-accent text-accent px-4 py-2 text-xs uppercase tracking-eyebrow font-ui hover:bg-surface-2"
               @click="openNewSession"
             >
               New session
@@ -2179,14 +2179,14 @@ async function onShared() {
       <template v-else>
         <div
           v-if="session.streamingTimedOut.value"
-          class="px-4 py-2 border-b border-signal-warn bg-surface-1 font-ui text-[12px] text-signal-warn"
+          class="px-4 py-2 border-b border-signal-warn bg-surface-1 font-ui text-small text-signal-warn"
           role="status"
         >
           waiting for stream… (no chunks received in 30s)
         </div>
         <div
           v-if="lastRememberError"
-          class="mx-4 my-2 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+          class="mx-4 my-2 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-small text-signal-warn"
           role="alert"
           data-testid="remember-error-toast"
         >
@@ -2197,7 +2197,7 @@ async function onShared() {
             </p>
             <button
               type="button"
-              class="mt-2 font-ui text-[11px] rounded-sm border border-signal-warn px-2 py-1 hover:bg-surface-2"
+              class="mt-2 font-ui text-caption rounded-sm border border-signal-warn px-2 py-1 hover:bg-surface-2"
               data-testid="remember-error-open-memory-settings"
               @click="router.push('/settings')"
             >
@@ -2214,7 +2214,7 @@ async function onShared() {
         >
           <button
             type="button"
-            class="px-3 py-1 rounded-t-sm font-ui text-[11px] uppercase tracking-[0.18em] border-b-2"
+            class="px-3 py-1 rounded-t-sm font-ui text-caption uppercase tracking-eyebrow border-b-2"
             :class="
               activeTab === 'chat'
                 ? 'text-accent border-accent'
@@ -2227,7 +2227,7 @@ async function onShared() {
           </button>
           <button
             type="button"
-            class="px-3 py-1 rounded-t-sm font-ui text-[11px] uppercase tracking-[0.18em] border-b-2 flex items-center gap-1"
+            class="px-3 py-1 rounded-t-sm font-ui text-caption uppercase tracking-eyebrow border-b-2 flex items-center gap-1"
             :class="
               activeTab === 'artifacts'
                 ? 'text-accent border-accent'
@@ -2237,13 +2237,13 @@ async function onShared() {
             @click="activeTab = 'artifacts'"
           >
             <span>Artifacts</span>
-            <span class="text-ink-dim font-mono text-[10px]">
+            <span class="text-ink-dim font-mono text-eyebrow">
               ({{ sessionArtifacts.list.value.length }})
             </span>
           </button>
           <button
             type="button"
-            class="px-3 py-1 rounded-t-sm font-ui text-[11px] uppercase tracking-[0.18em] border-b-2"
+            class="px-3 py-1 rounded-t-sm font-ui text-caption uppercase tracking-eyebrow border-b-2"
             :class="
               activeTab === 'context'
                 ? 'text-accent border-accent'
@@ -2265,7 +2265,7 @@ async function onShared() {
                means. -->
           <span
             v-if="compactionOverheadVisible"
-            class="ml-auto px-3 py-1 font-ui text-[11px] tracking-[0.05em] text-ink-muted"
+            class="ml-auto px-3 py-1 font-ui text-caption tracking-meta text-ink-muted"
             data-testid="compaction-overhead-line"
             :title="`Running total across this app session; not specific to the conversation you're viewing.${compactionOverheadIndeterminate > 0 ? ` ${compactionOverheadIndeterminate} call(s) had no matching price entry and are excluded from the dollar total.` : ''}`"
           >
@@ -2283,7 +2283,7 @@ async function onShared() {
                auto-title call has run anywhere in this process. -->
           <span
             v-if="autoTitleOverheadVisible"
-            class="ml-auto px-3 py-1 font-ui text-[11px] tracking-[0.05em] text-ink-muted"
+            class="ml-auto px-3 py-1 font-ui text-caption tracking-meta text-ink-muted"
             data-testid="autotitle-overhead-line"
             :title="`Running total across this app session; not specific to the conversation you're viewing.${autoTitleOverheadIndeterminate > 0 ? ` ${autoTitleOverheadIndeterminate} call(s) had no matching price entry and are excluded from the dollar total.` : ''}`"
           >
@@ -2303,7 +2303,7 @@ async function onShared() {
                with no compacted history. -->
           <button
             type="button"
-            class="px-3 py-1 rounded-sm font-ui text-[11px] uppercase tracking-[0.18em] border"
+            class="px-3 py-1 rounded-sm font-ui text-caption uppercase tracking-eyebrow border"
             :class="[
               compactionOverheadVisible || autoTitleOverheadVisible ? '' : 'ml-auto',
               session.showFullHistory.value
@@ -2319,7 +2319,7 @@ async function onShared() {
         </div>
         <div
           v-if="lastArtifactError"
-          class="mx-4 my-2 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+          class="mx-4 my-2 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-small text-signal-warn"
           role="alert"
         >
           {{ lastArtifactError }}
@@ -2333,7 +2333,7 @@ async function onShared() {
              knob (provider-implementation-uniformity-01KQ8V4F WP07). -->
         <div
           v-if="session.session.value && activeTab === 'chat' && activeReasoningStyle !== 'none'"
-          class="flex justify-end px-4 py-1 border-b border-hairline"
+          class="flex justify-end px-4 py-1 border-b border-border-muted"
         >
           <ReasoningControl
             :reasoning-style="activeReasoningStyle"
@@ -2444,7 +2444,7 @@ async function onShared() {
                click silently do nothing. -->
           <div
             v-if="subagentControlError"
-            class="mx-4 mb-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+            class="mx-4 mb-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
             role="alert"
             data-testid="subagent-control-error"
           >
@@ -2454,7 +2454,7 @@ async function onShared() {
                (FR-003: the error ref was set but never displayed). -->
           <div
             v-if="branchFromTurnError"
-            class="mx-4 mb-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+            class="mx-4 mb-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
             role="alert"
             data-testid="branch-from-turn-error"
           >
@@ -2468,7 +2468,7 @@ async function onShared() {
                session-full banner, which means the turn is over. -->
           <div
             v-if="session.overflowRecovery.value"
-            class="mx-4 mb-2 rounded-sm border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+            class="mx-4 mb-2 rounded-sm border border-border-muted bg-surface-1 px-3 py-2 font-ui text-small text-ink-muted"
             role="status"
             data-testid="overflow-recovery-notice"
           >
@@ -2484,7 +2484,7 @@ async function onShared() {
                server-side, so reopening the conversation recovers it. -->
           <div
             v-if="session.streamTruncated.value"
-            class="mx-4 mb-2 rounded-sm border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+            class="mx-4 mb-2 rounded-sm border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-small text-signal-warn"
             role="status"
             data-testid="stream-truncated-notice"
           >
@@ -2528,7 +2528,7 @@ async function onShared() {
           >
             <thead>
               <tr
-                class="text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+                class="text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
               >
                 <th class="px-2 py-1.5 font-medium">Source</th>
                 <th class="px-2 py-1.5 font-medium">Title</th>
@@ -2545,19 +2545,19 @@ async function onShared() {
                 :data-testid="`session-artifacts-row-${a.id}`"
                 @click="openArtifactPreview(a)"
               >
-                <td class="px-2 py-1.5 text-ink-dim font-mono text-[11px]">
+                <td class="px-2 py-1.5 text-ink-dim font-mono text-caption">
                   {{ a.source }}
                 </td>
                 <td class="px-2 py-1.5 text-ink truncate max-w-[40ch]">
                   {{ a.title }}
                 </td>
-                <td class="px-2 py-1.5 text-ink-muted font-mono text-[11px]">
+                <td class="px-2 py-1.5 text-ink-muted font-mono text-caption">
                   {{ a.mimeType }}
                 </td>
-                <td class="px-2 py-1.5 text-ink-muted font-mono text-[11px]">
+                <td class="px-2 py-1.5 text-ink-muted font-mono text-caption">
                   {{ formatSize(a.byteSize) }}
                 </td>
-                <td class="px-2 py-1.5 text-ink-dim font-mono text-[11px]">
+                <td class="px-2 py-1.5 text-ink-dim font-mono text-caption">
                   {{ formatTimestamp(a.createdAt) }}
                 </td>
               </tr>
@@ -2575,7 +2575,7 @@ async function onShared() {
         <!-- footer status bar: muted model picker + context window meter -->
         <div
           v-if="activeProvider && allChoices.length > 0"
-          class="relative flex items-center justify-between gap-3 border-t border-border-muted bg-surface-0 px-4 py-1.5 font-ui text-[11px] text-ink-dim"
+          class="relative flex items-center justify-between gap-3 border-t border-border-muted bg-surface-0 px-4 py-1.5 font-ui text-caption text-ink-dim"
           data-testid="session-status-bar"
         >
           <button
@@ -2584,7 +2584,7 @@ async function onShared() {
             :data-testid="'session-model-switcher'"
             @click="toggleSwitcher"
           >
-            <span class="uppercase tracking-[0.14em] text-ink-subtle">
+            <span class="uppercase tracking-eyebrow text-ink-subtle">
               model
             </span>
             <span class="font-mono text-ink-muted">
@@ -2592,7 +2592,7 @@ async function onShared() {
             </span>
             <span
               v-if="activeModelCachesPrompts"
-              class="rounded-sm border border-border-muted px-1 text-[10px] text-ink-subtle"
+              class="rounded-sm border border-border-muted px-1 text-eyebrow text-ink-subtle"
               title="Requests to this model mark the system prompt and loaded tools for the provider's prompt cache."
               data-testid="session-model-caches-prompts"
             >caches prompts</span>
@@ -2604,7 +2604,7 @@ async function onShared() {
             role="menu"
           >
             <div
-              class="px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-ink-subtle border-b border-border-muted"
+              class="px-3 py-1.5 text-eyebrow uppercase tracking-eyebrow text-ink-subtle border-b border-border-muted"
             >
               {{
                 activeFamily ? `Same family (${activeFamily})` : 'Available'
@@ -2624,13 +2624,13 @@ async function onShared() {
               @click="pickModel(c.providerId, c.modelId)"
             >
               <div class="font-mono text-xs">{{ c.modelId }}</div>
-              <div class="text-[10px] text-ink-dim">
+              <div class="text-eyebrow text-ink-dim">
                 {{ c.providerName }}<template v-if="modelCachesPrompts(c.providerId, c.modelId)"> · caches prompts</template>
               </div>
             </button>
             <div
               v-if="otherFamilyChoices.length > 0"
-              class="px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-ink-subtle border-t border-border-muted"
+              class="px-3 py-1.5 text-eyebrow uppercase tracking-eyebrow text-ink-subtle border-t border-border-muted"
             >
               Other families (cross-family blocked)
             </div>
@@ -2644,7 +2644,7 @@ async function onShared() {
               "
             >
               <div class="font-mono text-xs">{{ c.modelId }}</div>
-              <div class="text-[10px]">
+              <div class="text-eyebrow">
                 {{ c.providerName }} · {{ c.family }}
               </div>
             </div>
@@ -2688,7 +2688,7 @@ async function onShared() {
                 : 'Context window size unknown for this model'"
           >
             <span
-              class="uppercase tracking-[0.14em]"
+              class="uppercase tracking-eyebrow"
               :class="hasContextWindow ? 'text-ink-subtle' : 'text-ink-dim'"
             >
               context

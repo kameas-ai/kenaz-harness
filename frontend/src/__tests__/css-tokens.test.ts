@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 /**
  * Privacy CI invariant #4 (plan §4.3): no raw hex/rgb/hsl/oklch literal
@@ -118,5 +119,23 @@ describe('Contrast lint guard (WP04)', () => {
     }
     // Report count for awareness but do not fail when under baseline.
     expect(count).toBeLessThanOrEqual(TEXT_INK_DIM_BASELINE);
+  });
+});
+
+/**
+ * DS v0.13.0 adoption: the space / type / radius token groups, the retired
+ * serif register and the @font-face exemption live in the CI script itself
+ * (scripts/ci/check-css-tokens.mjs). pr.yml runs that script with
+ * `continue-on-error: true`, so running it here is what makes the full
+ * invariant blocking — vitest is a required check.
+ */
+describe('DS token discipline — full check-css-tokens.mjs gate', () => {
+  it('scripts/ci/check-css-tokens.mjs passes on the tree', () => {
+    const script = resolve(ROOT, '../../scripts/ci/check-css-tokens.mjs');
+    const r = spawnSync(process.execPath, [script], { encoding: 'utf8' });
+    if (r.status !== 0) {
+      throw new Error(`[css-tokens] gate failed (exit ${r.status}):\n${r.stdout}\n${r.stderr}`);
+    }
+    expect(r.stdout).toMatch(/clean across \d+ files/);
   });
 });

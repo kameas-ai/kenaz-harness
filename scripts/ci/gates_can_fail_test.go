@@ -3356,6 +3356,69 @@ func TestCSSTokensGate_SameVerdictFromAnyCWD(t *testing.T) {
 	}
 }
 
+// TestCSSTokensGate_PlantedDSLiteralsFire is the planted-violation proof for
+// the DS v0.13.0 extension of check-css-tokens.mjs (space / type / radius
+// token groups, retired serif). One probe file carries one violation per
+// rule, each on its own line (the gate reports the first rule a line hits),
+// plus an @font-face block and an allow-next-line pair that must NOT be
+// reported. Asserts every rule name appears and the exemptions hold.
+func TestCSSTokensGate_PlantedDSLiteralsFire(t *testing.T) {
+	root := repoRoot(t)
+	probe := filepath.Join(root, "frontend", "src", "zz_gate_probe_ds_tokens.vue")
+	content := strings.Join([]string{
+		`<template>`,
+		`  <div class="text-[11px]"></div>`,
+		`  <div class="text-base"></div>`,
+		`  <div class="rounded-[3px]"></div>`,
+		`  <div class="p-[7px]"></div>`,
+		`  <div class="gap-10"></div>`,
+		`  <div class="tracking-[0.18em]"></div>`,
+		`  <div class="font-serif"></div>`,
+		`  <!-- css-tokens-allow-next-line: probe exemption -->`,
+		`  <div class="pl-[88px] zz-allowed-next-line"></div>`,
+		`</template>`,
+		`<style>`,
+		`@font-face { font-family: 'ZzProbeFace'; }`,
+		`.a { font-size: 13px; }`,
+		`.b { border-radius: 3px; }`,
+		`.c { padding: 0.5rem 7px; }`,
+		`</style>`,
+		``,
+	}, "\n")
+	cleanup := plant(t, probe, content, "")
+	defer cleanup()
+
+	cmd := exec.Command("node", filepath.Join(root, "scripts", "ci", "check-css-tokens.mjs"))
+	cmd.Dir = root
+	outB, err := cmd.CombinedOutput()
+	out := string(outB)
+	if err == nil {
+		t.Fatalf("check-css-tokens.mjs exited 0 with DS-literal violations planted:\n%s", out)
+	}
+	for _, rule := range []string{
+		"arbitrary font size",
+		"off-scale Tailwind font size",
+		"arbitrary radius",
+		"arbitrary spacing",
+		"off-scale spacing step",
+		"arbitrary letter-spacing",
+		"retired serif register",
+		"font-size literal",
+		"border-radius literal",
+		"spacing literal",
+	} {
+		if !strings.Contains(out, "zz_gate_probe_ds_tokens.vue") || !strings.Contains(out, rule) {
+			t.Errorf("planted %q violation not reported by the gate:\n%s", rule, out)
+		}
+	}
+	if strings.Contains(out, "zz-allowed-next-line") {
+		t.Errorf("css-tokens-allow-next-line did not exempt the following line:\n%s", out)
+	}
+	if strings.Contains(out, "ZzProbeFace") {
+		t.Errorf("font-family inside @font-face was reported as a font stack:\n%s", out)
+	}
+}
+
 // TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites is I16's true
 // negative (approval-node-01PMZC12 UNIT-9, AC-11): a port written ONLY
 // through ports_gen.go's generated ToPortValues() — which writes every

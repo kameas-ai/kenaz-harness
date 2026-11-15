@@ -21,7 +21,7 @@ const model = defineModel<string>({ required: true });
 <template>
   <select
     v-model="model"
-    class="font-ui text-[12px] text-ink bg-surface-1 border border-border-muted rounded-md px-2 py-1 w-full"
+    class="font-ui text-small text-ink bg-surface-1 border border-border-muted rounded-md px-2 py-1 w-full"
     aria-label="Team"
     :disabled="disabled"
     :data-testid="testid ?? 'fleet-team-picker'"

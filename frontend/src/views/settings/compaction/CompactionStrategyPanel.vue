@@ -450,7 +450,7 @@ defineExpose({ refresh, saveGlobalConfig });
     <!-- Global error banner -->
     <div
       v-if="error"
-      class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="csp-error"
     >
@@ -459,10 +459,10 @@ defineExpose({ refresh, saveGlobalConfig });
 
     <!-- 1. Aggressiveness tier ─────────────────────────────────────────── -->
     <section data-testid="csp-tier-section">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Aggressiveness tier
       </h2>
-      <p class="mt-1 font-ui text-[11px] text-ink-muted">
+      <p class="mt-1 font-ui text-caption text-ink-muted">
         Controls when compaction fires and how much history is summarised.
         This tier is shared with the General settings panel — changes here
         are reflected there immediately.
@@ -479,7 +479,7 @@ defineExpose({ refresh, saveGlobalConfig });
           type="button"
           role="radio"
           :aria-checked="compactionTier === t"
-          class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors capitalize"
+          class="px-3 py-1.5 font-ui text-small border-r border-border last:border-r-0 transition-colors capitalize"
           :class="compactionTier === t
             ? 'bg-surface-3 text-ink'
             : 'bg-surface-1 text-ink-muted hover:text-ink'"
@@ -492,7 +492,7 @@ defineExpose({ refresh, saveGlobalConfig });
 
       <button
         type="button"
-        class="mt-2 font-ui text-[11px] text-accent hover:underline"
+        class="mt-2 font-ui text-caption text-accent hover:underline"
         data-testid="csp-explain-toggle"
         :aria-expanded="explainOpen"
         @click="explainOpen = !explainOpen"
@@ -502,7 +502,7 @@ defineExpose({ refresh, saveGlobalConfig });
 
       <div
         v-if="explainOpen"
-        class="mt-2 rounded-sm border border-border bg-surface-1 p-3 font-ui text-[12px]"
+        class="mt-2 rounded-sm border border-border bg-surface-1 p-3 font-ui text-small"
         data-testid="csp-explain-disclosure"
       >
         <div v-if="selectedTierExplain" class="space-y-1">
@@ -513,7 +513,7 @@ defineExpose({ refresh, saveGlobalConfig });
             {{ selectedTierExplain.description }}
           </p>
           <dl
-            class="mt-2 grid gap-1 font-mono text-[11px] text-ink-muted"
+            class="mt-2 grid gap-1 font-mono text-caption text-ink-muted"
             style="grid-template-columns: 14ch 1fr"
             data-testid="csp-explain-numerics"
           >
@@ -537,11 +537,11 @@ defineExpose({ refresh, saveGlobalConfig });
 
     <!-- 2. Per-site strategy picker (global layer) ─────────────────────── -->
     <section data-testid="csp-global-strategies-section">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Strategy per trigger site
         <span class="ml-1 text-ink-dim font-normal normal-case tracking-normal">(global layer)</span>
       </h2>
-      <p class="mt-1 font-ui text-[11px] text-ink-muted">
+      <p class="mt-1 font-ui text-caption text-ink-muted">
         Choose a compaction algorithm for each trigger site. "— inherit —" falls
         through to the engine's built-in default. Project and session overrides can
         be set in the Scope override section below.
@@ -549,7 +549,7 @@ defineExpose({ refresh, saveGlobalConfig });
 
       <div
         v-if="loading"
-        class="mt-3 font-ui text-[12px] text-ink-muted"
+        class="mt-3 font-ui text-small text-ink-muted"
         data-testid="csp-loading"
       >
         Loading…
@@ -563,12 +563,12 @@ defineExpose({ refresh, saveGlobalConfig });
           :data-testid="`csp-site-${site}`"
         >
           <header class="mb-3 flex items-center justify-between">
-            <h3 class="font-ui text-[13px] uppercase tracking-[0.18em] text-ink-dim">
+            <h3 class="font-ui text-ui uppercase tracking-eyebrow text-ink-dim">
               {{ siteLabel(site) }}
             </h3>
             <span
               v-if="effectiveSiteConfig(site).strategy"
-              class="rounded-sm border border-border-muted px-2 py-0 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim"
+              class="rounded-sm border border-border-muted px-2 py-0 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim"
               :data-testid="`csp-effective-${site}`"
             >
               Effective: {{ strategyLabel(effectiveSiteConfig(site).strategy) }}
@@ -584,7 +584,7 @@ defineExpose({ refresh, saveGlobalConfig });
 
           <div class="grid grid-cols-2 gap-3">
             <!-- Enabled toggle -->
-            <label class="flex items-center gap-2 font-ui text-[12px] text-ink-muted col-span-2">
+            <label class="flex items-center gap-2 font-ui text-small text-ink-muted col-span-2">
               <input
                 type="checkbox"
                 :checked="siteConfig(site).enabled"
@@ -596,11 +596,11 @@ defineExpose({ refresh, saveGlobalConfig });
             </label>
 
             <!-- Strategy picker -->
-            <label class="flex flex-col font-ui text-[12px] text-ink-muted">
+            <label class="flex flex-col font-ui text-small text-ink-muted">
               <span>Strategy</span>
               <select
                 :value="siteConfig(site).strategy ?? ''"
-                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink"
+                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-small text-ink"
                 :data-testid="`csp-${site}-strategy`"
                 @change="updateSiteConfig(site, {
                   strategy: (($event.target as HTMLSelectElement).value as CompactionStrategy) || undefined,
@@ -616,7 +616,7 @@ defineExpose({ refresh, saveGlobalConfig });
             <!-- Pre-call threshold (only for pre_call site) -->
             <label
               v-if="site === 'pre_call'"
-              class="flex flex-col font-ui text-[12px] text-ink-muted"
+              class="flex flex-col font-ui text-small text-ink-muted"
             >
               <span>Threshold (0.0–1.0)</span>
               <input
@@ -625,7 +625,7 @@ defineExpose({ refresh, saveGlobalConfig });
                 min="0"
                 max="1"
                 :value="siteConfig(site).preCallThreshold ?? ''"
-                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink w-24"
+                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-small text-ink w-24"
                 :data-testid="`csp-${site}-threshold`"
                 @input="updateSiteConfig(site, {
                   preCallThreshold: Number.parseFloat(($event.target as HTMLInputElement).value) || undefined,
@@ -636,14 +636,14 @@ defineExpose({ refresh, saveGlobalConfig });
             <!-- Tool result max bytes (only for post_tool site) -->
             <label
               v-if="site === 'post_tool'"
-              class="flex flex-col font-ui text-[12px] text-ink-muted"
+              class="flex flex-col font-ui text-small text-ink-muted"
             >
               <span>Tool result max bytes</span>
               <input
                 type="number"
                 min="0"
                 :value="siteConfig(site).toolResultMaxBytes ?? ''"
-                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink w-28"
+                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-small text-ink w-28"
                 :data-testid="`csp-${site}-max-bytes`"
                 @input="updateSiteConfig(site, {
                   toolResultMaxBytes: Number.parseInt(($event.target as HTMLInputElement).value, 10) || undefined,
@@ -654,14 +654,14 @@ defineExpose({ refresh, saveGlobalConfig });
             <!-- Drop-oldest keep-recent-N (for drop_oldest strategy) -->
             <label
               v-if="siteConfig(site).strategy === 'drop_oldest'"
-              class="flex flex-col font-ui text-[12px] text-ink-muted"
+              class="flex flex-col font-ui text-small text-ink-muted"
             >
               <span>{{ summaryLengthLabel('drop_oldest') }}</span>
               <input
                 type="number"
                 min="1"
                 :value="siteConfig(site).dropOldestKeepRecentN ?? ''"
-                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink w-24"
+                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-small text-ink w-24"
                 :data-testid="`csp-${site}-keep-recent-n`"
                 @input="updateSiteConfig(site, {
                   dropOldestKeepRecentN: Number.parseInt(($event.target as HTMLInputElement).value, 10) || undefined,
@@ -672,14 +672,14 @@ defineExpose({ refresh, saveGlobalConfig });
             <!-- Semantic cluster count (for semantic_cluster strategy) -->
             <label
               v-if="siteConfig(site).strategy === 'semantic_cluster'"
-              class="flex flex-col font-ui text-[12px] text-ink-muted"
+              class="flex flex-col font-ui text-small text-ink-muted"
             >
               <span>{{ summaryLengthLabel('semantic_cluster') }}</span>
               <input
                 type="number"
                 min="1"
                 :value="siteConfig(site).semanticClusterCount ?? ''"
-                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink w-24"
+                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-small text-ink w-24"
                 :data-testid="`csp-${site}-cluster-count`"
                 @input="updateSiteConfig(site, {
                   semanticClusterCount: Number.parseInt(($event.target as HTMLInputElement).value, 10) || undefined,
@@ -694,14 +694,14 @@ defineExpose({ refresh, saveGlobalConfig });
                  nil-LLM heuristic pipe-join with no model to target. -->
             <label
               v-if="siteConfig(site).strategy === 'summary'"
-              class="flex flex-col font-ui text-[12px] text-ink-muted"
+              class="flex flex-col font-ui text-small text-ink-muted"
             >
               <span>Summary model (optional)</span>
               <input
                 type="text"
                 placeholder="Use session's active model"
                 :value="siteConfig(site).summaryModel ?? ''"
-                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink"
+                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-small text-ink"
                 :data-testid="`csp-${site}-summary-model`"
                 @input="updateSiteConfig(site, {
                   summaryModel: ($event.target as HTMLInputElement).value || undefined,
@@ -712,12 +712,12 @@ defineExpose({ refresh, saveGlobalConfig });
             <!-- Custom subgraph picker (for custom_subgraph strategy) -->
             <label
               v-if="siteConfig(site).strategy === 'custom_subgraph'"
-              class="col-span-2 flex flex-col font-ui text-[12px] text-ink-muted"
+              class="col-span-2 flex flex-col font-ui text-small text-ink-muted"
             >
               <span>Custom strategy graph</span>
               <select
                 :value="siteConfig(site).customGraphId ?? ''"
-                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink"
+                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-small text-ink"
                 :data-testid="`csp-${site}-custom-graph`"
                 @change="updateSiteConfig(site, {
                   customGraphId: ($event.target as HTMLSelectElement).value || undefined,
@@ -730,7 +730,7 @@ defineExpose({ refresh, saveGlobalConfig });
               </select>
               <p
                 v-if="customStrategies.length === 0"
-                class="mt-1 font-ui text-[11px] text-ink-dim"
+                class="mt-1 font-ui text-caption text-ink-dim"
               >
                 No custom strategies registered. They appear here once the
                 agent-graph library ships custom_subgraph nodes.
@@ -742,7 +742,7 @@ defineExpose({ refresh, saveGlobalConfig });
         <div class="flex items-center gap-3">
           <button
             type="button"
-            class="rounded-sm border border-accent bg-surface-2 px-4 py-1.5 font-ui text-[12px] uppercase tracking-[0.18em] text-accent hover:bg-accent-glow disabled:opacity-50"
+            class="rounded-sm border border-accent bg-surface-2 px-4 py-1.5 font-ui text-small uppercase tracking-eyebrow text-accent hover:bg-accent-glow disabled:opacity-50"
             data-testid="csp-save-global"
             :disabled="saving"
             @click="saveGlobalConfig"
@@ -751,7 +751,7 @@ defineExpose({ refresh, saveGlobalConfig });
           </button>
           <span
             v-if="saveSuccess"
-            class="font-ui text-[11px] text-signal-success"
+            class="font-ui text-caption text-signal-ok-text"
             data-testid="csp-save-success"
           >
             Saved.
@@ -762,10 +762,10 @@ defineExpose({ refresh, saveGlobalConfig });
 
     <!-- 3. Live preview ────────────────────────────────────────────────── -->
     <section data-testid="csp-preview-section">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Live preview
       </h2>
-      <p class="mt-1 font-ui text-[11px] text-ink-muted">
+      <p class="mt-1 font-ui text-caption text-ink-muted">
         What the effective cascade would compact in a sample {{ SAMPLE_TURNS.length }}-turn session
         ({{ SAMPLE_TOTAL_TOKENS.toLocaleString() }} tokens / {{ MOCK_CONTEXT_CAP.toLocaleString() }} cap).
       </p>
@@ -775,7 +775,7 @@ defineExpose({ refresh, saveGlobalConfig });
         data-testid="csp-preview-card"
       >
         <p
-          class="mb-3 font-ui text-[11px] text-ink-muted"
+          class="mb-3 font-ui text-caption text-ink-muted"
           data-testid="csp-preview-note"
         >
           {{ previewResult.note }}
@@ -784,13 +784,13 @@ defineExpose({ refresh, saveGlobalConfig });
           <li
             v-for="turn in SAMPLE_TURNS"
             :key="turn.id"
-            class="flex items-center gap-2 font-ui text-[12px]"
+            class="flex items-center gap-2 font-ui text-small"
             :data-testid="`csp-preview-turn-${turn.id}`"
           >
             <span
-              class="inline-block w-5 h-5 flex-shrink-0 rounded-sm text-center text-[10px] leading-5"
+              class="inline-block w-5 h-5 flex-shrink-0 rounded-sm text-center text-eyebrow leading-5"
               :class="previewResult.compacted.includes(turn.id)
-                ? 'bg-signal-warning/20 text-signal-warning'
+                ? 'bg-signal-warn/20 text-signal-warn-text'
                 : 'bg-surface-2 text-ink-muted'"
             >
               {{ previewResult.compacted.includes(turn.id) ? '↓' : '·' }}
@@ -802,14 +802,14 @@ defineExpose({ refresh, saveGlobalConfig });
             >
               {{ turn.label }}
             </span>
-            <span class="ml-auto font-mono text-[10px] text-ink-dim">
+            <span class="ml-auto font-mono text-eyebrow text-ink-dim">
               {{ turn.tokens.toLocaleString() }}t
             </span>
           </li>
         </ul>
         <p
           v-if="previewResult.compacted.length > 0"
-          class="mt-3 font-ui text-[11px] text-signal-warning"
+          class="mt-3 font-ui text-caption text-signal-warn-text"
           data-testid="csp-preview-compacted-count"
         >
           {{ previewResult.compacted.length }} turn{{ previewResult.compacted.length !== 1 ? 's' : '' }}
@@ -820,17 +820,17 @@ defineExpose({ refresh, saveGlobalConfig });
 
     <!-- 4. Per-scope override ──────────────────────────────────────────── -->
     <section data-testid="csp-scope-override-section">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Scope override
       </h2>
-      <p class="mt-1 font-ui text-[11px] text-ink-muted">
+      <p class="mt-1 font-ui text-caption text-ink-muted">
         A project or session can opt into a different strategy than the global
         default. Enter its ID to load, edit, and save a per-scope override.
         The cascade priority is global → project → session → run → node.
       </p>
 
       <div class="mt-3 flex flex-wrap items-end gap-3">
-        <div class="flex flex-col font-ui text-[12px] text-ink-muted">
+        <div class="flex flex-col font-ui text-small text-ink-muted">
           Scope
           <div
             class="mt-1 inline-flex rounded-sm border border-border-muted"
@@ -843,7 +843,7 @@ defineExpose({ refresh, saveGlobalConfig });
               type="button"
               role="radio"
               :aria-checked="overrideScope === s"
-              class="px-3 py-1.5 font-ui text-[12px] border-r border-border-muted last:border-r-0 transition-colors capitalize"
+              class="px-3 py-1.5 font-ui text-small border-r border-border-muted last:border-r-0 transition-colors capitalize"
               :class="overrideScope === s
                 ? 'bg-surface-3 text-ink'
                 : 'bg-surface-1 text-ink-muted hover:text-ink'"
@@ -855,20 +855,20 @@ defineExpose({ refresh, saveGlobalConfig });
           </div>
         </div>
 
-        <label class="flex flex-col font-ui text-[12px] text-ink-muted">
+        <label class="flex flex-col font-ui text-small text-ink-muted">
           {{ overrideScopeIdLabel }}
           <input
             v-model="overrideScopeId"
             type="text"
             :placeholder="`Enter ${overrideScopeIdLabel.toLowerCase()}…`"
-            class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink w-64"
+            class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-small text-ink w-64"
             data-testid="csp-override-scope-id"
           />
         </label>
 
         <button
           type="button"
-          class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-ink-muted hover:bg-surface-3 disabled:opacity-50"
+          class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1 font-ui text-small uppercase tracking-eyebrow text-ink-muted hover:bg-surface-3 disabled:opacity-50"
           data-testid="csp-override-load"
           :disabled="!overrideScopeId.trim() || overrideLoading"
           @click="loadOverrideConfig"
@@ -879,7 +879,7 @@ defineExpose({ refresh, saveGlobalConfig });
 
       <div
         v-if="overrideError"
-        class="mt-2 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="mt-2 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
         data-testid="csp-override-error"
       >
@@ -898,12 +898,12 @@ defineExpose({ refresh, saveGlobalConfig });
           :data-testid="`csp-override-site-${site}`"
         >
           <header class="mb-3 flex items-center justify-between">
-            <h3 class="font-ui text-[13px] uppercase tracking-[0.18em] text-ink-dim">
+            <h3 class="font-ui text-ui uppercase tracking-eyebrow text-ink-dim">
               {{ siteLabel(site) }}
             </h3>
             <span
               v-if="overrideEffectiveSiteConfig(site).strategy"
-              class="rounded-sm border border-border-muted px-2 py-0 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim"
+              class="rounded-sm border border-border-muted px-2 py-0 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim"
               :data-testid="`csp-override-effective-${site}`"
             >
               Effective: {{ strategyLabel(overrideEffectiveSiteConfig(site).strategy) }}
@@ -918,7 +918,7 @@ defineExpose({ refresh, saveGlobalConfig });
           </header>
 
           <div class="grid grid-cols-2 gap-3">
-            <label class="flex items-center gap-2 font-ui text-[12px] text-ink-muted col-span-2">
+            <label class="flex items-center gap-2 font-ui text-small text-ink-muted col-span-2">
               <input
                 type="checkbox"
                 :checked="overrideSiteConfig(site).enabled"
@@ -929,11 +929,11 @@ defineExpose({ refresh, saveGlobalConfig });
               Enabled
             </label>
 
-            <label class="flex flex-col font-ui text-[12px] text-ink-muted">
+            <label class="flex flex-col font-ui text-small text-ink-muted">
               <span>Strategy</span>
               <select
                 :value="overrideSiteConfig(site).strategy ?? ''"
-                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink"
+                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-small text-ink"
                 :data-testid="`csp-override-${site}-strategy`"
                 @change="updateOverrideSiteConfig(site, {
                   strategy: (($event.target as HTMLSelectElement).value as CompactionStrategy) || undefined,
@@ -948,7 +948,7 @@ defineExpose({ refresh, saveGlobalConfig });
 
             <label
               v-if="site === 'pre_call'"
-              class="flex flex-col font-ui text-[12px] text-ink-muted"
+              class="flex flex-col font-ui text-small text-ink-muted"
             >
               <span>Threshold (0.0–1.0)</span>
               <input
@@ -957,7 +957,7 @@ defineExpose({ refresh, saveGlobalConfig });
                 min="0"
                 max="1"
                 :value="overrideSiteConfig(site).preCallThreshold ?? ''"
-                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink w-24"
+                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-small text-ink w-24"
                 :data-testid="`csp-override-${site}-threshold`"
                 @input="updateOverrideSiteConfig(site, {
                   preCallThreshold: Number.parseFloat(($event.target as HTMLInputElement).value) || undefined,
@@ -975,7 +975,7 @@ defineExpose({ refresh, saveGlobalConfig });
             >
               <button
                 type="button"
-                class="self-start rounded-sm border border-accent bg-surface-2 px-3 py-1.5 font-ui text-[12px] uppercase tracking-[0.18em] text-accent hover:bg-accent-glow disabled:opacity-50"
+                class="self-start rounded-sm border border-accent bg-surface-2 px-3 py-1.5 font-ui text-small uppercase tracking-eyebrow text-accent hover:bg-accent-glow disabled:opacity-50"
                 data-testid="csp-manual-compact-now"
                 :disabled="manualCompacting || !overrideScopeId.trim()"
                 @click="triggerManualCompact"
@@ -984,7 +984,7 @@ defineExpose({ refresh, saveGlobalConfig });
               </button>
               <p
                 v-if="manualCompactError"
-                class="font-ui text-[12px] text-signal-danger"
+                class="font-ui text-small text-signal-danger"
                 role="alert"
                 data-testid="csp-manual-compact-error"
               >
@@ -992,14 +992,14 @@ defineExpose({ refresh, saveGlobalConfig });
               </p>
               <p
                 v-else-if="manualCompactResult && manualCompactResult.skipped"
-                class="font-ui text-[12px] text-signal-warning"
+                class="font-ui text-small text-signal-warn-text"
                 data-testid="csp-manual-compact-skipped"
               >
                 Skipped: {{ manualCompactResult.reason || 'nothing to compact.' }}
               </p>
               <p
                 v-else-if="manualCompactResult"
-                class="font-ui text-[12px] text-signal-success"
+                class="font-ui text-small text-signal-ok-text"
                 data-testid="csp-manual-compact-success"
               >
                 Compacted with {{ strategyLabel(manualCompactResult.strategy) }} —
@@ -1012,7 +1012,7 @@ defineExpose({ refresh, saveGlobalConfig });
         <div class="flex items-center gap-3">
           <button
             type="button"
-            class="rounded-sm border border-accent bg-surface-2 px-4 py-1.5 font-ui text-[12px] uppercase tracking-[0.18em] text-accent hover:bg-accent-glow disabled:opacity-50"
+            class="rounded-sm border border-accent bg-surface-2 px-4 py-1.5 font-ui text-small uppercase tracking-eyebrow text-accent hover:bg-accent-glow disabled:opacity-50"
             data-testid="csp-override-save"
             :disabled="overrideSaving || !overrideScopeId.trim()"
             @click="saveOverrideConfig"
@@ -1021,7 +1021,7 @@ defineExpose({ refresh, saveGlobalConfig });
           </button>
           <span
             v-if="overrideSaveSuccess"
-            class="font-ui text-[11px] text-signal-success"
+            class="font-ui text-caption text-signal-ok-text"
             data-testid="csp-override-save-success"
           >
             Saved.

@@ -9,11 +9,12 @@ defineProps<{
 </script>
 
 <template>
+  <!-- css-tokens-allow-next-line: 88px clears the macOS traffic-light buttons (platform geometry, not a spacing step) -->
   <div class="flex items-center justify-between pl-[88px] pr-4 py-2 select-none">
     <div class="flex items-center gap-3">
       <span
         v-if="showDisclaimer !== false"
-        class="font-ui text-[11px] text-ink-subtle"
+        class="font-ui text-caption text-ink-subtle"
         aria-label="Disclaimer"
       >
         Content is user-generated and unverified.

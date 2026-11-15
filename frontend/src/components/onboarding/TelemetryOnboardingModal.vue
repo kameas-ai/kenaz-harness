@@ -154,7 +154,7 @@ async function dismiss() {
     @close="dismiss"
   >
     <div data-testid="telemetry-onboarding-modal">
-      <h2 id="telemetry-onboarding-title" class="text-base font-semibold text-ink mb-3">
+      <h2 id="telemetry-onboarding-title" class="text-h3 font-semibold text-ink mb-3">
         Share performance telemetry
       </h2>
       <p class="text-sm text-ink-muted mb-4">
