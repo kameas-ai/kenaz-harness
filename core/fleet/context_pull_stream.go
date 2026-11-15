@@ -28,6 +28,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 )
 
 // Audience values Fleet serves on pull (spec 018 FR-6) and takes on push.
@@ -66,7 +67,18 @@ func (c pullCursor) query() string {
 
 // laneStreamPath builds a pull path for a lane's kinds at cursor c.
 func laneStreamPath(kinds []string, c pullCursor) string {
-	p := "/api/v1/context/pull?" + laneKindQuery(kinds)
+	return laneStreamPathLimit(kinds, c, pullPageSize)
+}
+
+// laneStreamPathLimit is laneStreamPath with an explicit page size. limit
+// is always sent: a page shorter than it ends a full pull (and lets a
+// reset sweep run), so Fleet's default must never decide that. limit is
+// not part of the cursor's filter set.
+func laneStreamPathLimit(kinds []string, c pullCursor, limit int) string {
+	if limit <= 0 {
+		limit = pullPageSize
+	}
+	p := "/api/v1/context/pull?" + laneKindQuery(kinds) + "&limit=" + strconv.Itoa(limit)
 	if q := c.query(); q != "" {
 		p += "&" + q
 	}

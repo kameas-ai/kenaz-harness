@@ -31,6 +31,10 @@ type UnitNodeLabels struct {
 	Audience    string `json:"audience,omitempty"`
 	Governed    bool   `json:"governed,omitempty"`
 	OwnerUserID string `json:"owner_user_id,omitempty"`
+	// PulledBy is the signed-in fleet user the row was recorded for. A
+	// unit recorded for another account is never removed by this one's
+	// reset (several accounts can sign in on one profile).
+	PulledBy string `json:"pulled_by,omitempty"`
 }
 
 type unitIndexFile struct {
@@ -125,6 +129,9 @@ func (x *unitIndex) put(nodeID string, l UnitNodeLabels) {
 	prev, had := x.nodes[nodeID]
 	if l.OwnerUserID == "" {
 		l.OwnerUserID = prev.OwnerUserID
+	}
+	if l.PulledBy == "" {
+		l.PulledBy = prev.PulledBy
 	}
 	if had && prev == l {
 		return
