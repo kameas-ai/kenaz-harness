@@ -16,7 +16,7 @@ function status(over: Partial<MemorySyncStatus> = {}): MemorySyncStatus {
     scopes: ['global', 'long_term'],
     consentVersion: '',
     optedInAt: '',
-    currentConsentVersion: '2026-10-07',
+    currentConsentVersion: '2026-11-14',
     liveRecords: 0,
     liveBytes: 0,
     maxRecords: 20000,
@@ -76,7 +76,7 @@ describe('MemorySyncPanel', () => {
     await wrapper.find('[data-testid="memory-sync-consent"]').setValue(true);
     await wrapper.find('[data-testid="memory-sync-enable"]').trigger('click');
     await flushPromises();
-    expect(memorySyncEnable).toHaveBeenCalledWith(['long_term'], '2026-10-07');
+    expect(memorySyncEnable).toHaveBeenCalledWith(['long_term'], '2026-11-14');
     expect(wrapper.find('[data-testid="memory-sync-on"]').exists()).toBe(true);
   });
 

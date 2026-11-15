@@ -66,6 +66,10 @@ type fakeMemoryFleet struct {
 	// the raw body of every re-acknowledgement PUT (Fleet f4772414).
 	consent string
 	reacks  []map[string]any
+	// reackStatus forces the next re-acknowledgement to answer with this
+	// status and reackCode, once.
+	reackStatus int
+	reackCode   string
 	// status429 / status403 force the next N requests to fail.
 	status429, status403 int
 	pushes               []memPushRequest
@@ -343,6 +347,12 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var raw map[string]any
 			_ = json.Unmarshal(body, &raw)
 			f.reacks = append(f.reacks, raw)
+			if f.reackStatus != 0 {
+				st, code := f.reackStatus, f.reackCode
+				f.reackStatus = 0
+				writeJSON(w, st, map[string]any{"code": code})
+				return
+			}
 			if u.Enabled != nil || u.Scopes != nil || u.ConsentVersion == "" {
 				writeJSON(w, 400, map[string]any{"code": "invalid_request_body"})
 				return

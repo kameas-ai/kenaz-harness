@@ -64,15 +64,13 @@ const (
 )
 
 // MemoryConsentVersion is the disclosure version the settings UI shows and
-// sends when enabling (Fleet requires one; it records it with opted_in_at).
-//
-// It deliberately stays "2026-10-07" on the enable path although the
-// disclosure text was corrected in v0.106.2 (see MemoryDisclosureRevision):
-// Fleet asked for the enable path to stay unchanged. The corrected text is
-// acknowledged separately with a re-acknowledgement (sendDisclosureReack),
-// which Fleet records in its consent history (Fleet f4772414, 2026-11-15) and
-// which never overwrites a stored memory-sync/vN edition.
-const MemoryConsentVersion = "2026-10-07"
+// sends when enabling (Fleet requires one; it records it with opted_in_at and
+// in the member's consent history). It is the revision of the text the enable
+// screen shows, which since v0.106.2 is the corrected one (Fleet agreed on
+// 2026-11-15: the value records the notice the member actually read). Members
+// who turned sync on under the earlier text send a re-acknowledgement instead
+// (sendDisclosureReack), which never overwrites a memory-sync/vN edition.
+const MemoryConsentVersion = MemoryDisclosureRevision
 
 // MemoryDisclosureRevision is the revision of the memory-sync disclosure text
 // the settings panel shows (the v0.106.2 correction: notes are server-readable,
@@ -345,6 +343,9 @@ type MemorySync struct {
 	tokenKey    string // the token ensureAccount last confirmed st.Account with
 	nextAttempt time.Time
 	failures    int
+	// reackRetryAt holds off the lane's re-acknowledgement retry after a
+	// failure, so a Fleet fault on that one PUT doesn't repeat every cycle.
+	reackRetryAt time.Time
 	// pausedHold: the current backoff was set by a 403 org_paused, so the
 	// OnOrgUnpaused fan-out may clear it (ResumeAfterOrgUnpause).
 	pausedHold bool
@@ -637,7 +638,10 @@ func (m *MemorySync) RunOnce(ctx context.Context) {
 	if m.now().Before(wait) {
 		return
 	}
-	if m.state().DisclosureReackPending {
+	m.mu.Lock()
+	reackWait := m.reackRetryAt
+	m.mu.Unlock()
+	if m.state().DisclosureReackPending && !m.now().Before(reackWait) {
 		if err := m.sendDisclosureReack(ctx); err != nil {
 			logging.L().Warn("fleet.memory_sync.disclosure_reack_failed", "err", err.Error())
 		}
@@ -1884,6 +1888,18 @@ func (m *MemorySync) putDisabled(ctx context.Context) error {
 // kept, sync off, or a refusal a retry can't change); a transport or server
 // failure leaves it for the lane to retry. The local ack stands either way.
 func (m *MemorySync) sendDisclosureReack(ctx context.Context) error {
+	err := m.sendDisclosureReackOnce(ctx)
+	m.mu.Lock()
+	if err != nil {
+		m.reackRetryAt = m.now().Add(memReackRetry)
+	} else {
+		m.reackRetryAt = time.Time{}
+	}
+	m.mu.Unlock()
+	return err
+}
+
+func (m *MemorySync) sendDisclosureReackOnce(ctx context.Context) error {
 	if !m.state().DisclosureReackPending {
 		return nil
 	}
@@ -1918,3 +1934,7 @@ func (m *MemorySync) sendDisclosureReack(ctx context.Context) error {
 	m.mu.Unlock()
 	return done()
 }
+
+// memReackRetry is how long the lane waits after a failed re-acknowledgement
+// before trying it again.
+const memReackRetry = 30 * time.Minute

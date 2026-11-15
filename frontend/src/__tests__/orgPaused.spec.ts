@@ -192,7 +192,7 @@ describe('Memory sync panel while paused', () => {
   function status(over: Partial<MemorySyncStatus> = {}): MemorySyncStatus {
     return {
       wired: true, entitled: false, enabled: true, scopes: [], consentVersion: '',
-      optedInAt: '', currentConsentVersion: '2026-10-07', liveRecords: 0, liveBytes: 0,
+      optedInAt: '', currentConsentVersion: '2026-11-14', liveRecords: 0, liveBytes: 0,
       maxRecords: 0, maxBytes: 0, blockedCount: 0, pendingCount: 0, olderNotes: 0, unresolvedNotes: 0,
       lane: { status: 'off', reason: 'org_paused', consecutiveFailures: 0 },
       orgPaused: true, pausedCategory: 'security',
