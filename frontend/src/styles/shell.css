@@ -15,13 +15,13 @@
   top: -9999px;
   left: 1rem;
   z-index: 10000;
-  padding: 0.5rem 1rem;
+  padding: var(--space-8) var(--space-16);
   background: var(--surface-3);
   color: var(--accent);
   border: 1px solid var(--accent-hairline);
   border-radius: var(--radius-sm);
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: var(--type-body-size);
   text-decoration: none;
   transition: top var(--motion-fast);
 }

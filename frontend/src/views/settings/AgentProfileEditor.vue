@@ -7,6 +7,7 @@
  *
  * branch-subagent-interactive-01KZNP3B WP05.
  */
+import { X } from '@/shell/icons';
 import { ref, watch } from 'vue';
 import type { AgentProfile, AutonomyTier, SubagentMergePolicy } from '@/lib/types';
 
@@ -71,7 +72,7 @@ function stringToToolList(s: string): string[] {
 <template>
   <!-- Modal overlay -->
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-modal-overlay"
     role="dialog"
     aria-modal="true"
     aria-label="Edit sub-agent profile"
@@ -81,7 +82,7 @@ function stringToToolList(s: string): string[] {
     <div class="relative w-full max-w-2xl rounded-lg bg-surface-0 shadow-xl">
       <!-- Header -->
       <div class="flex items-center justify-between border-b border-border-muted px-6 py-4">
-        <h2 class="font-ui text-base font-semibold text-ink">
+        <h2 class="font-ui text-h3 font-semibold text-ink">
           {{ readOnly ? 'View Profile' : profile?.id ? 'Edit Profile' : 'New Profile' }}
         </h2>
         <button
@@ -90,7 +91,7 @@ function stringToToolList(s: string): string[] {
           data-testid="profile-editor-close"
           @click="emit('close')"
         >
-          ✕
+          <X class="inline-block" :size="12" aria-hidden="true" />
         </button>
       </div>
 
@@ -104,7 +105,7 @@ function stringToToolList(s: string): string[] {
           <!-- ID -->
           <div>
             <label class="mb-1 block font-ui text-xs font-medium text-ink" for="profile-id">
-              ID <span class="text-status-error">*</span>
+              ID <span class="text-signal-danger-text">*</span>
             </label>
             <input
               id="profile-id"
@@ -115,7 +116,7 @@ function stringToToolList(s: string): string[] {
               class="w-full rounded border border-border-muted bg-surface-1 px-3 py-1.5 font-ui text-sm text-ink placeholder:text-ink-subtle focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60"
               data-testid="profile-id-input"
             />
-            <p class="mt-1 font-ui text-[11px] text-ink-subtle">
+            <p class="mt-1 font-ui text-caption text-ink-subtle">
               Lowercase alphanumeric + hyphens only. Unique per profile set.
             </p>
           </div>
@@ -123,7 +124,7 @@ function stringToToolList(s: string): string[] {
           <!-- Name -->
           <div>
             <label class="mb-1 block font-ui text-xs font-medium text-ink" for="profile-name">
-              Name <span class="text-status-error">*</span>
+              Name <span class="text-signal-danger-text">*</span>
             </label>
             <input
               id="profile-name"
@@ -225,7 +226,7 @@ function stringToToolList(s: string): string[] {
                 }
               "
             />
-            <p class="mt-1 font-ui text-[11px] text-ink-subtle">Stored profile metadata. These lists are not enforced; the worker uses the parent session’s tools and permissions.</p>
+            <p class="mt-1 font-ui text-caption text-ink-subtle">Stored profile metadata. These lists are not enforced; the worker uses the parent session’s tools and permissions.</p>
           </div>
 
           <!-- Denied Tools -->
@@ -247,7 +248,7 @@ function stringToToolList(s: string): string[] {
                 }
               "
             />
-            <p class="mt-1 font-ui text-[11px] text-ink-subtle">Stored preference only. This list does not block tool execution.</p>
+            <p class="mt-1 font-ui text-caption text-ink-subtle">Stored preference only. This list does not block tool execution.</p>
           </div>
 
           <!-- Budget Tokens -->
@@ -303,7 +304,7 @@ function stringToToolList(s: string): string[] {
           <!-- Validation error -->
           <div
             v-if="validationError"
-            class="rounded border border-status-error/30 bg-status-error/5 px-3 py-2 font-ui text-sm text-status-error"
+            class="rounded border border-signal-danger/30 bg-signal-danger/5 px-3 py-2 font-ui text-sm text-signal-danger-text"
             role="alert"
             data-testid="profile-editor-error"
           >

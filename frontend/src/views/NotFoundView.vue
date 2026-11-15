@@ -11,8 +11,8 @@ const router = useRouter();
 
 <template>
   <div class="flex h-full flex-col items-center justify-center gap-4 px-8 py-12 font-ui">
-    <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">404</div>
-    <h1 class="text-lg font-semibold text-ink">Page not found</h1>
+    <div class="text-caption uppercase tracking-eyebrow text-ink-subtle">404</div>
+    <h1 class="text-title font-semibold text-ink">Page not found</h1>
     <p class="max-w-xs text-center text-sm text-ink-muted">
       The path <code class="font-mono text-xs text-ink">{{ route.fullPath }}</code> doesn't
       exist. It may have been moved or removed.

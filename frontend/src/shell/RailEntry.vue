@@ -60,10 +60,10 @@ const isActive = computed(() => {
     :title="`${DESKTOP_ONLY_LABEL}. ${unavailable}`"
     data-rail-unavailable="true"
   >
-    <component :is="icon" :size="14" />
+    <component :is="icon" class="inline-block" :size="14" />
     <span class="truncate hidden two-col:inline">{{ label }}</span>
     <span
-      class="ml-auto hidden two-col:inline shrink-0 font-ui text-[9px] uppercase tracking-[0.14em]"
+      class="ml-auto hidden two-col:inline shrink-0 font-ui text-tag uppercase tracking-eyebrow"
     >{{ DESKTOP_ONLY_LABEL }}</span>
   </span>
   <component
@@ -80,7 +80,7 @@ const isActive = computed(() => {
     :aria-current="isActive ? 'page' : undefined"
     :aria-label="label"
   >
-    <component :is="icon" :size="14" :class="isActive ? 'text-accent' : ''" />
+    <component :is="icon" :size="14" class="inline-block" :class="isActive ? 'text-accent' : ''" />
     <span class="truncate hidden two-col:inline">{{ label }}</span>
   </component>
 </template>

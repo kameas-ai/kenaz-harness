@@ -382,7 +382,7 @@ defineExpose({ local, partitioned });
   >
     <div
       v-if="!kindId"
-      class="rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-dim"
+      class="rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-small text-ink-dim"
       data-testid="node-attr-empty"
     >
       Select a node to edit.
@@ -390,7 +390,7 @@ defineExpose({ local, partitioned });
 
     <template v-else-if="!manifest">
       <div
-        class="rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-dim"
+        class="rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-small text-ink-dim"
         data-testid="node-attr-loading"
       >
         Loading manifest for <code class="text-ink">{{ kindId }}</code>…
@@ -400,14 +400,14 @@ defineExpose({ local, partitioned });
     <template v-else>
       <header class="border-b border-border-muted pb-2">
         <div
-          class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim"
+          class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim"
         >
           Node {{ nodeId || '—' }}
         </div>
-        <div class="font-mono text-[14px] text-ink">
+        <div class="font-mono text-body text-ink">
           {{ manifest.summary.displayName || manifest.summary.id }}
         </div>
-        <div class="font-ui text-[11px] text-ink-dim">
+        <div class="font-ui text-caption text-ink-dim">
           kind: <code>{{ kindId }}</code>
           <span v-if="manifest.summary.description"
             > — {{ manifest.summary.description }}</span
@@ -417,7 +417,7 @@ defineExpose({ local, partitioned });
 
       <div
         v-if="partitioned.length === 0"
-        class="px-2 py-2 font-ui text-[11px] text-ink-dim"
+        class="px-2 py-2 font-ui text-caption text-ink-dim"
         data-testid="node-attr-no-fields"
       >
         This kind declares no editable attributes.
@@ -439,10 +439,10 @@ defineExpose({ local, partitioned });
           :data-testid="`attr-divider-${archetypeChainLabel(part.archetypeLayer)}`"
         >
           <span
-            class="rounded-sm border border-accent px-1 py-0.5 font-ui text-[9px] uppercase tracking-[0.18em] text-accent"
+            class="rounded-sm border border-accent px-1 py-0.5 font-ui text-tag uppercase tracking-eyebrow text-accent"
             >inherited</span
           >
-          <span class="font-ui text-[11px] text-ink-dim">
+          <span class="font-ui text-caption text-ink-dim">
             from archetype
             <code class="text-ink">{{
               archetypeChainLabel(part.archetypeLayer)
@@ -455,7 +455,7 @@ defineExpose({ local, partitioned });
           data-testid="attr-divider-leaf"
         >
           <span
-            class="rounded-sm border border-border-muted px-1 py-0.5 font-ui text-[9px] uppercase tracking-[0.18em] text-ink-dim"
+            class="rounded-sm border border-border-muted px-1 py-0.5 font-ui text-tag uppercase tracking-eyebrow text-ink-dim"
             >this kind</span
           >
         </div>
@@ -467,7 +467,7 @@ defineExpose({ local, partitioned });
           :data-testid="`attr-row-${attr.name}`"
         >
           <label
-            class="flex items-center gap-2 font-ui text-[12px] text-ink"
+            class="flex items-center gap-2 font-ui text-small text-ink"
             :for="`attr-${attr.name}`"
           >
             <span>
@@ -480,21 +480,21 @@ defineExpose({ local, partitioned });
               >
             </span>
             <span
-              class="rounded-sm border px-1 font-ui text-[9px] uppercase tracking-[0.18em]"
+              class="rounded-sm border px-1 font-ui text-tag uppercase tracking-eyebrow"
               :class="provenanceClass(provenanceFor(attr.name))"
               :data-testid="`attr-provenance-${attr.name}`"
               :title="`Provenance layer: ${provenanceFor(attr.name)}`"
             >
               {{ provenanceLabel(provenanceFor(attr.name)) }}
             </span>
-            <span class="ml-auto font-mono text-[10px] text-ink-dim">{{
+            <span class="ml-auto font-mono text-eyebrow text-ink-dim">{{
               attr.type
             }}</span>
           </label>
 
           <p
             v-if="attr.description"
-            class="font-ui text-[11px] text-ink-dim"
+            class="font-ui text-caption text-ink-dim"
           >
             {{ attr.description }}
           </p>
@@ -507,7 +507,7 @@ defineExpose({ local, partitioned });
           -->
           <p
             v-if="readOnly"
-            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-mono text-[11px] text-ink"
+            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-mono text-caption text-ink"
             :data-testid="`attr-value-${attr.name}`"
           >
             {{ displayValue(attr) }}
@@ -522,7 +522,7 @@ defineExpose({ local, partitioned });
             :minlength="attr.minLength"
             :maxlength="attr.maxLength"
             :required="attr.required"
-            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink"
+            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-small text-ink"
             :data-testid="`attr-input-${attr.name}`"
             @input="onString(attr, $event)"
           />
@@ -537,7 +537,7 @@ defineExpose({ local, partitioned });
             :max="attr.max"
             :step="attr.type === 'int' ? 1 : 'any'"
             :required="attr.required"
-            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink"
+            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-small text-ink"
             :data-testid="`attr-input-${attr.name}`"
             @input="onNumber(attr, $event)"
           />
@@ -558,7 +558,7 @@ defineExpose({ local, partitioned });
             v-else-if="attr.type === 'enum'"
             :id="`attr-${attr.name}`"
             :value="(valueOf(attr) as string | undefined) ?? ''"
-            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink"
+            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-small text-ink"
             :data-testid="`attr-input-${attr.name}`"
             @change="onEnum(attr, $event)"
           >
@@ -573,7 +573,7 @@ defineExpose({ local, partitioned });
             v-else-if="hasRefOptions(attr.type)"
             :id="`attr-${attr.name}`"
             :value="(valueOf(attr) as string | undefined) ?? ''"
-            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink"
+            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-small text-ink"
             :data-testid="`attr-input-${attr.name}`"
             @change="onSelectRef(attr, $event)"
           >
@@ -593,7 +593,7 @@ defineExpose({ local, partitioned });
               :id="`attr-${attr.name}`"
               rows="4"
               :value="jsonDisplayValue(attr)"
-              class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-mono text-[11px] text-ink"
+              class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-mono text-caption text-ink"
               spellcheck="false"
               :data-testid="`attr-input-${attr.name}`"
               @input="onJsonInput(attr, $event)"
@@ -602,7 +602,7 @@ defineExpose({ local, partitioned });
             <div class="flex items-center justify-between">
               <button
                 type="button"
-                class="rounded-sm border border-border-muted px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+                class="rounded-sm border border-border-muted px-1.5 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
                 :data-testid="`attr-format-${attr.name}`"
                 @click="formatJson(attr)"
               >
@@ -610,7 +610,7 @@ defineExpose({ local, partitioned });
               </button>
               <span
                 v-if="jsonErrors[attr.name]"
-                class="font-ui text-[11px] text-signal-danger"
+                class="font-ui text-caption text-signal-danger"
                 :data-testid="`attr-json-error-${attr.name}`"
               >
                 {{ jsonErrors[attr.name] }}
@@ -624,14 +624,14 @@ defineExpose({ local, partitioned });
             :id="`attr-${attr.name}`"
             type="text"
             :value="(valueOf(attr) as string | undefined) ?? ''"
-            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink"
+            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-small text-ink"
             :data-testid="`attr-input-${attr.name}`"
             @input="onString(attr, $event)"
           />
 
           <p
             v-if="!readOnly && isRequiredMissing(attr)"
-            class="font-ui text-[11px] text-signal-danger"
+            class="font-ui text-caption text-signal-danger"
             :data-testid="`attr-required-${attr.name}`"
           >
             {{ attr.name }} is required.

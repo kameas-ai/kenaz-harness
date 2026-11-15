@@ -93,7 +93,7 @@ function toggleAncestors() {
 <template>
   <div
     v-if="visible"
-    class="flex items-center gap-1.5 px-4 py-1.5 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-ink-muted"
+    class="flex items-center gap-1.5 px-4 py-1.5 bg-surface-1 border-b border-border-muted font-ui text-caption text-ink-muted"
     data-testid="branch-breadcrumb"
     role="navigation"
     aria-label="Branch ancestry"
@@ -116,7 +116,7 @@ function toggleAncestors() {
     <!-- Ancestor popover (when expanded) -->
     <div
       v-if="showAncestors && (ancestorCount ?? 0) > 1"
-      class="absolute z-50 mt-6 ml-8 rounded-sm border border-border-muted bg-surface-0 shadow-lg py-1 px-2 text-[11px]"
+      class="absolute z-50 mt-6 ml-8 rounded-sm border border-border-muted bg-surface-0 shadow-lg py-1 px-2 text-caption"
       data-testid="branch-breadcrumb-ancestor-popover"
     >
       <span class="text-ink-subtle italic">{{ ancestorCount }} levels deep</span>

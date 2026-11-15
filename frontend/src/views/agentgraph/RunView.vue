@@ -411,14 +411,14 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
         <div class="flex gap-2">
           <button
             type="button"
-            class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            class="rounded-sm border border-border-muted px-3 py-1 font-ui text-small uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
             @click="backToList"
           >
             Back
           </button>
           <button
             type="button"
-            class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            class="rounded-sm border border-border-muted px-3 py-1 font-ui text-small uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
             data-testid="run-view-as-graph"
             @click="openMaterialized"
           >
@@ -431,7 +431,7 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
     <div class="px-6 py-4 max-w-5xl space-y-4">
       <div
         v-if="error"
-        class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
       >
         {{ error }}
@@ -443,20 +443,20 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
       >
         <div class="flex items-center gap-3">
           <span
-            class="rounded-sm border px-2 py-0 font-ui text-[10px] uppercase tracking-[0.18em]"
+            class="rounded-sm border px-2 py-0 font-ui text-eyebrow uppercase tracking-eyebrow"
             :class="stateClass"
             data-testid="run-state"
           >
             {{ stateLabel }}
           </span>
-          <span class="font-ui text-[13px] text-ink">
+          <span class="font-ui text-ui text-ink">
             graph: <span class="font-semibold">{{ status?.graphId || '—' }}</span>
           </span>
-          <span v-if="status?.error" class="font-ui text-[12px] text-signal-danger">
+          <span v-if="status?.error" class="font-ui text-small text-signal-danger">
             error: {{ status.error }}
           </span>
         </div>
-        <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-ui text-[12px] text-ink-muted">
+        <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-ui text-small text-ink-muted">
           <span data-testid="run-counter-nodes">nodes complete: {{ status?.nodesComplete ?? 0 }}</span>
           <span>llm tokens: {{ status?.llmTokens ?? 0 }}</span>
           <span>llm calls: {{ status?.llmCalls ?? 0 }}</span>
@@ -469,7 +469,7 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
         >
           <button
             type="button"
-            class="rounded-sm border border-signal-danger px-2 py-1 font-ui text-[11px] uppercase tracking-[0.18em] text-signal-danger hover:bg-surface-2"
+            class="rounded-sm border border-signal-danger px-2 py-1 font-ui text-caption uppercase tracking-eyebrow text-signal-danger hover:bg-surface-2"
             data-testid="run-cancel"
             @click="cancelRun"
           >
@@ -483,10 +483,10 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
         class="rounded-md border border-signal-danger bg-surface-1 px-4 py-3"
         data-testid="run-abandoned"
       >
-        <div class="font-ui text-[12px] uppercase tracking-[0.18em] text-signal-danger">
+        <div class="font-ui text-small uppercase tracking-eyebrow text-signal-danger">
           Run abandoned
         </div>
-        <div class="mt-1 font-ui text-[13px] text-ink">
+        <div class="mt-1 font-ui text-ui text-ink">
           This run was paused before a process restart and cannot be resumed.
           <template v-if="status?.error">{{ status.error }}</template>
         </div>
@@ -497,10 +497,10 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
         class="rounded-md border border-signal-warn bg-surface-1 px-4 py-3"
         data-testid="run-pending-ask"
       >
-        <div class="font-ui text-[12px] uppercase tracking-[0.18em] text-signal-warn">
+        <div class="font-ui text-small uppercase tracking-eyebrow text-signal-warn">
           AskNode parked the run
         </div>
-        <div class="mt-1 font-ui text-[14px] font-semibold text-ink">
+        <div class="mt-1 font-ui text-body font-semibold text-ink">
           {{ status.pendingAsk.question }}
         </div>
         <div class="mt-2 flex items-end gap-2">
@@ -508,13 +508,13 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
             v-model="askResponse"
             type="text"
             data-testid="run-ask-input"
-            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[13px] text-ink"
+            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-ui text-ink"
             placeholder="Type your answer…"
           />
           <button
             type="button"
             :disabled="submittingAsk"
-            class="rounded-sm border border-accent bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-accent disabled:opacity-50"
+            class="rounded-sm border border-accent bg-surface-2 px-3 py-1 font-ui text-small uppercase tracking-eyebrow text-accent disabled:opacity-50"
             data-testid="run-ask-submit"
             @click="resume"
           >
@@ -528,12 +528,12 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
         class="rounded-md border border-signal-warn bg-surface-1 px-4 py-3"
         data-testid="run-pending-approval"
       >
-        <div class="font-ui text-[12px] uppercase tracking-[0.18em] text-signal-warn">
+        <div class="font-ui text-small uppercase tracking-eyebrow text-signal-warn">
           Approval requested<template v-if="status.pendingApproval.approverRole">
             — {{ status.pendingApproval.approverRole }}</template
           >
         </div>
-        <div class="mt-1 font-ui text-[14px] font-semibold text-ink">
+        <div class="mt-1 font-ui text-body font-semibold text-ink">
           {{ status.pendingApproval.prompt }}
         </div>
         <div class="mt-2 flex items-end gap-2">
@@ -541,13 +541,13 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
             v-model="approvalReason"
             type="text"
             data-testid="run-approval-reason"
-            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[13px] text-ink"
+            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-ui text-ink"
             placeholder="Reason (optional)…"
           />
           <button
             type="button"
             :disabled="submittingApproval"
-            class="rounded-sm border border-signal-ok bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-signal-ok disabled:opacity-50"
+            class="rounded-sm border border-signal-ok bg-surface-2 px-3 py-1 font-ui text-small uppercase tracking-eyebrow text-signal-ok disabled:opacity-50"
             data-testid="run-approval-approve"
             @click="resolveApproval(true)"
           >
@@ -556,7 +556,7 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
           <button
             type="button"
             :disabled="submittingApproval"
-            class="rounded-sm border border-signal-danger bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-signal-danger disabled:opacity-50"
+            class="rounded-sm border border-signal-danger bg-surface-2 px-3 py-1 font-ui text-small uppercase tracking-eyebrow text-signal-danger disabled:opacity-50"
             data-testid="run-approval-reject"
             @click="resolveApproval(false)"
           >
@@ -567,7 +567,7 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
 
       <div class="rounded-md border border-border-muted bg-surface-1">
         <div
-          class="flex items-center gap-2 border-b border-border-muted px-4 py-2 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-muted"
+          class="flex items-center gap-2 border-b border-border-muted px-4 py-2 font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
         >
           <span>Graph</span>
           <span
@@ -583,7 +583,7 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
         <div class="p-2">
           <div
             v-if="graphError"
-            class="rounded-sm border border-border-muted bg-surface-0 px-3 py-2 font-ui text-[12px] text-ink-muted"
+            class="rounded-sm border border-border-muted bg-surface-0 px-3 py-2 font-ui text-small text-ink-muted"
             data-testid="run-graph-error"
           >
             This run cannot be drawn as a graph: {{ graphError }}
@@ -601,7 +601,7 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
 
       <div class="rounded-md border border-border-muted bg-surface-1">
         <div
-          class="border-b border-border-muted px-4 py-2 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim"
+          class="border-b border-border-muted px-4 py-2 font-ui text-caption uppercase tracking-eyebrow text-ink-dim"
         >
           Trace tail
         </div>
@@ -614,23 +614,23 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
           <li
             v-for="ev in events"
             :key="ev.seq"
-            class="border-b border-border-muted px-4 py-2 font-ui text-[12px] text-ink-muted last:border-b-0"
+            class="border-b border-border-muted px-4 py-2 font-ui text-small text-ink-muted last:border-b-0"
             :class="ev.seq === focusedSeq ? 'bg-surface-2 ring-1 ring-accent' : ''"
             :data-testid="`trace-event-${ev.seq}`"
             :data-focused="ev.seq === focusedSeq ? 'true' : 'false'"
           >
-            <span class="font-mono text-[10px] text-ink-dim">#{{ ev.seq }}</span>
-            <span class="ml-2 rounded-sm border border-border-muted px-1 py-0 text-[10px] uppercase tracking-[0.18em] text-ink-dim">
+            <span class="font-mono text-eyebrow text-ink-dim">#{{ ev.seq }}</span>
+            <span class="ml-2 rounded-sm border border-border-muted px-1 py-0 text-eyebrow uppercase tracking-eyebrow text-ink-dim">
               {{ ev.kind }}
             </span>
-            <span v-if="ev.nodeId" class="ml-2 font-mono text-[11px] text-ink">
+            <span v-if="ev.nodeId" class="ml-2 font-mono text-caption text-ink">
               {{ ev.nodeId }}
             </span>
           </li>
         </ul>
         <div
           v-else
-          class="px-4 py-3 font-ui text-[12px] text-ink-muted"
+          class="px-4 py-3 font-ui text-small text-ink-muted"
           data-testid="run-trace-empty"
         >
           No events yet.

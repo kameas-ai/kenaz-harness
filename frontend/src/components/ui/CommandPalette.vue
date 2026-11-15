@@ -65,7 +65,7 @@ async function run(id: string) {
 <template>
   <div
     v-if="palette.isOpen.value"
-    class="fixed inset-0 z-50 grid place-items-start pt-24"
+    class="fixed inset-0 z-50 grid place-items-start pt-12"
     role="dialog"
     aria-modal="true"
     aria-label="Command palette"

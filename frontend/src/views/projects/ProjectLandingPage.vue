@@ -522,14 +522,14 @@ async function onPurgeProjectRemote() {
       <section data-testid="project-description-section">
         <div class="flex items-center justify-between">
           <h2
-            class="font-ui text-[11px] font-medium uppercase tracking-[0.18em] text-ink-subtle"
+            class="font-ui text-caption font-medium uppercase tracking-eyebrow text-ink-subtle"
           >
             Description
           </h2>
           <button
             v-if="!descEditing && project"
             type="button"
-            class="flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2 hover:text-ink"
+            class="flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink-muted hover:bg-surface-2 hover:text-ink"
             data-testid="project-edit-description"
             @click="startEditDescription"
           >
@@ -564,7 +564,7 @@ async function onPurgeProjectRemote() {
           />
           <div
             v-if="descError"
-            class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+            class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
             role="alert"
             data-testid="project-description-error"
           >
@@ -573,7 +573,7 @@ async function onPurgeProjectRemote() {
           <div class="flex items-center justify-end gap-2">
             <button
               type="button"
-              class="rounded-sm px-2 py-1 font-ui text-[11px] text-ink-dim hover:text-ink"
+              class="rounded-sm px-2 py-1 font-ui text-caption text-ink-dim hover:text-ink"
               :disabled="descSaving"
               data-testid="project-description-cancel"
               @click="cancelEditDescription"
@@ -582,7 +582,7 @@ async function onPurgeProjectRemote() {
             </button>
             <button
               type="button"
-              class="rounded-sm border border-accent bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow disabled:opacity-50"
+              class="rounded-sm border border-accent bg-surface-1 px-2 py-1 font-ui text-caption text-accent hover:bg-accent-glow disabled:opacity-50"
               :disabled="descSaving"
               data-testid="project-description-save"
               @click="saveDescription"
@@ -596,18 +596,18 @@ async function onPurgeProjectRemote() {
       <!-- project-scope memory link (WP07 T002) -->
       <section data-testid="project-memory-section">
         <h2
-          class="font-ui text-[11px] font-medium uppercase tracking-[0.18em] text-ink-subtle"
+          class="font-ui text-caption font-medium uppercase tracking-eyebrow text-ink-subtle"
         >
           Project memory
           <span class="ml-1 text-ink-dim">({{ memoryCount }})</span>
         </h2>
-        <p class="mt-1 font-ui text-[11px] text-ink-dim">
+        <p class="mt-1 font-ui text-caption text-ink-dim">
           Pinned snippets scoped to this project; pulled into every session
           here at retrieval time.
         </p>
         <div
           v-if="memoryError"
-          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
           role="alert"
           data-testid="project-memory-error"
         >
@@ -615,11 +615,11 @@ async function onPurgeProjectRemote() {
         </div>
         <button
           type="button"
-          class="mt-2 flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2 hover:text-accent"
+          class="mt-2 flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink-muted hover:bg-surface-2 hover:text-accent"
           data-testid="project-memory-link"
           @click="openMemoryView"
         >
-          <Brain :size="12" />
+          <Brain class="inline-block" :size="12" />
           Open memory at project scope
         </button>
       </section>
@@ -627,14 +627,14 @@ async function onPurgeProjectRemote() {
       <section>
         <div class="flex items-center justify-between">
           <h2
-            class="font-ui text-[11px] font-medium uppercase tracking-[0.18em] text-ink-subtle"
+            class="font-ui text-caption font-medium uppercase tracking-eyebrow text-ink-subtle"
           >
             Sessions
             <span class="ml-1 text-ink-dim">({{ sessions.length }})</span>
           </h2>
           <button
             type="button"
-            class="flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+            class="flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-caption text-accent hover:bg-accent-glow"
             data-testid="project-new-session"
             @click="openNewSessionDialog"
           >
@@ -655,7 +655,7 @@ async function onPurgeProjectRemote() {
           data-testid="project-sessions-list"
         >
           <thead>
-            <tr class="text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+            <tr class="text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
               <th class="px-3 py-1.5 font-medium">Name</th>
               <th class="px-3 py-1.5 font-medium">Last active</th>
             </tr>
@@ -679,7 +679,7 @@ async function onPurgeProjectRemote() {
                 </button>
               </td>
               <td
-                class="px-3 py-2 text-ink-dim font-mono text-[11px]"
+                class="px-3 py-2 text-ink-dim font-mono text-caption"
                 :data-testid="`project-session-last-active-${s.id}`"
               >
                 {{ formatTimestamp(s.lastActiveAt) }}
@@ -700,7 +700,7 @@ async function onPurgeProjectRemote() {
       <section data-testid="project-context-section">
         <div class="flex items-center justify-between">
           <h2
-            class="font-ui text-[11px] font-medium uppercase tracking-[0.18em] text-ink-subtle"
+            class="font-ui text-caption font-medium uppercase tracking-eyebrow text-ink-subtle"
           >
             Project context
             <span class="ml-1 text-ink-dim">({{ attachments.length }})</span>
@@ -708,7 +708,7 @@ async function onPurgeProjectRemote() {
           <div class="flex items-center gap-2">
             <button
               type="button"
-              class="flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2 hover:text-accent"
+              class="flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink-muted hover:bg-surface-2 hover:text-accent"
               data-testid="project-new-context-folder"
               @click="beginCreateFolder"
             >
@@ -717,7 +717,7 @@ async function onPurgeProjectRemote() {
             </button>
             <button
               type="button"
-              class="flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+              class="flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-caption text-accent hover:bg-accent-glow"
               data-testid="project-add-context"
               @click="openPicker"
             >
@@ -740,30 +740,30 @@ async function onPurgeProjectRemote() {
             aria-label="New context folder name"
             spellcheck="false"
             autocomplete="off"
-            class="w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink focus:border-accent focus:outline-none"
+            class="w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-small text-ink focus:border-accent focus:outline-none"
             data-testid="project-new-folder-input"
             @keydown.enter.prevent="confirmCreateFolder"
             @keydown.esc.prevent="cancelCreateFolder"
           />
-          <p class="mt-1 font-ui text-[10px] text-ink-subtle">
+          <p class="mt-1 font-ui text-eyebrow text-ink-subtle">
             Creates a top-level folder in the context library and attaches it at project scope · Enter to create, Esc to cancel
           </p>
           <p
             v-if="newFolderError"
-            class="mt-1 font-ui text-[10px] text-signal-danger"
+            class="mt-1 font-ui text-eyebrow text-signal-danger"
             data-testid="project-new-folder-error"
           >
             {{ newFolderError }}
           </p>
         </div>
-        <p class="mt-1 font-ui text-[11px] text-ink-dim">
+        <p class="mt-1 font-ui text-caption text-ink-dim">
           Attached files apply to every session in this project, including
           sessions created later. Reorder by drag — order matters because
           the resolved stream concatenates global → project → session.
         </p>
         <div
           v-if="attachmentsError"
-          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
           role="alert"
           data-testid="project-attachments-error"
         >
@@ -805,18 +805,18 @@ async function onPurgeProjectRemote() {
 
       <section data-testid="project-artifacts-section">
         <h2
-          class="font-ui text-[11px] font-medium uppercase tracking-[0.18em] text-ink-subtle"
+          class="font-ui text-caption font-medium uppercase tracking-eyebrow text-ink-subtle"
         >
           Project artifacts
           <span class="ml-1 text-ink-dim">({{ projectArtifacts.length }})</span>
         </h2>
-        <p class="mt-1 font-ui text-[11px] text-ink-dim">
+        <p class="mt-1 font-ui text-caption text-ink-dim">
           Code blocks, tool outputs, and pinned snippets promoted to this
           project. They survive their originating session.
         </p>
         <div
           v-if="artifactsErrorMsg"
-          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
           role="alert"
           data-testid="project-artifacts-error"
         >
@@ -835,7 +835,7 @@ async function onPurgeProjectRemote() {
           data-testid="project-artifacts-table"
         >
           <thead>
-            <tr class="text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+            <tr class="text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
               <th class="px-3 py-1.5 font-medium">Source</th>
               <th class="px-3 py-1.5 font-medium">Title</th>
               <th class="px-3 py-1.5 font-medium">Mime</th>
@@ -850,16 +850,16 @@ async function onPurgeProjectRemote() {
               :data-testid="`project-artifacts-row-${a.id}`"
               @click="openArtifactPreview(a)"
             >
-              <td class="px-3 py-2 text-ink-dim font-mono text-[11px]">
+              <td class="px-3 py-2 text-ink-dim font-mono text-caption">
                 {{ a.source }}
               </td>
               <td class="px-3 py-2 text-ink truncate max-w-[36ch]">
                 {{ a.title }}
               </td>
-              <td class="px-3 py-2 text-ink-muted font-mono text-[11px]">
+              <td class="px-3 py-2 text-ink-muted font-mono text-caption">
                 {{ a.mimeType }}
               </td>
-              <td class="px-3 py-2 text-ink-muted font-mono text-[11px]">
+              <td class="px-3 py-2 text-ink-muted font-mono text-caption">
                 {{ formatArtifactSize(a.byteSize) }}
               </td>
             </tr>
@@ -878,13 +878,13 @@ async function onPurgeProjectRemote() {
       <!-- Fleet project sync (fleet-context-sync-01NDFSEX15 WP08) -->
       <section data-testid="project-sync-section">
         <div class="flex items-center justify-between mb-2">
-          <h2 class="font-ui text-[11px] font-medium uppercase tracking-[0.18em] text-ink-subtle">
+          <h2 class="font-ui text-caption font-medium uppercase tracking-eyebrow text-ink-subtle">
             Fleet Sync
           </h2>
           <!-- Sync toggle -->
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] transition-colors"
+            class="flex items-center gap-1.5 rounded px-2 py-0.5 font-ui text-caption uppercase tracking-eyebrow transition-colors"
             :class="isProjectSyncEnabled
               ? 'bg-accent/15 text-accent border border-accent/40'
               : 'bg-surface-2 text-ink-muted border border-border-muted hover:bg-surface-3'"
@@ -911,7 +911,7 @@ async function onPurgeProjectRemote() {
              the only in-app control that removes them. -->
         <button
           type="button"
-          class="mb-3 flex items-center gap-1 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] text-danger border border-danger/40 bg-surface-2 hover:bg-danger/10 transition-colors"
+          class="mb-3 flex items-center gap-1 rounded px-2 py-0.5 font-ui text-caption uppercase tracking-eyebrow text-signal-danger-text border border-signal-danger/40 bg-surface-2 hover:bg-signal-danger/10 transition-colors"
           :disabled="projectPurging"
           data-testid="project-purge-remote-btn"
           @click="onPurgeProjectRemote"

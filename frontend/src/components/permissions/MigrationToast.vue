@@ -53,13 +53,13 @@ async function dismiss() {
       <div class="flex items-start justify-between gap-3">
         <div class="flex-1 min-w-0">
           <p
-            class="font-ui text-[11px] uppercase tracking-[0.18em] text-accent"
+            class="font-ui text-caption uppercase tracking-eyebrow text-accent"
             data-testid="migration-toast-title"
           >
             Permissions updated
           </p>
           <p
-            class="mt-1 font-ui text-[12px] text-ink leading-relaxed"
+            class="mt-1 font-ui text-small text-ink leading-relaxed"
             data-testid="migration-toast-body"
           >
             Bash allowlist migrated to Cedar policies. Open
@@ -69,7 +69,7 @@ async function dismiss() {
         </div>
         <button
           type="button"
-          class="flex-shrink-0 mt-0.5 px-2 py-0.5 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+          class="flex-shrink-0 mt-0.5 px-2 py-0.5 rounded-sm border border-border-muted font-ui text-caption uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
           data-testid="migration-toast-dismiss"
           @click="dismiss"
         >

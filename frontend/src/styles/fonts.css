@@ -1,5 +1,7 @@
 /*
- * Geist, Geist Mono, and Newsreader @font-face declarations.
+ * Geist + Geist Mono @font-face declarations (DS v0.13.0 ships no serif:
+ * Newsreader and --font-serif were retired in DS 0.12; headings use
+ * --font-heading, which resolves to --font-ui).
  *
  * The woff2 binaries are NOT vendored into this repo — they're sourced
  * directly from the @kameas-ai/kenaz-design-system package (the same
@@ -44,6 +46,15 @@
 }
 
 @font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../../node_modules/@kameas-ai/kenaz-design-system/src/assets/fonts/Geist-Bold.woff2')
+    format('woff2');
+}
+
+@font-face {
   font-family: 'Geist Mono';
   font-style: normal;
   font-weight: 400;
@@ -58,24 +69,5 @@
   font-weight: 500;
   font-display: swap;
   src: url('../../node_modules/@kameas-ai/kenaz-design-system/src/assets/fonts/GeistMono-Medium.woff2')
-    format('woff2');
-}
-
-/*
- * Newsreader — serif register (DS 0.6 paper direction / spec 071 FR-004,
- * mirrored from how kenaz/frontend consumes it). Sanctioned contexts only:
- * page/view titles, editorial headlines, card titles, digest prose. Never
- * rail, toolbar, tables, or buttons — see `--font-serif` usage sites.
- * Variable font (wght 400/500 sanctioned), optical sizing on, font-display:
- * block so editorial headlines don't reflow from the Georgia fallback once
- * Newsreader arrives.
- */
-@font-face {
-  font-family: 'Newsreader';
-  font-style: normal;
-  font-weight: 400 500;
-  font-display: block;
-  font-optical-sizing: auto;
-  src: url('../../node_modules/@kameas-ai/kenaz-design-system/src/assets/fonts/Newsreader-Variable.woff2')
     format('woff2');
 }

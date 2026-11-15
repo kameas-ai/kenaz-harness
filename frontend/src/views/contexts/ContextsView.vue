@@ -844,7 +844,7 @@ onBeforeUnmount(() => {
     >
       <span
         v-if="props.embedded"
-        class="font-ui text-[11px] text-ink-muted flex-1 min-w-0 truncate"
+        class="font-ui text-caption text-ink-muted flex-1 min-w-0 truncate"
         data-testid="context-library-location"
       >
         <template v-if="rootPath">Markdown + text files in <span class="font-mono">{{ rootPath }}</span></template>
@@ -858,7 +858,7 @@ onBeforeUnmount(() => {
                v-else block above. -->
           <ContextHealthCard />
           <label
-            class="flex items-center gap-1.5 font-ui text-[11px] text-ink-muted cursor-pointer"
+            class="flex items-center gap-1.5 font-ui text-caption text-ink-muted cursor-pointer"
           >
             <input
               type="checkbox"
@@ -871,7 +871,7 @@ onBeforeUnmount(() => {
           </label>
           <button
             type="button"
-            class="font-ui text-[11px] text-ink-dim hover:text-accent flex items-center gap-1"
+            class="font-ui text-caption text-ink-dim hover:text-accent flex items-center gap-1"
             data-testid="context-import"
             @click="openImportDialog"
           >
@@ -897,7 +897,7 @@ onBeforeUnmount(() => {
 
     <div
       v-if="externalChangeToast"
-      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-ink-muted"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-caption text-ink-muted"
       role="status"
       data-testid="context-external-change-toast"
     >
@@ -905,7 +905,7 @@ onBeforeUnmount(() => {
     </div>
     <div
       v-if="importError"
-      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-danger"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-caption text-signal-danger"
       role="alert"
       data-testid="context-import-error"
     >
@@ -915,12 +915,12 @@ onBeforeUnmount(() => {
     <!-- Sync status strip — only shown when fleet team-graph cap is active -->
     <div
       v-if="teamCapEnabled"
-      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-ink-muted flex items-center gap-3"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-caption text-ink-muted flex items-center gap-3"
       data-testid="context-sync-status-strip"
     >
       <span class="flex items-center gap-1">
         <span
-          class="inline-block w-2 h-2 rounded-full bg-signal-success"
+          class="inline-block w-2 h-2 rounded-full bg-signal-ok"
           data-testid="context-sync-cap-indicator"
         />
         <span>Team sync active</span>
@@ -947,7 +947,7 @@ onBeforeUnmount(() => {
     <!-- Publish confirm dialog — first-publish "visible to your org" warning -->
     <div
       v-if="showPublishConfirm"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-modal-overlay"
       data-testid="context-publish-confirm-overlay"
     >
       <div
@@ -955,17 +955,17 @@ onBeforeUnmount(() => {
         data-testid="context-publish-confirm-dialog"
       >
         <h2 class="font-ui font-semibold text-sm text-ink mb-2">Share this entry?</h2>
-        <p class="font-ui text-[12px] text-ink-muted leading-relaxed mb-3">
+        <p class="font-ui text-small text-ink-muted leading-relaxed mb-3">
           Do not share credentials, private keys, or sensitive personal information in shared
           layers.
         </p>
         <!-- Layer choice — "org" is an explicit option, disabled for a known
              non-admin. "team" picks one of the caller's teams, by id. -->
         <fieldset class="flex flex-col gap-2 mb-4" data-testid="context-publish-layer-choice">
-          <legend class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle mb-1">
+          <legend class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle mb-1">
             Visibility
           </legend>
-          <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
+          <label class="flex items-center gap-2 font-ui text-small text-ink cursor-pointer">
             <input
               v-model="publishLayer"
               type="radio"
@@ -981,7 +981,7 @@ onBeforeUnmount(() => {
               testid="context-publish-team-picker"
             />
           </div>
-          <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
+          <label class="flex items-center gap-2 font-ui text-small text-ink cursor-pointer">
             <input
               v-model="publishLayer"
               type="radio"
@@ -992,7 +992,7 @@ onBeforeUnmount(() => {
           </label>
           <p
             v-if="orgNeedsReview"
-            class="font-ui text-[11px] text-ink-muted"
+            class="font-ui text-caption text-ink-muted"
             data-testid="context-publish-org-review-note"
           >
             An org admin reviews org-wide shares. Share the entry with a team first; asking for
@@ -1000,7 +1000,7 @@ onBeforeUnmount(() => {
           </p>
           <p
             v-if="publishPendingId"
-            class="font-ui text-[11px] text-signal-warning"
+            class="font-ui text-caption text-signal-warn-text"
             data-testid="context-publish-pending-note"
           >
             An org-wide share of this entry is waiting for review (request {{ publishPendingId }}).
@@ -1008,7 +1008,7 @@ onBeforeUnmount(() => {
         </fieldset>
         <p
           v-if="publishMoveWarning"
-          class="font-ui text-[12px] text-signal-warning leading-relaxed mb-4"
+          class="font-ui text-small text-signal-warn-text leading-relaxed mb-4"
           role="alert"
           data-testid="context-publish-move-warning"
         >
@@ -1016,7 +1016,7 @@ onBeforeUnmount(() => {
         </p>
         <p
           v-if="publishStaysNote"
-          class="font-ui text-[12px] text-ink-muted leading-relaxed mb-4"
+          class="font-ui text-small text-ink-muted leading-relaxed mb-4"
           data-testid="context-publish-stays-note"
         >
           {{ publishStaysNote }}
@@ -1024,7 +1024,7 @@ onBeforeUnmount(() => {
         <div class="flex justify-end gap-3">
           <button
             type="button"
-            class="font-ui text-[12px] text-ink-dim hover:text-ink px-3 py-1.5 rounded-md border border-border-muted"
+            class="font-ui text-small text-ink-dim hover:text-ink px-3 py-1.5 rounded-md border border-border-muted"
             data-testid="context-publish-confirm-cancel"
             @click="showPublishConfirm = false"
           >
@@ -1032,7 +1032,7 @@ onBeforeUnmount(() => {
           </button>
           <button
             type="button"
-            class="font-ui text-[12px] text-accent hover:text-accent-muted px-3 py-1.5 rounded-md bg-accent/10 hover:bg-accent/20"
+            class="font-ui text-small text-accent hover:text-accent-muted px-3 py-1.5 rounded-md bg-accent/10 hover:bg-accent/20"
             data-testid="context-publish-confirm-ok"
             :disabled="!publishReady"
             @click="confirmPublish"
@@ -1059,10 +1059,10 @@ onBeforeUnmount(() => {
          waiting for review, or refused with the reason in plain words. -->
     <div
       v-if="publishResult && publishOutcomeView"
-      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px]"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-caption"
       :class="{
-        'text-signal-success': publishOutcomeView.tone === 'success',
-        'text-signal-warning': publishOutcomeView.tone === 'warning',
+        'text-signal-ok-text': publishOutcomeView.tone === 'success',
+        'text-signal-warn-text': publishOutcomeView.tone === 'warning',
         'text-signal-danger': publishOutcomeView.tone === 'danger',
       }"
       :data-status="publishOutcomeView.status"
@@ -1071,7 +1071,7 @@ onBeforeUnmount(() => {
       {{ publishOutcomeView.text }}
       <span
         v-if="publishOutcomeView.status === 'published' && publishResult.audience !== 'org' && publishPendingId"
-        class="text-signal-warning ml-2"
+        class="text-signal-warn-text ml-2"
         data-testid="context-publish-still-pending"
       >
         · the org-wide request {{ publishPendingId }} is still waiting for review
@@ -1086,7 +1086,7 @@ onBeforeUnmount(() => {
     </div>
     <div
       v-if="publishError"
-      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-danger"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-caption text-signal-danger"
       data-testid="context-publish-error"
     >
       {{ publishError }}
@@ -1095,14 +1095,14 @@ onBeforeUnmount(() => {
     <!-- Promote result / error toast (WP16) -->
     <div
       v-if="promoteResult"
-      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-success"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-caption text-signal-ok-text"
       data-testid="context-promote-result"
     >
       Promoted to {{ promoteResult.new_classification }}
     </div>
     <div
       v-if="promoteError"
-      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-danger"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-caption text-signal-danger"
       data-testid="context-promote-error"
     >
       {{ promoteError }}
@@ -1117,7 +1117,7 @@ onBeforeUnmount(() => {
       data-testid="context-team-search-panel"
     >
       <div class="flex items-center gap-2">
-        <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle shrink-0">
+        <span class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle shrink-0">
           Team search
         </span>
         <input
@@ -1128,13 +1128,13 @@ onBeforeUnmount(() => {
           spellcheck="false"
           autocomplete="off"
           :disabled="!teamCapEnabled"
-          class="min-w-0 flex-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none disabled:opacity-50"
+          class="min-w-0 flex-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-small text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none disabled:opacity-50"
           data-testid="context-team-search-input"
           @keydown.enter.prevent="runTeamSearch"
         />
         <button
           type="button"
-          class="font-ui text-[11px] text-accent hover:text-accent-muted disabled:opacity-50 disabled:hover:text-accent shrink-0"
+          class="font-ui text-caption text-accent hover:text-accent-muted disabled:opacity-50 disabled:hover:text-accent shrink-0"
           :disabled="!teamCapEnabled || teamSearchLoading"
           data-testid="context-team-search-btn"
           @click="runTeamSearch"
@@ -1143,7 +1143,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           type="button"
-          class="font-ui text-[11px] text-ink-dim hover:text-accent disabled:opacity-50 disabled:hover:text-ink-dim shrink-0"
+          class="font-ui text-caption text-ink-dim hover:text-accent disabled:opacity-50 disabled:hover:text-ink-dim shrink-0"
           :disabled="!teamCapEnabled || exportLoading"
           data-testid="context-export-btn"
           @click="onExportClick"
@@ -1153,7 +1153,7 @@ onBeforeUnmount(() => {
       </div>
       <p
         v-if="!teamCapEnabled"
-        class="mt-1 font-ui text-[10px] text-ink-subtle"
+        class="mt-1 font-ui text-eyebrow text-ink-subtle"
         data-testid="context-team-search-disabled-reason"
       >
         Fleet team sync is off — search and export need a signed-in fleet connection with the team-graph capability.
@@ -1161,7 +1161,7 @@ onBeforeUnmount(() => {
       <template v-else>
         <p
           v-if="teamSearchError"
-          class="mt-1 font-ui text-[11px] text-signal-danger"
+          class="mt-1 font-ui text-caption text-signal-danger"
           data-testid="context-team-search-error"
         >
           {{ teamSearchError }}
@@ -1174,7 +1174,7 @@ onBeforeUnmount(() => {
           <li
             v-for="hit in teamSearchResults"
             :key="hit.node_id"
-            class="font-ui text-[11px] text-ink-muted"
+            class="font-ui text-caption text-ink-muted"
             :data-testid="`context-search-hit-${hit.node_id}`"
           >
             <span class="text-ink font-medium">{{ hit.title }}</span>
@@ -1184,14 +1184,14 @@ onBeforeUnmount(() => {
         </ul>
         <p
           v-else-if="teamSearchDispatched"
-          class="mt-1 font-ui text-[11px] text-ink-subtle"
+          class="mt-1 font-ui text-caption text-ink-subtle"
           data-testid="context-team-search-empty"
         >
           No matches.
         </p>
         <p
           v-if="exportError"
-          class="mt-1 font-ui text-[11px] text-signal-danger"
+          class="mt-1 font-ui text-caption text-signal-danger"
           data-testid="context-export-error"
         >
           {{ exportError }}
@@ -1206,7 +1206,7 @@ onBeforeUnmount(() => {
         aria-label="Context tree"
       >
         <header class="px-3 py-2 border-b border-border-muted flex items-center gap-2">
-          <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle flex-1">
+          <span class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle flex-1">
             Library
           </span>
           <!-- Publish affordance — visible whenever an entry is selected;
@@ -1220,7 +1220,7 @@ onBeforeUnmount(() => {
           <button
             v-if="shareTarget"
             type="button"
-            class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
+            class="text-caption text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
             :disabled="shareTarget === 'folder' ? !selectedFolderNode || publishLoading || promoteLoading : shareBlockedReason !== null || publishLoading"
             :title="shareBlockedReason ?? undefined"
             data-testid="context-publish-btn"
@@ -1236,7 +1236,7 @@ onBeforeUnmount(() => {
           <button
             v-if="shareTarget"
             type="button"
-            class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
+            class="text-caption text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
             :disabled="shareTarget === 'folder' ? !selectedFolderNode || publishLoading || promoteLoading : shareBlockedReason !== null || promoteLoading"
             :title="shareBlockedReason ?? undefined"
             data-testid="context-promote-btn"
@@ -1248,7 +1248,7 @@ onBeforeUnmount(() => {
           </button>
           <button
             type="button"
-            class="text-[11px] text-ink-dim hover:text-accent flex items-center gap-1"
+            class="text-caption text-ink-dim hover:text-accent flex items-center gap-1"
             data-testid="context-create-folder"
             @click="beginCreateFolder"
           >
@@ -1260,7 +1260,7 @@ onBeforeUnmount(() => {
              (knowledge-home-01DOGF0E WP04, FR-6). One reason for both. -->
         <p
           v-if="shareBlockedReason"
-          class="px-3 py-1.5 border-b border-border-muted font-ui text-[10px] leading-snug text-ink-subtle"
+          class="px-3 py-1.5 border-b border-border-muted font-ui text-eyebrow leading-snug text-ink-subtle"
           :data-share-target="shareTarget"
           data-testid="context-share-disabled-reason"
         >
@@ -1281,7 +1281,7 @@ onBeforeUnmount(() => {
             aria-label="Filter context files"
             spellcheck="false"
             autocomplete="off"
-            class="w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
+            class="w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-small text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
             data-testid="context-text-filter"
           />
         </div>
@@ -1302,13 +1302,13 @@ onBeforeUnmount(() => {
             aria-label="New folder name"
             spellcheck="false"
             autocomplete="off"
-            class="w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink focus:border-accent focus:outline-none"
+            class="w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-small text-ink focus:border-accent focus:outline-none"
             data-testid="context-new-folder-input"
             @keydown.enter.prevent="confirmCreateFolder"
             @keydown.esc.prevent="cancelCreateFolder"
             @blur="cancelCreateFolder"
           />
-          <p class="mt-1 font-ui text-[10px] text-ink-subtle">
+          <p class="mt-1 font-ui text-eyebrow text-ink-subtle">
             Creates in
             <span class="font-mono">{{ folderParentPath() || 'library root' }}</span>
             · Enter to create, Esc to cancel
@@ -1317,7 +1317,7 @@ onBeforeUnmount(() => {
         <div class="flex-1 overflow-y-auto px-2 py-2">
           <div
             v-if="treeError"
-            class="px-2 py-2 font-ui text-[12px] text-signal-danger"
+            class="px-2 py-2 font-ui text-small text-signal-danger"
             role="alert"
           >
             {{ treeError }}
@@ -1331,7 +1331,7 @@ onBeforeUnmount(() => {
               <FileText :size="14" />
               <span class="font-ui text-sm">No contexts yet</span>
             </div>
-            <p class="font-ui text-[12px] text-ink-muted leading-relaxed">
+            <p class="font-ui text-small text-ink-muted leading-relaxed">
               Drop a <span class="font-mono">.md</span> /
               <span class="font-mono">.markdown</span> /
               <span class="font-mono">.txt</span> file into the library
@@ -1339,13 +1339,13 @@ onBeforeUnmount(() => {
             </p>
             <p
               v-if="rootPath"
-              class="font-mono text-[11px] text-ink-subtle break-all"
+              class="font-mono text-caption text-ink-subtle break-all"
             >
               {{ rootPath }}
             </p>
             <button
               type="button"
-              class="font-ui text-[12px] text-accent hover:text-accent-muted"
+              class="font-ui text-small text-accent hover:text-accent-muted"
               data-testid="context-empty-create-folder"
               @click="beginCreateFolder"
             >
@@ -1356,7 +1356,7 @@ onBeforeUnmount(() => {
           <template v-else-if="contextTextFilter">
             <div
               v-if="filteredContextFiles.length === 0"
-              class="px-2 py-3 font-ui text-[12px] text-ink-muted"
+              class="px-2 py-3 font-ui text-small text-ink-muted"
               data-testid="context-filter-empty"
             >
               No files match "{{ contextTextFilter }}"
@@ -1368,7 +1368,7 @@ onBeforeUnmount(() => {
               >
                 <button
                   type="button"
-                  class="w-full rounded-sm px-2 py-1 text-left font-ui text-[12px] hover:bg-surface-2"
+                  class="w-full rounded-sm px-2 py-1 text-left font-ui text-small hover:bg-surface-2"
                   :class="selectedPath === node.path ? 'bg-surface-2 text-ink' : 'text-ink-muted'"
                   :data-testid="`context-filter-item-${node.path}`"
                   @click="selectFile(node.path)"

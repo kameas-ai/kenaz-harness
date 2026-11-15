@@ -14,6 +14,7 @@
  * (provider-implementation-uniformity-01KQ8V4F WP08)
  */
 
+import { X, AlertTriangle } from '@/shell/icons';
 import { computed } from 'vue';
 import {
   parseUnsupportedFeatureError,
@@ -67,14 +68,14 @@ function onDismiss() {
     data-testid="composer-error"
     class="flex items-start gap-2 rounded-md border border-signal-danger/30 bg-signal-danger/10 px-3 py-2 text-sm text-signal-danger"
   >
-    <span aria-hidden="true" class="mt-0.5 shrink-0 text-[14px]">⚠</span>
+    <AlertTriangle :size="14" class="inline-block mt-0.5 shrink-0" aria-hidden="true" />
     <div class="flex-1 min-w-0">
       <p class="leading-snug" data-testid="composer-error-message">
         {{ message }}
       </p>
       <p
         v-if="featureLabel"
-        class="mt-0.5 font-mono text-[11px] text-signal-danger/70"
+        class="mt-0.5 font-mono text-caption text-signal-danger/70"
         data-testid="composer-error-feature"
       >
         feature: {{ featureLabel }}
@@ -87,7 +88,7 @@ function onDismiss() {
       data-testid="composer-error-dismiss"
       @click="onDismiss"
     >
-      ✕
+      <X class="inline-block" :size="12" aria-hidden="true" />
     </button>
   </div>
 </template>

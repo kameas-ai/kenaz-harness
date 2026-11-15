@@ -110,12 +110,12 @@ defineExpose({ refresh });
   <div class="px-6 py-4 max-w-3xl" data-testid="memory-health-panel">
     <!-- Header row -->
     <div class="mb-4 flex items-center gap-3">
-      <h2 class="font-ui text-[12px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-small uppercase tracking-eyebrow text-ink-subtle">
         Memory health
       </h2>
       <button
         type="button"
-        class="ml-auto px-3 py-1 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2 disabled:opacity-50"
+        class="ml-auto px-3 py-1 rounded-sm border border-border-muted font-ui text-caption uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2 disabled:opacity-50"
         :disabled="loading"
         data-testid="memory-health-refresh"
         @click="refresh"
@@ -126,7 +126,7 @@ defineExpose({ refresh });
 
     <div
       v-if="error"
-      class="mb-4 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="mb-4 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="memory-health-error"
     >
@@ -135,7 +135,7 @@ defineExpose({ refresh });
 
     <div
       v-if="!snapshot && !error && !loading"
-      class="font-ui text-[12px] text-ink-muted"
+      class="font-ui text-small text-ink-muted"
     >
       Loading…
     </div>
@@ -146,13 +146,13 @@ defineExpose({ refresh });
         class="mb-5 rounded-md border border-border-muted bg-surface-1 p-4"
         data-testid="memory-health-counts"
       >
-        <h3 class="mb-3 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim">
+        <h3 class="mb-3 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim">
           Total chunks
         </h3>
-        <table class="w-full font-mono text-[12px] text-ink">
+        <table class="w-full font-mono text-small text-ink">
           <tbody>
             <tr data-testid="health-count-total">
-              <td class="py-0.5 font-ui text-[11px] text-ink font-medium" colspan="2">
+              <td class="py-0.5 font-ui text-caption text-ink font-medium" colspan="2">
                 Total chunks
               </td>
               <td class="py-0.5 text-right tabular-nums text-ink">
@@ -171,7 +171,7 @@ defineExpose({ refresh });
               <td class="py-0.5 text-ink-dim">•</td>
               <td class="py-0.5 text-ink-dim">
                 Narrative
-                <span class="ml-1 text-[10px] text-ink-subtle">[ships with narrative-layer]</span>
+                <span class="ml-1 text-eyebrow text-ink-subtle">[ships with narrative-layer]</span>
               </td>
               <td class="py-0.5 text-right tabular-nums">
                 {{ snapshot.counts.narrative.toLocaleString() }}
@@ -191,10 +191,10 @@ defineExpose({ refresh });
 
         <div class="mt-4 mb-2 border-t border-border-muted" />
 
-        <h3 class="mb-2 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim">
+        <h3 class="mb-2 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim">
           Embedded vs. unembedded
         </h3>
-        <table class="w-full font-mono text-[12px] text-ink">
+        <table class="w-full font-mono text-small text-ink">
           <tbody>
             <tr data-testid="health-count-embedded">
               <td class="py-0.5 text-ink-dim">Embedded</td>
@@ -204,13 +204,13 @@ defineExpose({ refresh });
               </td>
             </tr>
             <tr data-testid="health-count-unembedded">
-              <td class="py-0.5 text-signal-warning">Unembedded</td>
-              <td class="py-0.5 text-right tabular-nums text-signal-warning">
+              <td class="py-0.5 text-signal-warn-text">Unembedded</td>
+              <td class="py-0.5 text-right tabular-nums text-signal-warn-text">
                 {{ snapshot.counts.unembedded.toLocaleString() }}
                 <span class="ml-2">({{ pct(snapshot.counts.unembedded, snapshot.counts.total) }})</span>
                 <span
                   v-if="snapshot.counts.unembedded > 0"
-                  class="ml-1 text-[10px]"
+                  class="ml-1 text-eyebrow"
                 >— not retrievable</span>
               </td>
             </tr>
@@ -223,22 +223,22 @@ defineExpose({ refresh });
         class="mb-5 rounded-md border border-border-muted bg-surface-1 p-4"
         data-testid="memory-health-activity"
       >
-        <h3 class="mb-3 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim">
+        <h3 class="mb-3 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim">
           Last 7 days
         </h3>
-        <table class="w-full font-mono text-[12px] text-ink">
+        <table class="w-full font-mono text-small text-ink">
           <tbody>
             <tr data-testid="health-activity-captured">
               <td class="py-0.5 text-ink-dim">•</td>
               <td class="py-0.5 text-ink-dim">Captured</td>
-              <td class="py-0.5 text-right tabular-nums text-signal-success">
+              <td class="py-0.5 text-right tabular-nums text-signal-ok-text">
                 {{ formatActivitySigned(snapshot.activity.captured, '+') }}
               </td>
             </tr>
             <tr data-testid="health-activity-pruned">
               <td class="py-0.5 text-ink-dim">•</td>
               <td class="py-0.5 text-ink-dim">Pruned</td>
-              <td class="py-0.5 text-right tabular-nums text-signal-warning">
+              <td class="py-0.5 text-right tabular-nums text-signal-warn-text">
                 {{ formatActivitySigned(snapshot.activity.pruned, '-') }}
               </td>
             </tr>
@@ -258,10 +258,10 @@ defineExpose({ refresh });
         class="mb-5 rounded-md border border-border-muted bg-surface-1 p-4"
         data-testid="memory-health-embedder"
       >
-        <h3 class="mb-3 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim">
+        <h3 class="mb-3 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim">
           Embedder
         </h3>
-        <table class="w-full font-mono text-[12px] text-ink">
+        <table class="w-full font-mono text-small text-ink">
           <tbody>
             <tr>
               <td class="py-0.5 pr-6 text-ink-dim">Provider</td>
@@ -279,8 +279,8 @@ defineExpose({ refresh });
         </table>
         <p
           v-if="testResult"
-          class="mt-2 font-mono text-[11px]"
-          :class="testResult.startsWith('error') ? 'text-signal-danger' : 'text-signal-success'"
+          class="mt-2 font-mono text-caption"
+          :class="testResult.startsWith('error') ? 'text-signal-danger' : 'text-signal-ok-text'"
           data-testid="memory-embedder-test-result"
         >
           {{ testResult }}
@@ -291,7 +291,7 @@ defineExpose({ refresh });
       <div class="flex flex-wrap items-center gap-3">
         <button
           type="button"
-          class="px-3 py-1 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2 disabled:opacity-50"
+          class="px-3 py-1 rounded-sm border border-border-muted font-ui text-caption uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2 disabled:opacity-50"
           :disabled="testRunning"
           data-testid="memory-health-test-embedder"
           @click="testEmbedder"
@@ -300,7 +300,7 @@ defineExpose({ refresh });
         </button>
         <button
           type="button"
-          class="px-3 py-1 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+          class="px-3 py-1 rounded-sm border border-border-muted font-ui text-caption uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
           :disabled="snapshot.counts.unembedded === 0"
           data-testid="memory-health-reembed"
           @click="showReembedModal = true"
@@ -322,7 +322,7 @@ defineExpose({ refresh });
       <div class="w-[28rem] max-w-[92vw] rounded-md border border-border-muted bg-surface-1 p-4 shadow-lg">
         <h3
           id="memory-reembed-title"
-          class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle"
         >
           Re-embed unembedded chunks
         </h3>
@@ -333,7 +333,7 @@ defineExpose({ refresh });
         <div class="mt-4 flex justify-end">
           <button
             type="button"
-            class="px-3 py-1 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            class="px-3 py-1 rounded-sm border border-border-muted font-ui text-caption uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
             data-testid="memory-reembed-close"
             @click="showReembedModal = false"
           >

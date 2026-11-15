@@ -217,18 +217,18 @@ function next() {
   >
     <div class="space-y-3" data-testid="pending-approvals-modal">
       <div class="flex items-baseline justify-between gap-3">
-        <h2 class="font-ui text-[13px] font-medium" data-testid="pending-approvals-title">{{ dialogTitle }}</h2>
-        <span v-if="items.length > 1" class="text-[11px] text-ink-muted" data-testid="pending-approvals-step">
+        <h2 class="font-ui text-ui font-medium" data-testid="pending-approvals-title">{{ dialogTitle }}</h2>
+        <span v-if="items.length > 1" class="text-caption text-ink-muted" data-testid="pending-approvals-step">
           {{ index + 1 }} of {{ items.length }}
         </span>
       </div>
 
-      <p v-if="loaded && items.length === 0" class="text-[12px] text-ink-muted" data-testid="pending-approvals-empty">
+      <p v-if="loaded && items.length === 0" class="text-small text-ink-muted" data-testid="pending-approvals-empty">
         Nothing needs your approval right now.
       </p>
 
-      <section v-if="current" class="space-y-2 text-[12px]" :data-testid="`pending-approval-${current.kind}`">
-        <h3 class="text-[13px] font-medium" data-testid="pending-approval-title">{{ current.title }}</h3>
+      <section v-if="current" class="space-y-2 text-small" :data-testid="`pending-approval-${current.kind}`">
+        <h3 class="text-ui font-medium" data-testid="pending-approval-title">{{ current.title }}</h3>
         <p class="text-ink-muted" data-testid="pending-approval-summary">{{ current.summary }}</p>
         <p v-if="currentDeferral" class="text-signal-warn" data-testid="pending-approval-deferrable">
           Accept by {{ formatAcceptByDate(currentDeferral) }}.
@@ -256,7 +256,7 @@ function next() {
           <p class="break-all text-ink-muted" data-testid="pending-approval-document-url">{{ current.documentUrl }}</p>
           <button
             type="button"
-            class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] hover:bg-surface-2"
+            class="px-3 py-1.5 rounded-sm border border-border-muted text-caption hover:bg-surface-2"
             data-testid="pending-approval-document-open"
             @click="openDocument(current)"
           >
@@ -287,14 +287,14 @@ function next() {
         </label>
       </section>
 
-      <p v-if="errorMsg" class="text-[12px] text-signal-danger" data-testid="pending-approvals-error">{{ errorMsg }}</p>
+      <p v-if="errorMsg" class="text-small text-signal-danger" data-testid="pending-approvals-error">{{ errorMsg }}</p>
 
       <div class="flex items-center justify-between gap-2 pt-2">
         <div class="flex gap-2">
           <button
             v-if="items.length > 1"
             type="button"
-            class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] hover:bg-surface-2 disabled:opacity-50"
+            class="px-3 py-1.5 rounded-sm border border-border-muted text-caption hover:bg-surface-2 disabled:opacity-50"
             :disabled="index === 0"
             data-testid="pending-approvals-prev"
             @click="prev"
@@ -304,7 +304,7 @@ function next() {
           <button
             v-if="items.length > 1"
             type="button"
-            class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] hover:bg-surface-2 disabled:opacity-50"
+            class="px-3 py-1.5 rounded-sm border border-border-muted text-caption hover:bg-surface-2 disabled:opacity-50"
             :disabled="index >= items.length - 1"
             data-testid="pending-approvals-next"
             @click="next"
@@ -315,7 +315,7 @@ function next() {
         <div class="flex gap-2">
           <button
             type="button"
-            class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] hover:bg-surface-2"
+            class="px-3 py-1.5 rounded-sm border border-border-muted text-caption hover:bg-surface-2"
             data-testid="pending-approvals-close"
             @click="emit('close')"
           >
@@ -324,7 +324,7 @@ function next() {
           <button
             v-if="current && current.localDismiss"
             type="button"
-            class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] hover:bg-surface-2 disabled:opacity-50"
+            class="px-3 py-1.5 rounded-sm border border-border-muted text-caption hover:bg-surface-2 disabled:opacity-50"
             :disabled="busy"
             data-testid="pending-approval-dismiss-local"
             @click="dismissLocally"
@@ -334,7 +334,7 @@ function next() {
           <button
             v-if="current && current.approveAllowed"
             type="button"
-            class="rounded px-3 py-1.5 text-[12px] font-ui bg-accent text-on-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed"
+            class="rounded px-3 py-1.5 text-small font-ui bg-accent text-surface-0 hover:bg-accent-muted disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="!canApprove"
             data-testid="pending-approval-approve"
             @click="approve"

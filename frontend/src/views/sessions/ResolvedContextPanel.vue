@@ -160,7 +160,7 @@ async function confirmCreateFolder() {
   >
     <button
       type="button"
-      class="flex w-full items-center gap-2 px-3 py-2 font-ui text-[12px] text-ink-muted hover:text-ink"
+      class="flex w-full items-center gap-2 px-3 py-2 font-ui text-small text-ink-muted hover:text-ink"
       :aria-expanded="expanded"
       data-testid="resolved-context-toggle"
       @click="toggle"
@@ -169,12 +169,12 @@ async function confirmCreateFolder() {
         :size="12"
         :class="expanded ? 'rotate-90 transition-transform' : 'transition-transform'"
       />
-      <span class="text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+      <span class="text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
         Resolved context
       </span>
       <span
         v-if="summary.total > 0"
-        class="text-[11px] text-ink"
+        class="text-caption text-ink"
         data-testid="resolved-context-summary"
       >
         {{ summary.total }}
@@ -182,8 +182,8 @@ async function confirmCreateFolder() {
         ·
         {{ summary.g }}G / {{ summary.p }}P / {{ summary.s }}S
       </span>
-      <span v-else class="text-[11px] text-ink-dim">no contexts</span>
-      <span v-if="loading" class="ml-auto text-[10px] text-ink-dim">…</span>
+      <span v-else class="text-caption text-ink-dim">no contexts</span>
+      <span v-if="loading" class="ml-auto text-eyebrow text-ink-dim">…</span>
     </button>
 
     <div
@@ -193,7 +193,7 @@ async function confirmCreateFolder() {
     >
       <div
         v-if="errorMsg"
-        class="rounded-sm border border-signal-danger bg-surface-0 px-2 py-1 font-ui text-[11px] text-signal-danger"
+        class="rounded-sm border border-signal-danger bg-surface-0 px-2 py-1 font-ui text-caption text-signal-danger"
         role="alert"
       >
         {{ errorMsg }}
@@ -204,7 +204,7 @@ async function confirmCreateFolder() {
           v-if="grouped[kind].length > 0"
           :data-testid="`resolved-context-${kind}`"
         >
-          <div class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle mb-1.5">
+          <div class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle mb-1.5">
             {{ sectionLabels[kind] }}
             <span class="text-ink-dim">({{ grouped[kind].length }})</span>
           </div>
@@ -233,7 +233,7 @@ async function confirmCreateFolder() {
                 :data-testid="`resolved-preview-${a.id}`"
               >
                 <pre
-                  class="font-mono text-[11px] leading-relaxed text-ink whitespace-pre-wrap"
+                  class="font-mono text-caption leading-relaxed text-ink whitespace-pre-wrap"
                 >{{ a.content }}</pre>
               </div>
             </li>
@@ -243,7 +243,7 @@ async function confirmCreateFolder() {
 
       <p
         v-if="summary.total === 0 && !loading && !errorMsg"
-        class="font-ui text-[11px] text-ink-dim"
+        class="font-ui text-caption text-ink-dim"
         data-testid="resolved-context-empty"
       >
         No contexts attached at any scope.
@@ -252,12 +252,12 @@ async function confirmCreateFolder() {
       <!-- Session-scope "New context folder" affordance (FR-021) -->
       <div class="pt-1 border-t border-border-muted" data-testid="session-new-folder-section">
         <div class="flex items-center justify-between">
-          <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+          <span class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
             Session context
           </span>
           <button
             type="button"
-            class="flex items-center gap-1 font-ui text-[11px] text-ink-dim hover:text-accent"
+            class="flex items-center gap-1 font-ui text-caption text-ink-dim hover:text-accent"
             data-testid="session-new-context-folder"
             @click.stop="beginCreateFolder"
           >
@@ -279,17 +279,17 @@ async function confirmCreateFolder() {
             aria-label="New session context folder name"
             spellcheck="false"
             autocomplete="off"
-            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink focus:border-accent focus:outline-none"
+            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-small text-ink focus:border-accent focus:outline-none"
             data-testid="session-new-folder-input"
             @keydown.enter.prevent="confirmCreateFolder"
             @keydown.esc.prevent="cancelCreateFolder"
           />
-          <p class="mt-1 font-ui text-[10px] text-ink-subtle">
+          <p class="mt-1 font-ui text-eyebrow text-ink-subtle">
             Creates in context library and attaches at session scope · Enter to create, Esc to cancel
           </p>
           <p
             v-if="newFolderError"
-            class="mt-1 font-ui text-[10px] text-signal-danger"
+            class="mt-1 font-ui text-eyebrow text-signal-danger"
             data-testid="session-new-folder-error"
           >
             {{ newFolderError }}

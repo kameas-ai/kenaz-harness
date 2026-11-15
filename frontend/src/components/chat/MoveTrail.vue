@@ -277,7 +277,7 @@ function toggle() {
     <button
       v-if="steps.length >= COLLAPSE_THRESHOLD"
       type="button"
-      class="flex w-full max-w-[74ch] items-center gap-1.5 rounded-sm px-1 py-0.5 font-ui text-[11px] text-ink-subtle text-left hover:bg-surface-2 hover:text-ink-muted transition-fast"
+      class="flex w-full max-w-[74ch] items-center gap-1.5 rounded-sm px-1 py-0.5 font-ui text-caption text-ink-subtle text-left hover:bg-surface-2 hover:text-ink-muted transition-fast"
       :aria-expanded="expanded"
       :aria-label="digestLabel"
       data-testid="move-trail-toggle"
@@ -286,7 +286,7 @@ function toggle() {
       <component
         :is="expanded ? ChevronDown : ChevronRight"
         :size="12"
-        class="shrink-0"
+        class="inline-block shrink-0"
         aria-hidden="true"
       />
       <span class="shrink-0 tabular-nums" data-testid="move-trail-count">
@@ -301,7 +301,7 @@ function toggle() {
       </span>
       <span
         v-if="errorCount > 0"
-        class="ml-auto shrink-0 uppercase tracking-[0.14em] text-[10px] text-signal-danger"
+        class="ml-auto shrink-0 uppercase tracking-eyebrow text-eyebrow text-signal-danger"
         data-testid="move-trail-errors"
       >
         {{ errorCount }} failed
@@ -337,7 +337,7 @@ function toggle() {
       <button
         v-if="earlierCount > 0"
         type="button"
-        class="block w-full max-w-[74ch] rounded-sm border border-dashed border-border-muted px-2 py-0.5 font-ui text-[11px] text-ink-subtle text-left hover:bg-surface-2 hover:text-ink-muted transition-fast"
+        class="block w-full max-w-[74ch] rounded-sm border border-dashed border-border-muted px-2 py-0.5 font-ui text-caption text-ink-subtle text-left hover:bg-surface-2 hover:text-ink-muted transition-fast"
         data-testid="move-trail-show-earlier"
         @click="showEarlier = true"
       >
@@ -352,13 +352,13 @@ function toggle() {
           data-testid="move-step"
         >
           <span
-            class="mt-[2px] shrink-0 font-mono text-[10px] tabular-nums text-ink-subtle"
+            class="mt-0.5 shrink-0 font-mono text-eyebrow tabular-nums text-ink-subtle"
             data-testid="move-step-ordinal"
             aria-hidden="true"
           >
             {{ step.ordinal }}
           </span>
-          <div class="min-w-0 max-w-[74ch] font-ui text-[13px] leading-relaxed text-ink-muted">
+          <div class="min-w-0 max-w-[74ch] font-ui text-ui leading-relaxed text-ink-muted">
             <MarkdownBlock
               :source="step.message.content"
               :streaming="step.message.streaming === true"

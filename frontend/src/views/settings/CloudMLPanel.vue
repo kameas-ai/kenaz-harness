@@ -321,14 +321,14 @@ function onOptInChange(ev: Event) {
 <template>
   <div class="space-y-6">
     <section v-if="visible && status" class="space-y-3" data-testid="cloud-ml-panel">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">Cloud ML</h2>
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">Cloud ML</h2>
 
-      <p v-if="status.fleetError" class="text-[12px] text-ink-muted" data-testid="cloud-ml-fleet-error">
+      <p v-if="status.fleetError" class="text-small text-ink-muted" data-testid="cloud-ml-fleet-error">
         Could not read your Cloud ML settings from Fleet, so nothing is sent: {{ status.fleetError }}
       </p>
 
       <template v-if="loaded">
-        <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-[12px]" data-testid="cloud-ml-fields">
+        <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-small" data-testid="cloud-ml-fields">
           <dt class="text-ink-muted">Organization offload</dt>
           <dd data-testid="cloud-ml-offload">{{ status.orgOffloadEnabled ? 'On' : 'Off' }}</dd>
           <dt class="text-ink-muted">Organization policy</dt>
@@ -347,7 +347,7 @@ function onOptInChange(ev: Event) {
           <dd data-testid="cloud-ml-retention">{{ status.retentionDays }} days</dd>
         </dl>
 
-        <label v-if="showOptIn" class="flex items-start gap-2 text-[12px]" data-testid="cloud-ml-optin">
+        <label v-if="showOptIn" class="flex items-start gap-2 text-small" data-testid="cloud-ml-optin">
           <input
             type="checkbox"
             :checked="status.userWorkflowEventsOptedIn"
@@ -360,7 +360,7 @@ function onOptInChange(ev: Event) {
 
         <div
           v-if="showNotice"
-          class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+          class="space-y-2 rounded-sm border border-border-muted p-3 text-small"
           data-testid="cloud-ml-notice"
         >
           <p v-if="noticeChanged" class="text-signal-warn" data-testid="cloud-ml-notice-changed">
@@ -368,7 +368,7 @@ function onOptInChange(ev: Event) {
           </p>
           <!-- Fallback (no hub): counsel's rev-1 text, laid out from structured fields. -->
           <template v-if="localNotice">
-            <h3 class="text-[13px] font-semibold" data-testid="cloud-ml-notice-heading">{{ localNotice.heading }}</h3>
+            <h3 class="text-ui font-semibold" data-testid="cloud-ml-notice-heading">{{ localNotice.heading }}</h3>
             <p data-testid="cloud-ml-notice-intro">{{ localNotice.intro }}</p>
             <p v-for="s in localNotice.sections" :key="s.label" data-testid="cloud-ml-notice-section">
               <strong>{{ s.label }}</strong> {{ s.text }}
@@ -381,7 +381,7 @@ function onOptInChange(ev: Event) {
                 v-for="a in localNotice.actions"
                 :key="a"
                 type="button"
-                class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 :disabled="busy"
                 data-testid="cloud-ml-notice-action"
                 @click="onNoticeAction(a)"
@@ -392,14 +392,14 @@ function onOptInChange(ev: Event) {
           </template>
           <!-- Hub: the item title is the heading; body_text verbatim below it. -->
           <template v-else>
-            <h3 v-if="status.noticeTitle" class="text-[13px] font-semibold" data-testid="cloud-ml-notice-heading">
+            <h3 v-if="status.noticeTitle" class="text-ui font-semibold" data-testid="cloud-ml-notice-heading">
               {{ status.noticeTitle }}
             </h3>
             <!-- The served body_text is the only exclusions source here: nothing of our own. -->
             <p class="whitespace-pre-wrap" data-testid="cloud-ml-notice-text">{{ status.noticeText }}</p>
             <button
               type="button"
-              class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
               :disabled="busy"
               data-testid="cloud-ml-ack"
               @click="acknowledge"
@@ -411,7 +411,7 @@ function onOptInChange(ev: Event) {
 
         <div
           v-if="needsDashboard"
-          class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+          class="space-y-2 rounded-sm border border-border-muted p-3 text-small"
           data-testid="cloud-ml-notice-dashboard"
         >
           <p data-testid="cloud-ml-notice-dashboard-text">{{ DASHBOARD_NOTICE }}</p>
@@ -419,7 +419,7 @@ function onOptInChange(ev: Event) {
             <p class="break-all text-ink-muted" data-testid="cloud-ml-notice-dashboard-url">{{ dashboardUrl }}</p>
             <button
               type="button"
-              class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+              class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2"
               data-testid="cloud-ml-notice-dashboard-open"
               @click="openDashboard"
             >
@@ -431,17 +431,17 @@ function onOptInChange(ev: Event) {
         <!-- No notice shown: Fleet's exclusions paragraph on its own. -->
         <p
           v-if="loaded && !showNotice && exclusionsSummary"
-          class="text-[12px]"
+          class="text-small"
           data-testid="cloud-ml-exclusions"
         >
           {{ exclusionsSummary }}
         </p>
 
-        <p class="text-[12px] text-ink-muted" data-testid="cloud-ml-harness-line">{{ HARNESS_LINE }}</p>
+        <p class="text-small text-ink-muted" data-testid="cloud-ml-harness-line">{{ HARNESS_LINE }}</p>
       </template>
 
       <!-- Shipping status: empty until the ML shipper reports. -->
-      <div class="text-[12px] text-ink-muted" data-testid="cloud-ml-shipping">
+      <div class="text-small text-ink-muted" data-testid="cloud-ml-shipping">
         <template v-if="status.shipping">
           <p data-testid="cloud-ml-shipping-last">
             Last batch: {{ status.shipping.lastBatchAt ? formatTime(status.shipping.lastBatchAt) : 'none yet' }}
@@ -456,25 +456,25 @@ function onOptInChange(ev: Event) {
         </template>
       </div>
 
-      <p v-if="errorMsg" class="text-[12px] text-signal-danger" data-testid="cloud-ml-error">{{ errorMsg }}</p>
+      <p v-if="errorMsg" class="text-small text-signal-danger" data-testid="cloud-ml-error">{{ errorMsg }}</p>
     </section>
 
     <section class="space-y-3" data-testid="ml-local-activity">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">Local activity</h2>
-      <p class="text-[12px]" data-testid="ml-local-line">{{ LOCAL_LINE }}</p>
-      <p v-if="local?.sharingWithFleet" class="text-[12px] text-ink-muted" data-testid="ml-local-sharing">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">Local activity</h2>
+      <p class="text-small" data-testid="ml-local-line">{{ LOCAL_LINE }}</p>
+      <p v-if="local?.sharingWithFleet" class="text-small text-ink-muted" data-testid="ml-local-sharing">
         Fleet sharing is on, so new activity is also sent to your organization's Cloud ML.
       </p>
-      <p v-if="local?.retentionBlocked" class="text-[12px] text-signal-warn" data-testid="ml-local-retention-blocked">
+      <p v-if="local?.retentionBlocked" class="text-small text-signal-warn" data-testid="ml-local-retention-blocked">
         {{ retentionBlockedLine(local) }}
       </p>
       <template v-if="local">
-        <p v-if="!local.available" class="text-[12px] text-ink-muted" data-testid="ml-local-unavailable">
+        <p v-if="!local.available" class="text-small text-ink-muted" data-testid="ml-local-unavailable">
           Local recording is paused because the local activity store can't be opened. Kenaz tries again as new
           activity comes in. Activity already recorded on this device is unchanged.
         </p>
         <template v-else>
-          <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-[12px]" data-testid="ml-local-fields">
+          <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-small" data-testid="ml-local-fields">
             <dt class="text-ink-muted">Stored</dt>
             <dd data-testid="ml-local-counts">{{ local.events }} events, {{ local.tasks }} tasks</dd>
             <dt class="text-ink-muted">Size on disk</dt>
@@ -482,7 +482,7 @@ function onOptInChange(ev: Event) {
             <dt class="text-ink-muted">Kept for</dt>
             <dd data-testid="ml-local-retention">{{ local.effectiveRetentionDays }} days</dd>
           </dl>
-          <label class="flex items-center gap-2 text-[12px]">
+          <label class="flex items-center gap-2 text-small">
             <span>Keep local activity for</span>
             <input
               v-model.number="retentionInput"
@@ -496,7 +496,7 @@ function onOptInChange(ev: Event) {
             <span>days</span>
             <button
               type="button"
-              class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
               :disabled="localBusy"
               data-testid="ml-local-retention-save"
               @click="saveRetention"
@@ -507,7 +507,7 @@ function onOptInChange(ev: Event) {
           <div v-if="!confirmingDelete">
             <button
               type="button"
-              class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
               :disabled="localBusy"
               data-testid="ml-local-delete"
               @click="confirmingDelete = true"
@@ -517,7 +517,7 @@ function onOptInChange(ev: Event) {
           </div>
           <div
             v-else
-            class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+            class="space-y-2 rounded-sm border border-border-muted p-3 text-small"
             data-testid="ml-local-delete-confirm"
           >
             <p>
@@ -527,7 +527,7 @@ function onOptInChange(ev: Event) {
             <div class="flex gap-2">
               <button
                 type="button"
-                class="px-3 py-1.5 rounded-sm border border-signal-danger text-signal-danger text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                class="px-3 py-1.5 rounded-sm border border-signal-danger text-signal-danger text-caption uppercase tracking-eyebrow hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 :disabled="localBusy"
                 data-testid="ml-local-delete-yes"
                 @click="deleteLocal"
@@ -536,7 +536,7 @@ function onOptInChange(ev: Event) {
               </button>
               <button
                 type="button"
-                class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+                class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2"
                 :disabled="localBusy"
                 data-testid="ml-local-delete-cancel"
                 @click="confirmingDelete = false"
@@ -547,7 +547,7 @@ function onOptInChange(ev: Event) {
           </div>
         </template>
       </template>
-      <p v-if="localError" class="text-[12px] text-signal-danger" data-testid="ml-local-error">{{ localError }}</p>
+      <p v-if="localError" class="text-small text-signal-danger" data-testid="ml-local-error">{{ localError }}</p>
     </section>
   </div>
 </template>

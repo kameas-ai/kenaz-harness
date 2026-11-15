@@ -221,7 +221,7 @@ const browserTransmitStatus = computed(() => {
           v-model="sentryDsn"
           type="text"
           placeholder="https://key@sentry.example.com/project-id"
-          class="flex-1 text-sm px-2 py-1.5 rounded border border-border-muted bg-surface text-ink"
+          class="flex-1 text-sm px-2 py-1.5 rounded border border-border-muted bg-surface-1 text-ink"
           :disabled="saving"
           @blur="saveDsn"
         />

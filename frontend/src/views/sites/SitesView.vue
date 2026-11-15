@@ -282,7 +282,7 @@ onBeforeUnmount(() => {
         Add it to your agent session to get started:
       </p>
       <pre
-        class="mt-3 px-3 py-2 rounded bg-surface-1 font-mono text-[11px] text-ink select-all"
+        class="mt-3 px-3 py-2 rounded bg-surface-1 font-mono text-caption text-ink select-all"
         data-testid="sites-mcp-oneliner"
       >claude mcp add fleet-sites</pre>
       <p class="mt-3 text-ink-muted">
@@ -293,7 +293,7 @@ onBeforeUnmount(() => {
     <!-- sites table -->
     <table
       v-else
-      class="w-full font-ui text-[12px] text-ink"
+      class="w-full font-ui text-small text-ink"
       data-testid="sites-table"
     >
       <thead class="bg-surface-1 text-ink-muted">
@@ -316,7 +316,7 @@ onBeforeUnmount(() => {
           <td class="px-4 py-2 font-mono">{{ s.name }}</td>
           <td class="px-4 py-2">
             <span
-              class="text-[11px] uppercase tracking-[0.12em]"
+              class="text-caption uppercase tracking-eyebrow"
               :class="s.kind === 'static' ? 'text-accent' : 'text-ink-muted'"
               :data-testid="`site-kind-${s.name}`"
             >{{ s.kind }}</span>
@@ -336,7 +336,7 @@ onBeforeUnmount(() => {
           </td>
           <td class="px-4 py-2">
             <span
-              class="text-[11px] uppercase tracking-[0.12em]"
+              class="text-caption uppercase tracking-eyebrow"
               :class="statusClass(s.status)"
               :data-testid="`site-status-${s.name}`"
             >{{ s.status }}</span>
@@ -348,7 +348,7 @@ onBeforeUnmount(() => {
             <button
               v-if="s.kind === 'dynamic'"
               type="button"
-              class="text-[11px] text-ink-muted hover:text-ink"
+              class="text-caption text-ink-muted hover:text-ink"
               :data-testid="`site-logs-${s.name}`"
               @click="openLogs(s.name)"
             >
@@ -356,7 +356,7 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
-              class="text-[11px] text-ink-muted hover:text-ink"
+              class="text-caption text-ink-muted hover:text-ink"
               :data-testid="`site-env-${s.name}`"
               @click="openEnvModal(s.name)"
             >
@@ -364,7 +364,7 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
-              class="text-[11px] text-signal-danger hover:text-ink"
+              class="text-caption text-signal-danger hover:text-ink"
               :data-testid="`site-delete-${s.name}`"
               @click="promptDelete(s.name)"
             >
@@ -376,7 +376,7 @@ onBeforeUnmount(() => {
     </table>
 
     <!-- deploy affordance + progress -->
-    <div class="mt-6 px-6 py-4 border-t border-border-muted font-ui text-[12px]">
+    <div class="mt-6 px-6 py-4 border-t border-border-muted font-ui text-small">
       <div class="text-ink mb-2">Deploy from folder</div>
       <p class="text-ink-muted mb-3 max-w-prose">
         Pick a local folder that contains a
@@ -387,7 +387,7 @@ onBeforeUnmount(() => {
       <div class="flex items-center gap-2">
         <button
           type="button"
-          class="px-3 py-1 text-[11px] bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
+          class="px-3 py-1 text-caption bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
           :disabled="deployBusy"
           data-testid="sites-deploy-btn"
           @click="pickAndDeploy"
@@ -397,7 +397,7 @@ onBeforeUnmount(() => {
         <button
           v-if="deployDone || deployError"
           type="button"
-          class="text-[11px] text-ink-muted hover:text-ink"
+          class="text-caption text-ink-muted hover:text-ink"
           data-testid="sites-deploy-reset"
           @click="resetDeploy"
         >
@@ -408,7 +408,7 @@ onBeforeUnmount(() => {
       <!-- deploy error -->
       <div
         v-if="deployError"
-        class="mt-2 text-[11px] text-signal-danger"
+        class="mt-2 text-caption text-signal-danger"
         role="alert"
         data-testid="sites-deploy-error"
       >
@@ -418,7 +418,7 @@ onBeforeUnmount(() => {
       <!-- deploy progress stages -->
       <ul
         v-if="deployStages.length > 0"
-        class="mt-3 space-y-1 font-mono text-[11px]"
+        class="mt-3 space-y-1 font-mono text-caption"
         data-testid="sites-deploy-progress"
       >
         <li
@@ -428,7 +428,7 @@ onBeforeUnmount(() => {
           :class="ev.stage === 'error' ? 'text-signal-danger' : ev.stage === 'done' ? 'text-signal-ok' : 'text-ink-muted'"
           :data-testid="`deploy-stage-${ev.stage}`"
         >
-          <span class="w-[7rem] shrink-0 uppercase tracking-[0.1em] text-[10px]">{{ ev.stage }}</span>
+          <span class="w-[7rem] shrink-0 uppercase tracking-eyebrow text-eyebrow">{{ ev.stage }}</span>
           <span class="flex-1">{{ ev.message }}</span>
           <a
             v-if="ev.url"
@@ -454,7 +454,7 @@ onBeforeUnmount(() => {
         class="relative z-10 w-[640px] max-w-[90vw] rounded-md border border-border-muted bg-surface-0 shadow-lg p-5"
       >
         <div class="flex items-center justify-between mb-3">
-          <h2 class="font-ui text-base font-semibold text-ink">
+          <h2 class="font-ui text-h3 font-semibold text-ink">
             Logs: {{ logsModalSite }}
           </h2>
           <button
@@ -478,7 +478,7 @@ onBeforeUnmount(() => {
         </div>
         <pre
           v-else
-          class="overflow-auto max-h-[50vh] font-mono text-[11px] text-ink bg-surface-1 rounded p-3 whitespace-pre-wrap"
+          class="overflow-auto max-h-[50vh] font-mono text-caption text-ink bg-surface-1 rounded p-3 whitespace-pre-wrap"
           data-testid="logs-content"
         >{{ logsContent || '(no log output)' }}</pre>
       </div>
@@ -497,7 +497,7 @@ onBeforeUnmount(() => {
         class="relative z-10 w-[520px] max-w-[90vw] rounded-md border border-border-muted bg-surface-0 shadow-lg p-5"
       >
         <div class="flex items-center justify-between mb-3">
-          <h2 class="font-ui text-base font-semibold text-ink">
+          <h2 class="font-ui text-h3 font-semibold text-ink">
             Env vars: {{ envModalSite }}
           </h2>
           <button
@@ -509,7 +509,7 @@ onBeforeUnmount(() => {
             Close
           </button>
         </div>
-        <p class="text-[11px] text-ink-muted mb-3 max-w-prose">
+        <p class="text-caption text-ink-muted mb-3 max-w-prose">
           Values are write-only — once set, they are never shown here again.
           This is the only way secrets reach a site; they never ride in a
           deploy manifest.
@@ -542,12 +542,12 @@ onBeforeUnmount(() => {
             <div class="flex items-baseline justify-between">
               <span class="font-mono text-xs text-ink">{{ entry.name }}</span>
               <span
-                class="text-[10px] uppercase tracking-[0.1em]"
+                class="text-eyebrow uppercase tracking-eyebrow"
                 :class="entry.setAt ? 'text-signal-ok' : 'text-ink-subtle'"
                 :data-testid="`env-status-${entry.name}`"
               >{{ envSetDisplay(entry) }}</span>
             </div>
-            <p v-if="entry.description" class="text-[11px] text-ink-muted">
+            <p v-if="entry.description" class="text-caption text-ink-muted">
               {{ entry.description }}
             </p>
             <div class="flex gap-2">
@@ -561,7 +561,7 @@ onBeforeUnmount(() => {
               />
               <button
                 type="button"
-                class="px-2 py-1 text-[11px] bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
+                class="px-2 py-1 text-caption bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
                 :disabled="!envDrafts[entry.name] || envSaving === entry.name"
                 :data-testid="`env-save-${entry.name}`"
                 @click="saveEnvVar(entry.name)"
@@ -594,7 +594,7 @@ onBeforeUnmount(() => {
       <div
         class="relative z-10 w-[420px] max-w-[90vw] rounded-md border border-border-muted bg-surface-0 shadow-lg p-5"
       >
-        <h2 class="font-ui text-base font-semibold text-ink">
+        <h2 class="font-ui text-h3 font-semibold text-ink">
           Delete "{{ deletingConfirmSite }}"?
         </h2>
         <p class="mt-2 font-ui text-xs text-ink-muted">

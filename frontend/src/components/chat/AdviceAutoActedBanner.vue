@@ -16,6 +16,7 @@
  * Purely presentational, mirroring AdviceChip.vue / LongSessionNudge
  * .vue's split between a dumb component and its composable.
  */
+import { Zap } from '@/shell/icons';
 import type { AdviceAutoActedPayload } from '@/lib/types';
 
 const props = defineProps<{
@@ -56,7 +57,7 @@ function handleDismiss() {
     data-testid="advice-auto-acted-banner"
     :data-kind-id="notice.kind_id"
   >
-    <div class="flex-shrink-0 text-accent-strong" aria-hidden="true">⚡</div>
+    <Zap :size="14" class="flex-shrink-0 text-ink-muted" aria-hidden="true" />
 
     <div class="flex min-w-0 flex-1 flex-col gap-1">
       <span class="font-ui text-sm text-ink" data-testid="advice-auto-acted-banner-body">
@@ -67,7 +68,7 @@ function handleDismiss() {
         <button
           v-if="notice.child_session_id"
           type="button"
-          class="rounded-md bg-accent-strong px-2.5 py-1 font-ui text-xs text-on-accent"
+          class="rounded-md bg-accent px-2.5 py-1 font-ui text-xs text-surface-0"
           data-testid="advice-auto-acted-banner-open"
           @click="handleOpen"
         >

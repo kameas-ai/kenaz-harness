@@ -123,20 +123,20 @@ onMounted(refresh);
         @change="toggle"
       />
       <span class="flex flex-col gap-0.5">
-        <span class="flex items-center gap-2 font-ui text-[13px] text-ink">
+        <span class="flex items-center gap-2 font-ui text-ui text-ink">
           <span>Capture long-term memory</span>
           <span
             v-if="enabled === true"
-            class="text-[10px] uppercase tracking-[0.16em] text-signal-ok"
+            class="text-eyebrow uppercase tracking-eyebrow text-signal-ok"
             data-testid="memory-capture-state"
           >on</span>
           <span
             v-else-if="enabled === false"
-            class="text-[10px] uppercase tracking-[0.16em] text-ink-subtle"
+            class="text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
             data-testid="memory-capture-state"
           >off</span>
         </span>
-        <span class="font-ui text-[11px] text-ink-muted max-w-prose">
+        <span class="font-ui text-caption text-ink-muted max-w-prose">
           When on, each finished turn is captured into memory and the most
           relevant chunks are added before every model call. Turning it off
           stops both; chunks already saved stay below until you forget them.
@@ -150,7 +150,7 @@ onMounted(refresh);
 
     <p
       v-if="enabled === false"
-      class="mt-2 rounded-sm border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink"
+      class="mt-2 rounded-sm border border-border-muted bg-surface-1 px-3 py-2 font-ui text-small text-ink"
       role="status"
       data-testid="memory-off-banner"
     >
@@ -160,7 +160,7 @@ onMounted(refresh);
 
     <div
       v-if="partialInstall"
-      class="mt-2 flex flex-wrap items-center gap-3 rounded-sm border border-signal-warning bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink"
+      class="mt-2 flex flex-wrap items-center gap-3 rounded-sm border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-small text-ink"
       role="alert"
       data-testid="memory-partial-install"
     >
@@ -171,7 +171,7 @@ onMounted(refresh);
       </span>
       <button
         type="button"
-        class="rounded-sm border border-border-muted px-2 py-0.5 text-[11px] text-ink hover:bg-surface-2 disabled:opacity-50"
+        class="rounded-sm border border-border-muted px-2 py-0.5 text-caption text-ink hover:bg-surface-2 disabled:opacity-50"
         :disabled="repairing"
         data-testid="memory-repair-hooks"
         @click="repair"
@@ -182,7 +182,7 @@ onMounted(refresh);
 
     <p
       v-if="loadError"
-      class="mt-2 font-ui text-[11px] text-signal-danger"
+      class="mt-2 font-ui text-caption text-signal-danger"
       role="alert"
       data-testid="memory-setting-load-error"
     >
@@ -190,7 +190,7 @@ onMounted(refresh);
     </p>
     <p
       v-if="error"
-      class="mt-2 font-ui text-[11px] text-signal-danger"
+      class="mt-2 font-ui text-caption text-signal-danger"
       role="alert"
       data-testid="memory-toggle-error"
     >

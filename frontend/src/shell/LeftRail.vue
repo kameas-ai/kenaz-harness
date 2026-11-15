@@ -12,7 +12,7 @@ import {
   FileText,
   Settings,
   BookOpen,
-  GitBranch,
+  Workflow,
   Globe,
   Trash2,
   X,
@@ -604,13 +604,13 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
     <!-- error banner -->
     <div
       v-if="lastError"
-      class="mx-2 mb-1 rounded-sm border border-signal-danger bg-surface-1 px-2 py-1.5 font-ui text-[11px] text-signal-danger"
+      class="mx-2 mb-1 rounded-sm border border-signal-danger bg-surface-1 px-2 py-1.5 font-ui text-caption text-signal-danger"
       role="alert"
     >
       <pre class="whitespace-pre-wrap break-words">{{ lastError }}</pre>
       <button
         type="button"
-        class="mt-1 text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-ink"
+        class="mt-1 text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-ink"
         @click="dismissError"
       >
         Dismiss
@@ -625,13 +625,13 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
       <!-- Projects header + add affordance -->
       <div class="flex items-center gap-1 px-2 pt-1 pb-1">
         <span
-          class="flex-1 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="flex-1 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
         >
           Projects
         </span>
         <button
           type="button"
-          class="text-[11px] text-ink-dim hover:text-accent flex items-center gap-1"
+          class="text-caption text-ink-dim hover:text-accent flex items-center gap-1"
           aria-label="New project"
           data-testid="new-project"
           @click.stop="openNewProjectPrompt"
@@ -692,11 +692,11 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                 <component
                   :is="isCollapsed(project.id) ? ChevronRight : ChevronDown"
                   :size="12"
-                  class="text-ink-dim"
+                  class="inline-block text-ink-dim"
                 />
                 <Folder :size="13" />
                 <span class="truncate flex-1 hidden two-col:inline">{{ project.name }}</span>
-                <span class="text-[10px] text-ink-dim">{{ sessionsFor(project.id).length }}</span>
+                <span class="text-eyebrow text-ink-dim">{{ sessionsFor(project.id).length }}</span>
               </button>
               <!-- D-01 fix (WP04): keyboard-accessible ⋯ options button -->
               <button
@@ -784,7 +784,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                   :data-testid="`delete-session-${session.id}`"
                   @click="deleteSession(session.id, $event)"
                 >
-                  <X :size="14" />
+                  <X class="inline-block" :size="14" />
                 </button>
               </div>
             </li>
@@ -798,7 +798,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         class="mt-3"
       >
         <div
-          class="px-2 py-1 rounded-sm font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="px-2 py-1 rounded-sm font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
           :class="dropTargetId === '__loose__' ? 'bg-accent-glow ring-1 ring-accent' : ''"
           data-testid="loose-header"
           @dragover="onProjectDragOver($event, '__loose__')"
@@ -835,7 +835,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                   :data-testid="`delete-session-${session.id}`"
                   @click.stop="deleteSession(session.id, $event)"
                 >
-                  <X :size="14" />
+                  <X class="inline-block" :size="14" />
                 </button>
               </template>
             </SessionTreeRow>
@@ -862,7 +862,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                     :data-testid="`delete-session-${child.id}`"
                     @click.stop="deleteSession(child.id, $event)"
                   >
-                    <X :size="14" />
+                    <X class="inline-block" :size="14" />
                   </button>
                 </template>
               </SessionTreeRow>
@@ -916,7 +916,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                 :data-testid="`delete-session-${session.id}`"
                 @click="deleteSession(session.id, $event)"
               >
-                <X :size="14" />
+                <X class="inline-block" :size="14" />
               </button>
             </div>
           </li>
@@ -933,7 +933,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
       <div v-if="sessionList.length > 0" class="mt-2 px-2">
         <button
           type="button"
-          class="flex items-center gap-1.5 px-2 py-1 rounded-sm text-[11px] uppercase tracking-[0.16em] text-ink-dim hover:text-signal-danger transition-fast"
+          class="flex items-center gap-1.5 px-2 py-1 rounded-sm text-caption uppercase tracking-eyebrow text-ink-dim hover:text-signal-danger transition-fast"
           :title="`Delete all ${sessionList.length} sessions`"
           :data-testid="'clear-all-sessions'"
           @click="clearAll"
@@ -993,7 +993,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
       <div
         class="relative z-10 w-[420px] max-w-[90vw] rounded-md border border-border-muted bg-surface-0 shadow-lg p-5"
       >
-        <h2 class="font-ui text-base font-semibold text-ink">
+        <h2 class="font-ui text-h3 font-semibold text-ink">
           Delete project “{{ deleteModal.project.name }}”?
         </h2>
         <p class="mt-2 font-ui text-xs text-ink-muted">
@@ -1056,7 +1056,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <li data-testid="nav-capabilities">
           <RailEntry :icon="Blocks" label="Capabilities" to="/tools" match-prefix="/tools" :unavailable="servedUnavailable('nav.capabilities')" />
         </li>
-        <li data-testid="nav-workflows"><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" match-prefix="/workflows" :unavailable="servedUnavailable('nav.workflows')" /></li>
+        <li data-testid="nav-workflows"><RailEntry :icon="Workflow" label="Workflows" to="/workflows" match-prefix="/workflows" :unavailable="servedUnavailable('nav.workflows')" /></li>
         <!-- knowledge-home-01DOGF0E WP02: one Knowledge entry replaces the
              separate Contexts and Memory entries (Curated / Learned sections
              inside; stores unchanged). match-prefix keeps it active on

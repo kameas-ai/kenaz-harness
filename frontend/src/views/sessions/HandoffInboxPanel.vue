@@ -95,7 +95,7 @@ async function onDismiss(it: FleetInboxItemView) {
     aria-label="Sessions shared with you"
   >
     <div class="flex items-center justify-between">
-      <h3 class="font-ui text-xs uppercase tracking-[0.15em] text-ink-muted">Shared with you</h3>
+      <h3 class="font-ui text-xs uppercase tracking-eyebrow text-ink-muted">Shared with you</h3>
       <button
         type="button"
         class="text-ink-muted hover:text-ink text-xs"
@@ -120,17 +120,17 @@ async function onDismiss(it: FleetInboxItemView) {
         :data-testid="`handoff-inbox-item-${it.inboxItemID}`"
       >
         <div class="font-ui text-sm text-ink truncate">{{ fromLabel(it) }}</div>
-        <div class="font-ui text-[11px] text-ink-muted">{{ receivedLabel(it) }}</div>
+        <div class="font-ui text-caption text-ink-muted">{{ receivedLabel(it) }}</div>
         <p
           v-if="it.undecryptable"
-          class="mt-1 font-ui text-[11px] text-ink-muted"
+          class="mt-1 font-ui text-caption text-ink-muted"
           data-testid="handoff-inbox-undecryptable"
         >
           Sent to a device key of yours that no longer exists, so it can't be opened on any device.
         </p>
         <p
           v-if="errorByID[it.inboxItemID]"
-          class="mt-1 font-ui text-[11px] text-signal-danger"
+          class="mt-1 font-ui text-caption text-signal-danger"
           role="alert"
           data-testid="handoff-inbox-error"
         >

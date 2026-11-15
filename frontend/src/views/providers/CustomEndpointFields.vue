@@ -179,7 +179,7 @@ function capLabel(val: 'true' | 'false' | 'unknown'): string {
 }
 function capClass(val: 'true' | 'false' | 'unknown'): string {
   switch (val) {
-    case 'true': return 'text-signal-success';
+    case 'true': return 'text-signal-ok-text';
     case 'false': return 'text-signal-danger';
     default: return 'text-ink-dim';
   }
@@ -192,7 +192,7 @@ defineExpose({ baseURL, model, authScheme, authHeader, apiKey, templateID, probe
   <div class="space-y-4">
     <!-- Template picker -->
     <div v-if="templates.length > 0">
-      <label class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <label class="block text-caption uppercase tracking-eyebrow text-ink-subtle">
         Quick-select template
       </label>
       <div class="mt-1 flex flex-wrap gap-1.5">
@@ -214,7 +214,7 @@ defineExpose({ baseURL, model, authScheme, authHeader, apiKey, templateID, probe
     <div>
       <label
         for="custom-base-url"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         Base URL
       </label>
@@ -231,12 +231,12 @@ defineExpose({ baseURL, model, authScheme, authHeader, apiKey, templateID, probe
         />
         <span
           v-if="recognizing"
-          class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-ink-dim"
+          class="absolute right-2 top-1/2 -translate-y-1/2 text-eyebrow text-ink-dim"
         >
           detecting…
         </span>
       </div>
-      <p class="mt-1 text-[11px] text-ink-dim">
+      <p class="mt-1 text-caption text-ink-dim">
         The root URL of the OpenAI-compatible API (no trailing slash).
       </p>
     </div>
@@ -245,7 +245,7 @@ defineExpose({ baseURL, model, authScheme, authHeader, apiKey, templateID, probe
     <div>
       <label
         for="custom-model"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         Model ID
       </label>
@@ -258,14 +258,14 @@ defineExpose({ baseURL, model, authScheme, authHeader, apiKey, templateID, probe
         :data-testid="'custom-model'"
         placeholder="e.g. meta-llama/Llama-3-8b-instruct"
       />
-      <p class="mt-1 text-[11px] text-ink-dim">
+      <p class="mt-1 text-caption text-ink-dim">
         The model name sent with every request. Required for probe.
       </p>
     </div>
 
     <!-- Auth scheme -->
     <div>
-      <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <span class="block text-caption uppercase tracking-eyebrow text-ink-subtle">
         Auth scheme
       </span>
       <div class="mt-1 flex gap-1 rounded-sm border border-border-muted bg-surface-1 p-0.5">
@@ -291,7 +291,7 @@ defineExpose({ baseURL, model, authScheme, authHeader, apiKey, templateID, probe
     <div v-if="authScheme === 'api-key-header' || authScheme === 'custom'">
       <label
         for="custom-auth-header"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         Auth header name
       </label>
@@ -310,7 +310,7 @@ defineExpose({ baseURL, model, authScheme, authHeader, apiKey, templateID, probe
     <div v-if="requiresKey">
       <label
         for="custom-api-key"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         API Key
       </label>
@@ -323,7 +323,7 @@ defineExpose({ baseURL, model, authScheme, authHeader, apiKey, templateID, probe
         :data-testid="'custom-api-key'"
         :placeholder="editing ? 'leave blank to keep current key' : 'paste key'"
       />
-      <p class="mt-1 text-[11px] text-ink-dim">
+      <p class="mt-1 text-caption text-ink-dim">
         Stored in your OS keychain. Never written to providers.json.
       </p>
     </div>
@@ -365,7 +365,7 @@ defineExpose({ baseURL, model, authScheme, authHeader, apiKey, templateID, probe
       class="rounded-sm border border-border-muted bg-surface-1 px-3 py-2 text-xs"
       :data-testid="'custom-capability-matrix'"
     >
-      <p class="mb-1.5 text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <p class="mb-1.5 text-caption uppercase tracking-eyebrow text-ink-subtle">
         Capabilities
       </p>
       <ul class="space-y-1">

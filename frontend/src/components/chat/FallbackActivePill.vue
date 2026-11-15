@@ -60,12 +60,12 @@ defineExpose({ payload, dismiss });
   >
     <div
       v-if="payload"
-      class="inline-flex items-center gap-1.5 rounded-full border border-signal-warning bg-surface-1 px-2.5 py-1 font-ui text-[11px] text-ink shadow-sm"
+      class="inline-flex items-center gap-1.5 rounded-full border border-signal-warn bg-surface-1 px-2.5 py-1 font-ui text-caption text-ink shadow-sm"
       role="status"
       aria-live="polite"
       data-testid="fallback-active-pill"
     >
-      <span class="h-1.5 w-1.5 rounded-full bg-signal-warning flex-shrink-0" />
+      <span class="h-1.5 w-1.5 rounded-full bg-signal-warn flex-shrink-0" />
       <span>Fallback: {{ payload.to_profile }}<template v-if="payload.to_model"> / {{ payload.to_model }}</template></span>
       <button
         type="button"

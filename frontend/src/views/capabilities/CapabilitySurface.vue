@@ -492,16 +492,16 @@ defineExpose({ focusBrowse });
       <!-- The page's "Add capability" action lives in ToolsView's header
            (WP09); this heading names the list, which holds installed and
            available capabilities alike. -->
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         All capabilities
       </h2>
       <div class="flex flex-wrap items-center gap-2" data-testid="capability-entry-points">
-        <span class="font-ui text-[11px] text-ink-muted">Add your own:</span>
+        <span class="font-ui text-caption text-ink-muted">Add your own:</span>
         <button
           v-for="ep in ENTRY_POINTS"
           :key="ep.id"
           type="button"
-          class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2.5 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+          class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2.5 py-1 font-ui text-caption text-accent hover:bg-accent-glow"
           :data-testid="`capability-entry-${ep.id}`"
           @click="entryOpen = ep.id"
         >
@@ -523,7 +523,7 @@ defineExpose({ focusBrowse });
         type="search"
         aria-label="Search capabilities"
         placeholder="Search tools, MCP servers, skills, workflows, bundles…"
-        class="w-full rounded-sm border border-border-muted bg-surface-1 py-2 pl-8 pr-3 font-ui text-[12px] text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none"
+        class="w-full rounded-sm border border-border-muted bg-surface-1 py-2 pl-8 pr-3 font-ui text-small text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none"
         data-testid="capability-search"
       />
     </div>
@@ -534,7 +534,7 @@ defineExpose({ focusBrowse });
         type="button"
         :aria-pressed="kindFilter === chip.id"
         :class="[
-          'rounded-sm border px-2 py-0.5 font-ui text-[11px]',
+          'rounded-sm border px-2 py-0.5 font-ui text-caption',
           kindFilter === chip.id ? 'border-accent text-accent' : 'border-border-muted text-ink-muted hover:text-ink',
         ]"
         :data-testid="`capability-kind-chip-${chip.id}`"
@@ -550,7 +550,7 @@ defineExpose({ focusBrowse });
         type="button"
         :aria-pressed="sourceFilter === chip.id"
         :class="[
-          'rounded-sm border px-2 py-0.5 font-ui text-[11px]',
+          'rounded-sm border px-2 py-0.5 font-ui text-caption',
           sourceFilter === chip.id ? 'border-accent text-accent' : 'border-border-muted text-ink-muted hover:text-ink',
         ]"
         :data-testid="`capability-source-chip-${chip.id}`"
@@ -560,7 +560,7 @@ defineExpose({ focusBrowse });
       </button>
       <span
         v-if="categoryFilter"
-        class="ml-2 inline-flex items-center gap-1 font-ui text-[11px] text-ink-muted"
+        class="ml-2 inline-flex items-center gap-1 font-ui text-caption text-ink-muted"
         data-testid="capability-category-filter"
       >
         Showing <span class="rounded-sm bg-surface-2 px-1.5 text-ink">{{ categoryLabel(categoryFilter) }}</span>
@@ -570,7 +570,7 @@ defineExpose({ focusBrowse });
 
     <div
       v-if="loadError"
-      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="capability-load-error"
     >
@@ -584,7 +584,7 @@ defineExpose({ focusBrowse });
         <div
           v-for="u in visibleUnavailable"
           :key="`${u.kind}:${u.source}:${u.reason}`"
-          class="rounded-sm border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+          class="rounded-sm border border-border-muted bg-surface-1 px-3 py-2 font-ui text-small text-ink-muted"
           role="note"
           :data-testid="`capability-unavailable-${u.kind}-${u.source || 'all'}`"
         >
@@ -593,12 +593,12 @@ defineExpose({ focusBrowse });
           — {{ unavailableText(u.reason, u.message) }}
         </div>
 
-        <div v-if="loading && rows.length === 0" class="py-4 font-ui text-[12px] text-ink-muted" data-testid="capability-loading">
+        <div v-if="loading && rows.length === 0" class="py-4 font-ui text-small text-ink-muted" data-testid="capability-loading">
           Loading capabilities…
         </div>
         <div
           v-else-if="rows.length === 0"
-          class="py-4 font-ui text-[12px] text-ink-muted"
+          class="py-4 font-ui text-small text-ink-muted"
           data-testid="capability-empty"
         >
           {{ emptyText }}
@@ -614,13 +614,13 @@ defineExpose({ focusBrowse });
               :data-testid="`${row.tool.testid}-tool-row`"
             >
               <button type="button" class="min-w-0 text-left" @click="select(row)">
-                <div class="flex items-center gap-2 font-ui text-[13px] text-ink">
+                <div class="flex items-center gap-2 font-ui text-ui text-ink">
                   <span>{{ row.tool.name }}</span>
-                  <span class="text-[10px] uppercase tracking-[0.14em] text-ink-dim">built-in</span>
-                  <span v-if="builtinOn[row.tool.id]" class="text-[10px] uppercase tracking-[0.16em] text-signal-ok">on</span>
+                  <span class="text-eyebrow uppercase tracking-eyebrow text-ink-dim">built-in</span>
+                  <span v-if="builtinOn[row.tool.id]" class="text-eyebrow uppercase tracking-eyebrow text-signal-ok">on</span>
                 </div>
-                <p class="mt-1 max-w-prose text-[11px] text-ink-muted">{{ row.tool.summary }}</p>
-                <div v-if="builtinError[row.tool.id]" class="mt-1 text-[11px] text-signal-danger" role="alert">
+                <p class="mt-1 max-w-prose text-caption text-ink-muted">{{ row.tool.summary }}</p>
+                <div v-if="builtinError[row.tool.id]" class="mt-1 text-caption text-signal-danger" role="alert">
                   {{ builtinError[row.tool.id] }}
                 </div>
               </button>
@@ -650,37 +650,37 @@ defineExpose({ focusBrowse });
                 aria-hidden="true"
               />
               <button type="button" class="min-w-0 text-left" @click="select(row)">
-                <div class="flex flex-wrap items-center gap-2 font-ui text-[13px] text-ink">
+                <div class="flex flex-wrap items-center gap-2 font-ui text-ui text-ink">
                   <span>{{ row.item.name }}</span>
-                  <span class="text-[10px] uppercase tracking-[0.14em] text-ink-dim">{{ kindNoun(row.item.kind) }}</span>
+                  <span class="text-eyebrow uppercase tracking-eyebrow text-ink-dim">{{ kindNoun(row.item.kind) }}</span>
                   <span
-                    class="text-[10px] uppercase tracking-[0.14em] text-ink-dim"
+                    class="text-eyebrow uppercase tracking-eyebrow text-ink-dim"
                     :data-testid="`capability-source-${row.item.kind}-${row.item.id}`"
                   >{{ SOURCE_LABELS[row.item.source] ?? row.item.source }}</span>
                   <span
-                    :class="['text-[10px] uppercase tracking-[0.14em]', row.item.state.installed ? 'text-signal-ok' : 'text-ink-subtle']"
+                    :class="['text-eyebrow uppercase tracking-eyebrow', row.item.state.installed ? 'text-signal-ok' : 'text-ink-subtle']"
                     :data-testid="`capability-state-${row.item.kind}-${row.item.id}`"
                   >{{ stateLabel(row.item) }}</span>
                   <span
                     v-if="lifecycleChip(row.item)"
-                    :class="['rounded-sm border border-border-muted px-1 text-[10px] uppercase tracking-[0.14em]', lifecycleChip(row.item)!.tone]"
+                    :class="['rounded-sm border border-border-muted px-1 text-eyebrow uppercase tracking-eyebrow', lifecycleChip(row.item)!.tone]"
                     :title="lifecycleChip(row.item)!.title"
                     :data-testid="`capability-lifecycle-${row.item.kind}-${row.item.id}`"
                   >{{ lifecycleChip(row.item)!.label }}</span>
                 </div>
-                <p class="mt-1 max-w-prose text-[11px] text-ink-muted line-clamp-2">{{ row.item.description }}</p>
+                <p class="mt-1 max-w-prose text-caption text-ink-muted line-clamp-2">{{ row.item.description }}</p>
                 <!-- Disabled-with-reason (WP02 posture): visible text, not a tooltip only. -->
                 <p
                   v-if="isRevoked(row.item) && !row.item.state.installed"
                   :id="`capability-revoked-reason-${row.item.kind}-${row.item.id}`"
-                  class="mt-1 max-w-prose text-[11px] text-ink-subtle"
+                  class="mt-1 max-w-prose text-caption text-ink-subtle"
                   :data-testid="`capability-revoked-${row.item.kind}-${row.item.id}`"
                 >
                   {{ REVOKED_INSTALL_COPY }}
                 </p>
                 <div
                   v-if="rowError[row.key]"
-                  class="mt-1 text-[11px] text-signal-danger"
+                  class="mt-1 text-caption text-signal-danger"
                   role="alert"
                   :data-testid="`capability-row-error-${row.item.kind}-${row.item.id}`"
                 >
@@ -691,7 +691,7 @@ defineExpose({ focusBrowse });
                 <button
                   v-if="!row.item.state.installed"
                   type="button"
-                  class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:cursor-not-allowed disabled:opacity-50"
+                  class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-small text-accent hover:bg-accent-glow disabled:cursor-not-allowed disabled:opacity-50"
                   :disabled="busy[row.key] || isRevoked(row.item)"
                   :title="isRevoked(row.item) ? REVOKED_INSTALL_COPY : undefined"
                   :aria-describedby="isRevoked(row.item) ? `capability-revoked-reason-${row.item.kind}-${row.item.id}` : undefined"
@@ -703,7 +703,7 @@ defineExpose({ focusBrowse });
                 <button
                   v-else-if="row.item.state.update_available"
                   type="button"
-                  class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50"
+                  class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-small text-accent hover:bg-accent-glow disabled:opacity-50"
                   :disabled="busy[row.key]"
                   :data-testid="`capability-update-${row.item.kind}-${row.item.id}`"
                   @click="update(row)"
@@ -722,37 +722,37 @@ defineExpose({ focusBrowse });
             >
               <component :is="categoryIconFor('')" class="mt-0.5 h-4 w-4 text-ink-subtle" aria-hidden="true" />
               <button type="button" class="min-w-0 text-left" @click="select(row)">
-                <div class="flex flex-wrap items-center gap-2 font-ui text-[13px] text-ink">
+                <div class="flex flex-wrap items-center gap-2 font-ui text-ui text-ink">
                   <span>{{ row.entry.slug }}</span>
-                  <span class="text-[10px] uppercase tracking-[0.14em] text-ink-dim">{{ kindNoun(row.entry.kind) }}</span>
-                  <span class="text-[10px] uppercase tracking-[0.14em] text-ink-dim">{{ VISIBILITY_LABELS[row.entry.visibility] ?? SOURCE_LABELS[catalogSource(row.entry.visibility)] }}</span>
+                  <span class="text-eyebrow uppercase tracking-eyebrow text-ink-dim">{{ kindNoun(row.entry.kind) }}</span>
+                  <span class="text-eyebrow uppercase tracking-eyebrow text-ink-dim">{{ VISIBILITY_LABELS[row.entry.visibility] ?? SOURCE_LABELS[catalogSource(row.entry.visibility)] }}</span>
                   <span
                     v-if="row.residue"
-                    class="text-[10px] uppercase tracking-[0.14em] text-ink-muted"
+                    class="text-eyebrow uppercase tracking-eyebrow text-ink-muted"
                     title="An earlier version downloaded this item, but nothing on this device uses it."
                     :data-testid="`capability-catalog-downloaded-${row.entry.kind}-${row.entry.slug}`"
                   >Downloaded — not active</span>
-                  <span v-else class="text-[10px] uppercase tracking-[0.14em] text-ink-subtle">Not installable yet</span>
+                  <span v-else class="text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Not installable yet</span>
                   <span
                     v-if="lifecycleChip(row.entry)"
-                    :class="['rounded-sm border border-border-muted px-1 text-[10px] uppercase tracking-[0.14em]', lifecycleChip(row.entry)!.tone]"
+                    :class="['rounded-sm border border-border-muted px-1 text-eyebrow uppercase tracking-eyebrow', lifecycleChip(row.entry)!.tone]"
                     :title="lifecycleChip(row.entry)!.title"
                     :data-testid="`capability-catalog-lifecycle-${row.entry.kind}-${row.entry.slug}`"
                   >{{ lifecycleChip(row.entry)!.label }}</span>
                 </div>
-                <p class="mt-1 max-w-prose text-[11px] text-ink-muted line-clamp-2">{{ row.entry.description || 'No description.' }}</p>
+                <p class="mt-1 max-w-prose text-caption text-ink-muted line-clamp-2">{{ row.entry.description || 'No description.' }}</p>
                 <!-- Disabled-with-reason (WP02 posture): visible text, not a tooltip only. -->
                 <p
                   v-if="!row.residue && catalogOnlyKind(row.entry.kind)"
                   :id="reasonElId(row.entry)"
-                  class="mt-1 max-w-prose text-[11px] text-ink-subtle"
+                  class="mt-1 max-w-prose text-caption text-ink-subtle"
                   :data-testid="`capability-catalog-unsupported-${row.entry.kind}-${row.entry.slug}`"
                 >
                   {{ catalogOnlyKind(row.entry.kind)?.reason }}
                 </p>
                 <div
                   v-if="rowError[row.key]"
-                  class="mt-1 text-[11px] text-signal-danger"
+                  class="mt-1 text-caption text-signal-danger"
                   role="alert"
                   :data-testid="`capability-catalog-error-${row.entry.kind}-${row.entry.slug}`"
                 >
@@ -763,7 +763,7 @@ defineExpose({ focusBrowse });
                 <button
                   v-if="row.residue"
                   type="button"
-                  class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[12px] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
+                  class="rounded-sm border border-border-muted px-3 py-1 font-ui text-small text-ink-muted hover:bg-surface-2 disabled:opacity-50"
                   :disabled="busy[row.key]"
                   :data-testid="`capability-catalog-remove-download-${row.entry.kind}-${row.entry.slug}`"
                   @click="removeDownload(row.entry, row.key)"
@@ -773,7 +773,7 @@ defineExpose({ focusBrowse });
                 <button
                   v-else
                   type="button"
-                  class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-[12px] text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-small text-accent disabled:cursor-not-allowed disabled:opacity-50"
                   disabled
                   :title="catalogOnlyKind(row.entry.kind)?.reason"
                   :aria-describedby="reasonElId(row.entry)"
@@ -791,13 +791,13 @@ defineExpose({ focusBrowse });
                delete in the first release after v0.87.x (decision record D3). -->
           <li
             v-if="(kindFilter === 'all' || kindFilter === 'builtin') && !query.trim() && categoryFilter === null"
-            class="flex flex-wrap items-center gap-2 px-4 py-3 font-ui text-[12px] text-ink-muted"
+            class="flex flex-wrap items-center gap-2 px-4 py-3 font-ui text-small text-ink-muted"
             data-testid="memory-moved-pointer"
           >
             <span>Long-term memory moved to Knowledge › Learned.</span>
             <button
               type="button"
-              class="rounded-sm border border-border-muted px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-ink hover:bg-surface-2"
+              class="rounded-sm border border-border-muted px-2 py-0.5 text-eyebrow uppercase tracking-eyebrow text-ink hover:bg-surface-2"
               data-testid="memory-view-link"
               @click="gotoLearned"
             >
@@ -812,15 +812,15 @@ defineExpose({ focusBrowse });
           :class="['rounded-sm border px-4 py-3', rows.length === 0 ? 'border-accent-hairline bg-accent-glow' : 'border-border-muted bg-surface-1']"
           data-testid="capability-long-tail"
         >
-          <div class="font-ui text-[12px] font-semibold text-ink">Don't see your tool?</div>
-          <p class="mt-1 max-w-prose text-[11px] text-ink-muted">
+          <div class="font-ui text-small font-semibold text-ink">Don't see your tool?</div>
+          <p class="mt-1 max-w-prose text-caption text-ink-muted">
             Reach thousands more apps through Automation &amp; iPaaS connectors (Zapier, Make, n8n,
             Pipedream, Composio, Workato), or add any MCP server yourself.
           </p>
           <div class="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
-              class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2.5 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+              class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2.5 py-1 font-ui text-caption text-accent hover:bg-accent-glow"
               data-testid="capability-browse-automation"
               @click="browseAutomation"
             >
@@ -829,7 +829,7 @@ defineExpose({ focusBrowse });
             </button>
             <button
               type="button"
-              class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2.5 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+              class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2.5 py-1 font-ui text-caption text-accent hover:bg-accent-glow"
               data-testid="capability-add-custom"
               @click="entryOpen = 'mcp-custom'"
             >
@@ -838,7 +838,7 @@ defineExpose({ focusBrowse });
             </button>
             <button
               type="button"
-              class="font-ui text-[11px] text-ink-muted underline hover:text-ink"
+              class="font-ui text-caption text-ink-muted underline hover:text-ink"
               data-testid="capability-request-connector"
               @click="requestConnector"
             >
@@ -850,17 +850,17 @@ defineExpose({ focusBrowse });
 
       <!-- Detail -->
       <aside class="min-w-0 rounded-sm border border-border-muted bg-surface-1 px-4 py-3" data-testid="capability-detail">
-        <p v-if="!selected" class="font-ui text-[12px] text-ink-muted" data-testid="capability-detail-empty">
+        <p v-if="!selected" class="font-ui text-small text-ink-muted" data-testid="capability-detail-empty">
           Select a capability to see its details.
         </p>
         <template v-else-if="selected.type === 'builtin'">
           <div class="space-y-2" :data-testid="`builtin-detail-${selected.tool.id}`">
-            <div class="font-ui text-[13px] font-semibold text-ink">{{ selected.tool.name }}</div>
-            <p class="text-[11px] text-ink-muted">{{ selected.tool.description }}</p>
-            <ul v-if="selected.tool.tools" class="list-none font-mono text-[10px] text-ink-dim">
+            <div class="font-ui text-ui font-semibold text-ink">{{ selected.tool.name }}</div>
+            <p class="text-caption text-ink-muted">{{ selected.tool.description }}</p>
+            <ul v-if="selected.tool.tools" class="list-none font-mono text-eyebrow text-ink-dim">
               <li v-for="t in selected.tool.tools" :key="t">{{ t }}</li>
             </ul>
-            <p class="text-[11px] text-ink-subtle">
+            <p class="text-caption text-ink-subtle">
               Built-in tools are enabled, not installed — use the toggle in the list.
             </p>
           </div>
@@ -887,24 +887,24 @@ defineExpose({ focusBrowse });
             v-if="!pluginFor(selected.item.kind)!.ownsRemove && selected.item.state.installed"
             class="mt-3 border-t border-border-muted pt-3"
           >
-            <p v-if="selected.item.read_only" class="text-[11px] text-ink-muted" :data-testid="`capability-read-only-${selected.item.kind}-${selected.item.id}`">
+            <p v-if="selected.item.read_only" class="text-caption text-ink-muted" :data-testid="`capability-read-only-${selected.item.kind}-${selected.item.id}`">
               {{ selected.item.read_only_reason || 'Managed by your org' }} — it can't be removed here.
             </p>
             <template v-else>
               <button
                 v-if="confirmingRemoveKey !== selected.key"
                 type="button"
-                class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-signal-danger hover:bg-signal-danger/10"
+                class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-signal-danger hover:bg-signal-danger/10"
                 :data-testid="`capability-remove-${selected.item.kind}-${selected.item.id}`"
                 @click="confirmingRemoveKey = selected.key"
               >
                 Remove
               </button>
               <div v-else class="flex items-center gap-2">
-                <span class="font-ui text-[12px] text-ink">Remove {{ selected.item.name }}?</span>
+                <span class="font-ui text-small text-ink">Remove {{ selected.item.name }}?</span>
                 <button
                   type="button"
-                  class="rounded-sm border border-signal-danger px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-signal-danger"
+                  class="rounded-sm border border-signal-danger px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-signal-danger"
                   :data-testid="`capability-remove-confirm-${selected.item.kind}-${selected.item.id}`"
                   @click="removeSelected"
                 >
@@ -912,7 +912,7 @@ defineExpose({ focusBrowse });
                 </button>
                 <button
                   type="button"
-                  class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim"
+                  class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim"
                   @click="confirmingRemoveKey = null"
                 >
                   Cancel
@@ -952,7 +952,7 @@ defineExpose({ focusBrowse });
     >
       <div class="absolute inset-0 bg-modal-overlay" @click="cancelWithdraw" />
       <div class="relative z-10 w-[440px] max-w-[90vw] rounded-md border border-border-muted bg-surface-0 p-5 shadow-lg">
-        <h2 class="font-ui text-base font-semibold text-ink">
+        <h2 class="font-ui text-h3 font-semibold text-ink">
           Withdraw "{{ pendingWithdraw.slug }}"?
         </h2>
         <p class="mt-2 font-ui text-xs text-ink-muted" data-testid="withdraw-confirm-copy">

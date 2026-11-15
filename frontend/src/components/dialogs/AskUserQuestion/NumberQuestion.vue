@@ -55,14 +55,14 @@ function onInput(e: Event) {
       :max="max ?? undefined"
       :step="step ?? undefined"
       :aria-label="ariaLabel"
-      class="w-full rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-[13px] text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none"
+      class="w-full rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-ui text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none"
       placeholder="Enter a number…"
       data-testid="number-question-input"
       @input="onInput"
     />
     <p
       v-if="min !== null || max !== null"
-      class="mt-1 font-ui text-[10px] text-ink-subtle"
+      class="mt-1 font-ui text-eyebrow text-ink-subtle"
     >
       <template v-if="min !== null">Min: {{ min }}&nbsp;</template>
       <template v-if="max !== null">Max: {{ max }}&nbsp;</template>

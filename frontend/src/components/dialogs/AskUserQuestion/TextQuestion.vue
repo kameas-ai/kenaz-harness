@@ -57,12 +57,12 @@ function onKeydown(e: KeyboardEvent) {
       :placeholder="placeholder || 'Type your answer…'"
       :aria-label="ariaLabel"
       rows="4"
-      class="w-full resize-y rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-[13px] text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none"
+      class="w-full resize-y rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-ui text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none"
       data-testid="text-question-input"
       @input="onInput"
       @keydown="onKeydown"
     />
-    <p class="mt-1 font-ui text-[10px] text-ink-subtle">
+    <p class="mt-1 font-ui text-eyebrow text-ink-subtle">
       Enter to submit · Shift+Enter for new line
     </p>
   </div>

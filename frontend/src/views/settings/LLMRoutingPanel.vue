@@ -11,6 +11,7 @@
  * model-fallback-routing-01NDFSEX04 WP05.
  */
 import { onMounted, ref } from 'vue';
+import { ChevronRight } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { FallbackChain, FallbackChainEntry, FallbackChainSummary, TriggerCondition } from '@/lib/types';
 
@@ -148,12 +149,12 @@ onMounted(refresh);
     data-testid="llm-routing-panel"
   >
     <div class="flex items-center justify-between mb-4">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         LLM Routing — Fallback Chains
       </h2>
       <button
         type="button"
-        class="font-ui text-xs text-ink-link hover:underline disabled:opacity-40"
+        class="font-ui text-xs text-accent hover:underline disabled:opacity-40"
         :disabled="loading"
         data-testid="llm-routing-new-chain"
         @click="openNew"
@@ -206,25 +207,17 @@ onMounted(refresh);
           <span class="font-ui text-sm text-ink truncate">{{ chain.name }}</span>
           <span
             v-if="chain.description"
-            class="font-ui text-[11px] text-ink-muted truncate"
+            class="font-ui text-caption text-ink-muted truncate"
           >{{ chain.description }}</span>
           <div class="flex items-center gap-2 mt-0.5">
-            <span class="font-ui text-[10px] text-ink-subtle">{{ chain.entryCount }} hop{{ chain.entryCount !== 1 ? 's' : '' }}</span>
+            <span class="font-ui text-eyebrow text-ink-subtle">{{ chain.entryCount }} hop{{ chain.entryCount !== 1 ? 's' : '' }}</span>
             <span
               v-if="chain.bundled"
-              class="font-ui text-[10px] uppercase tracking-[0.12em] text-accent"
+              class="font-ui text-eyebrow uppercase tracking-eyebrow text-accent"
             >bundled</span>
           </div>
         </div>
-        <svg
-          class="h-4 w-4 text-ink-muted flex-shrink-0 ml-2"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-        >
-          <path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
+        <ChevronRight class="h-4 w-4 text-ink-muted flex-shrink-0 ml-2" aria-hidden="true" />
       </li>
     </ul>
 
@@ -235,7 +228,7 @@ onMounted(refresh);
       data-testid="llm-routing-editor"
     >
       <div class="flex items-center justify-between">
-        <h3 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h3 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           {{ editorChain.id ? 'Edit chain' : 'New chain' }}
         </h3>
         <button
@@ -251,7 +244,7 @@ onMounted(refresh);
       <!-- bundled notice -->
       <div
         v-if="editorChain.bundled"
-        class="font-ui text-[11px] text-ink-muted rounded border border-border px-2 py-1"
+        class="font-ui text-caption text-ink-muted rounded border border-border px-2 py-1"
         data-testid="llm-routing-bundled-notice"
       >
         This is a bundled chain. Save to create a user-managed override.
@@ -259,11 +252,11 @@ onMounted(refresh);
 
       <!-- id -->
       <label class="flex flex-col gap-1">
-        <span class="font-ui text-[11px] text-ink-subtle">ID</span>
+        <span class="font-ui text-caption text-ink-subtle">ID</span>
         <input
           v-model="editorChain.id"
           type="text"
-          class="rounded border border-border bg-surface-1 px-2 py-1 font-mono text-[12px] text-ink outline-none focus:border-accent"
+          class="rounded border border-border bg-surface-1 px-2 py-1 font-mono text-small text-ink outline-none focus:border-accent"
           placeholder="my-chain-id"
           data-testid="llm-routing-editor-id"
           :disabled="!!editorChain.bundled && !!editorChain.id"
@@ -272,7 +265,7 @@ onMounted(refresh);
 
       <!-- name -->
       <label class="flex flex-col gap-1">
-        <span class="font-ui text-[11px] text-ink-subtle">Name</span>
+        <span class="font-ui text-caption text-ink-subtle">Name</span>
         <input
           v-model="editorChain.name"
           type="text"
@@ -284,7 +277,7 @@ onMounted(refresh);
 
       <!-- description -->
       <label class="flex flex-col gap-1">
-        <span class="font-ui text-[11px] text-ink-subtle">Description (optional)</span>
+        <span class="font-ui text-caption text-ink-subtle">Description (optional)</span>
         <input
           v-model="editorChain.description"
           type="text"
@@ -297,10 +290,10 @@ onMounted(refresh);
       <!-- entries -->
       <div>
         <div class="flex items-center justify-between mb-2">
-          <span class="font-ui text-[11px] text-ink-subtle">Hops (in order)</span>
+          <span class="font-ui text-caption text-ink-subtle">Hops (in order)</span>
           <button
             type="button"
-            class="font-ui text-xs text-ink-link hover:underline"
+            class="font-ui text-xs text-accent hover:underline"
             data-testid="llm-routing-editor-add-entry"
             @click="addEntry"
           >
@@ -323,10 +316,10 @@ onMounted(refresh);
           :data-testid="`llm-routing-entry-${idx}`"
         >
           <div class="flex items-center justify-between">
-            <span class="font-ui text-[10px] uppercase tracking-[0.12em] text-ink-subtle">Hop {{ idx + 1 }}</span>
+            <span class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Hop {{ idx + 1 }}</span>
             <button
               type="button"
-              class="font-ui text-[11px] text-signal-danger hover:underline"
+              class="font-ui text-caption text-signal-danger hover:underline"
               :data-testid="`llm-routing-entry-remove-${idx}`"
               @click="removeEntry(idx)"
             >
@@ -336,11 +329,11 @@ onMounted(refresh);
 
           <!-- provider -->
           <label class="flex flex-col gap-1">
-            <span class="font-ui text-[11px] text-ink-subtle">Provider ID</span>
+            <span class="font-ui text-caption text-ink-subtle">Provider ID</span>
             <input
               v-model="entry.providerID"
               type="text"
-              class="rounded border border-border bg-surface-1 px-2 py-1 font-mono text-[12px] text-ink outline-none focus:border-accent"
+              class="rounded border border-border bg-surface-1 px-2 py-1 font-mono text-small text-ink outline-none focus:border-accent"
               placeholder="openrouter"
               :data-testid="`llm-routing-entry-provider-${idx}`"
             />
@@ -348,11 +341,11 @@ onMounted(refresh);
 
           <!-- model -->
           <label class="flex flex-col gap-1">
-            <span class="font-ui text-[11px] text-ink-subtle">Model (optional — uses provider default if blank)</span>
+            <span class="font-ui text-caption text-ink-subtle">Model (optional — uses provider default if blank)</span>
             <input
               v-model="entry.model"
               type="text"
-              class="rounded border border-border bg-surface-1 px-2 py-1 font-mono text-[12px] text-ink outline-none focus:border-accent"
+              class="rounded border border-border bg-surface-1 px-2 py-1 font-mono text-small text-ink outline-none focus:border-accent"
               placeholder="openai/gpt-4o"
               :data-testid="`llm-routing-entry-model-${idx}`"
             />
@@ -360,7 +353,7 @@ onMounted(refresh);
 
           <!-- max attempts -->
           <label class="flex flex-col gap-1">
-            <span class="font-ui text-[11px] text-ink-subtle">Max attempts (whole-chain ceiling: 5)</span>
+            <span class="font-ui text-caption text-ink-subtle">Max attempts (whole-chain ceiling: 5)</span>
             <input
               v-model.number="entry.maxAttempts"
               type="number"
@@ -373,7 +366,7 @@ onMounted(refresh);
 
           <!-- triggers -->
           <div class="flex flex-col gap-1">
-            <span class="font-ui text-[11px] text-ink-subtle">Trigger on</span>
+            <span class="font-ui text-caption text-ink-subtle">Trigger on</span>
             <div class="flex flex-wrap gap-2">
               <label
                 v-for="t in ALL_TRIGGERS"
@@ -387,7 +380,7 @@ onMounted(refresh);
                   class="accent-accent"
                   @change="toggleTrigger(entry, t)"
                 />
-                <span class="font-mono text-[11px] text-ink">{{ t }}</span>
+                <span class="font-mono text-caption text-ink">{{ t }}</span>
               </label>
             </div>
           </div>
@@ -397,14 +390,14 @@ onMounted(refresh);
       <!-- errors -->
       <div
         v-if="saveError"
-        class="font-ui text-[11px] text-signal-danger"
+        class="font-ui text-caption text-signal-danger"
         data-testid="llm-routing-save-error"
       >
         {{ saveError }}
       </div>
       <div
         v-if="deleteError"
-        class="font-ui text-[11px] text-signal-danger"
+        class="font-ui text-caption text-signal-danger"
         data-testid="llm-routing-delete-error"
       >
         {{ deleteError }}
@@ -436,7 +429,7 @@ onMounted(refresh);
           </button>
           <button
             type="button"
-            class="font-ui text-xs text-ink-link hover:underline disabled:opacity-40"
+            class="font-ui text-xs text-accent hover:underline disabled:opacity-40"
             :disabled="saving"
             data-testid="llm-routing-editor-save"
             @click="save"

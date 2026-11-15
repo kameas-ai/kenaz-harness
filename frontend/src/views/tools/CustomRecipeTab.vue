@@ -258,7 +258,7 @@ async function save() {
     <div class="space-y-1">
       <label
         for="custom-id"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         ID <span class="ml-1 text-signal-warn" aria-label="required">*</span>
       </label>
@@ -274,14 +274,14 @@ async function save() {
       />
       <p
         v-if="idError"
-        class="text-[11px] text-signal-danger"
+        class="text-caption text-signal-danger"
         data-testid="custom-id-error"
       >
         {{ idError }}
       </p>
       <p
         v-if="shadowWarning"
-        class="text-[11px] text-signal-warn"
+        class="text-caption text-signal-warn"
         data-testid="custom-shadow-warning"
       >
         {{ shadowWarning }}
@@ -292,7 +292,7 @@ async function save() {
     <div class="space-y-1">
       <label
         for="custom-display-name"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         Display name <span class="ml-1 text-signal-warn" aria-label="required">*</span>
       </label>
@@ -312,7 +312,7 @@ async function save() {
     <div class="space-y-1">
       <label
         for="custom-description"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         Description
       </label>
@@ -328,7 +328,7 @@ async function save() {
 
     <!-- Transport selector -->
     <div class="space-y-2">
-      <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <div class="text-caption uppercase tracking-eyebrow text-ink-subtle">
         Transport
       </div>
       <div class="flex gap-4">
@@ -344,7 +344,7 @@ async function save() {
             class="accent-accent w-3.5 h-3.5"
             :data-testid="`custom-transport-${t}`"
           />
-          <span class="font-ui text-[12px] text-ink uppercase tracking-[0.16em]">{{ t }}</span>
+          <span class="font-ui text-small text-ink uppercase tracking-eyebrow">{{ t }}</span>
         </label>
       </div>
     </div>
@@ -354,7 +354,7 @@ async function save() {
       <div class="space-y-1">
         <label
           for="custom-command"
-          class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
         >
           Command <span class="ml-1 text-signal-warn" aria-label="required">*</span>
         </label>
@@ -370,7 +370,7 @@ async function save() {
         />
         <p
           v-if="commandError"
-          class="text-[11px] text-signal-danger"
+          class="text-caption text-signal-danger"
           data-testid="custom-command-error"
         >
           {{ commandError }}
@@ -379,7 +379,7 @@ async function save() {
       <div class="space-y-1">
         <label
           for="custom-args"
-          class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
         >
           Args (space-separated)
         </label>
@@ -401,7 +401,7 @@ async function save() {
       <div class="space-y-1">
         <label
           for="custom-url"
-          class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
         >
           URL <span class="ml-1 text-signal-warn" aria-label="required">*</span>
         </label>
@@ -417,7 +417,7 @@ async function save() {
         />
         <p
           v-if="urlError"
-          class="text-[11px] text-signal-danger"
+          class="text-caption text-signal-danger"
           data-testid="custom-url-error"
         >
           {{ urlError }}
@@ -426,7 +426,7 @@ async function save() {
       <div class="space-y-1">
         <label
           for="custom-headers"
-          class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
         >
           Headers (JSON)
         </label>
@@ -448,7 +448,7 @@ async function save() {
       <div class="space-y-1">
         <label
           for="custom-post-url"
-          class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="block text-caption uppercase tracking-eyebrow text-ink-subtle"
         >
           Post URL (SSE)
         </label>
@@ -469,7 +469,7 @@ async function save() {
     <div class="space-y-2">
       <button
         type="button"
-        class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[12px] text-ink-dim hover:text-ink hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        class="rounded-sm border border-border-muted px-3 py-1 font-ui text-small text-ink-dim hover:text-ink hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
         :disabled="testing || !canSave"
         data-testid="custom-test-btn"
         @click="testConnection"
@@ -478,14 +478,14 @@ async function save() {
       </button>
       <div
         v-if="testResult"
-        class="rounded-sm border border-border-muted bg-surface-0 px-3 py-2 font-ui text-[11px] text-ink-muted"
+        class="rounded-sm border border-border-muted bg-surface-0 px-3 py-2 font-ui text-caption text-ink-muted"
         data-testid="custom-test-result"
       >
         {{ testResult }}
       </div>
       <div
         v-if="testError"
-        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
         role="alert"
         data-testid="custom-test-error"
       >
@@ -496,7 +496,7 @@ async function save() {
     <!-- Save + cancel actions -->
     <div
       v-if="saveError"
-      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="custom-save-error"
     >
@@ -505,7 +505,7 @@ async function save() {
     <div class="flex gap-2">
       <button
         type="button"
-        class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+        class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-small text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
         :disabled="!canSave || saving"
         data-testid="custom-save-btn"
         @click="save"
@@ -514,7 +514,7 @@ async function save() {
       </button>
       <button
         type="button"
-        class="rounded-sm border border-border-muted px-3 py-1.5 font-ui text-[12px] text-ink-dim hover:text-ink"
+        class="rounded-sm border border-border-muted px-3 py-1.5 font-ui text-small text-ink-dim hover:text-ink"
         data-testid="custom-cancel-btn"
         @click="emit('cancel')"
       >

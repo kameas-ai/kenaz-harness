@@ -73,14 +73,14 @@ watch(
       class="rounded-md border border-signal-warn bg-surface-1 px-4 py-3 max-w-prose"
       role="alert"
     >
-      <div class="font-ui text-[11px] uppercase tracking-[0.18em] text-signal-warn">
+      <div class="font-ui text-caption uppercase tracking-eyebrow text-signal-warn">
         Surface error
       </div>
       <p class="mt-1 font-ui text-sm text-ink">
         Something failed while rendering this surface. The error has been logged.
       </p>
       <pre
-        class="mt-2 max-h-40 overflow-auto rounded-sm bg-surface-2 px-2 py-1.5 font-mono text-[11px] text-ink-muted whitespace-pre-wrap"
+        class="mt-2 max-h-40 overflow-auto rounded-sm bg-surface-2 px-2 py-1.5 font-mono text-caption text-ink-muted whitespace-pre-wrap"
       >{{ captured.message }}</pre>
       <div class="mt-2 flex items-center gap-2">
         <button
@@ -91,7 +91,7 @@ watch(
         >
           Dismiss
         </button>
-        <span class="font-ui text-[11px] text-ink-dim">or</span>
+        <span class="font-ui text-caption text-ink-dim">or</span>
         <button
           type="button"
           class="font-ui text-xs text-accent hover:text-ink"

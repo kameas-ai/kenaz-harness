@@ -55,14 +55,14 @@ const ariaLabel = computed<string>(() => `MCP server status: ${displayLabel.valu
   >
     <!-- Dot -->
     <span
-      class="text-[8px] leading-none select-none"
+      class="text-eyebrow-xs leading-none select-none"
       :class="dotClass"
       aria-hidden="true"
     >●</span>
     <!-- Label (hidden in compact mode) -->
     <span
       v-if="!compact"
-      class="font-ui text-[10px] uppercase tracking-[0.14em]"
+      class="font-ui text-eyebrow uppercase tracking-eyebrow"
       :class="dotClass"
     >{{ displayLabel }}</span>
   </span>

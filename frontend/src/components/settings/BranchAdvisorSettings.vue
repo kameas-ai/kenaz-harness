@@ -100,10 +100,10 @@ function onMaxTokensInput(evt: Event): void {
   <div class="grid gap-6" data-testid="branch-advisor-settings">
     <!-- Toggle: enable/disable advisor -->
     <section data-testid="branch-advisor-enabled-section">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Suggest spawning subagents
       </h2>
-      <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+      <label class="mt-2 flex items-center gap-3 font-ui text-small text-ink">
         <input
           type="checkbox"
           class="accent-accent"
@@ -117,10 +117,10 @@ function onMaxTokensInput(evt: Event): void {
 
     <!-- Slider: confidence threshold -->
     <section data-testid="branch-advisor-confidence-section">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Suggestion confidence threshold
       </h2>
-      <p class="mt-1 font-ui text-[11px] text-ink-muted">
+      <p class="mt-1 font-ui text-caption text-ink-muted">
         Minimum confidence the detector must reach before a suggestion banner appears.
         Default {{ DEFAULT_MIN_CONFIDENCE }}.
       </p>
@@ -136,7 +136,7 @@ function onMaxTokensInput(evt: Event): void {
           data-testid="branch-advisor-confidence-slider"
           @input="onConfidenceInput"
         />
-        <span class="font-mono text-[12px] text-ink" data-testid="branch-advisor-confidence-value">
+        <span class="font-mono text-small text-ink" data-testid="branch-advisor-confidence-value">
           {{ minConfidence.toFixed(2) }}
         </span>
       </div>
@@ -144,10 +144,10 @@ function onMaxTokensInput(evt: Event): void {
 
     <!-- Number input: max reintegration tokens -->
     <section data-testid="branch-advisor-max-tokens-section">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Reintegration summary max tokens
       </h2>
-      <p class="mt-1 font-ui text-[11px] text-ink-muted">
+      <p class="mt-1 font-ui text-caption text-ink-muted">
         Token budget for the branch reintegration summarisation call. Range {{ MIN_TOKENS }}–{{ MAX_TOKENS }}.
         Default {{ DEFAULT_MAX_TOKENS }}.
       </p>
@@ -158,19 +158,19 @@ function onMaxTokensInput(evt: Event): void {
           :max="MAX_TOKENS"
           :value="maxTokens"
           aria-label="Reintegration summary max tokens"
-          class="w-28 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+          class="w-28 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-small text-ink"
           data-testid="branch-advisor-max-tokens-input"
           @input="onMaxTokensInput"
         />
         <p
           v-if="maxTokensError"
-          class="mt-1 font-ui text-[11px] text-signal-danger"
+          class="mt-1 font-ui text-caption text-signal-danger"
           role="alert"
           data-testid="branch-advisor-max-tokens-error"
         >
           {{ maxTokensError }}
         </p>
-        <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+        <p v-else class="mt-1 font-ui text-caption text-ink-muted">
           Short branches produce short summaries regardless of this cap.
         </p>
       </div>

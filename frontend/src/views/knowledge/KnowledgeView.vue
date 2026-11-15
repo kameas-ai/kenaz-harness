@@ -61,7 +61,7 @@ const EXPLAINERS: Readonly<Record<KnowledgeSection, string>> = {
         nav-label="Knowledge sections"
         test-id-prefix="knowledge"
       />
-      <p class="font-ui text-[12px] text-ink-muted" data-testid="knowledge-explainer">
+      <p class="font-ui text-small text-ink-muted" data-testid="knowledge-explainer">
         {{ EXPLAINERS[section] }}
       </p>
     </div>

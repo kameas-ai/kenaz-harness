@@ -540,14 +540,14 @@ defineExpose({
         <div class="flex gap-2">
           <button
             type="button"
-            class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            class="rounded-sm border border-border-muted px-3 py-1 font-ui text-small uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
             @click="backToList"
           >
             Back
           </button>
           <button
             type="button"
-            class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            class="rounded-sm border border-border-muted px-3 py-1 font-ui text-small uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
             data-testid="editor-validate"
             @click="validate"
           >
@@ -555,7 +555,7 @@ defineExpose({
           </button>
           <span
             v-if="!readOnly && dirty"
-            class="self-center font-ui text-[11px] uppercase tracking-[0.18em] text-signal-warn"
+            class="self-center font-ui text-caption uppercase tracking-eyebrow text-signal-warn"
             data-testid="editor-dirty"
             >Unsaved</span
           >
@@ -563,7 +563,7 @@ defineExpose({
             v-if="!readOnly"
             type="button"
             :disabled="!canSave"
-            class="rounded-sm border border-accent bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-accent disabled:opacity-50"
+            class="rounded-sm border border-accent bg-surface-2 px-3 py-1 font-ui text-small uppercase tracking-eyebrow text-accent disabled:opacity-50"
             data-testid="editor-save"
             @click="save"
           >
@@ -576,14 +576,14 @@ defineExpose({
     <div class="px-3 py-3 space-y-3">
       <div
         v-if="error"
-        class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
       >
         {{ error }}
       </div>
       <div
         v-if="saved"
-        class="rounded-md border border-signal-ok bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-ok"
+        class="rounded-md border border-signal-ok bg-surface-1 px-3 py-2 font-ui text-small text-signal-ok"
         data-testid="editor-saved"
       >
         Graph saved.
@@ -591,7 +591,7 @@ defineExpose({
 
       <div
         v-if="isMaterialized"
-        class="rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+        class="rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-small text-ink-muted"
         data-testid="editor-materialized-banner"
       >
         Materialized run — read-only. This graph was projected from the run's
@@ -602,14 +602,14 @@ defineExpose({
       </div>
       <div
         v-else-if="readOnly"
-        class="rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+        class="rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-small text-ink-muted"
         data-testid="editor-readonly-banner"
       >
         Library graph — read-only. Copy + change the id to save your own.
       </div>
       <div
         v-if="isDegraded"
-        class="rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+        class="rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-small text-signal-warn"
         data-testid="editor-materialized-degraded"
         role="status"
       >
@@ -622,7 +622,7 @@ defineExpose({
       </div>
       <div
         v-if="isUnreviewed"
-        class="rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+        class="rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-small text-signal-warn"
         data-testid="editor-unreviewed-banner"
         role="status"
       >
@@ -644,7 +644,7 @@ defineExpose({
 
         <div class="flex min-w-0 flex-col gap-2">
           <div
-            class="flex items-center gap-2 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-muted"
+            class="flex items-center gap-2 font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
           >
             <span>Canvas</span>
             <span
@@ -666,14 +666,14 @@ defineExpose({
         <div class="flex flex-col gap-2 min-w-0">
           <div class="flex items-center gap-2">
             <label
-              class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim"
+              class="font-ui text-caption uppercase tracking-eyebrow text-ink-dim"
               for="editor-node-select"
               >Selected node</label
             >
             <select
               id="editor-node-select"
               v-model="selectedNodeId"
-              class="rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink"
+              class="rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-small text-ink"
               data-testid="editor-node-select"
             >
               <option value="">—</option>
@@ -683,7 +683,7 @@ defineExpose({
             </select>
             <span
               v-if="manifestLoading"
-              class="font-ui text-[11px] text-ink-dim"
+              class="font-ui text-caption text-ink-dim"
               >Loading…</span
             >
           </div>
@@ -692,7 +692,7 @@ defineExpose({
             :readonly="readOnly"
             spellcheck="false"
             aria-label="Graph YAML definition"
-            class="h-[480px] w-full rounded-md border border-border-muted bg-surface-0 px-3 py-2 font-mono text-[12px] text-ink"
+            class="h-[480px] w-full rounded-md border border-border-muted bg-surface-0 px-3 py-2 font-mono text-small text-ink"
             data-testid="editor-yaml"
           />
 
@@ -703,12 +703,12 @@ defineExpose({
           >
             <div
               v-if="validation.ok"
-              class="font-ui text-[12px] text-signal-ok"
+              class="font-ui text-small text-signal-ok"
               data-testid="editor-validation-ok"
             >
               Validation passed.
             </div>
-            <ul v-else class="space-y-1 font-ui text-[12px]">
+            <ul v-else class="space-y-1 font-ui text-small">
               <li
                 v-for="(issue, idx) in validation.issues"
                 :key="idx"
@@ -716,7 +716,7 @@ defineExpose({
                 :data-testid="`editor-validation-issue-${idx}`"
               >
                 <span
-                  class="inline-block rounded-sm border border-signal-danger px-1 mr-1 text-[10px] uppercase tracking-[0.18em]"
+                  class="inline-block rounded-sm border border-signal-danger px-1 mr-1 text-eyebrow uppercase tracking-eyebrow"
                 >
                   {{ issue.rule }}
                 </span>

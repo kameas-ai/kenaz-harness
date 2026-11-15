@@ -208,7 +208,7 @@ async function setRetention(days: number) {
         />
         <button
           type="button"
-          class="px-2 py-1 text-[11px] rounded border border-signal-danger text-signal-danger hover:bg-surface-2 disabled:opacity-50"
+          class="px-2 py-1 text-caption rounded border border-signal-danger text-signal-danger hover:bg-surface-2 disabled:opacity-50"
           data-testid="compliance-skip-to-id-btn"
           :disabled="skipping || !skipToIdInput.trim()"
           @click="skipToId"

@@ -208,16 +208,16 @@ const statusLabel: Record<BatchEntry['status'], string> = {
 const statusClass: Record<BatchEntry['status'], string> = {
   pending: 'text-ink-subtle',
   running: 'text-accent',
-  done: 'text-signal-success',
+  done: 'text-signal-ok-text',
   failed: 'text-signal-danger',
-  skipped: 'text-signal-warning',
+  skipped: 'text-signal-warn-text',
   not_started: 'text-ink-subtle',
 };
 </script>
 
 <template>
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-modal-overlay"
     data-testid="folder-share-overlay"
   >
     <div
@@ -235,7 +235,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
 
       <p
         v-if="disabledReason"
-        class="font-ui text-[12px] text-ink-muted leading-relaxed mb-3"
+        class="font-ui text-small text-ink-muted leading-relaxed mb-3"
         data-testid="folder-share-disabled-reason"
       >
         {{ disabledReason }}
@@ -247,14 +247,14 @@ const statusClass: Record<BatchEntry['status'], string> = {
       <template v-else>
         <p
           v-if="mode === 'share'"
-          class="font-ui text-[12px] text-ink-muted leading-relaxed mb-3"
+          class="font-ui text-small text-ink-muted leading-relaxed mb-3"
         >
           Each checked file is published as its own entry. Do not share credentials, private
           keys, or sensitive personal information in shared layers.
         </p>
         <p
           v-else
-          class="font-ui text-[12px] text-ink-muted leading-relaxed mb-3"
+          class="font-ui text-small text-ink-muted leading-relaxed mb-3"
         >
           Promote moves entries already shared with your team to org-wide. A file that was never
           shared fails with the server's reason; the other files still promote.
@@ -267,17 +267,17 @@ const statusClass: Record<BatchEntry['status'], string> = {
         :disabled="disabled || phase !== 'select'"
         data-testid="folder-share-layer-choice"
       >
-        <legend class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle mb-1">
+        <legend class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle mb-1">
           Visibility
         </legend>
-        <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
+        <label class="flex items-center gap-2 font-ui text-small text-ink cursor-pointer">
           <input v-model="layer" type="radio" value="team" data-testid="folder-share-layer-team" />
           <span>Share to team</span>
         </label>
         <div v-if="teamsReady && layer === 'team' && teams.length > 0" class="pl-6">
           <TeamPicker v-model="teamId" :teams="teams" testid="folder-share-team-picker" />
         </div>
-        <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
+        <label class="flex items-center gap-2 font-ui text-small text-ink cursor-pointer">
           <input
             v-model="layer"
             type="radio"
@@ -288,7 +288,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
         </label>
         <p
           v-if="orgNeedsReview"
-          class="font-ui text-[11px] text-ink-muted"
+          class="font-ui text-caption text-ink-muted"
           data-testid="folder-share-org-review-note"
         >
           An org admin reviews org-wide shares: each entry already shared with a team waits for
@@ -297,7 +297,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
       </fieldset>
       <p
         v-if="moveWarning"
-        class="font-ui text-[12px] text-signal-warning leading-relaxed mb-3"
+        class="font-ui text-small text-signal-warn-text leading-relaxed mb-3"
         role="alert"
         data-testid="folder-share-move-warning"
       >
@@ -305,13 +305,13 @@ const statusClass: Record<BatchEntry['status'], string> = {
       </p>
       <p
         v-if="staysNote"
-        class="font-ui text-[12px] text-ink-muted leading-relaxed mb-3"
+        class="font-ui text-small text-ink-muted leading-relaxed mb-3"
         data-testid="folder-share-stays-note"
       >
         {{ staysNote }}
       </p>
 
-      <div class="flex items-center gap-3 mb-1 font-ui text-[11px] text-ink-muted">
+      <div class="flex items-center gap-3 mb-1 font-ui text-caption text-ink-muted">
         <span class="flex-1">{{ entries.length }} file{{ entries.length === 1 ? '' : 's' }} · {{ selectedCount }} selected</span>
         <button
           type="button"
@@ -331,7 +331,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
 
       <p
         v-if="entries.length === 0"
-        class="font-ui text-[12px] text-ink-muted py-2"
+        class="font-ui text-small text-ink-muted py-2"
         data-testid="folder-share-empty"
       >
         This folder has no files to {{ mode }}.
@@ -344,7 +344,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
         <li
           v-for="e in entries"
           :key="e.path"
-          class="px-2 py-1.5 font-ui text-[12px]"
+          class="px-2 py-1.5 font-ui text-small"
           :data-status="e.status"
           :data-testid="`folder-share-entry-${e.path}`"
         >
@@ -360,19 +360,19 @@ const statusClass: Record<BatchEntry['status'], string> = {
             <span
               v-if="statusLabel[e.status]"
               :class="statusClass[e.status]"
-              class="text-[11px] shrink-0"
+              class="text-caption shrink-0"
             >{{ statusLabel[e.status] }}</span>
           </label>
           <p
             v-if="e.ineligible"
-            class="pl-6 text-[11px] text-ink-subtle"
+            class="pl-6 text-caption text-ink-subtle"
             :data-testid="`folder-share-ineligible-${e.path}`"
           >
             {{ e.ineligible }}
           </p>
           <p
             v-else-if="e.message"
-            class="pl-6 text-[11px]"
+            class="pl-6 text-caption"
             :class="statusClass[e.status]"
             :data-testid="`folder-share-message-${e.path}`"
           >
@@ -383,14 +383,14 @@ const statusClass: Record<BatchEntry['status'], string> = {
 
       <div
         v-if="phase === 'finished'"
-        class="mt-3 font-ui text-[12px]"
+        class="mt-3 font-ui text-small"
         role="status"
         data-testid="folder-share-summary"
       >
-        <p :class="summary.failed > 0 ? 'text-signal-warning' : 'text-signal-success'">
+        <p :class="summary.failed > 0 ? 'text-signal-warn-text' : 'text-signal-ok-text'">
           {{ summary.done }} {{ doneWord }}, {{ summary.failed }} failed<template v-if="summary.skipped > 0">, {{ summary.skipped }} skipped</template><template v-if="summary.notStarted > 0">, {{ summary.notStarted }} not started (cancelled)</template>.
         </p>
-        <ul v-if="failures.length > 0" class="mt-1 text-signal-danger text-[11px]">
+        <ul v-if="failures.length > 0" class="mt-1 text-signal-danger text-caption">
           <li v-for="f in failures" :key="f.path">
             <span class="font-mono">{{ f.relPath }}</span> — {{ f.message }}
           </li>
@@ -400,7 +400,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
       <div class="flex justify-end gap-3 mt-4">
         <button
           type="button"
-          class="font-ui text-[12px] text-ink-dim hover:text-ink px-3 py-1.5 rounded-md border border-border-muted disabled:opacity-50"
+          class="font-ui text-small text-ink-dim hover:text-ink px-3 py-1.5 rounded-md border border-border-muted disabled:opacity-50"
           :disabled="phase === 'running' && stopRequested"
           data-testid="folder-share-cancel"
           @click="onCancel"
@@ -412,7 +412,7 @@ const statusClass: Record<BatchEntry['status'], string> = {
         <button
           v-if="phase !== 'finished'"
           type="button"
-          class="font-ui text-[12px] text-accent hover:text-accent-muted px-3 py-1.5 rounded-md bg-accent/10 hover:bg-accent/20 disabled:opacity-50"
+          class="font-ui text-small text-accent hover:text-accent-muted px-3 py-1.5 rounded-md bg-accent/10 hover:bg-accent/20 disabled:opacity-50"
           :disabled="disabled || phase !== 'select' || selectedCount === 0 || !teamsReady"
           data-testid="folder-share-confirm"
           @click="confirm"

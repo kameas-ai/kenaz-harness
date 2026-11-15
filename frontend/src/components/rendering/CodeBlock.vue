@@ -13,7 +13,8 @@
  * directly in templates.
  */
 import { computed, ref } from 'vue';
-import { Copy, Check, BookmarkPlus } from 'lucide-vue-next';
+import { BookmarkPlus } from 'lucide-vue-next';
+import { Clipboard as Copy, Check } from '@/shell/icons';
 
 const props = defineProps<{
   lang: string;

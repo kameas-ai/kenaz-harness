@@ -36,10 +36,10 @@ defineProps<{
     <div
       class="flex items-center gap-1 border-b border-dashed border-border-muted px-2 py-1"
     >
-      <span class="truncate font-ui text-[11px] uppercase tracking-[0.14em] text-ink-muted">
+      <span class="truncate font-ui text-caption uppercase tracking-eyebrow text-ink-muted">
         {{ data.label }}
       </span>
-      <span class="ml-auto font-mono text-[10px] text-ink-muted">{{ data.kind }}</span>
+      <span class="ml-auto font-mono text-eyebrow text-ink-muted">{{ data.kind }}</span>
     </div>
 
     <Handle

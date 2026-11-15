@@ -482,7 +482,7 @@ defineExpose({
   <button
     v-if="hasParked && minimized"
     type="button"
-    class="fixed bottom-4 right-4 z-50 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[11px] uppercase tracking-[0.18em] text-signal-warn shadow-xl hover:bg-surface-2"
+    class="fixed bottom-4 right-4 z-50 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-caption uppercase tracking-eyebrow text-signal-warn shadow-xl hover:bg-surface-2"
     data-testid="confirm-tool-waiting-pill"
     @click="reopen"
   >
@@ -504,7 +504,7 @@ defineExpose({
     <div
       class="relative flex w-full max-w-2xl flex-col rounded-md border border-accent-hairline bg-surface-1 p-5 shadow-xl"
     >
-      <div class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <div class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Tool confirmation required
       </div>
       <h2
@@ -513,7 +513,7 @@ defineExpose({
       >
         {{ activeRows.length === 1 ? 'The model wants to run 1 tool' : `The model wants to run ${activeRows.length} tools` }}
       </h2>
-      <p class="mt-1 font-ui text-[12px] text-ink-muted">
+      <p class="mt-1 font-ui text-small text-ink-muted">
         Nothing runs until you decide. Leaving this open keeps the turn paused.
       </p>
 
@@ -535,7 +535,7 @@ defineExpose({
                    reads as the chat in front of you unless it says
                    otherwise, and you approve it on that misreading. -->
               <div
-                class="mb-1 flex items-center gap-1.5 font-ui text-[10px] uppercase tracking-[0.18em]"
+                class="mb-1 flex items-center gap-1.5 font-ui text-eyebrow uppercase tracking-eyebrow"
                 :class="isForeign(row.session_id) ? 'text-signal-warn' : 'text-ink-subtle'"
                 :data-testid="`confirm-tool-session-${row.call_id}`"
               >
@@ -545,12 +545,12 @@ defineExpose({
                   :data-testid="`confirm-tool-foreign-${row.call_id}`"
                 >· other session</span>
               </div>
-              <div class="truncate font-mono text-[12px] text-accent">
+              <div class="truncate font-mono text-small text-accent">
                 {{ row.server }}.{{ row.tool }}
               </div>
               <!-- Structural summary only — never argument values. -->
               <div
-                class="mt-1 truncate font-ui text-[11px] text-ink-muted"
+                class="mt-1 truncate font-ui text-caption text-ink-muted"
                 :data-testid="`confirm-tool-args-${row.call_id}`"
                 :title="row.args_summary"
               >
@@ -558,7 +558,7 @@ defineExpose({
               </div>
               <div
                 v-if="row.reason"
-                class="mt-1 font-ui text-[11px] text-ink-subtle"
+                class="mt-1 font-ui text-caption text-ink-subtle"
               >
                 {{ row.reason }}
               </div>
@@ -572,7 +572,7 @@ defineExpose({
                 :data-testid="`confirm-tool-risk-${row.call_id}`"
               >
                 <span
-                  class="rounded-sm border px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.12em]"
+                  class="rounded-sm border px-1.5 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow"
                   :class="riskTierClass(row.risk_tier)"
                   :data-testid="`confirm-tool-risk-tier-${row.call_id}`"
                 >
@@ -580,13 +580,13 @@ defineExpose({
                 </span>
                 <span
                   v-if="row.risk_threshold !== undefined"
-                  class="font-ui text-[10px] text-ink-subtle"
+                  class="font-ui text-eyebrow text-ink-subtle"
                 >
                   threshold {{ row.risk_threshold }}
                 </span>
                 <span
                   v-if="row.risk_rationale"
-                  class="w-full font-ui text-[11px] text-ink-subtle"
+                  class="w-full font-ui text-caption text-ink-subtle"
                   :data-testid="`confirm-tool-risk-rationale-${row.call_id}`"
                 >
                   {{ row.risk_rationale }}
@@ -598,7 +598,7 @@ defineExpose({
           <div class="mt-3 flex flex-wrap items-center gap-2">
             <button
               type="button"
-              class="rounded-md border border-accent bg-accent/10 px-3 py-1.5 font-ui text-[11px] uppercase tracking-[0.18em] text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+              class="rounded-md border border-accent bg-accent/10 px-3 py-1.5 font-ui text-caption uppercase tracking-eyebrow text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="submitting"
               :data-testid="`confirm-tool-approve-${row.call_id}`"
               @click="approve(row)"
@@ -607,7 +607,7 @@ defineExpose({
             </button>
             <button
               type="button"
-              class="rounded-md border border-border-muted px-3 py-1.5 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-muted hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
+              class="rounded-md border border-border-muted px-3 py-1.5 font-ui text-caption uppercase tracking-eyebrow text-ink-muted hover:bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="submitting"
               :data-testid="`confirm-tool-deny-${row.call_id}`"
               @click="deny(row)"
@@ -615,7 +615,7 @@ defineExpose({
               Deny
             </button>
             <label
-              class="flex cursor-pointer items-center gap-1.5 font-ui text-[11px] text-ink-muted"
+              class="flex cursor-pointer items-center gap-1.5 font-ui text-caption text-ink-muted"
               :for="`confirm-tool-remember-${row.call_id}`"
               :data-testid="`confirm-tool-remember-label-${row.call_id}`"
             >
@@ -636,7 +636,7 @@ defineExpose({
           <div class="mt-3 border-t border-border-muted pt-2">
             <button
               type="button"
-              class="rounded-md border px-3 py-1.5 font-ui text-[10px] uppercase tracking-[0.18em] disabled:cursor-not-allowed disabled:opacity-50"
+              class="rounded-md border px-3 py-1.5 font-ui text-eyebrow uppercase tracking-eyebrow disabled:cursor-not-allowed disabled:opacity-50"
               :class="isArmed(row.call_id)
                 ? 'border-signal-warn bg-signal-warn/10 text-signal-warn'
                 : 'border-border-muted text-ink-subtle hover:bg-surface-1'"
@@ -650,7 +650,7 @@ defineExpose({
             </button>
             <span
               v-if="isArmed(row.call_id)"
-              class="ml-2 font-ui text-[10px] text-ink-subtle"
+              class="ml-2 font-ui text-eyebrow text-ink-subtle"
             >
               Writes a permission rule. Revoke in Settings → Permissions.
             </span>
@@ -660,7 +660,7 @@ defineExpose({
 
       <div
         v-if="lastError"
-        class="mt-3 rounded-sm border border-signal-warn bg-surface-2 px-3 py-2 font-ui text-[12px] text-signal-warn"
+        class="mt-3 rounded-sm border border-signal-warn bg-surface-2 px-3 py-2 font-ui text-small text-signal-warn"
         role="alert"
         data-testid="confirm-tool-error"
       >
@@ -672,7 +672,7 @@ defineExpose({
         <button
           v-if="activeRows.length > 1"
           type="button"
-          class="rounded-md border border-accent bg-accent/10 px-4 py-2 font-ui text-[11px] uppercase tracking-[0.18em] text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+          class="rounded-md border border-accent bg-accent/10 px-4 py-2 font-ui text-caption uppercase tracking-eyebrow text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="submitting"
           data-testid="confirm-tool-approve-all"
           @click="approveAll"
@@ -681,7 +681,7 @@ defineExpose({
         </button>
         <button
           type="button"
-          class="rounded-md border border-border-muted px-4 py-2 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-muted hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+          class="rounded-md border border-border-muted px-4 py-2 font-ui text-caption uppercase tracking-eyebrow text-ink-muted hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="submitting"
           data-testid="confirm-tool-dismiss"
           @click="dismiss"
@@ -690,7 +690,7 @@ defineExpose({
         </button>
         <button
           type="button"
-          class="rounded-md px-4 py-2 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+          class="rounded-md px-4 py-2 font-ui text-caption uppercase tracking-eyebrow text-ink-subtle hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="submitting"
           data-testid="confirm-tool-decide-later"
           @click="decideLater"
@@ -701,7 +701,7 @@ defineExpose({
 
       <div
         v-if="queuedBehind > 0"
-        class="mt-3 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="mt-3 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle"
         data-testid="confirm-tool-queue-badge"
       >
         +{{ queuedBehind }} more waiting in another batch

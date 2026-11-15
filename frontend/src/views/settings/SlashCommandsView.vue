@@ -205,7 +205,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
       <!-- Error banner -->
       <div
         v-if="listError || deleteError"
-        class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
         data-testid="slashcmds-error"
       >
@@ -221,7 +221,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
             <div class="flex items-center gap-1.5">
               <label
                 for="filter-kind"
-                class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+                class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
               >
                 Kind
               </label>
@@ -241,7 +241,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
             <div class="flex items-center gap-1.5">
               <label
                 for="filter-scope"
-                class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted"
+                class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted"
               >
                 Scope
               </label>
@@ -267,7 +267,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
               />
               <label
                 for="filter-model-invokable"
-                class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-muted cursor-pointer"
+                class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted cursor-pointer"
               >
                 Model-invokable only
               </label>
@@ -277,7 +277,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
           <!-- Loading -->
           <div
             v-if="loading"
-            class="font-ui text-[12px] text-ink-muted"
+            class="font-ui text-small text-ink-muted"
             role="status"
             data-testid="slashcmds-loading"
           >
@@ -291,7 +291,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
             data-testid="slashcmds-empty"
           >
             <p class="font-ui text-sm text-ink mb-1">No user commands yet.</p>
-            <p class="font-ui text-[12px] text-ink-muted mb-4">
+            <p class="font-ui text-small text-ink-muted mb-4">
               Create a text expansion, prompt template, or tool dispatch command.
             </p>
             <Button
@@ -309,7 +309,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
             class="rounded-md border border-border-muted bg-surface-1 px-4 py-6 text-center"
             data-testid="slashcmds-no-match"
           >
-            <p class="font-ui text-[12px] text-ink-muted">
+            <p class="font-ui text-small text-ink-muted">
               No commands match the current filters.
             </p>
           </div>
@@ -322,7 +322,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
           >
             <thead>
               <tr
-                class="border-b border-border-muted text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+                class="border-b border-border-muted text-caption uppercase tracking-eyebrow text-ink-subtle"
               >
                 <th class="px-3 py-2 font-ui font-medium">Name</th>
                 <th class="px-3 py-2 font-ui font-medium">Description</th>
@@ -340,35 +340,35 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
                 :data-testid="`slashcmd-row-${cmd.name}`"
                 @click="openEdit(cmd)"
               >
-                <td class="px-3 py-2 font-mono text-[12px] text-ink">
+                <td class="px-3 py-2 font-mono text-small text-ink">
                   /{{ cmd.name }}
                 </td>
-                <td class="px-3 py-2 font-ui text-[12px] text-ink-muted max-w-xs truncate">
+                <td class="px-3 py-2 font-ui text-small text-ink-muted max-w-xs truncate">
                   {{ cmd.description || '—' }}
                 </td>
                 <td class="px-3 py-2">
                   <span
                     :class="KIND_CHIP[cmd.kind]"
-                    class="font-ui text-[10px] uppercase tracking-[0.18em] rounded px-1 py-0.5"
+                    class="font-ui text-eyebrow uppercase tracking-eyebrow rounded px-1 py-0.5"
                     :data-testid="`slashcmd-kind-chip-${cmd.name}`"
                   >
                     {{ KIND_LABEL[cmd.kind] }}
                   </span>
                 </td>
-                <td class="px-3 py-2 font-ui text-[11px] text-ink-muted">
+                <td class="px-3 py-2 font-ui text-caption text-ink-muted">
                   {{ cmd.scope }}
                 </td>
                 <td class="px-3 py-2">
                   <span
                     v-if="cmd.modelInvokable"
-                    class="font-ui text-[10px] uppercase tracking-[0.18em] text-accent border border-accent-hairline rounded px-1 py-0.5 mr-1"
+                    class="font-ui text-eyebrow uppercase tracking-eyebrow text-accent border border-accent-hairline rounded px-1 py-0.5 mr-1"
                     data-testid="`slashcmd-model-invokable-badge-${cmd.name}`"
                   >
                     AI
                   </span>
                   <span
                     v-if="cmd.hiddenFromPanel"
-                    class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle border border-border-muted rounded px-1 py-0.5"
+                    class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle border border-border-muted rounded px-1 py-0.5"
                     :data-testid="`slashcmd-hidden-badge-${cmd.name}`"
                   >
                     hidden
@@ -395,7 +395,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
           />
           <p
             v-if="saveError"
-            class="mt-2 font-ui text-[11px] text-signal-danger"
+            class="mt-2 font-ui text-caption text-signal-danger"
             role="alert"
             data-testid="slashcmds-save-error"
           >
@@ -423,7 +423,7 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
             <OrgPausedBanner v-else-if="fleetOrgPaused" compact />
             <p
               v-else
-              class="font-ui text-[11px] text-ink-muted"
+              class="font-ui text-caption text-ink-muted"
               data-testid="publish-to-team-unavailable"
             >
               Team+ required to publish skills to your team.

@@ -46,24 +46,24 @@ function onCancel() { emit('cancel'); }
   <Teleport to="body">
     <div
       v-if="open"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-modal-overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby="session-close-dialog-title"
       data-testid="session-close-dialog"
       @click.self="onCancel"
     >
-      <div class="bg-surface border border-border rounded-xl shadow-xl w-full max-w-sm p-6 flex flex-col gap-4">
+      <div class="bg-surface-1 border border-border rounded-xl shadow-xl w-full max-w-sm p-6 flex flex-col gap-4">
         <!-- Title -->
         <h2
           id="session-close-dialog-title"
-          class="font-ui font-semibold text-[14px] text-ink"
+          class="font-ui font-semibold text-body text-ink"
         >
           Close session?
         </h2>
 
         <!-- Body -->
-        <p class="text-[13px] text-ink-muted leading-relaxed">
+        <p class="text-ui text-ink-muted leading-relaxed">
           This session has
           <strong class="text-ink">{{ taskCount }} running background {{ taskNoun }}</strong>.
           What should happen to {{ taskCount === 1 ? 'it' : 'them' }} when you close?
@@ -74,7 +74,7 @@ function onCancel() { emit('cancel'); }
           <li
             v-for="task in tasks"
             :key="task.id"
-            class="text-[12px] font-mono text-ink-muted truncate"
+            class="text-small font-mono text-ink-muted truncate"
           >
             ⚙ {{ task.description || task.cmd || task.id }}
           </li>
@@ -84,7 +84,7 @@ function onCancel() { emit('cancel'); }
         <div class="flex flex-col gap-2">
           <button
             type="button"
-            class="w-full px-4 py-2 text-[13px] font-ui bg-signal-danger text-white rounded-lg hover:brightness-90 transition-colors"
+            class="w-full px-4 py-2 text-ui font-ui bg-signal-danger text-white rounded-lg hover:brightness-90 transition-colors"
             data-testid="session-close-kill-btn"
             @click="onKill"
           >
@@ -93,7 +93,7 @@ function onCancel() { emit('cancel'); }
 
           <button
             type="button"
-            class="w-full px-4 py-2 text-[13px] font-ui bg-surface-raised border border-border text-ink rounded-lg hover:bg-surface transition-colors"
+            class="w-full px-4 py-2 text-ui font-ui bg-surface-2 border border-border text-ink rounded-lg hover:bg-surface-1 transition-colors"
             data-testid="session-close-leave-btn"
             @click="onLeave"
           >
@@ -102,7 +102,7 @@ function onCancel() { emit('cancel'); }
 
           <button
             type="button"
-            class="w-full px-4 py-2 text-[13px] font-ui text-ink-muted hover:text-ink transition-colors"
+            class="w-full px-4 py-2 text-ui font-ui text-ink-muted hover:text-ink transition-colors"
             data-testid="session-close-cancel-btn"
             @click="onCancel"
           >

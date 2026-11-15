@@ -54,7 +54,7 @@ const showSettings = computed(
   <div
     role="alert"
     data-testid="delivery-banner"
-    class="flex items-start gap-2 rounded-md border border-signal-danger/30 bg-signal-danger/10 px-3 py-2 font-ui text-[12px]"
+    class="flex items-start gap-2 rounded-md border border-signal-danger/30 bg-signal-danger/10 px-3 py-2 font-ui text-small"
   >
     <div class="flex-1 min-w-0">
       <p class="leading-snug text-signal-danger" data-testid="delivery-banner-reason">
@@ -99,7 +99,7 @@ const showSettings = computed(
       </button>
       <button
         type="button"
-        class="shrink-0 px-2 py-0.5 rounded-md border border-accent text-accent uppercase tracking-[0.18em] text-[10px] hover:bg-surface-2"
+        class="shrink-0 px-2 py-0.5 rounded-md border border-accent text-accent uppercase tracking-eyebrow text-eyebrow hover:bg-surface-2"
         data-testid="delivery-banner-retry"
         @click="emit('retry')"
       >

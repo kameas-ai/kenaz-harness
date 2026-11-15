@@ -51,12 +51,12 @@ const INDENT_PX = 14;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-2);
 }
 .team-tree__row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   min-width: 0;
 }
 .team-tree__name {
@@ -66,7 +66,7 @@ const INDENT_PX = 14;
 }
 .team-tree__tag {
   flex: none;
-  font-size: 10px;
+  font-size: var(--type-eyebrow-size);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   opacity: 0.7;

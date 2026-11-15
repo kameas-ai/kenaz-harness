@@ -140,10 +140,10 @@ onMounted(async () => {
 <template>
   <div class="grid gap-6 max-w-3xl" data-testid="permission-dials-panel">
     <section id="permissions-mode" data-testid="permission-mode-section">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Permission mode
       </h2>
-      <p class="mt-1 font-ui text-[11px] text-ink-dim">
+      <p class="mt-1 font-ui text-caption text-ink-dim">
         Controls how much risk a tool call may carry before it must ask you, when there is
         no explicit allow/deny rule for it. An explicit rule always wins over this setting.
         Destructive or unrecognized tools always confirm, at every mode.
@@ -159,7 +159,7 @@ onMounted(async () => {
         />
         <p
           v-else
-          class="font-ui text-[11px] text-ink-dim"
+          class="font-ui text-caption text-ink-dim"
           role="status"
           data-testid="permission-mode-unavailable"
         >
@@ -169,7 +169,7 @@ onMounted(async () => {
       </div>
       <p
         v-if="permissionModeRead && permissionMode === 'permissive'"
-        class="mt-3 font-ui text-[11px] text-signal-warn"
+        class="mt-3 font-ui text-caption text-signal-warn"
         data-testid="permissive-active-warning"
       >
         Permissive: only destructive or unrecognized-tool calls still prompt. Dial back to Strict / Normal at any time.
@@ -177,7 +177,7 @@ onMounted(async () => {
       <!-- Explicit error state for security-significant permission mode failures. -->
       <p
         v-if="permissionModeError"
-        class="mt-2 font-ui text-[11px] text-signal-danger"
+        class="mt-2 font-ui text-caption text-signal-danger"
         role="alert"
         data-testid="permission-mode-error"
       >
@@ -188,10 +188,10 @@ onMounted(async () => {
     <section data-testid="permission-cache-dangerous-section">
       <div class="flex items-center justify-between gap-4">
         <div>
-          <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
             Cache dangerous operation grants
           </h2>
-          <p class="mt-0.5 font-ui text-[11px] text-ink-dim">
+          <p class="mt-0.5 font-ui text-caption text-ink-dim">
             When enabled, "Allow always" is offered for dangerous ops (rm, sudo, system paths, etc).
             Default off — dangerous ops re-prompt every time.
           </p>
@@ -215,7 +215,7 @@ onMounted(async () => {
       <!-- Explicit error state for security-significant dangerous-ops failures. -->
       <p
         v-if="dangerousOpsError"
-        class="mt-2 font-ui text-[11px] text-signal-danger"
+        class="mt-2 font-ui text-caption text-signal-danger"
         role="alert"
         data-testid="dangerous-ops-error"
       >
@@ -223,7 +223,7 @@ onMounted(async () => {
       </p>
       <div
         v-if="pendingDangerousToggle"
-        class="mt-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink"
+        class="mt-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-ink"
         role="alertdialog"
         data-testid="dangerous-confirm"
       >
@@ -235,7 +235,7 @@ onMounted(async () => {
         <div class="mt-2 flex justify-end gap-2">
           <button
             type="button"
-            class="rounded-sm px-2 py-1 font-ui text-[11px] text-ink-dim hover:text-ink"
+            class="rounded-sm px-2 py-1 font-ui text-caption text-ink-dim hover:text-ink"
             data-testid="dangerous-confirm-cancel"
             @click="cancelDangerousToggle"
           >
@@ -243,7 +243,7 @@ onMounted(async () => {
           </button>
           <button
             type="button"
-            class="rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 font-ui text-[11px] text-signal-danger hover:bg-surface-2"
+            class="rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 font-ui text-caption text-signal-danger hover:bg-surface-2"
             data-testid="dangerous-confirm-yes"
             @click="applyDangerousToggle(true)"
           >

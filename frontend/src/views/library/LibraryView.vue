@@ -58,7 +58,7 @@ const TABS: readonly { id: LibraryTab; label: string; hint: string }[] = [
           v-for="t in TABS"
           :key="t.id"
           :to="{ path: `/library/${t.id}`, query: route.query }"
-          class="rounded-sm border px-3 py-1 font-ui text-[12px]"
+          class="rounded-sm border px-3 py-1 font-ui text-small"
           :class="
             view === t.id
               ? 'border-accent bg-surface-2 text-accent'
@@ -72,13 +72,13 @@ const TABS: readonly { id: LibraryTab; label: string; hint: string }[] = [
         </router-link>
       </nav>
       <label class="flex items-center gap-2">
-        <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">Search</span>
+        <span class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Search</span>
         <input
           v-model="query"
           type="search"
           placeholder="Filter by title"
           aria-label="Filter the library by title"
-          class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink w-64"
+          class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-small text-ink w-64"
           data-testid="library-search"
         />
       </label>

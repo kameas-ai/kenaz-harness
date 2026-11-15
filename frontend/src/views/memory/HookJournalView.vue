@@ -58,9 +58,9 @@ const filtered = computed(() => {
 });
 
 function statusOf(e: MemoryJournalEntry): { label: string; cls: string } {
-  if (e.skipped) return { label: 'skipped', cls: 'text-signal-warning' };
+  if (e.skipped) return { label: 'skipped', cls: 'text-signal-warn-text' };
   if (e.deduped) return { label: 'deduped', cls: 'text-ink-muted' };
-  if (e.written) return { label: 'written', cls: 'text-signal-success' };
+  if (e.written) return { label: 'written', cls: 'text-signal-ok-text' };
   return { label: 'unknown', cls: 'text-ink-muted' };
 }
 
@@ -87,7 +87,7 @@ defineExpose({ refresh });
   <div data-testid="hook-journal-view">
     <div class="px-6 py-4 max-w-5xl">
       <header class="mb-4">
-        <h2 class="font-ui text-[16px] uppercase tracking-[0.18em] text-ink">
+        <h2 class="font-ui text-h3 uppercase tracking-eyebrow text-ink">
           Hook journal
         </h2>
         <p class="mt-1 font-ui text-sm text-ink-muted">
@@ -106,7 +106,7 @@ defineExpose({ refresh });
           :key="p"
           type="button"
           :data-testid="`hook-journal-scope-${p}`"
-          class="px-3 py-1 rounded-sm border text-[11px] uppercase tracking-[0.18em] font-ui"
+          class="px-3 py-1 rounded-sm border text-caption uppercase tracking-eyebrow font-ui"
           :class="
             scopeFilter === p
               ? 'border-accent text-accent bg-surface-2'
@@ -121,12 +121,12 @@ defineExpose({ refresh });
           type="search"
           aria-label="Filter hook journal entries"
           placeholder="Filter by boundary, source, hash…"
-          class="ml-auto px-2 py-1 rounded-sm border border-border-muted bg-surface-1 font-ui text-[12px] text-ink placeholder:text-ink-subtle"
+          class="ml-auto px-2 py-1 rounded-sm border border-border-muted bg-surface-1 font-ui text-small text-ink placeholder:text-ink-subtle"
           data-testid="hook-journal-filter"
         />
         <button
           type="button"
-          class="px-3 py-1 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+          class="px-3 py-1 rounded-sm border border-border-muted font-ui text-caption uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2"
           data-testid="hook-journal-refresh"
           @click="refresh"
         >
@@ -136,7 +136,7 @@ defineExpose({ refresh });
 
       <div
         v-if="error"
-        class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
         role="alert"
       >
         {{ error }}
@@ -144,7 +144,7 @@ defineExpose({ refresh });
 
       <div
         v-if="loading"
-        class="font-ui text-[12px] text-ink-muted"
+        class="font-ui text-small text-ink-muted"
         role="status"
       >
         Loading hook journal…
@@ -163,11 +163,11 @@ defineExpose({ refresh });
 
       <table
         v-else
-        class="w-full table-auto text-left font-ui text-[12px] text-ink"
+        class="w-full table-auto text-left font-ui text-small text-ink"
         data-testid="hook-journal-table"
       >
         <thead>
-          <tr class="border-b border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+          <tr class="border-b border-border-muted text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
             <th class="px-2 py-1 font-normal">When</th>
             <th class="px-2 py-1 font-normal">Boundary</th>
             <th class="px-2 py-1 font-normal">Scope</th>
@@ -183,15 +183,15 @@ defineExpose({ refresh });
             class="border-b border-border-muted/40"
             :data-testid="`hook-journal-row-${entry.seq}`"
           >
-            <td class="px-2 py-1 font-mono text-[11px] text-ink-dim">
+            <td class="px-2 py-1 font-mono text-caption text-ink-dim">
               {{ formatTs(entry.at) }}
             </td>
-            <td class="px-2 py-1 font-mono text-[11px]">
+            <td class="px-2 py-1 font-mono text-caption">
               {{ entry.boundary }}
             </td>
             <td class="px-2 py-1">{{ entry.scope }}</td>
             <td
-              class="px-2 py-1 font-mono text-[11px]"
+              class="px-2 py-1 font-mono text-caption"
               :class="statusOf(entry).cls"
             >
               {{ statusOf(entry).label }}
@@ -205,7 +205,7 @@ defineExpose({ refresh });
             <td class="px-2 py-1">
               {{ entry.title || entry.source || '—' }}
             </td>
-            <td class="px-2 py-1 font-mono text-[10px] text-ink-subtle">
+            <td class="px-2 py-1 font-mono text-eyebrow text-ink-subtle">
               {{ (entry.contentHash ?? '').slice(0, 12) || '—' }}
             </td>
           </tr>

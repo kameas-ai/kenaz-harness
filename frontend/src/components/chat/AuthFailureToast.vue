@@ -180,9 +180,9 @@ defineExpose({ queue });
     data-testid="auth-failure-toast"
   >
     <div
-      class="pointer-events-auto flex max-w-md flex-col gap-2 rounded-md border border-signal-warning bg-surface-1 p-3 shadow-lg"
+      class="pointer-events-auto flex max-w-md flex-col gap-2 rounded-md border border-signal-warn bg-surface-1 p-3 shadow-lg"
     >
-      <div class="font-ui text-[11px] uppercase tracking-[0.18em] text-signal-warning">
+      <div class="font-ui text-caption uppercase tracking-eyebrow text-signal-warn-text">
         API Key Invalid
       </div>
 
@@ -197,7 +197,7 @@ defineExpose({ queue });
         <div class="mt-1 flex justify-end">
           <button
             type="button"
-            class="font-ui text-xs text-ink-link hover:underline"
+            class="font-ui text-xs text-accent hover:underline"
             data-testid="auth-failure-rotated-ok-close"
             @click="dismissAfterRotate"
           >
@@ -212,7 +212,7 @@ defineExpose({ queue });
           {{ providerLabel(head.payload) }} rejected your API key. Paste a new key
           below and press Enter to rotate without re-opening Settings.
         </div>
-        <div v-if="head.payload.reason" class="font-ui text-[11px] text-ink-muted">
+        <div v-if="head.payload.reason" class="font-ui text-caption text-ink-muted">
           {{ head.payload.reason }}
         </div>
 
@@ -220,7 +220,7 @@ defineExpose({ queue });
           v-model="apiKeyInput"
           type="password"
           autocomplete="off"
-          class="mt-1 w-full rounded border border-border bg-surface-0 px-2 py-1 font-mono text-[12px] text-ink outline-none focus:border-accent"
+          class="mt-1 w-full rounded border border-border bg-surface-0 px-2 py-1 font-mono text-small text-ink outline-none focus:border-accent"
           placeholder="Paste new API key…"
           aria-label="New API key"
           data-testid="auth-failure-key-input"
@@ -230,7 +230,7 @@ defineExpose({ queue });
 
         <div
           v-if="lastError"
-          class="font-ui text-[11px] text-status-error"
+          class="font-ui text-caption text-signal-danger-text"
           data-testid="auth-failure-error"
         >
           {{ lastError }}
@@ -239,7 +239,7 @@ defineExpose({ queue });
         <div class="mt-1 flex justify-end gap-2">
           <button
             type="button"
-            class="font-ui text-xs text-ink-link hover:underline"
+            class="font-ui text-xs text-accent hover:underline"
             data-testid="auth-failure-dismiss"
             @click="dismiss"
           >
@@ -247,7 +247,7 @@ defineExpose({ queue });
           </button>
           <button
             type="button"
-            class="font-ui text-xs text-ink-link hover:underline disabled:opacity-40"
+            class="font-ui text-xs text-accent hover:underline disabled:opacity-40"
             :disabled="submitting || !apiKeyInput.trim()"
             data-testid="auth-failure-rotate"
             @click="submit"

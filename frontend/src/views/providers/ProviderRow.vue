@@ -125,14 +125,14 @@ const statusClass = computed(() =>
         <span class="font-medium">{{ provider.name || provider.id }}</span>
         <span
           v-if="sourceTag"
-          class="rounded-sm border border-border-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-ink-muted"
+          class="rounded-sm border border-border-muted px-1.5 py-0.5 text-eyebrow uppercase tracking-wider text-ink-muted"
           :data-testid="`provider-source-tag-${provider.id}`"
         >
           {{ sourceTag }}
         </span>
         <span
           v-if="keyBadge"
-          class="rounded-sm border px-1.5 py-0.5 text-[10px] tracking-wider"
+          class="rounded-sm border px-1.5 py-0.5 text-eyebrow tracking-wider"
           :class="isFleetKey ? 'border-accent-hairline text-ink' : 'border-border-muted text-ink-muted'"
           :data-testid="`provider-key-badge-${provider.id}`"
         >
@@ -141,7 +141,7 @@ const statusClass = computed(() =>
       </div>
       <div
         v-if="keyScope"
-        class="mt-0.5 text-[11px] text-ink-subtle"
+        class="mt-0.5 text-caption text-ink-subtle"
         :data-testid="`provider-key-scope-${provider.id}`"
       >
         Scope: {{ keyScope }}
@@ -155,7 +155,7 @@ const statusClass = computed(() =>
     </td>
     <td class="px-4 py-2.5">
       <span
-        class="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-[0.18em] font-ui"
+        class="inline-flex items-center gap-1.5 text-caption uppercase tracking-eyebrow font-ui"
         :class="statusClass"
         role="status"
         :aria-label="`Status: ${statusLabel.toLowerCase()}`"

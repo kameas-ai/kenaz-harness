@@ -38,7 +38,7 @@ const props = defineProps<{
 <template>
   <div
     v-if="props.runId"
-    class="mt-1 flex items-center gap-3 font-ui text-[11px] text-ink-subtle"
+    class="mt-1 flex items-center gap-3 font-ui text-caption text-ink-subtle"
     data-testid="turn-run-links"
   >
     <RouterLink
@@ -58,7 +58,7 @@ const props = defineProps<{
   </div>
   <div
     v-else
-    class="mt-1 font-ui text-[11px] text-ink-subtle opacity-70"
+    class="mt-1 font-ui text-caption text-ink-subtle opacity-70"
     data-testid="turn-run-unrecorded"
     title="No run was recorded for this turn — it predates run-graph linkage, the recording failed, or the turn arrived from another device. Its run cannot be identified safely."
   >

@@ -119,17 +119,17 @@ onMounted(() => {
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div>
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Model-accessible secrets
         </h2>
-        <p class="mt-1 font-ui text-[11px] text-ink-dim">
+        <p class="mt-1 font-ui text-caption text-ink-dim">
           Secrets the model can reference using <code class="font-mono">@secret:&lt;locator&gt;</code> tokens in tool calls.
           Plaintext never enters the conversation context.
         </p>
       </div>
       <button
         type="button"
-        class="rounded-sm border border-border px-2 py-1 font-ui text-[11px] uppercase tracking-[0.14em] text-ink hover:bg-surface-2 disabled:opacity-50 transition-colors"
+        class="rounded-sm border border-border px-2 py-1 font-ui text-caption uppercase tracking-eyebrow text-ink hover:bg-surface-2 disabled:opacity-50 transition-colors"
         :disabled="showExposeForm"
         data-testid="secrets-expose-btn"
         @click="showExposeForm = true"
@@ -144,12 +144,12 @@ onMounted(() => {
       class="mt-3 rounded-sm border border-border bg-surface-1 p-4 grid gap-3"
       data-testid="secrets-expose-form"
     >
-      <h3 class="font-ui text-[11px] uppercase tracking-[0.14em] text-ink-subtle">
+      <h3 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Expose a secret to the model
       </h3>
 
       <div class="grid gap-1">
-        <label class="font-ui text-[11px] text-ink-muted" for="expose-locator">
+        <label class="font-ui text-caption text-ink-muted" for="expose-locator">
           Locator <span class="text-signal-danger">*</span>
         </label>
         <input
@@ -157,17 +157,17 @@ onMounted(() => {
           v-model="exposeLocator"
           type="text"
           placeholder="user:my-api-key"
-          class="rounded-sm border border-border bg-surface-0 px-2 py-1 font-mono text-[12px] text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+          class="rounded-sm border border-border bg-surface-0 px-2 py-1 font-mono text-small text-ink focus:outline-none focus:ring-1 focus:ring-accent"
           data-testid="expose-locator-input"
           :disabled="exposing"
         />
-        <p class="font-ui text-[10px] text-ink-dim">
+        <p class="font-ui text-eyebrow text-ink-dim">
           The identifier used in <code class="font-mono">@secret:&lt;locator&gt;</code>. Example: <code class="font-mono">user:github-pat</code>
         </p>
       </div>
 
       <div class="grid gap-1">
-        <label class="font-ui text-[11px] text-ink-muted" for="expose-description">
+        <label class="font-ui text-caption text-ink-muted" for="expose-description">
           Description
         </label>
         <input
@@ -175,20 +175,20 @@ onMounted(() => {
           v-model="exposeDescription"
           type="text"
           placeholder="GitHub personal access token"
-          class="rounded-sm border border-border bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+          class="rounded-sm border border-border bg-surface-0 px-2 py-1 font-ui text-small text-ink focus:outline-none focus:ring-1 focus:ring-accent"
           data-testid="expose-description-input"
           :disabled="exposing"
         />
       </div>
 
       <div class="grid gap-1">
-        <label class="font-ui text-[11px] text-ink-muted" for="expose-kind">
+        <label class="font-ui text-caption text-ink-muted" for="expose-kind">
           Kind
         </label>
         <select
           id="expose-kind"
           v-model="exposeKind"
-          class="rounded-sm border border-border bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+          class="rounded-sm border border-border bg-surface-0 px-2 py-1 font-ui text-small text-ink focus:outline-none focus:ring-1 focus:ring-accent"
           data-testid="expose-kind-select"
           :disabled="exposing"
         >
@@ -201,7 +201,7 @@ onMounted(() => {
       </div>
 
       <div class="grid gap-1">
-        <label class="font-ui text-[11px] text-ink-muted" for="expose-plaintext">
+        <label class="font-ui text-caption text-ink-muted" for="expose-plaintext">
           Secret value <span class="text-signal-danger">*</span>
         </label>
         <input
@@ -209,19 +209,19 @@ onMounted(() => {
           v-model="exposePlaintext"
           type="password"
           placeholder="Paste your secret here"
-          class="rounded-sm border border-border bg-surface-0 px-2 py-1 font-mono text-[12px] text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+          class="rounded-sm border border-border bg-surface-0 px-2 py-1 font-mono text-small text-ink focus:outline-none focus:ring-1 focus:ring-accent"
           data-testid="expose-plaintext-input"
           :disabled="exposing"
           autocomplete="off"
         />
-        <p class="font-ui text-[10px] text-ink-dim">
+        <p class="font-ui text-eyebrow text-ink-dim">
           Zeroed immediately after being stored. Never logged or returned to the frontend.
         </p>
       </div>
 
       <div
         v-if="exposeError"
-        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+        class="rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
         role="alert"
         data-testid="expose-error"
       >
@@ -231,7 +231,7 @@ onMounted(() => {
       <div class="flex gap-2 justify-end">
         <button
           type="button"
-          class="rounded-sm border border-border px-3 py-1 font-ui text-[11px] text-ink-muted hover:text-ink transition-colors"
+          class="rounded-sm border border-border px-3 py-1 font-ui text-caption text-ink-muted hover:text-ink transition-colors"
           :disabled="exposing"
           @click="cancelExpose"
         >
@@ -239,7 +239,7 @@ onMounted(() => {
         </button>
         <button
           type="button"
-          class="rounded-sm bg-accent px-3 py-1 font-ui text-[11px] text-white hover:bg-accent-hover disabled:opacity-50 transition-colors"
+          class="rounded-sm bg-accent px-3 py-1 font-ui text-caption text-white hover:bg-accent-muted disabled:opacity-50 transition-colors"
           :disabled="exposing"
           data-testid="expose-submit-btn"
           @click="expose"
@@ -252,14 +252,14 @@ onMounted(() => {
     <!-- Error/loading states -->
     <div
       v-if="loadError"
-      class="mt-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+      class="mt-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
       role="alert"
     >
       {{ loadError }}
     </div>
     <div
       v-if="revokeError"
-      class="mt-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+      class="mt-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-caption text-signal-danger"
       role="alert"
     >
       {{ revokeError }}
@@ -269,14 +269,14 @@ onMounted(() => {
     <div class="mt-3">
       <div
         v-if="loading"
-        class="font-ui text-[11px] text-ink-dim py-4 text-center"
+        class="font-ui text-caption text-ink-dim py-4 text-center"
         data-testid="secrets-loading"
       >
         Loading…
       </div>
       <div
         v-else-if="rows.length === 0 && !loadError"
-        class="rounded-sm border border-border bg-surface-1 px-4 py-6 text-center font-ui text-[11px] text-ink-dim"
+        class="rounded-sm border border-border bg-surface-1 px-4 py-6 text-center font-ui text-caption text-ink-dim"
         data-testid="secrets-empty"
       >
         No secrets are currently exposed to the model.
@@ -289,11 +289,11 @@ onMounted(() => {
       >
         <thead>
           <tr class="border-b border-border">
-            <th class="pb-1 pr-4 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-subtle">Ref token</th>
-            <th class="pb-1 pr-4 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-subtle">Description</th>
-            <th class="pb-1 pr-4 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-subtle">Kind</th>
-            <th class="pb-1 pr-4 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-subtle">Scope</th>
-            <th class="pb-1 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-subtle">Actions</th>
+            <th class="pb-1 pr-4 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Ref token</th>
+            <th class="pb-1 pr-4 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Description</th>
+            <th class="pb-1 pr-4 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Kind</th>
+            <th class="pb-1 pr-4 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Scope</th>
+            <th class="pb-1 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -303,22 +303,22 @@ onMounted(() => {
             class="border-b border-border-muted last:border-b-0"
             :data-testid="`secrets-row-${row.locator}`"
           >
-            <td class="py-2 pr-4 font-mono text-[11px] text-ink">
+            <td class="py-2 pr-4 font-mono text-caption text-ink">
               {{ row.ref }}
             </td>
-            <td class="py-2 pr-4 font-ui text-[11px] text-ink-muted">
+            <td class="py-2 pr-4 font-ui text-caption text-ink-muted">
               {{ row.description || '—' }}
             </td>
-            <td class="py-2 pr-4 font-ui text-[11px] text-ink-muted">
+            <td class="py-2 pr-4 font-ui text-caption text-ink-muted">
               {{ row.kind }}
             </td>
-            <td class="py-2 pr-4 font-ui text-[11px] text-ink-muted">
+            <td class="py-2 pr-4 font-ui text-caption text-ink-muted">
               {{ row.scope }}
             </td>
             <td class="py-2">
               <button
                 type="button"
-                class="rounded-sm border border-signal-danger px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.12em] text-signal-danger hover:bg-signal-danger hover:text-white disabled:opacity-50 transition-colors"
+                class="rounded-sm border border-signal-danger px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-signal-danger hover:bg-signal-danger hover:text-white disabled:opacity-50 transition-colors"
                 :disabled="revoking[row.locator]"
                 :data-testid="`secrets-revoke-${row.locator}`"
                 @click="revoke(row.locator)"

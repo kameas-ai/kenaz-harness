@@ -15,6 +15,7 @@
  *   - Tooltip text explains the value proposition.
  */
 
+import { Brain } from '@/shell/icons';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -114,12 +115,12 @@ function dismissZeroModal() {
   <!-- Badge button — always rendered even during load (shows "…"). -->
   <button
     type="button"
-    class="flex items-center gap-1 rounded-sm px-2 py-1 font-ui text-[11px] text-ink-muted hover:text-ink hover:bg-surface-2 transition-fast"
+    class="flex items-center gap-1 rounded-sm px-2 py-1 font-ui text-caption text-ink-muted hover:text-ink hover:bg-surface-2 transition-fast"
     :title="tooltipText"
     data-testid="memory-badge"
     @click="onClick"
   >
-    <span aria-hidden="true">💭</span>
+    <Brain class="inline-block" :size="12" aria-hidden="true" />
     <span class="hidden two-col:inline tabular-nums" data-testid="memory-badge-count">
       {{ countLabel }}
     </span>
@@ -142,7 +143,7 @@ function dismissZeroModal() {
     <div
       class="relative z-10 w-[360px] max-w-[90vw] rounded-md border border-border-muted bg-surface-0 shadow-lg p-5"
     >
-      <h2 class="font-ui text-base font-semibold text-ink">
+      <h2 class="font-ui text-h3 font-semibold text-ink">
         Memory carries context across sessions
       </h2>
       <p class="mt-2 font-ui text-sm text-ink-muted">

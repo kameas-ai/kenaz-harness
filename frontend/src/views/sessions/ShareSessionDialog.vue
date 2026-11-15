@@ -150,7 +150,7 @@ async function onShare() {
     @close="emit('close')"
   >
     <div data-testid="share-session-dialog">
-      <h2 class="font-ui text-base font-semibold text-ink">
+      <h2 class="font-ui text-h3 font-semibold text-ink">
         Share session
       </h2>
       <p class="mt-1 font-ui text-sm text-ink-muted">
@@ -160,7 +160,7 @@ async function onShare() {
 
       <!-- Recipient search -->
       <div class="mt-4">
-        <label for="share-recipient-input" class="block font-ui text-xs uppercase tracking-[0.15em] text-ink-muted mb-1">
+        <label for="share-recipient-input" class="block font-ui text-xs uppercase tracking-eyebrow text-ink-muted mb-1">
           Recipient
         </label>
         <input
@@ -241,7 +241,7 @@ async function onShare() {
             <li
               v-for="d in devices"
               :key="d.keyID"
-              class="font-mono text-[10px] break-all"
+              class="font-mono text-eyebrow break-all"
               data-testid="share-device-fingerprint"
             >
               {{ d.fingerprint }}

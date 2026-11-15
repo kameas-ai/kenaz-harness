@@ -458,17 +458,17 @@ async function confirmDelete() {
       >
         <div class="min-w-0">
           <div
-            class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+            class="text-caption uppercase tracking-eyebrow text-ink-subtle"
           >
             ARTIFACT · {{ artifact.scopeKind }} · {{ artifact.source }}
           </div>
           <h2
-            class="mt-1 font-ui text-base font-semibold text-ink truncate"
+            class="mt-1 font-ui text-h3 font-semibold text-ink truncate"
             data-testid="artifact-preview-title"
           >
             {{ artifact.title }}
           </h2>
-          <div class="font-mono text-[11px] text-ink-dim">
+          <div class="font-mono text-caption text-ink-dim">
             {{ artifact.mimeType }} · {{ artifact.byteSize }} B
           </div>
         </div>
@@ -479,7 +479,7 @@ async function confirmDelete() {
           data-testid="artifact-preview-close"
           @click="close"
         >
-          <X :size="16" />
+          <X class="inline-block" :size="16" />
         </button>
       </header>
 
@@ -524,7 +524,7 @@ async function confirmDelete() {
           >
             <div
               v-if="!allowScripts"
-              class="rounded-sm border border-border-muted bg-surface-1 px-3 py-2 text-[11px] text-ink-muted flex items-center justify-between gap-2"
+              class="rounded-sm border border-border-muted bg-surface-1 px-3 py-2 text-caption text-ink-muted flex items-center justify-between gap-2"
             >
               <span>
                 Scripts are blocked in the preview. Toggle
@@ -533,7 +533,7 @@ async function confirmDelete() {
               </span>
               <button
                 type="button"
-                class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 text-[11px] text-accent hover:bg-accent-glow"
+                class="rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 text-caption text-accent hover:bg-accent-glow"
                 data-testid="artifact-preview-run-scripts"
                 @click="allowScripts = true"
               >
@@ -542,7 +542,7 @@ async function confirmDelete() {
             </div>
             <div
               v-else
-              class="rounded-sm border border-signal-warn bg-surface-1 px-3 py-2 text-[11px] text-signal-warn flex items-center justify-between gap-2"
+              class="rounded-sm border border-signal-warn bg-surface-1 px-3 py-2 text-caption text-signal-warn flex items-center justify-between gap-2"
               role="alert"
               data-testid="artifact-preview-scripts-banner"
             >
@@ -552,7 +552,7 @@ async function confirmDelete() {
               </span>
               <button
                 type="button"
-                class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-[11px] text-ink-muted hover:text-ink"
+                class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-caption text-ink-muted hover:text-ink"
                 data-testid="artifact-preview-disable-scripts"
                 @click="allowScripts = false"
               >
@@ -596,7 +596,7 @@ async function confirmDelete() {
             />
             <div
               v-else
-              class="px-4 py-6 text-center text-[12px] text-ink-muted"
+              class="px-4 py-6 text-center text-small text-ink-muted"
               data-testid="artifact-preview-image-broken"
             >
               Image bytes failed to render — the file may be corrupt or
@@ -609,14 +609,14 @@ async function confirmDelete() {
           <!-- Plain / code text -->
           <pre
             v-else-if="isText"
-            class="whitespace-pre-wrap break-words font-mono text-[12px] text-ink bg-surface-1 border border-border-muted rounded-sm p-3 overflow-x-auto"
+            class="whitespace-pre-wrap break-words font-mono text-small text-ink bg-surface-1 border border-border-muted rounded-sm p-3 overflow-x-auto"
             data-testid="artifact-preview-text"
             >{{ decodedText }}</pre>
 
           <!-- Unknown mime -->
           <div
             v-else-if="isOther"
-            class="rounded-sm border border-border-muted bg-surface-1 px-4 py-6 text-center text-[12px] text-ink-muted"
+            class="rounded-sm border border-border-muted bg-surface-1 px-4 py-6 text-center text-small text-ink-muted"
             data-testid="artifact-preview-other"
           >
             Preview not available; download to view.
@@ -625,7 +625,7 @@ async function confirmDelete() {
 
         <div
           v-if="errorMsg"
-          class="mt-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 text-[11px] text-signal-danger"
+          class="mt-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 text-caption text-signal-danger"
           role="alert"
           data-testid="artifact-preview-error"
         >
@@ -642,7 +642,7 @@ async function confirmDelete() {
            always visible after clicking a footer action button. -->
       <div
         v-if="showPromoteConfirm"
-        class="border-t border-border-muted bg-surface-1 px-5 py-2 text-[12px] text-ink"
+        class="border-t border-border-muted bg-surface-1 px-5 py-2 text-small text-ink"
         role="dialog"
         data-testid="artifact-preview-promote-confirm"
       >
@@ -653,7 +653,7 @@ async function confirmDelete() {
           <div class="flex items-center gap-2 shrink-0">
             <button
               type="button"
-              class="rounded-sm px-2 py-1 text-[11px] text-ink-dim hover:text-ink"
+              class="rounded-sm px-2 py-1 text-caption text-ink-dim hover:text-ink"
               :disabled="busy"
               data-testid="artifact-preview-promote-cancel"
               @click="showPromoteConfirm = false"
@@ -662,7 +662,7 @@ async function confirmDelete() {
             </button>
             <button
               type="button"
-              class="rounded-sm border border-accent bg-surface-1 px-2 py-1 text-[11px] text-accent hover:bg-accent-glow disabled:opacity-50"
+              class="rounded-sm border border-accent bg-surface-1 px-2 py-1 text-caption text-accent hover:bg-accent-glow disabled:opacity-50"
               :disabled="busy"
               data-testid="artifact-preview-promote-confirm-btn"
               @click="confirmPromote"
@@ -674,7 +674,7 @@ async function confirmDelete() {
       </div>
       <div
         v-if="showDeleteConfirm"
-        class="border-t border-signal-danger bg-surface-1 px-5 py-2 text-[12px] text-ink"
+        class="border-t border-signal-danger bg-surface-1 px-5 py-2 text-small text-ink"
         role="dialog"
         data-testid="artifact-preview-delete-confirm"
       >
@@ -685,7 +685,7 @@ async function confirmDelete() {
           <div class="flex items-center gap-2 shrink-0">
             <button
               type="button"
-              class="rounded-sm px-2 py-1 text-[11px] text-ink-dim hover:text-ink"
+              class="rounded-sm px-2 py-1 text-caption text-ink-dim hover:text-ink"
               :disabled="busy"
               data-testid="artifact-preview-delete-cancel"
               @click="showDeleteConfirm = false"
@@ -694,7 +694,7 @@ async function confirmDelete() {
             </button>
             <button
               type="button"
-              class="rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 text-[11px] text-signal-danger hover:bg-surface-2 disabled:opacity-50"
+              class="rounded-sm border border-signal-danger bg-surface-1 px-2 py-1 text-caption text-signal-danger hover:bg-surface-2 disabled:opacity-50"
               :disabled="busy"
               data-testid="artifact-preview-delete-confirm-btn"
               @click="confirmDelete"
@@ -710,7 +710,7 @@ async function confirmDelete() {
         <div class="flex items-center gap-2">
           <button
             type="button"
-            class="flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-[12px] text-ink-muted hover:bg-surface-2 hover:text-ink"
+            class="flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-small text-ink-muted hover:bg-surface-2 hover:text-ink"
             data-testid="artifact-preview-download"
             @click="downloadArtifact"
           >
@@ -719,7 +719,7 @@ async function confirmDelete() {
           </button>
           <button
             type="button"
-            class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-[12px] text-ink-muted hover:bg-surface-2 hover:text-ink"
+            class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-small text-ink-muted hover:bg-surface-2 hover:text-ink"
             data-testid="artifact-preview-copy"
             @click="copyToClipboard"
           >
@@ -729,7 +729,7 @@ async function confirmDelete() {
         <div class="flex items-center gap-2">
           <button
             type="button"
-            class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-[12px] text-ink-muted hover:bg-surface-2 hover:text-accent disabled:opacity-50 disabled:cursor-not-allowed"
+            class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-small text-ink-muted hover:bg-surface-2 hover:text-accent disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="!canPromoteToProject || busy"
             :title="promoteDisabledReason ?? 'Promote scope from session to project'"
             data-testid="artifact-preview-promote"
@@ -739,7 +739,7 @@ async function confirmDelete() {
           </button>
           <button
             type="button"
-            class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-[12px] text-ink-muted hover:bg-surface-2 hover:text-signal-danger"
+            class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 text-small text-ink-muted hover:bg-surface-2 hover:text-signal-danger"
             :disabled="busy"
             data-testid="artifact-preview-delete"
             @click="askDelete"

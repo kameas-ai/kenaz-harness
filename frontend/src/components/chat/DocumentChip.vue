@@ -9,7 +9,7 @@
  */
 
 import { computed } from 'vue';
-import { FileText, Download } from 'lucide-vue-next';
+import { FileText, Download } from '@/shell/icons';
 import type { MediaSource } from '@/lib/types';
 
 const props = defineProps<{
@@ -85,7 +85,7 @@ function download() {
 
 <template>
   <span
-    class="inline-flex items-center gap-2 px-3 py-1.5 mr-2 mb-2 rounded-md border border-border-muted bg-surface-2 font-ui text-[12px] text-ink align-top"
+    class="inline-flex items-center gap-2 px-3 py-1.5 mr-2 mb-2 rounded-md border border-border-muted bg-surface-2 font-ui text-small text-ink align-top"
     data-testid="document-chip"
   >
     <FileText class="w-4 h-4 text-ink-dim" />

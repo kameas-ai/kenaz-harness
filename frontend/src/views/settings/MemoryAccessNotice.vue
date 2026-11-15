@@ -87,10 +87,10 @@ async function respond(action: 'ack' | 'withdraw') {
 <template>
   <div
     v-if="notice"
-    class="space-y-2 rounded-sm border border-border-muted p-3 text-[12px]"
+    class="space-y-2 rounded-sm border border-border-muted p-3 text-small"
     data-testid="memory-access-notice"
   >
-    <p class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">Notice</p>
+    <p class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">Notice</p>
     <p class="whitespace-pre-wrap" data-testid="memory-access-notice-text">{{ notice.text }}</p>
     <p v-if="stateLine" class="text-ink-muted" data-testid="memory-access-notice-state">{{ stateLine }}</p>
     <p v-if="stateError" class="text-ink-muted" data-testid="memory-access-notice-state-error">{{ stateError }}</p>
@@ -98,7 +98,7 @@ async function respond(action: 'ack' | 'withdraw') {
       <button
         v-if="!readCurrent"
         type="button"
-        class="px-3 py-1.5 rounded-sm border border-border-muted text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        class="px-3 py-1.5 rounded-sm border border-border-muted text-caption uppercase tracking-eyebrow hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
         :disabled="busy"
         data-testid="memory-access-notice-read"
         @click="respond('ack')"
@@ -108,7 +108,7 @@ async function respond(action: 'ack' | 'withdraw') {
       <button
         v-else
         type="button"
-        class="px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent disabled:opacity-50 disabled:cursor-not-allowed"
+        class="px-3 py-1.5 text-caption uppercase tracking-eyebrow text-ink-dim hover:text-accent disabled:opacity-50 disabled:cursor-not-allowed"
         :disabled="busy"
         data-testid="memory-access-notice-withdraw"
         @click="respond('withdraw')"

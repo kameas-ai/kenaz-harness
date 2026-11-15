@@ -111,7 +111,7 @@ function toggle() {
   >
     <button
       type="button"
-      class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.12em] transition-colors"
+      class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-ui text-caption uppercase tracking-eyebrow transition-colors"
       :class="
         isSet
           ? 'border-accent text-accent bg-accent/10 hover:bg-accent/15'
@@ -134,12 +134,12 @@ function toggle() {
       data-testid="reasoning-control-popover"
     >
       <div class="mb-3 flex items-center justify-between">
-        <h3 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        <h3 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
           Reasoning effort
         </h3>
         <button
           type="button"
-          class="font-ui text-[11px] text-ink-muted hover:text-ink"
+          class="font-ui text-caption text-ink-muted hover:text-ink"
           data-testid="reasoning-control-close"
           @click="open = false"
         >

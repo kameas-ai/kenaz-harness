@@ -10,6 +10,7 @@
  * Mount in Shell.vue alongside other modals.
  */
 import { computed } from 'vue';
+import { X } from '@/shell/icons';
 import { useRouter } from 'vue-router';
 import { SHORTCUTS, groupByCategory, resolveBinding } from '@/lib/shortcuts/registry';
 import KeycapDisplay from '@/components/shortcuts/KeycapDisplay.vue';
@@ -52,7 +53,7 @@ function effectiveBinding(id: string): string {
   <Teleport to="body">
     <div
       v-if="open"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-modal-overlay backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label="Keyboard shortcuts"
@@ -66,7 +67,7 @@ function effectiveBinding(id: string): string {
       >
         <!-- Header -->
         <div class="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-surface-1 px-6 py-4">
-          <h2 class="font-ui text-[13px] font-semibold uppercase tracking-[0.18em] text-ink">
+          <h2 class="font-ui text-ui font-semibold uppercase tracking-eyebrow text-ink">
             Keyboard shortcuts
           </h2>
           <button
@@ -76,9 +77,7 @@ function effectiveBinding(id: string): string {
             data-testid="cheat-sheet-close"
             @click="close"
           >
-            <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M3 3l10 10M13 3L3 13" />
-            </svg>
+            <X class="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
 
@@ -89,7 +88,7 @@ function effectiveBinding(id: string): string {
             :key="category"
             :data-testid="`cheat-sheet-category-${category.toLowerCase()}`"
           >
-            <h3 class="mb-2 font-ui text-[10px] uppercase tracking-[0.2em] text-ink-subtle">
+            <h3 class="mb-2 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
               {{ category }}
             </h3>
             <table class="w-full border-collapse">
@@ -101,10 +100,10 @@ function effectiveBinding(id: string): string {
                   :data-testid="`cheat-sheet-row-${sc.id}`"
                   @click="goToSettings(sc.id)"
                 >
-                  <td class="py-2 pr-4 font-ui text-[12px] text-ink">
+                  <td class="py-2 pr-4 font-ui text-small text-ink">
                     {{ sc.label }}
                   </td>
-                  <td class="py-2 pr-4 font-ui text-[11px] text-ink-muted">
+                  <td class="py-2 pr-4 font-ui text-caption text-ink-muted">
                     {{ sc.description }}
                   </td>
                   <td class="py-2 text-right">
@@ -117,7 +116,7 @@ function effectiveBinding(id: string): string {
         </div>
 
         <!-- Footer hint -->
-        <div class="border-t border-border-muted px-6 py-3 font-ui text-[11px] text-ink-dim">
+        <div class="border-t border-border-muted px-6 py-3 font-ui text-caption text-ink-dim">
           Press
           <KeycapDisplay binding="?" />
           or

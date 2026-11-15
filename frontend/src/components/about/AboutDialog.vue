@@ -11,6 +11,7 @@
  * This component reads isOpen from the same store.
  */
 import { onMounted, ref } from 'vue';
+import { DsKenazMark } from '@/shell/dsIcon';
 import BaseDialog from '@/components/ui/BaseDialog.vue';
 import { useAboutDialogStore } from '@/lib/aboutDialogStore';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -60,13 +61,11 @@ onMounted(async () => {
         class="grid h-16 w-16 place-items-center rounded-2xl bg-accent-dim"
         aria-hidden="true"
       >
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" class="text-accent">
-          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-        </svg>
+        <DsKenazMark :size="32" />
       </div>
 
       <div>
-        <h2 class="font-ui text-base font-semibold text-ink" data-testid="about-app-name">
+        <h2 class="font-ui text-h3 font-semibold text-ink" data-testid="about-app-name">
           Kenaz Harness
         </h2>
         <p class="font-ui text-sm text-ink-muted" data-testid="about-version">

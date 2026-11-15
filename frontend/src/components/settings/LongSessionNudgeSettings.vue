@@ -88,10 +88,10 @@ function onTokensInput(evt: Event): void {
   <div class="grid gap-6" data-testid="long-session-nudge-settings">
     <!-- Turn-count threshold -->
     <section data-testid="nudge-turns-section">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Long-session nudge — turn threshold
       </h2>
-      <p class="mt-1 font-ui text-[11px] text-ink-muted">
+      <p class="mt-1 font-ui text-caption text-ink-muted">
         Number of human turns after which the nudge banner appears.
         Default {{ DEFAULT_NUDGE_TURNS }}. Set to 0 to use the default.
       </p>
@@ -101,19 +101,19 @@ function onTokensInput(evt: Event): void {
           :min="MIN_NUDGE_TURNS"
           :value="nudgeTurns"
           aria-label="Turn threshold for long-session nudge"
-          class="w-28 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+          class="w-28 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-small text-ink"
           data-testid="nudge-turns-input"
           @input="onTurnsInput"
         />
         <p
           v-if="turnsError"
-          class="mt-1 font-ui text-[11px] text-signal-danger"
+          class="mt-1 font-ui text-caption text-signal-danger"
           role="alert"
           data-testid="nudge-turns-error"
         >
           {{ turnsError }}
         </p>
-        <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+        <p v-else class="mt-1 font-ui text-caption text-ink-muted">
           One turn is one message you send, however many model moves and
           tool calls answering it produced.
         </p>
@@ -122,10 +122,10 @@ function onTokensInput(evt: Event): void {
 
     <!-- Token threshold -->
     <section data-testid="nudge-tokens-section">
-      <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <h2 class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Long-session nudge — token threshold
       </h2>
-      <p class="mt-1 font-ui text-[11px] text-ink-muted">
+      <p class="mt-1 font-ui text-caption text-ink-muted">
         Conversation-history tokens (the history part of the last request, not the
         system prompt or tool definitions) after which the nudge banner appears,
         regardless of turn count. Default {{ DEFAULT_NUDGE_TOKENS.toLocaleString() }}. Set to 0 to use the default.
@@ -136,19 +136,19 @@ function onTokensInput(evt: Event): void {
           :min="MIN_NUDGE_TOKENS"
           :value="nudgeTokens"
           aria-label="Token threshold for long-session nudge"
-          class="w-36 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+          class="w-36 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-small text-ink"
           data-testid="nudge-tokens-input"
           @input="onTokensInput"
         />
         <p
           v-if="tokensError"
-          class="mt-1 font-ui text-[11px] text-signal-danger"
+          class="mt-1 font-ui text-caption text-signal-danger"
           role="alert"
           data-testid="nudge-tokens-error"
         >
           {{ tokensError }}
         </p>
-        <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+        <p v-else class="mt-1 font-ui text-caption text-ink-muted">
           Tokens in the prompt portion only (not completion).
         </p>
       </div>

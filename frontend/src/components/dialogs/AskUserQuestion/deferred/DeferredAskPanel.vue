@@ -8,6 +8,7 @@
  * a system_reminder for the next LLM turn.
  */
 
+import { X } from '@/shell/icons';
 import { computed, ref } from 'vue';
 import type { ElicitRequest } from '@/lib/types';
 
@@ -50,17 +51,17 @@ function dismiss() {
   >
     <!-- Header -->
     <div class="flex items-center justify-between">
-      <span class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+      <span class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle">
         Pending question
       </span>
       <button
         type="button"
-        class="font-ui text-[11px] text-ink-muted hover:text-ink"
+        class="font-ui text-caption text-ink-muted hover:text-ink"
         aria-label="Close pending question panel"
         data-testid="deferred-panel-close"
         @click="dismiss"
       >
-        ✕
+        <X class="inline-block" :size="12" aria-hidden="true" />
       </button>
     </div>
 
@@ -83,7 +84,7 @@ function dismiss() {
     <div class="mt-3 flex gap-2">
       <button
         type="button"
-        class="rounded-md border border-accent bg-accent/10 px-3 py-1.5 font-ui text-[11px] text-accent hover:bg-accent/20 disabled:opacity-50"
+        class="rounded-md border border-accent bg-accent/10 px-3 py-1.5 font-ui text-caption text-accent hover:bg-accent/20 disabled:opacity-50"
         :disabled="submitting"
         data-testid="deferred-panel-submit"
         @click="submit"
@@ -92,7 +93,7 @@ function dismiss() {
       </button>
       <button
         type="button"
-        class="rounded-md border border-border-muted px-3 py-1.5 font-ui text-[11px] text-ink-muted hover:bg-surface-2"
+        class="rounded-md border border-border-muted px-3 py-1.5 font-ui text-caption text-ink-muted hover:bg-surface-2"
         data-testid="deferred-panel-skip"
         @click="dismiss"
       >
@@ -103,7 +104,7 @@ function dismiss() {
     <!-- Queue overflow badge -->
     <div
       v-if="asks.length > 1"
-      class="mt-2 font-ui text-[10px] text-ink-subtle"
+      class="mt-2 font-ui text-eyebrow text-ink-subtle"
       data-testid="deferred-panel-queue"
     >
       +{{ asks.length - 1 }} more

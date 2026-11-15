@@ -169,7 +169,7 @@ onMounted(() => {
       <template #trailing>
         <button
           type="button"
-          class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow"
+          class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1.5 font-ui text-small text-accent hover:bg-accent-glow"
           data-testid="capabilities-add"
           @click="addCapability"
         >
@@ -184,7 +184,7 @@ onMounted(() => {
 
     <div class="px-6 pt-2 pb-1">
       <h2
-        class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle"
       >
         MCP servers
       </h2>
@@ -202,7 +202,7 @@ onMounted(() => {
     </div>
     <div
       v-if="policyError"
-      class="mx-6 mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="mx-6 mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="tool-policy-error"
     >
@@ -252,7 +252,7 @@ onMounted(() => {
         rel="noopener"
       >Read the MCP docs →</a>
     </div>
-    <table v-else-if="!loading && !error" class="w-full font-ui text-[12px] text-ink" data-testid="tools-table">
+    <table v-else-if="!loading && !error" class="w-full font-ui text-small text-ink" data-testid="tools-table">
       <thead class="bg-surface-1 text-ink-muted">
         <tr>
           <th class="text-left px-4 py-2 font-medium">Name</th>
@@ -276,12 +276,12 @@ onMounted(() => {
               v-if="(s.capabilities?.length ?? 0) === 0"
               class="text-ink-subtle"
             >—</span>
-            <span v-else class="font-mono text-[11px]">{{ s.capabilities?.join(', ') }}</span>
+            <span v-else class="font-mono text-caption">{{ s.capabilities?.join(', ') }}</span>
           </td>
           <td class="px-4 py-2 font-mono text-ink-muted">{{ s.version || '—' }}</td>
           <td class="px-4 py-2">
             <span
-              class="text-[11px] uppercase tracking-[0.12em]"
+              class="text-caption uppercase tracking-eyebrow"
               :class="stateColor(s.state)"
             >
               {{ s.state || 'unknown' }}
@@ -289,7 +289,7 @@ onMounted(() => {
           </td>
           <td class="px-4 py-2">
             <select
-              class="rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[11px] uppercase tracking-[0.1em] text-ink disabled:opacity-50"
+              class="rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-caption uppercase tracking-eyebrow text-ink disabled:opacity-50"
               :value="policyFor(s.name)"
               :disabled="policySaving === s.name"
               :data-testid="`tool-policy-select-${s.name}`"
@@ -303,7 +303,7 @@ onMounted(() => {
         </tr>
       </tbody>
     </table>
-    <p v-if="servers.length > 0" class="px-6 pt-2 pb-4 font-ui text-[11px] text-ink-subtle">
+    <p v-if="servers.length > 0" class="px-6 pt-2 pb-4 font-ui text-caption text-ink-subtle">
       Policy changes take effect on next restart — the permission list is read once at startup.
     </p>
   </div>

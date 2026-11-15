@@ -18,6 +18,7 @@
  * carries usage data (promptTokens / completionTokens must be defined).
  */
 
+import { X } from '@/shell/icons';
 import { computed, ref } from 'vue';
 import { formatCost } from '@/lib/formatCost';
 
@@ -96,7 +97,7 @@ function closePopover() {
   >
     <button
       type="button"
-      class="inline-flex items-center font-mono text-[10px] text-ink-subtle tabular-nums rounded-sm border border-transparent px-1 py-0 hover:border-border-muted hover:text-ink-muted transition-colors"
+      class="inline-flex items-center font-mono text-eyebrow text-ink-subtle tabular-nums rounded-sm border border-transparent px-1 py-0 hover:border-border-muted hover:text-ink-muted transition-colors"
       :aria-label="`Token usage: ${chipLabel}`"
       :aria-expanded="open"
       data-testid="token-meter-chip-button"
@@ -114,20 +115,20 @@ function closePopover() {
       data-testid="token-meter-popover"
     >
       <div class="mb-2 flex items-center justify-between">
-        <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+        <span class="font-ui text-eyebrow uppercase tracking-eyebrow text-ink-subtle">
           Token usage
         </span>
         <button
           type="button"
-          class="font-ui text-[11px] text-ink-muted hover:text-ink"
+          class="font-ui text-caption text-ink-muted hover:text-ink"
           aria-label="Close token usage popover"
           data-testid="token-meter-popover-close"
           @click.stop="closePopover"
         >
-          ✕
+          <X class="inline-block" :size="12" aria-hidden="true" />
         </button>
       </div>
-      <dl class="space-y-1 font-mono text-[11px]">
+      <dl class="space-y-1 font-mono text-caption">
         <div class="flex justify-between gap-4">
           <dt class="text-ink-muted">Prompt tokens</dt>
           <dd class="tabular-nums text-ink" data-testid="token-meter-prompt">
@@ -167,7 +168,7 @@ function closePopover() {
       </dl>
       <p
         v-if="costSource"
-        class="mt-2 font-ui text-[10px] text-ink-subtle"
+        class="mt-2 font-ui text-eyebrow text-ink-subtle"
         data-testid="token-meter-cost-source"
       >
         {{ costSourceLabel }}

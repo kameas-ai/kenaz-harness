@@ -67,20 +67,20 @@ function pick(name: string) {
       role="option"
       @mousedown.prevent="pick(cmd.name)"
     >
-      <span class="font-mono text-[12px]">/{{ cmd.name }}</span>
-      <span class="font-ui text-[11px] text-ink-dim flex-1 truncate">
+      <span class="font-mono text-small">/{{ cmd.name }}</span>
+      <span class="font-ui text-caption text-ink-dim flex-1 truncate">
         {{ cmd.description }}
       </span>
       <span
         v-if="cmd.isUser"
-        class="font-ui text-[10px] uppercase tracking-[0.18em] text-accent-dim border border-accent-dim rounded px-1"
+        class="font-ui text-eyebrow uppercase tracking-eyebrow text-accent-dim border border-accent-dim rounded px-1"
         data-testid="slash-user-chip"
       >
         user
       </span>
       <span
         v-if="cmd.comingSoon"
-        class="font-ui text-[10px] uppercase tracking-[0.18em] text-signal-warn"
+        class="font-ui text-eyebrow uppercase tracking-eyebrow text-signal-warn"
         data-testid="slash-coming-soon-tag"
       >
         coming soon

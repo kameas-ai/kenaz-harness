@@ -56,7 +56,7 @@ function navigate() {
   <button
     v-if="route"
     type="button"
-    class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono rounded border border-border-muted text-accent hover:text-accent hover:border-accent transition-colors"
+    class="inline-flex items-center gap-1 px-1.5 py-0.5 text-eyebrow font-mono rounded border border-border-muted text-accent hover:text-accent hover:border-accent transition-colors"
     :title="`Navigate to ${kind}: ${id}`"
     @click.stop="navigate"
   >
@@ -64,7 +64,7 @@ function navigate() {
   </button>
   <span
     v-else
-    class="inline-block px-1.5 py-0.5 text-[10px] font-mono rounded border border-border-muted text-ink-muted"
+    class="inline-block px-1.5 py-0.5 text-eyebrow font-mono rounded border border-border-muted text-ink-muted"
     :title="`${kind}: ${id}`"
   >
     {{ label }}

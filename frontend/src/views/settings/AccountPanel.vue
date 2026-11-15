@@ -587,32 +587,32 @@ async function refreshIdentity() {
 
 <style scoped>
 .account-panel {
-  padding: 1.5rem;
+  padding: var(--space-24);
   max-width: 480px;
 }
 
 .panel-header {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  gap: var(--space-8);
+  margin-bottom: var(--space-12);
 }
 
 .panel-title {
-  font-size: 1.125rem;
+  font-size: var(--type-title-size);
   font-weight: 600;
   margin: 0;
 }
 
 .panel-explainer {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--ink-muted);
-  margin-bottom: 1rem;
+  margin-bottom: var(--space-16);
 }
 
 .panel-banner {
-  border-radius: 0.5rem;
-  padding: 1rem;
+  border-radius: var(--radius-md);
+  padding: var(--space-16);
 }
 
 .disabled-banner {
@@ -622,20 +622,20 @@ async function refreshIdentity() {
 
 .banner-title {
   font-weight: 600;
-  margin: 0 0 0.5rem;
+  margin: 0 0 var(--space-8);
 }
 
 .banner-body {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--ink-muted);
   margin: 0;
 }
 
 .env-badge {
-  font-size: 0.7rem;
+  font-size: var(--type-caption-size);
   font-weight: 700;
-  padding: 0.1rem 0.45rem;
-  border-radius: 0.25rem;
+  padding: var(--space-2) var(--space-8);
+  border-radius: var(--radius-sm);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -658,16 +658,16 @@ async function refreshIdentity() {
 .identity-card {
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 1rem;
-  margin-bottom: 1rem;
+  border-radius: var(--radius-md);
+  padding: var(--space-16);
+  margin-bottom: var(--space-16);
 }
 
 .identity-row {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  gap: var(--space-8);
+  margin-bottom: var(--space-8);
 }
 
 .identity-row--teams {
@@ -684,20 +684,20 @@ async function refreshIdentity() {
 }
 
 .identity-label {
-  font-size: 0.75rem;
+  font-size: var(--type-small-size);
   color: var(--ink-muted);
   min-width: 90px;
 }
 
 .identity-value {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .tier-badge {
-  font-size: 0.7rem;
+  font-size: var(--type-caption-size);
   font-weight: 600;
-  padding: 0.1rem 0.4rem;
-  border-radius: 0.2rem;
+  padding: var(--space-2) var(--space-6);
+  border-radius: var(--radius-sm);
   text-transform: capitalize;
   background: var(--accent-dim);
   color: var(--accent);
@@ -705,15 +705,15 @@ async function refreshIdentity() {
 
 .panel-actions {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-8);
 }
 
 .btn {
-  padding: 0.5rem 1rem;
+  padding: var(--space-8) var(--space-16);
   border: none;
-  border-radius: 0.375rem;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   transition: opacity 0.15s;
 }
@@ -739,37 +739,37 @@ async function refreshIdentity() {
 }
 
 .degraded-banner {
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
   color: var(--warn);
-  margin: 0 0 0.75rem;
+  margin: 0 0 var(--space-12);
 }
 
 .degraded-lanes {
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
   color: var(--warn);
-  margin: 0 0 0.75rem;
-  padding-left: 1rem;
+  margin: 0 0 var(--space-12);
+  padding-left: var(--space-16);
 }
 
 .device-keys {
-  margin-bottom: 0.75rem;
+  margin-bottom: var(--space-12);
 }
 
 .error-msg {
-  font-size: 0.8125rem;
+  font-size: var(--type-ui-size);
   color: var(--danger);
-  margin-top: 0.5rem;
+  margin-top: var(--space-8);
 }
 
 .finish-signup-link {
   display: block;
-  margin-top: 0.35rem;
+  margin-top: var(--space-6);
   color: var(--accent);
   text-decoration: underline;
 }
 .fingerprint {
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--type-caption-size);
   word-break: break-all;
 }
 </style>

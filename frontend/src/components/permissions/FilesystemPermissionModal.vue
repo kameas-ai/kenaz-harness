@@ -115,7 +115,7 @@ defineExpose({ queue, reconcile });
 
 <template>
   <BasePermissionModal
-    family-icon="📁"
+    family-icon="fs"
     family-label="Filesystem"
     :request="head"
     :queue-length="queue.length"
@@ -127,7 +127,7 @@ defineExpose({ queue, reconcile });
     <!-- Model-initiated expanded-access notice (recipe_dir_add) -->
     <p
       v-if="head?.op === 'recipe_dir_add'"
-      class="mt-2 font-ui text-[12px] text-ink-muted"
+      class="mt-2 font-ui text-small text-ink-muted"
       data-testid="fs-recipe-dir-add-notice"
     >
       The model is requesting expanded filesystem access to this directory.
@@ -136,7 +136,7 @@ defineExpose({ queue, reconcile });
     <!-- Link target: the path really acts somewhere else -->
     <p
       v-if="pointsTo"
-      class="mt-2 font-ui text-[12px] text-ink-muted break-all"
+      class="mt-2 font-ui text-small text-ink-muted break-all"
       data-testid="fs-points-to"
     >
       Points to: <span class="font-mono text-ink">{{ pointsTo }}</span>
@@ -145,7 +145,7 @@ defineExpose({ queue, reconcile });
     <!-- Harness-state warning (E2E-3) -->
     <p
       v-if="privileged"
-      class="mt-2 rounded-sm border border-signal-warn bg-surface-2 px-3 py-2 font-ui text-[12px] text-signal-warn"
+      class="mt-2 rounded-sm border border-signal-warn bg-surface-2 px-3 py-2 font-ui text-small text-signal-warn"
       data-testid="fs-privileged-notice"
     >
       {{ privileged }}
@@ -157,10 +157,10 @@ defineExpose({ queue, reconcile });
       class="mt-3"
       data-testid="fs-grant-scope-radio"
     >
-      <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1">
+      <p class="font-ui text-caption uppercase tracking-eyebrow text-ink-subtle mb-1">
         If allowed always, scope to:
       </p>
-      <label class="flex items-center gap-2 cursor-pointer font-ui text-[12px] text-ink">
+      <label class="flex items-center gap-2 cursor-pointer font-ui text-small text-ink">
         <input
           v-model="grantScope"
           type="radio"
@@ -171,7 +171,7 @@ defineExpose({ queue, reconcile });
         />
         This exact path
       </label>
-      <label class="mt-1 flex items-center gap-2 cursor-pointer font-ui text-[12px] text-ink">
+      <label class="mt-1 flex items-center gap-2 cursor-pointer font-ui text-small text-ink">
         <input
           v-model="grantScope"
           type="radio"
@@ -184,7 +184,7 @@ defineExpose({ queue, reconcile });
       </label>
       <label
         v-if="grantScope === 'directory' && head.op === 'write'"
-        class="mt-1 ml-5 flex items-center gap-2 cursor-pointer font-ui text-[12px] text-ink"
+        class="mt-1 ml-5 flex items-center gap-2 cursor-pointer font-ui text-small text-ink"
       >
         <input
           v-model="alsoAllowReads"

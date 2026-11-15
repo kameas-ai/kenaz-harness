@@ -207,7 +207,7 @@ async function clearSchedule(id: string) {
       class="fixed inset-0 z-50 m-auto w-full max-w-sm rounded-sm border border-border-muted bg-surface-1 p-5 shadow-xl"
       data-testid="wf-sched-modal"
     >
-      <h3 class="font-ui text-base text-ink mb-3">Set schedule</h3>
+      <h3 class="font-ui text-h3 text-ink mb-3">Set schedule</h3>
       <div class="space-y-3 mb-4">
         <div>
           <label class="font-ui text-xs text-ink-muted block mb-1" for="wf-sched-cron">

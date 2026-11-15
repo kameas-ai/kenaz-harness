@@ -24,7 +24,7 @@
  */
 
 import { computed, onMounted, ref, watch } from 'vue';
-import { X, FolderOpen } from 'lucide-vue-next';
+import { X, FolderOpen } from '@/shell/icons';
 import type { UserCommand, UserCommandInput } from '@/lib/types';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 
@@ -220,7 +220,7 @@ const KIND_PLACEHOLDER: Record<string, string> = {
   >
     <!-- Header: command name + cancel -->
     <div class="flex items-center justify-between">
-      <span class="font-mono text-[12px] text-accent" data-testid="arg-fill-title">
+      <span class="font-mono text-small text-accent" data-testid="arg-fill-title">
         /{{ command.name }}
       </span>
       <button
@@ -249,7 +249,7 @@ const KIND_PLACEHOLDER: Record<string, string> = {
         role="tab"
         :aria-selected="idx === focusedIndex"
         :data-testid="`arg-chip-${inp.name}`"
-        class="px-2 py-0.5 rounded border font-mono text-[11px] transition-fast"
+        class="px-2 py-0.5 rounded border font-mono text-caption transition-fast"
         :class="[
           chipStatus(inp) === 'done'
             ? 'border-accent-dim text-accent bg-surface-2'
@@ -260,8 +260,8 @@ const KIND_PLACEHOLDER: Record<string, string> = {
         @click="onChipClick(idx)"
       >
         {{ inp.name }}
-        <span v-if="!inp.required" class="ml-0.5 text-ink-dim text-[10px]">?</span>
-        <span v-if="chipStatus(inp) === 'done'" class="ml-0.5 text-[10px]">✓</span>
+        <span v-if="!inp.required" class="ml-0.5 text-ink-dim text-eyebrow">?</span>
+        <span v-if="chipStatus(inp) === 'done'" class="ml-0.5 text-eyebrow">✓</span>
       </button>
     </div>
 
@@ -275,7 +275,7 @@ const KIND_PLACEHOLDER: Record<string, string> = {
       >
         <label
           :for="`arg-input-${inp.name}`"
-          class="font-ui text-[11px] text-ink-dim uppercase tracking-[0.12em]"
+          class="font-ui text-caption text-ink-dim uppercase tracking-eyebrow"
         >
           {{ inp.name }}
           <span v-if="inp.required" class="text-signal-danger ml-0.5">*</span>
@@ -399,7 +399,7 @@ const KIND_PLACEHOLDER: Record<string, string> = {
     <!-- Error banner (post-submit failure, unlikely but guard it) -->
     <div
       v-if="submitError"
-      class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-small text-signal-danger"
       role="alert"
       data-testid="arg-fill-error"
     >
@@ -410,7 +410,7 @@ const KIND_PLACEHOLDER: Record<string, string> = {
     <div class="flex items-center justify-end gap-2">
       <button
         type="button"
-        class="px-3 py-1 rounded-md border border-border-muted text-ink-dim font-ui text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+        class="px-3 py-1 rounded-md border border-border-muted text-ink-dim font-ui text-caption uppercase tracking-eyebrow hover:bg-surface-2"
         data-testid="arg-fill-cancel-btn"
         @click="cancel"
       >
@@ -418,7 +418,7 @@ const KIND_PLACEHOLDER: Record<string, string> = {
       </button>
       <button
         type="button"
-        class="px-3 py-1 rounded-md border border-accent text-accent font-ui text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        class="px-3 py-1 rounded-md border border-accent text-accent font-ui text-caption uppercase tracking-eyebrow hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
         :disabled="!allFilled || submitting"
         data-testid="arg-fill-submit"
         @click="submit"

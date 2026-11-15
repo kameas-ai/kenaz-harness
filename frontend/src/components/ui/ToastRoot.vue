@@ -88,7 +88,7 @@ onBeforeUnmount(() => {
   right: 1rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-8);
   z-index: 9999;
   pointer-events: none;
 }
@@ -97,15 +97,15 @@ onBeforeUnmount(() => {
   pointer-events: auto;
   display: inline-flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.45rem 0.7rem;
+  gap: var(--space-10);
+  padding: var(--space-8) var(--space-12);
   background: var(--surface-3);
   border: 1px solid var(--border-muted);
   border-radius: var(--radius-sm);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--type-small-size);
   color: var(--ink);
-  box-shadow: var(--shadow-elevated, 0 2px 8px var(--shadow-color, transparent));
+  box-shadow: 0 2px 8px var(--modal-shadow);
   max-width: 28rem;
 }
 
@@ -122,7 +122,7 @@ onBeforeUnmount(() => {
   font-family: inherit;
   font-size: inherit;
   cursor: pointer;
-  padding: 0 0.25rem;
+  padding: 0 var(--space-4);
 }
 
 .toast-undo:hover {
@@ -136,7 +136,7 @@ onBeforeUnmount(() => {
   font-family: inherit;
   font-size: inherit;
   cursor: pointer;
-  padding: 0 0.25rem;
+  padding: 0 var(--space-4);
 }
 
 .toast-action:hover {
@@ -148,10 +148,10 @@ onBeforeUnmount(() => {
   border: 0;
   color: var(--ink-muted);
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--type-body-size);
   line-height: 1;
   cursor: pointer;
-  padding: 0 0.25rem;
+  padding: 0 var(--space-4);
 }
 
 .toast-close:hover {

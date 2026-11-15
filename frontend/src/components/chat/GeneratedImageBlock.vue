@@ -118,7 +118,7 @@ function closeLightbox() {
     <!-- Error state -->
     <span
       v-else-if="loadError"
-      class="block rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-[11px] text-ink-muted"
+      class="block rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-caption text-ink-muted"
       data-testid="generated-image-block-error"
     >
       Image unavailable
@@ -141,7 +141,7 @@ function closeLightbox() {
         />
       </button>
       <span
-        class="block text-[10px] text-ink-dim text-center mt-0.5 max-w-[240px] truncate"
+        class="block text-eyebrow text-ink-dim text-center mt-0.5 max-w-[240px] truncate"
         data-testid="generated-image-block-title"
       >
         {{ titleLabel }}

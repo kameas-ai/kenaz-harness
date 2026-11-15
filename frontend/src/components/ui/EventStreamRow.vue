@@ -47,7 +47,7 @@ const formattedTrailing = computed(() => {
 
 <template>
   <div
-    class="grid items-baseline gap-3 px-3 py-1 font-mono text-[12px] leading-5 hover:bg-surface-1"
+    class="grid items-baseline gap-3 px-3 py-1 font-mono text-small leading-5 hover:bg-surface-1"
     style="grid-template-columns: 18ch 14ch 1fr auto"
     role="row"
   >
@@ -59,7 +59,7 @@ const formattedTrailing = computed(() => {
         aria-hidden="true"
       ></span>
       <span
-        class="uppercase tracking-[0.12em] text-[11px]"
+        class="uppercase tracking-eyebrow text-caption"
         :style="{ color: colorVar }"
       >
         {{ CATEGORY_REGISTRY[category].label }}

@@ -111,7 +111,7 @@ async function save() {
             min="1"
             max="3650"
             placeholder="30"
-            class="w-24 rounded border border-hairline bg-surface-1 px-2 py-1 text-sm"
+            class="w-24 rounded border border-border-muted bg-surface-1 px-2 py-1 text-sm"
             data-testid="model-call-retention"
             @change="save"
           />

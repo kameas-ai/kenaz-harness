@@ -217,7 +217,7 @@ function sourceBadge(): string {
         aria-hidden="true"
       />
       <div class="min-w-0 flex-1">
-        <div class="flex flex-wrap items-center gap-2 font-ui text-[13px] text-ink">
+        <div class="flex flex-wrap items-center gap-2 font-ui text-ui text-ink">
           <span class="font-semibold">{{ item.name }}</span>
           <HealthPill
             v-if="installed && status"
@@ -225,7 +225,7 @@ function sourceBadge(): string {
             :data-testid="`recipe-state-${item.id}`"
           />
           <span
-            class="text-[10px] uppercase tracking-[0.14em]"
+            class="text-eyebrow uppercase tracking-eyebrow"
             :class="orgManaged ? 'text-signal-info' : 'text-ink-dim'"
             :data-testid="`recipe-source-${item.id}`"
           >
@@ -233,26 +233,26 @@ function sourceBadge(): string {
           </span>
           <span
             v-if="orgManaged"
-            class="rounded-sm bg-signal-info-soft px-1.5 py-0.5 font-ui text-[10px] font-medium text-signal-info"
+            class="rounded-sm bg-signal-info-soft px-1.5 py-0.5 font-ui text-eyebrow font-medium text-signal-info"
             :data-testid="`recipe-org-badge-${item.id}`"
           >
             Provisioned by your org
           </span>
           <span
             v-if="isWarming(status?.state)"
-            class="text-[10px] text-signal-warn"
+            class="text-eyebrow text-signal-warn"
             :data-testid="`recipe-warming-${item.id}`"
           >
             warming… (npm fetch on first run can take 5–15 s)
           </span>
         </div>
-        <p class="mt-1 max-w-prose text-[11px] text-ink-muted">{{ item.description }}</p>
+        <p class="mt-1 max-w-prose text-caption text-ink-muted">{{ item.description }}</p>
       </div>
     </header>
 
     <div
       v-if="installed && status?.state === 'failed' && status.lastError"
-      class="rounded-sm border border-signal-danger bg-signal-danger/10 px-2 py-1 font-mono text-[10px] text-signal-danger"
+      class="rounded-sm border border-signal-danger bg-signal-danger/10 px-2 py-1 font-mono text-eyebrow text-signal-danger"
       role="alert"
       :data-testid="`recipe-health-alert-${item.id}`"
     >
@@ -260,7 +260,7 @@ function sourceBadge(): string {
     </div>
     <div
       v-if="error"
-      class="text-[11px] text-signal-danger"
+      class="text-caption text-signal-danger"
       role="alert"
       :data-testid="`recipe-row-error-${item.id}`"
     >
@@ -271,7 +271,7 @@ function sourceBadge(): string {
     <div v-if="!installed" class="flex items-center gap-2">
       <button
         type="button"
-        class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-[12px] text-accent hover:bg-accent-glow"
+        class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-small text-accent hover:bg-accent-glow"
         :data-testid="`recipe-configure-install-${item.id}`"
         @click="beginInstall"
       >
@@ -285,7 +285,7 @@ function sourceBadge(): string {
           v-for="key in listing!.recipe.envKeys"
           :key="key.name"
           type="button"
-          class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim hover:bg-surface-2 hover:text-ink"
+          class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2 hover:text-ink"
           :data-testid="`recipe-forget-${item.id}-${key.name}`"
           @click="forgetKey(key)"
         >
@@ -295,7 +295,7 @@ function sourceBadge(): string {
       <div v-if="item.category === 'filesystem' && status?.state === 'running'">
         <button
           type="button"
-          class="inline-flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink hover:bg-surface-2"
+          class="inline-flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-caption text-ink hover:bg-surface-2"
           :data-testid="`recipe-open-workspace-${item.id}`"
           @click="openWorkspace"
         >
@@ -310,7 +310,7 @@ function sourceBadge(): string {
       >
         <button
           type="button"
-          class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim hover:bg-surface-2 hover:text-ink"
+          class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2 hover:text-ink"
           :data-testid="`recipe-edit-config-${item.id}`"
           @click="editConfig"
         >
@@ -320,7 +320,7 @@ function sourceBadge(): string {
           <li
             v-for="(p, i) in allowedDirs()"
             :key="`${i}:${p}`"
-            class="inline-flex items-center rounded-sm border border-border-muted bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-ink"
+            class="inline-flex items-center rounded-sm border border-border-muted bg-surface-2 px-1.5 py-0.5 font-mono text-eyebrow text-ink"
           >
             {{ p }}
           </li>
@@ -332,7 +332,7 @@ function sourceBadge(): string {
       <div v-if="!orgManaged" class="flex items-center gap-2">
         <button
           type="button"
-          class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim hover:bg-surface-2 hover:text-ink"
+          class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:bg-surface-2 hover:text-ink"
           :data-testid="`recipe-edit-btn-${item.id}`"
           @click="openEditRecipe"
         >
@@ -340,7 +340,7 @@ function sourceBadge(): string {
         </button>
         <button
           type="button"
-          class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-signal-danger hover:bg-signal-danger/10 disabled:opacity-50"
+          class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-signal-danger hover:bg-signal-danger/10 disabled:opacity-50"
           :disabled="busy"
           :data-testid="`recipe-delete-btn-${item.id}`"
           @click="requestRemove"
@@ -353,13 +353,13 @@ function sourceBadge(): string {
         class="space-y-2 rounded-sm border border-signal-danger bg-signal-danger/10 px-3 py-2"
         data-testid="recipe-delete-confirm"
       >
-        <p class="font-ui text-[12px] text-ink">
+        <p class="font-ui text-small text-ink">
           Remove <strong>{{ item.name }}</strong>? This stops the server and removes it from your enabled list.
         </p>
         <div class="flex gap-2">
           <button
             type="button"
-            class="rounded-sm border border-signal-danger bg-signal-danger/10 px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-signal-danger hover:bg-signal-danger/20"
+            class="rounded-sm border border-signal-danger bg-signal-danger/10 px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-signal-danger hover:bg-signal-danger/20"
             :data-testid="`recipe-delete-confirm-yes-${item.id}`"
             @click="confirmRemove"
           >
@@ -367,7 +367,7 @@ function sourceBadge(): string {
           </button>
           <button
             type="button"
-            class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim hover:text-ink"
+            class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-ink"
             :data-testid="`recipe-delete-confirm-no-${item.id}`"
             @click="confirmingRemove = false"
           >
@@ -377,7 +377,7 @@ function sourceBadge(): string {
       </div>
       <button
         type="button"
-        class="inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.16em] text-ink-dim hover:text-ink"
+        class="inline-flex items-center gap-1 text-eyebrow uppercase tracking-eyebrow text-ink-dim hover:text-ink"
         :data-testid="`recipe-detail-toggle-${item.id}`"
         @click="expanded = !expanded"
       >
@@ -386,7 +386,7 @@ function sourceBadge(): string {
       </button>
       <div
         v-if="expanded && status"
-        class="rounded-sm border border-border-muted bg-surface-0 px-3 py-2 font-ui text-[11px] text-ink-muted"
+        class="rounded-sm border border-border-muted bg-surface-0 px-3 py-2 font-ui text-caption text-ink-muted"
         :data-testid="`recipe-detail-${item.id}`"
       >
         <dl class="grid gap-1" style="grid-template-columns: max-content 1fr">
@@ -410,7 +410,7 @@ function sourceBadge(): string {
         </dl>
         <pre
           v-if="status.stderrTail"
-          class="mt-2 max-h-40 overflow-auto rounded-sm bg-surface-2 px-2 py-1 font-mono text-[10px] text-ink"
+          class="mt-2 max-h-40 overflow-auto rounded-sm bg-surface-2 px-2 py-1 font-mono text-eyebrow text-ink"
         >{{ status.stderrTail }}</pre>
       </div>
     </template>

@@ -177,7 +177,7 @@ async function save(source: 'share' | 'mode' | 'custom') {
           :value="customInput"
           type="text"
           placeholder="e.g. Work laptop"
-          class="ml-6 w-64 rounded border border-hairline bg-surface-1 px-2 py-1 text-sm"
+          class="ml-6 w-64 rounded border border-border-muted bg-surface-1 px-2 py-1 text-sm"
           data-testid="fleet-device-name-custom"
           @input="onCustomInput"
           @change="save('custom')"
