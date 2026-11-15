@@ -886,6 +886,13 @@ export interface ContextNode {
   size?: number;
   modified?: string;
   children?: ContextNode[];
+  /**
+   * A pulled team/org entry's audience as Fleet serves it (spec 018 FR-6):
+   * "team" or "org". Absent for local files.
+   */
+  audience?: string;
+  /** True only for admin-governed org content. */
+  governed?: boolean;
 }
 
 // ── Fleet context-graph sync types (fleet-context-graph-sync-01NDFSEX17) ──────

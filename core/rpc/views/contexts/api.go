@@ -34,6 +34,11 @@ type Node struct {
 	Size     int64     `json:"size,omitempty"`
 	Modified time.Time `json:"modified,omitempty"`
 	Children []Node    `json:"children,omitempty"`
+	// Audience / Governed label a pulled team/org entry as Fleet serves it
+	// (spec 018 FR-6): "team" or "org"; Governed for admin-governed org
+	// content. Empty for local files.
+	Audience string `json:"audience,omitempty"`
+	Governed bool   `json:"governed,omitempty"`
 }
 
 // ContextsAPI is the view-scoped surface backing /contexts.

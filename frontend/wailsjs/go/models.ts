@@ -2176,6 +2176,8 @@ export namespace contexts {
 	    // Go type: time
 	    modified?: any;
 	    children?: Node[];
+	    audience?: string;
+	    governed?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Node(source);
@@ -2189,6 +2191,8 @@ export namespace contexts {
 	        this.size = source["size"];
 	        this.modified = this.convertValues(source["modified"], null);
 	        this.children = this.convertValues(source["children"], Node);
+	        this.audience = source["audience"];
+	        this.governed = source["governed"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

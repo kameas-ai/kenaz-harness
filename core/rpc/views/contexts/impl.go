@@ -294,9 +294,11 @@ func mergePulledEntries(root Node, pulled []fleet.ContextNodeEntry) Node {
 			// Path encodes the fleet node ID so it never collides with fs paths.
 			path := layerName + "/_fleet/" + e.ID
 			synthetic = append(synthetic, Node{
-				Name: e.Title,
-				Path: path,
-				Kind: KindFile,
+				Name:     e.Title,
+				Path:     path,
+				Kind:     KindFile,
+				Audience: entryAudience(e),
+				Governed: e.Governed,
 			})
 		}
 		// Look for an existing top-level folder with this name and append there;
@@ -320,6 +322,15 @@ func mergePulledEntries(root Node, pulled []fleet.ContextNodeEntry) Node {
 	appendLayerNodes(orgEntries, "org")
 
 	return root
+}
+
+// entryAudience is a pulled entry's audience as Fleet served it, or its
+// layer on an older Fleet that sends none.
+func entryAudience(e fleet.ContextNodeEntry) string {
+	if e.Audience != "" {
+		return e.Audience
+	}
+	return string(e.Layer)
 }
 
 // ErrPulledEntryReadOnly refuses writing to a pulled team/org entry: it is a

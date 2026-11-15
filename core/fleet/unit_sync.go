@@ -97,8 +97,30 @@ type UnitSyncer struct {
 	// wire_id.go). Immutable after construction.
 	ids *WireIDs
 
-	mu          sync.RWMutex
-	cursor      string
+	mu sync.RWMutex
+	// cursor is the stored pull position (opaque next_cursor, or legacy
+	// since), persisted in unit_cursor.txt (encodeUnitCursor).
+	cursor pullCursor
+	// snapshotting: a re-snapshot is pulling every page within the call;
+	// snapSweep: it ends with the reset sweep (finishSnapshot); snapSeen:
+	// the node ids it served so far.
+	snapshotting bool
+	snapSweep    bool
+	snapSeen     map[string]bool
+	// accessEpoch is the last access_epoch seen (legacy since-stream only).
+	accessEpoch *int64
+	// Reset outcomes (spec 018 H-2), cumulative. Never a team id.
+	resetCount       int
+	lastResetReason  string
+	resetDropped     int
+	resetDemoted     int
+	withdrawnApplied int
+	withdrawnKept    int
+	// index holds Fleet's labels per node (team, audience, author).
+	index *unitIndex
+	// servesLive reports whether another, wider stream (the Curated lane)
+	// serves a node live; a withdrawn tombstone is then not applied here.
+	servesLive  func(nodeID string) bool
 	lastPullAt  time.Time
 	lastPullErr string
 	lastPushErr string
@@ -164,6 +186,7 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 		dataDir: dataDir,
 		ids:     NewWireIDs(dataDir),
 		stopCh:  make(chan struct{}),
+		index:   newUnitIndex(dataDir),
 	}
 	s.selfIdentity = func() Identity {
 		if dataDir == "" {
@@ -176,18 +199,33 @@ func NewUnitSyncer(client *Client, store UnitStore, mapper *UnitMapper, caps *Ca
 		return id
 	}
 	if c, err := loadUnitCursor(dataDir); err == nil {
-		s.cursor = c
+		s.cursor = decodeUnitCursor(c)
 	}
 	// The cursor was advanced under a narrower pull filter (Fleet ruling
 	// 2026-11-13 widened it to the bootstrap and legacy kinds): those nodes
 	// were filtered out server-side and would never be re-sent past the old
 	// cursor. Re-pull from the start once; applying a known node again is a
 	// no-op (sidecar baselines), so only the missed nodes are created.
-	if s.cursor != "" && loadUnitLaneSig(dataDir) != unitLaneSig() {
+	if !s.cursor.empty() && loadUnitLaneSig(dataDir) != unitLaneSig() {
 		logging.L().Info("fleet.unit.pull.cursor_reset", "reason", "lane_kind_filter_changed")
-		s.cursor = ""
+		s.cursor = pullCursor{}
+	}
+	// A reset's re-snapshot that a restart interrupted starts again from
+	// the beginning of the stream, sweep included.
+	if reason := loadUnitSnapshotMark(dataDir); reason != "" {
+		s.cursor = pullCursor{}
+		s.snapshotting, s.snapSweep, s.snapSeen = true, true, map[string]bool{}
+		s.lastResetReason = reason
 	}
 	return s
+}
+
+// selfUserID is the signed-in fleet user id ("" when unknown).
+func (s *UnitSyncer) selfUserID() string {
+	if s.selfIdentity == nil {
+		return ""
+	}
+	return s.selfIdentity().UserID
 }
 
 // ── Capability gating ──────────────────────────────────────────────────────
@@ -298,6 +336,7 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 	// write resolve back to the local unit.
 	wireOf := make(map[string]string, len(dirty))
 	wirePolicy := make(map[string]string, len(dirty))
+	wireTeam := make(map[string]string, len(dirty))
 	seenEdge := map[string]bool{}
 	edges := make([]contextEdgeInput, 0)
 	type edgeCand struct {
@@ -333,6 +372,9 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 		node.ID = s.WireNodeID(ctx, u.ID)
 		wireOf[u.ID] = node.ID
 		wirePolicy[u.ID] = node.LoadPolicy
+		if node.TeamID != nil {
+			wireTeam[u.ID] = *node.TeamID
+		}
 		nodes = append(nodes, node)
 		pushed = append(pushed, u)
 
@@ -438,6 +480,16 @@ func (s *UnitSyncer) pushUnits(ctx context.Context, class units.Classification, 
 		}); err != nil {
 			return 0, fmt.Errorf("fleet: unit push: sidecar %s: %w", u.ID, err)
 		}
+		// This member wrote the node; the next pull fills team and audience.
+		if self := s.selfUserID(); self != "" {
+			prev, _ := s.index.get(wireOf[u.ID])
+			prev.OwnerUserID = self
+			if tid := wireTeam[u.ID]; tid != "" {
+				prev.TeamID = tid
+			}
+			s.index.put(wireOf[u.ID], prev)
+		}
+		s.index.flush()
 	}
 	return result.AcceptedNodes, nil
 }
@@ -470,6 +522,15 @@ func (s *UnitSyncer) WireNodeID(ctx context.Context, unitID string) string {
 // sync, the divergence is recorded as a UnitConflict (surfaced via
 // Conflicts()) and the local body is left intact for Phase-3 resolution.
 //
+// Spec 018 H-2 (context_pull_stream.go): the stored cursor is Fleet's
+// opaque next_cursor when served (legacy since= otherwise). A refused
+// cursor, or a reset, starts a re-snapshot from the start of the stream;
+// it pulls every page within the call and then removes every synced team /
+// org unit the snapshot did not serve (the member's own units are kept as
+// personal, as their own tombstone would). A reset also removes the units
+// of the teams it names at once. Neither loops: a pull with no cursor is
+// never refused for its cursor and never resets.
+//
 // Returns the number of nodes applied (created or fast-forwarded).
 func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	if err := s.canSync(); err != nil {
@@ -483,42 +544,133 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	cursor := s.cursor
 	s.mu.RUnlock()
 
+	applied := 0
+	cursorRetried, resetHandled := false, false
+	for page := 0; ; page++ {
+		pullResp, refused, err := s.fetchUnitPage(ctx, cursor)
+		if errors.Is(err, errSilentPullStop) {
+			return applied, nil
+		}
+		if err != nil {
+			return applied, err
+		}
+		if refused {
+			if cursorRetried || cursor.empty() {
+				s.setPullErr("fleet: unit pull: cursor refused")
+				return applied, fmt.Errorf("fleet: unit pull: cursor refused")
+			}
+			cursorRetried = true
+			logging.L().Info("fleet.unit.pull.cursor_refused_full_pull")
+			if err := s.beginSnapshot(ctx, resetCursorRefused, nil, false); err != nil {
+				return applied, err
+			}
+			cursor = pullCursor{}
+			continue
+		}
+		if pullResp.Reset || s.epochChanged(pullResp) {
+			reason := pullResp.ResetReason
+			if !pullResp.Reset {
+				reason = resetAccessEpoch
+			}
+			if resetHandled {
+				s.setPullErr("fleet: unit pull: repeated reset")
+				return applied, fmt.Errorf("fleet: unit pull: repeated reset")
+			}
+			resetHandled = true
+			logging.L().Info("fleet.unit.pull.reset", "reason", reason, "team_count", len(pullResp.ResetTeamIDs))
+			if err := s.beginSnapshot(ctx, reason, pullResp.ResetTeamIDs, true); err != nil {
+				return applied, err
+			}
+			cursor = pullCursor{}
+			continue
+		}
+		n, committed, err := s.applyUnitPage(ctx, pullResp, cursor)
+		applied += n
+		if err != nil {
+			return applied, err
+		}
+		s.mu.RLock()
+		snapshotting := s.snapshotting
+		cursor = s.cursor
+		s.mu.RUnlock()
+		if !committed || !snapshotting {
+			// Not committed: tombstones held for an unknown identity; the
+			// page (and any snapshot) is retried next tick.
+			break
+		}
+		if len(pullResp.Nodes) < pullPageSize {
+			if err := s.finishSnapshot(ctx); err != nil {
+				return applied, err
+			}
+			break
+		}
+		if page+1 >= maxSnapshotPages {
+			break // continued next tick from the stored cursor
+		}
+	}
+	return applied, nil
+}
+
+func (s *UnitSyncer) setPullErr(msg string) {
+	s.mu.Lock()
+	s.lastPullErr = msg
+	s.mu.Unlock()
+}
+
+// epochChanged reports a changed access_epoch on a legacy since-stream and
+// records the value seen.
+func (s *UnitSyncer) epochChanged(r contextPullResponse) bool {
+	if r.AccessEpoch == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev := s.accessEpoch
+	v := *r.AccessEpoch
+	s.accessEpoch = &v
+	return r.NextCursor == "" && prev != nil && *prev != v
+}
+
+// fetchUnitPage performs one Unit-lane pull at cursor.
+func (s *UnitSyncer) fetchUnitPage(ctx context.Context, cursor pullCursor) (contextPullResponse, bool, error) {
+	var pullResp contextPullResponse
 	// The Unit lane pulls its own kinds plus the allowlisted kinds no lane
 	// owns (WP03 lane split by kind; Fleet ruling 2026-11-13 reader rule).
-	urlPath := lanePullPath(unitLanePullKinds, cursor)
-
-	resp, err := s.client.Get(ctx, urlPath)
+	resp, err := s.client.Get(ctx, laneStreamPath(unitLanePullKinds, cursor))
 	if err != nil {
 		if errors.Is(err, ErrNotSignedIn) {
-			return 0, nil
+			return pullResp, false, errSilentPullStop
 		}
-		s.mu.Lock()
-		s.lastPullErr = err.Error()
-		s.mu.Unlock()
-		return 0, fmt.Errorf("fleet: unit pull: %w", err)
+		s.setPullErr(err.Error())
+		return pullResp, false, fmt.Errorf("fleet: unit pull: %w", err)
 	}
 	defer drain(resp)
 
 	if resp.StatusCode == http.StatusForbidden {
-		return 0, nil // unentitled → local-only
+		return pullResp, false, errSilentPullStop // unentitled → local-only
+	}
+	if isCursorRefusal(resp) {
+		return pullResp, true, nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		e := fmt.Errorf("fleet: unit pull status %d", resp.StatusCode)
-		s.mu.Lock()
-		s.lastPullErr = e.Error()
-		s.mu.Unlock()
-		return 0, e
+		s.setPullErr(e.Error())
+		return pullResp, false, e
 	}
-
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, fmt.Errorf("fleet: unit pull read: %w", err)
+		return pullResp, false, fmt.Errorf("fleet: unit pull read: %w", err)
 	}
-	var pullResp contextPullResponse
 	if err := json.Unmarshal(raw, &pullResp); err != nil {
-		return 0, fmt.Errorf("fleet: unit pull parse: %w", err)
+		return pullResp, false, fmt.Errorf("fleet: unit pull parse: %w", err)
 	}
+	return pullResp, false, nil
+}
 
+// applyUnitPage applies one page and, unless a tombstone was held for an
+// unknown identity, commits it: counters, the snapshot's seen set and the
+// stored cursor. Reports applied count and whether the page was committed.
+func (s *UnitSyncer) applyUnitPage(ctx context.Context, pullResp contextPullResponse, cursor pullCursor) (int, bool, error) {
 	applied := 0
 	skippedKinds, skippedInvalid, held := 0, 0, 0
 	for _, n := range pullResp.Nodes {
@@ -557,14 +709,16 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 			}
 			// A storage failure is transient: abort before the cursor
 			// advances so the page is retried.
-			return applied, err
+			return applied, false, err
 		}
 		if ok {
 			applied++
 		}
 	}
 
+	s.index.flush()
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	wasHeld := s.tombstonesHeldIdentityUnknown > 0
 	s.tombstonesHeldIdentityUnknown = held
 	switch {
@@ -573,28 +727,166 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 	case held == 0 && wasHeld:
 		logging.L().Info("fleet.unit.pull.held_identity_cleared")
 	}
-	if held == 0 {
-		// Counted only when the page is committed: a held page is re-applied
-		// next tick (idempotently: first-sight rows now have a sidecar,
-		// fast-forwards are at the baseline, applied tombstones have no
-		// sidecar left), and would otherwise be counted twice.
-		s.skippedUnknownKinds += skippedKinds
-		s.skippedInvalid += skippedInvalid
-		s.pullCount += len(pullResp.Nodes)
-		if pullResp.Cursor != "" {
-			s.cursor = pullResp.Cursor
-			if s.dataDir != "" {
-				if saveErr := saveUnitCursor(s.dataDir, s.cursor); saveErr != nil {
-					logging.L().Warn("fleet.unit.cursor_save_failed", "err", saveErr.Error())
-				}
-			}
+	if held > 0 {
+		s.lastPullAt = time.Now().UTC()
+		s.lastPullErr = ""
+		return applied, false, nil
+	}
+	// Counted only when the page is committed: a held page is re-applied
+	// next tick (idempotently: first-sight rows now have a sidecar,
+	// fast-forwards are at the baseline, applied tombstones have no
+	// sidecar left), and would otherwise be counted twice.
+	s.skippedUnknownKinds += skippedKinds
+	s.skippedInvalid += skippedInvalid
+	s.pullCount += len(pullResp.Nodes)
+	if s.snapshotting {
+		if s.snapSeen == nil {
+			s.snapSeen = map[string]bool{}
 		}
+		for _, n := range pullResp.Nodes {
+			if n.Withdrawn {
+				continue // left this stream: not "served"
+			}
+			s.snapSeen[n.ID] = true
+		}
+	}
+	next := nextCursorFrom(pullResp, s.cursor)
+	if next != s.cursor {
+		s.cursor = next
+		s.saveCursorLocked()
 	}
 	s.lastPullAt = time.Now().UTC()
 	s.lastPullErr = ""
-	s.mu.Unlock()
+	return applied, true, nil
+}
 
-	return applied, nil
+// saveCursorLocked persists the cursor. Caller holds s.mu.
+func (s *UnitSyncer) saveCursorLocked() {
+	if s.dataDir == "" {
+		return
+	}
+	if err := saveUnitCursor(s.dataDir, encodeUnitCursor(s.cursor)); err != nil {
+		logging.L().Warn("fleet.unit.cursor_save_failed", "err", err.Error())
+	}
+}
+
+// beginSnapshot starts a re-snapshot: the stored cursor is dropped, the
+// snapshot is recorded on disk (a restart continues it from the start) and,
+// on a reset, the units of the listed teams are removed at once.
+//
+// A refused cursor is a clean full re-pull only (no sweep): a cursor is
+// bound to one member, so the usual cause is another account signing in on
+// this profile, whose snapshot says nothing about the previous account's
+// units.
+func (s *UnitSyncer) beginSnapshot(ctx context.Context, reason string, teamIDs []string, reset bool) error {
+	s.mu.Lock()
+	s.cursor = pullCursor{}
+	s.snapshotting = true
+	s.snapSweep = reset
+	s.snapSeen = map[string]bool{}
+	if reset {
+		s.resetCount++
+		s.lastResetReason = reason
+	}
+	if s.dataDir != "" {
+		_ = os.Remove(unitCursorPath(s.dataDir))
+		if reset {
+			if err := saveUnitSnapshotMark(s.dataDir, reason); err != nil {
+				logging.L().Warn("fleet.unit.snapshot_mark_failed", "err", err.Error())
+			}
+		}
+	}
+	s.mu.Unlock()
+	teams := teamSet(teamIDs)
+	if !reset || teams == nil {
+		return nil // every remaining copy is decided by the snapshot sweep
+	}
+	return s.dropUnits(ctx, func(nodeID string) bool {
+		l, ok := s.index.get(nodeID)
+		return ok && l.TeamID != "" && teams[l.TeamID]
+	})
+}
+
+// finishSnapshot removes every synced team / org unit the completed
+// snapshot did not serve, and ends the snapshot.
+func (s *UnitSyncer) finishSnapshot(ctx context.Context) error {
+	s.mu.RLock()
+	seen, sweep := s.snapSeen, s.snapSweep
+	s.mu.RUnlock()
+	if sweep {
+		if err := s.dropUnits(ctx, func(nodeID string) bool { return !seen[nodeID] }); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	s.snapshotting, s.snapSweep, s.snapSeen = false, false, nil
+	if s.dataDir != "" {
+		_ = os.Remove(unitSnapshotMarkPath(s.dataDir))
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+// dropUnits removes every synced team / org unit whose node id matches:
+// the member's own unit is demoted to personal (content and history kept,
+// as for a tombstone of their own node); anyone else's is deleted with its
+// history, edges and sidecar. With no author on record (a unit pulled
+// before the index existed and not served since) a unit carrying un-pushed
+// local edits is demoted rather than deleted, so the member's own words are
+// never lost; one without is deleted.
+func (s *UnitSyncer) dropUnits(ctx context.Context, match func(nodeID string) bool) error {
+	lister, ok := s.store.(interface {
+		ListSyncState(ctx context.Context) ([]units.SyncState, error)
+	})
+	if !ok {
+		return nil
+	}
+	states, err := lister.ListSyncState(ctx)
+	if err != nil {
+		return fmt.Errorf("fleet: unit pull: list sidecars: %w", err)
+	}
+	defer s.index.flush()
+	self := ""
+	if s.selfIdentity != nil {
+		self = s.selfIdentity().UserID
+	}
+	for _, st := range states {
+		if st.NodeID == "" || !match(st.NodeID) {
+			continue
+		}
+		local, gerr := s.store.Get(ctx, st.UnitID)
+		if gerr == nil && local.Classification == units.ClassPersonal {
+			continue
+		}
+		l, _ := s.index.get(st.NodeID)
+		own := self != "" && l.OwnerUserID != "" && strings.EqualFold(l.OwnerUserID, self)
+		if l.OwnerUserID == "" && gerr == nil && local.Version > st.SyncedLocalVersion {
+			own = true
+		}
+		if gerr == nil && own {
+			if err := s.store.DemoteToPersonal(ctx, st.UnitID); err != nil {
+				return fmt.Errorf("fleet: unit pull: reset demote %s: %w", st.UnitID, err)
+			}
+			s.mu.Lock()
+			s.resetDemoted++
+			s.dropConflictLocked(st.UnitID)
+			s.mu.Unlock()
+		} else {
+			hadUnpushed, err := s.store.DeleteWithSyncState(ctx, st.UnitID)
+			if err != nil && !errors.Is(err, units.ErrPersonalUnit) {
+				return fmt.Errorf("fleet: unit pull: reset delete %s: %w", st.UnitID, err)
+			}
+			s.mu.Lock()
+			s.resetDropped++
+			if hadUnpushed {
+				s.tombstoneDroppedLocalEdits++
+			}
+			s.dropConflictLocked(st.UnitID)
+			s.mu.Unlock()
+		}
+		s.index.remove(st.NodeID)
+	}
+	return nil
 }
 
 // isUnitValidationErr reports whether err is the local store refusing a node
@@ -629,9 +921,15 @@ func isUnitValidationErr(err error) bool {
 // after a local edit (local.Version=1) a later server delta checked
 // local.Version(1) > baseline(N) = FALSE and silently overwrote the edit.
 func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (bool, error) {
+	if n.DeletedAt != nil && n.Withdrawn {
+		return s.applyWithdrawn(ctx, n)
+	}
 	if n.DeletedAt != nil {
 		return s.applyTombstone(ctx, n)
 	}
+	// Fleet's labels for the node (team, audience, author), kept for a
+	// reset's per-team drop and for the audience label.
+	s.index.put(n.ID, UnitNodeLabels{TeamID: n.TeamID, Audience: n.Audience, Governed: n.Governed, OwnerUserID: n.OwnerUserID})
 	mapped, ok, err := s.mapper.PulledNodeToUnit(n)
 	if err != nil {
 		return false, err
@@ -864,6 +1162,7 @@ func (s *UnitSyncer) applyTombstone(ctx context.Context, n ContextPulledNode) (b
 		s.tombstonesDemoted++
 		s.dropConflictLocked(st.UnitID)
 		s.mu.Unlock()
+		s.index.remove(n.ID)
 		logging.L().Info("fleet.unit.pull.tombstone_demoted_own_unit",
 			"unit_id", st.UnitID, "node_id", n.ID)
 		return true, nil
@@ -883,11 +1182,82 @@ func (s *UnitSyncer) applyTombstone(ctx context.Context, n ContextPulledNode) (b
 	}
 	s.dropConflictLocked(st.UnitID)
 	s.mu.Unlock()
+	s.index.remove(n.ID)
 	if hadUnpushed {
 		logging.L().Warn("fleet.unit.pull.tombstone_dropped_local_edits",
 			"unit_id", st.UnitID, "node_id", n.ID)
 	}
 	return true, nil
+}
+
+// applyWithdrawn handles a withdrawn tombstone (contract §2): the node
+// moved out of this stream's audience. It is not a deletion and never
+// pushes anything back: the local copy and its sidecar go (so its version
+// is forgotten and a return to an audience the member reads is a first
+// sight again), unless a wider stream still serves the node live — the
+// Unit lane is filtered by ?kind=, so the Curated lane's stream is checked
+// first. Ownership is not consulted: the author of a node always still
+// reads it where it moved, so a withdrawn row is never about their own.
+func (s *UnitSyncer) applyWithdrawn(ctx context.Context, n ContextPulledNode) (bool, error) {
+	if n.ID == "" {
+		return false, nil
+	}
+	s.mu.RLock()
+	live := s.servesLive
+	s.mu.RUnlock()
+	if live != nil && live(n.ID) {
+		s.mu.Lock()
+		s.withdrawnKept++
+		s.mu.Unlock()
+		return false, nil
+	}
+	st, err := s.store.GetSyncStateByNodeID(ctx, n.ID)
+	if errors.Is(err, units.ErrSyncStateNotFound) {
+		s.index.remove(n.ID)
+		return false, nil // never held here: ignore (contract §2)
+	}
+	if err != nil {
+		return false, fmt.Errorf("fleet: unit pull: withdrawn sidecar lookup %s: %w", n.ID, err)
+	}
+	hadUnpushed, err := s.store.DeleteWithSyncState(ctx, st.UnitID)
+	if err != nil {
+		if errors.Is(err, units.ErrPersonalUnit) {
+			return false, nil
+		}
+		return false, fmt.Errorf("fleet: unit pull: withdrawn delete %s: %w", st.UnitID, err)
+	}
+	s.mu.Lock()
+	s.withdrawnApplied++
+	if hadUnpushed {
+		s.tombstoneDroppedLocalEdits++
+	}
+	s.dropConflictLocked(st.UnitID)
+	s.mu.Unlock()
+	s.index.remove(n.ID)
+	return true, nil
+}
+
+// SetServesLive wires the check a withdrawn tombstone consults before it
+// removes a unit: whether a wider stream (the Curated lane's) still serves
+// the node live. nil = no other stream.
+func (s *UnitSyncer) SetServesLive(f func(nodeID string) bool) {
+	s.mu.Lock()
+	s.servesLive = f
+	s.mu.Unlock()
+}
+
+// NodeLabels returns Fleet's last labels for a local unit (audience,
+// governed, team), resolved through its sidecar. ok=false when the unit has
+// never synced or no label is on record.
+func (s *UnitSyncer) NodeLabels(ctx context.Context, unitID string) (UnitNodeLabels, bool) {
+	if s == nil || s.store == nil || unitID == "" {
+		return UnitNodeLabels{}, false
+	}
+	st, err := s.store.GetSyncState(ctx, unitID)
+	if err != nil || st.NodeID == "" {
+		return UnitNodeLabels{}, false
+	}
+	return s.index.get(st.NodeID)
 }
 
 // refreshServerLoadPolicy records the load_policy Fleet holds for a known
@@ -1212,6 +1582,16 @@ type UnitSyncStatus struct {
 	TombstoneDroppedLocalEdits    int `json:"tombstone_dropped_local_edits"`
 	TombstonesDemoted             int `json:"tombstones_demoted"`
 	TombstonesHeldIdentityUnknown int `json:"tombstones_held_identity_unknown"`
+	// Spec 018 H-2: loss-of-access resets handled and the latest reason;
+	// units removed / kept as personal by a reset; withdrawn tombstones
+	// applied, and kept because a wider stream serves the node live.
+	// Counts only, never a team.
+	ResetCount       int    `json:"reset_count"`
+	LastResetReason  string `json:"last_reset_reason,omitempty"`
+	ResetDropped     int    `json:"reset_dropped"`
+	ResetDemoted     int    `json:"reset_demoted"`
+	WithdrawnApplied int    `json:"withdrawn_applied"`
+	WithdrawnKept    int    `json:"withdrawn_kept"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -1219,7 +1599,7 @@ func (s *UnitSyncer) Status() UnitSyncStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return UnitSyncStatus{
-		Cursor:        s.cursor,
+		Cursor:        s.cursor.Value,
 		LastPullAt:    s.lastPullAt,
 		LastPullErr:   s.lastPullErr,
 		LastPushErr:   s.lastPushErr,
@@ -1237,6 +1617,13 @@ func (s *UnitSyncer) Status() UnitSyncStatus {
 		TombstoneDroppedLocalEdits:    s.tombstoneDroppedLocalEdits,
 		TombstonesDemoted:             s.tombstonesDemoted,
 		TombstonesHeldIdentityUnknown: s.tombstonesHeldIdentityUnknown,
+
+		ResetCount:       s.resetCount,
+		LastResetReason:  s.lastResetReason,
+		ResetDropped:     s.resetDropped,
+		ResetDemoted:     s.resetDemoted,
+		WithdrawnApplied: s.withdrawnApplied,
+		WithdrawnKept:    s.withdrawnKept,
 	}
 }
 
@@ -1283,6 +1670,58 @@ func saveUnitCursor(dataDir, cursor string) error {
 	}
 	// Record the filter the cursor was advanced under (see NewUnitSyncer).
 	return atomicWriteFile(unitLaneSigPath(dataDir), unitLaneSig()+"\n")
+}
+
+// Cursor encoding in unit_cursor.txt: an opaque Fleet cursor is prefixed
+// "opaque:"; a bare value is a legacy since timestamp (what older builds
+// wrote), so an upgrade continues from it and switches to next_cursor on
+// the first page Fleet answers with one.
+const unitCursorOpaquePrefix = "opaque:"
+
+func encodeUnitCursor(c pullCursor) string {
+	if c.Kind == pullCursorOpaque && c.Value != "" {
+		return unitCursorOpaquePrefix + c.Value
+	}
+	return c.Value
+}
+
+func decodeUnitCursor(v string) pullCursor {
+	if strings.HasPrefix(v, unitCursorOpaquePrefix) {
+		return pullCursor{Kind: pullCursorOpaque, Value: strings.TrimPrefix(v, unitCursorOpaquePrefix)}
+	}
+	if v == "" {
+		return pullCursor{}
+	}
+	return pullCursor{Kind: pullCursorSince, Value: v}
+}
+
+// unitSnapshotMarkPath records a reset re-snapshot in progress (its reason).
+func unitSnapshotMarkPath(dataDir string) string {
+	return filepath.Join(dataDir, "fleet", "unit_resnapshot.txt")
+}
+
+func saveUnitSnapshotMark(dataDir, reason string) error {
+	if dataDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "fleet"), 0o700); err != nil {
+		return err
+	}
+	if reason == "" {
+		reason = "reset"
+	}
+	return atomicWriteFile(unitSnapshotMarkPath(dataDir), reason+"\n")
+}
+
+func loadUnitSnapshotMark(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	b, err := os.ReadFile(unitSnapshotMarkPath(dataDir))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // unitLaneSig identifies the Unit lane's pull filter.

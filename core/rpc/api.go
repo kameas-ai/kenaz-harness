@@ -4717,6 +4717,17 @@ func New(c *core.Core, opts ...Option) *API {
 			if a.settingsImpl != nil {
 				unitSyncer.SetLanes(a.settingsImpl.FleetSyncLanes())
 			}
+			// Spec 018 H-2: withdrawn tombstones are per stream. The Unit lane
+			// is filtered by ?kind=, so before dropping a unit on one it asks
+			// the Curated lane's stream whether that node is still live.
+			if a.ctxGraphSyncer != nil {
+				unitSyncer.SetServesLive(a.ctxGraphSyncer.ServesLive)
+			}
+			// Audience labels for the model framing of shared units.
+			a.sharedCtx.setUnitLabels(func(ctx context.Context, unitID string) (string, bool, bool) {
+				l, ok := unitSyncer.NodeLabels(ctx, unitID)
+				return l.Audience, l.Governed, ok && l.Audience != ""
+			})
 			// Read-down-auto: pull org/team units into the local clone as read
 			// layers. Self-gates on sign-in + team-graph capability.
 			unitSyncer.StartPoller(context.Background())
