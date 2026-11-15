@@ -4,10 +4,13 @@ package settings
 // the device display name the enroll body carries as `hostname`, which
 // Fleet's Hosts page shows admins as "Device name".
 //
-// The choice is the member's (relay parity, legal D58): share or not
-// (default share), and when sharing, the neutral "<OS> device <4 hex>"
-// default, this computer's own name, or a custom name. The fields are
-// written only by SetFleetDeviceName; a whole-settings Set keeps them.
+// The choice is the member's: share or not (default share), and when
+// sharing, this computer's own name (the default, owner decision
+// 2026-11-14), the neutral "<OS> device <4 hex>" label, or a custom name.
+// The neutral label is also the fallback when the computer's name is empty
+// or generic (a Workbench VM's "localhost"). A served / in-VM harness has
+// no panel, so it resolves the same default. The fields are written only
+// by SetFleetDeviceName; a whole-settings Set keeps them.
 
 import (
 	"context"
@@ -39,6 +42,7 @@ func (s Settings) fleetDeviceNameChoice() fleet.DeviceNameChoice {
 	return fleet.DeviceNameChoice{
 		Share:           !s.FleetDeviceNameHidden,
 		UseComputerName: s.FleetDeviceNameUseComputerName,
+		UseNeutral:      s.FleetDeviceNameNeutral && !s.FleetDeviceNameUseComputerName,
 		Custom:          s.FleetDeviceNameCustom,
 	}
 }
@@ -72,6 +76,7 @@ func (a *API) GetFleetDeviceName(_ context.Context) (FleetDeviceNameSettings, er
 	return FleetDeviceNameSettings{
 		Share:           choice.Share,
 		UseComputerName: choice.UseComputerName,
+		UseNeutralName:  choice.UseNeutral,
 		CustomName:      s.FleetDeviceNameCustom,
 		ComputerName:    computer,
 		DefaultName:     fleet.DefaultDeviceName(runtime.GOOS, nodeID),
@@ -91,6 +96,7 @@ func (a *API) SetFleetDeviceName(_ context.Context, dn FleetDeviceNameSettings) 
 	if err := Update(a.store, func(s *Settings) error {
 		s.FleetDeviceNameHidden = !dn.Share
 		s.FleetDeviceNameUseComputerName = dn.UseComputerName
+		s.FleetDeviceNameNeutral = dn.UseNeutralName && !dn.UseComputerName
 		s.FleetDeviceNameCustom = fleet.SanitizeDeviceName(dn.CustomName)
 		return nil
 	}); err != nil {

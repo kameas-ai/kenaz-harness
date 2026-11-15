@@ -95,32 +95,59 @@ func TestResolveDeviceName(t *testing.T) {
 	if got := ResolveDeviceName(DeviceNameChoice{Share: false, UseComputerName: true, Custom: "Mine"}, "linux", "node-1", computer); got != "" {
 		t.Fatalf("off: %q", got)
 	}
-	// Default: the neutral name, computer name not read.
-	if got := ResolveDeviceName(DeviceNameChoice{Share: true}, "linux", "node-1", computer); got != def {
-		t.Fatalf("default: %q, want %q", got, def)
-	}
 	if calls != 0 {
-		t.Fatalf("computer name read %d times without being chosen", calls)
+		t.Fatalf("computer name read %d times with sharing off", calls)
 	}
-	// Computer name chosen.
+	// Default (never chosen): the computer's name.
+	if got := ResolveDeviceName(DeviceNameChoice{Share: true}, "linux", "node-1", computer); got != "Example-Workstation" {
+		t.Fatalf("default: %q, want the computer name", got)
+	}
+	// Computer name chosen explicitly: the same.
 	if got := ResolveDeviceName(DeviceNameChoice{Share: true, UseComputerName: true}, "linux", "node-1", computer); got != "Example-Workstation" {
 		t.Fatalf("computer: %q", got)
 	}
-	// Custom overrides the computer name, and is sanitised.
-	if got := ResolveDeviceName(DeviceNameChoice{Share: true, UseComputerName: true, Custom: " Test\tLaptop\u200b "}, "linux", "node-1", computer); got != "Test Laptop" {
+	// Neutral chosen explicitly: the neutral label, computer name not read.
+	calls = 0
+	if got := ResolveDeviceName(DeviceNameChoice{Share: true, UseNeutral: true}, "linux", "node-1", computer); got != def {
+		t.Fatalf("neutral: %q, want %q", got, def)
+	}
+	if calls != 0 {
+		t.Fatalf("computer name read %d times with neutral chosen", calls)
+	}
+	// Custom overrides the others, and is sanitised.
+	if got := ResolveDeviceName(DeviceNameChoice{Share: true, UseNeutral: true, Custom: " Test\tLaptop\u200b "}, "linux", "node-1", computer); got != "Test Laptop" {
 		t.Fatalf("custom: %q", got)
 	}
-	// A custom name that sanitises to nothing falls through.
-	if got := ResolveDeviceName(DeviceNameChoice{Share: true, Custom: "\x00\u200b "}, "linux", "node-1", computer); got != def {
+	// A custom name that sanitises to nothing falls through to the default.
+	if got := ResolveDeviceName(DeviceNameChoice{Share: true, Custom: "\x00\u200b "}, "linux", "node-1", computer); got != "Example-Workstation" {
 		t.Fatalf("empty custom: %q", got)
 	}
-	// Computer name unreadable: the neutral default, not nothing.
-	if got := ResolveDeviceName(DeviceNameChoice{Share: true, UseComputerName: true}, "linux", "node-1", func() string { return "" }); got != def {
-		t.Fatalf("unreadable computer name: %q", got)
+	// Computer name empty, unreadable or generic: the neutral label.
+	for _, cn := range []string{"", " \u200b", "localhost", "LOCALHOST.localdomain", "kameas-workbench", "kenaz-headless", "0123456789ab"} {
+		cn := cn
+		if got := ResolveDeviceName(DeviceNameChoice{Share: true}, "linux", "node-1", func() string { return cn }); got != def {
+			t.Fatalf("computer name %q: %q, want %q", cn, got, def)
+		}
 	}
-	// No node id and nothing else: empty (omitted).
-	if got := ResolveDeviceName(DeviceNameChoice{Share: true}, "linux", "", computer); got != "" {
+	if got := ResolveDeviceName(DeviceNameChoice{Share: true}, "linux", "node-1", nil); got != def {
+		t.Fatalf("no computer-name reader: %q", got)
+	}
+	// No node id and no usable computer name: empty (omitted).
+	if got := ResolveDeviceName(DeviceNameChoice{Share: true, UseNeutral: true}, "linux", "", computer); got != "" {
 		t.Fatalf("no node id: %q", got)
+	}
+}
+
+func TestIsGenericComputerName(t *testing.T) {
+	for _, n := range []string{"", "localhost", "Localhost.localdomain", "(none)", "ubuntu", "nixos", "kameas-workbench", "kenaz-headless", "abcdef012345"} {
+		if !IsGenericComputerName(n) {
+			t.Errorf("IsGenericComputerName(%q) = false", n)
+		}
+	}
+	for _, n := range []string{"Example-Workstation", "Test’s MacBook", "TEST-PC", "build-box-7", "abcdef01234"} {
+		if IsGenericComputerName(n) {
+			t.Errorf("IsGenericComputerName(%q) = true", n)
+		}
 	}
 }
 
@@ -145,6 +172,10 @@ func TestComputerNameFor(t *testing.T) {
 	}
 	if got := computerNameFor("linux", scutil, env, host); got != "test-host" {
 		t.Fatalf("linux: %q", got)
+	}
+	vmHost := func() (string, error) { return "localhost.localdomain", nil }
+	if got := computerNameFor("linux", nil, env, vmHost); got != "" {
+		t.Fatalf("generic VM hostname: %q, want empty", got)
 	}
 	if got := computerNameFor("linux", nil, env, failHost); got != "" {
 		t.Fatalf("linux no hostname: %q", got)
