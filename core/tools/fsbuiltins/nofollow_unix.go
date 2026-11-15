@@ -93,17 +93,42 @@ func isLinkAt(dirfd int, name string) bool {
 }
 
 // openInDir opens name in the opened directory dir without following a
-// link at name (errLeafLink if it is one).
+// link at name (errLeafLink if it is one). A read-only open is made
+// O_NONBLOCK and checked with fstat before anything reads it: a FIFO or
+// socket (one swapped in after the caller's type check, say) is refused
+// with errNotRegular instead of blocking the tool forever; anything else
+// gets O_NONBLOCK cleared again.
 func openInDir(dir *os.File, name string, flag int, perm os.FileMode) (*os.File, error) {
 	dfd := int(dir.Fd())
-	fd, err := unix.Openat(dfd, name, flag|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(perm.Perm()))
+	full := filepath.Join(dir.Name(), name)
+	readOnly := flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE) == 0
+	oflag := flag | unix.O_NOFOLLOW | unix.O_CLOEXEC
+	if readOnly {
+		oflag |= unix.O_NONBLOCK
+	}
+	fd, err := unix.Openat(dfd, name, oflag, uint32(perm.Perm()))
 	if err != nil {
 		if isLinkAt(dfd, name) {
 			return nil, errLeafLink
 		}
-		return nil, &os.PathError{Op: "open", Path: filepath.Join(dir.Name(), name), Err: err}
+		return nil, &os.PathError{Op: "open", Path: full, Err: err}
 	}
-	return os.NewFile(uintptr(fd), filepath.Join(dir.Name(), name)), nil
+	if readOnly {
+		var st unix.Stat_t
+		if err := unix.Fstat(fd, &st); err != nil {
+			_ = unix.Close(fd)
+			return nil, &os.PathError{Op: "stat", Path: full, Err: err}
+		}
+		if t := st.Mode & unix.S_IFMT; t == unix.S_IFIFO || t == unix.S_IFSOCK {
+			_ = unix.Close(fd)
+			return nil, &os.PathError{Op: "open", Path: full, Err: errNotRegular}
+		}
+		if err := unix.SetNonblock(fd, false); err != nil {
+			_ = unix.Close(fd)
+			return nil, &os.PathError{Op: "open", Path: full, Err: err}
+		}
+	}
+	return os.NewFile(uintptr(fd), full), nil
 }
 
 // openSubdir opens the subdirectory name of dir for listing, without

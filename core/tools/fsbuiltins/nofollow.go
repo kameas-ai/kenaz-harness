@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // pathChangedError is ErrPathChanged's type; a type rather than
@@ -45,6 +46,9 @@ var ErrPathChanged error = pathChangedError{}
 // write), the read tools to ErrPathChanged (their checked path had every
 // link resolved, so a leaf link appeared after the check).
 var errLeafLink = errors.New("leaf is a link")
+
+// errNotRegular refuses a read of a FIFO or socket, which would block.
+var errNotRegular = errors.New("not a regular file or directory")
 
 // openNoFollow opens p for reading without following a link in any
 // component. A leaf link is refused with ErrEditThroughLink; a link in an
@@ -94,16 +98,18 @@ func readDirSorted(dir *os.File) ([]fs.DirEntry, error) {
 // filepath.SkipDir and filepath.SkipAll behave as in filepath.WalkDir. A
 // directory that cannot be read or opened is skipped, as the tools' old
 // WalkDir callbacks did. parent is the handle of the entry's directory;
-// fn may use it with openInDir / lsizeInDir until it returns.
-func walkNoFollow(root *os.File, rootPath string, fn func(path string, d fs.DirEntry, parent *os.File) error) error {
-	err := walkDirHandle(root, rootPath, fn)
+// fn may use it with openInDir / lsizeInDir until it returns. skip, when
+// non-nil, is asked about every opened subdirectory before it is entered
+// (fn has already seen its entry); true leaves it unread.
+func walkNoFollow(root *os.File, rootPath string, skip func(sub *os.File, path string) bool, fn func(path string, d fs.DirEntry, parent *os.File) error) error {
+	err := walkDirHandle(root, rootPath, skip, fn)
 	if err == filepath.SkipAll || err == filepath.SkipDir {
 		return nil
 	}
 	return err
 }
 
-func walkDirHandle(dir *os.File, dirPath string, fn func(string, fs.DirEntry, *os.File) error) error {
+func walkDirHandle(dir *os.File, dirPath string, skip func(*os.File, string) bool, fn func(string, fs.DirEntry, *os.File) error) error {
 	ents, err := readDirSorted(dir)
 	if err != nil && len(ents) == 0 {
 		return nil // unreadable directory: skipped
@@ -129,7 +135,11 @@ func walkDirHandle(dir *os.File, dirPath string, fn func(string, fs.DirEntry, *o
 			}
 			continue // unreadable subdirectory: skipped
 		}
-		err = walkDirHandle(sub, p, fn)
+		if skip != nil && skip(sub, p) {
+			_ = sub.Close()
+			continue
+		}
+		err = walkDirHandle(sub, p, skip, fn)
 		_ = sub.Close()
 		if err != nil {
 			return err
@@ -207,6 +217,66 @@ func atomicWrite(path string, data []byte, mode fs.FileMode) error {
 	}
 	committed = true
 	return nil
+}
+
+// stateSkipper keeps the recursive tools out of harness state below a
+// root that only contains it: a grep of ~ under a broad grant must not
+// read .kenaz/harness/... — the gate judged the root, never the state
+// inside it. A subdirectory is state when its opened handle is the same
+// directory (os.SameFile) as one of the gate's StateDirs; the walk never
+// gets below one, so nothing inside state is reached either. A walk whose
+// root is itself state (judged so by the gate, with its own prompt)
+// skips nothing.
+type stateSkipper struct {
+	roots   []os.FileInfo
+	skipped []string
+}
+
+func newStateSkipper(gate interface {
+	StateDirs() []string
+	InsideState(string) bool
+}, root *os.File) *stateSkipper {
+	s := &stateSkipper{}
+	for _, d := range gate.StateDirs() {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+			s.roots = append(s.roots, fi)
+		}
+	}
+	if len(s.roots) == 0 || gate.InsideState(root.Name()) {
+		return nil
+	}
+	return s
+}
+
+// skip reports whether sub (at path) is a state directory, and records it.
+func (s *stateSkipper) skip(sub *os.File, path string) bool {
+	if s == nil {
+		return false
+	}
+	fi, err := sub.Stat()
+	if err != nil {
+		return true // cannot tell: fail closed
+	}
+	for _, r := range s.roots {
+		if os.SameFile(fi, r) {
+			s.skipped = append(s.skipped, path)
+			return true
+		}
+	}
+	return false
+}
+
+// note is the result text for the skipped state directories, each shown
+// through show (the caller's spelling); empty when none was skipped.
+func (s *stateSkipper) note(show func(string) string) string {
+	if s == nil || len(s.skipped) == 0 {
+		return ""
+	}
+	shown := make([]string, len(s.skipped))
+	for i, p := range s.skipped {
+		shown[i] = show(p)
+	}
+	return "harness state directory skipped: " + strings.Join(shown, ", ")
 }
 
 // beforeRename is a test seam between the temp file's create and the

@@ -273,6 +273,20 @@ type privilege struct {
 	copy string
 }
 
+// StateDirs returns the harness state directories the gate protects
+// (GateOptions.StateDirs). Recursive builtins use it to skip state they
+// would otherwise walk into below a root that only contains it.
+func (g *Gate) StateDirs() []string {
+	return append([]string(nil), g.opts.StateDirs...)
+}
+
+// InsideState reports whether p is harness state as the gate classifies
+// it (privilege().inside: inside a StateDir, compared as the filesystem
+// sees it, and not exempted as a workspace inside it).
+func (g *Gate) InsideState(p string) bool {
+	return g.privilege(p).inside
+}
+
 // privilege classifies canonical against GateOptions.StateDirs.
 func (g *Gate) privilege(canonical string) privilege {
 	if len(g.opts.StateDirs) == 0 {

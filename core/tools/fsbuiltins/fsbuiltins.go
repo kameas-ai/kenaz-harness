@@ -397,6 +397,8 @@ type dirEntry struct {
 type listDirResult struct {
 	Entries   []dirEntry `json:"entries"`
 	Truncated bool       `json:"truncated"`
+	// Note reports harness state directories a recursive listing skipped.
+	Note string `json:"note,omitempty"`
 }
 
 func (t *ListDirTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -414,7 +416,7 @@ func (t *ListDirTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMe
 		args.MaxEntries = 1000
 	}
 
-	_, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpRead, args.Path)
+	shownRoot, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpRead, args.Path)
 	if err != nil {
 		return errResult("list_dir: " + err.Error()), nil
 	}
@@ -434,9 +436,10 @@ func (t *ListDirTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMe
 
 	var entries []dirEntry
 	truncated := false
+	state := stateSkipperFor(t.gate, root)
 
 	if args.Recursive {
-		err = walkNoFollow(root, canonical, func(path string, d fs.DirEntry, parent *os.File) error {
+		err = walkNoFollow(root, canonical, state.skip, func(path string, d fs.DirEntry, parent *os.File) error {
 			if len(entries) >= args.MaxEntries {
 				truncated = true
 				return filepath.SkipAll
@@ -463,7 +466,9 @@ func (t *ListDirTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMe
 		return errResult("list_dir: walk: " + err.Error()), nil
 	}
 
-	return okResult(listDirResult{Entries: entries, Truncated: truncated}), nil
+	return okResult(listDirResult{Entries: entries, Truncated: truncated, Note: state.note(func(p string) string {
+		return underShown(p, canonical, shownRoot)
+	})}), nil
 }
 
 // toDirEntry describes d, an entry of the opened directory parent. Its
@@ -538,6 +543,8 @@ type globArgs struct {
 type globResult struct {
 	Matches   []string `json:"matches"`
 	Truncated bool     `json:"truncated"`
+	// Note reports harness state directories the walk skipped.
+	Note string `json:"note,omitempty"`
 }
 
 func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -590,7 +597,8 @@ func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 		maxDepth = len(strings.Split(filepath.ToSlash(rel), "/"))
 	}
 
-	err = walkNoFollow(rootDir, canonical, func(path string, d fs.DirEntry, _ *os.File) error {
+	state := stateSkipperFor(t.gate, rootDir)
+	err = walkNoFollow(rootDir, canonical, state.skip, func(path string, d fs.DirEntry, _ *os.File) error {
 		relPath, relErr := filepath.Rel(canonical, path)
 		if relErr != nil {
 			relPath = path
@@ -619,7 +627,9 @@ func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	}
 
 	sort.Strings(matches)
-	return okResult(globResult{Matches: matches, Truncated: truncated}), nil
+	return okResult(globResult{Matches: matches, Truncated: truncated, Note: state.note(func(p string) string {
+		return underShown(p, canonical, shown)
+	})}), nil
 }
 
 // splitGlobRoot splits a glob into the directory to walk (the base
@@ -886,7 +896,8 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	defer rootF.Close()
 
 	outsideChecked, outsideSkipped := 0, 0
-	walkErr := walkNoFollow(rootF, canonical, func(path string, d fs.DirEntry, parent *os.File) error {
+	state := stateSkipperFor(t.gate, rootF)
+	walkErr := walkNoFollow(rootF, canonical, state.skip, func(path string, d fs.DirEntry, parent *os.File) error {
 		if d.IsDir() {
 			return nil
 		}
@@ -914,7 +925,9 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 			if li, lerr := os.Lstat(target); lerr != nil || !li.Mode().IsRegular() {
 				return nil // a directory, device, dangling or looping link
 			}
-			if !insideDir(target, canonical) {
+			// A target in harness state is never read on the root's
+			// judgement, even when the state dir sits inside the tree.
+			if !insideDir(target, canonical) || (state != nil && t.gate.InsideState(target)) {
 				if outsideChecked >= maxOutsideLinkChecks {
 					outsideSkipped++
 					return nil
@@ -952,15 +965,38 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	}
 
 	res := grepResult{Matches: matches, Truncated: truncated}
+	res.Note = state.note(display)
 	if outsideSkipped > 0 {
 		res.SkippedLinks = outsideSkipped
 		what := "links pointing outside %s were skipped"
 		if outsideSkipped == 1 {
 			what = "link pointing outside %s was skipped"
 		}
-		res.Note = fmt.Sprintf("%d "+what+"; grep a link's target directly to search it", outsideSkipped, shown)
+		linkNote := fmt.Sprintf("%d "+what+"; grep a link's target directly to search it", outsideSkipped, shown)
+		if res.Note != "" {
+			res.Note += "; "
+		}
+		res.Note += linkNote
 	}
 	return okResult(res), nil
+}
+
+// stateSkipperFor is newStateSkipper for a possibly nil gate (no gate: no
+// state directories to skip).
+func stateSkipperFor(gate *corefs.Gate, root *os.File) *stateSkipper {
+	if gate == nil {
+		return nil
+	}
+	return newStateSkipper(gate, root)
+}
+
+// underShown re-roots p (below the resolved root) under the caller's
+// spelling of the root.
+func underShown(p, root, shown string) string {
+	if rel, err := filepath.Rel(root, p); err == nil {
+		return filepath.Join(shown, rel)
+	}
+	return p
 }
 
 // insideDir reports whether p is dir or lies below it (both cleaned,
