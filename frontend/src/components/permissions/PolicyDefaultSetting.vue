@@ -55,7 +55,7 @@ const OPTIONS = [
 
 <template>
   <section v-if="mode" class="flex flex-col gap-2" data-testid="policy-default-setting">
-    <p class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-muted">Default policy</p>
+    <p class="font-ui text-caption uppercase tracking-eyebrow text-ink-muted">Default policy</p>
     <p v-if="mode === 'workbench'" class="font-ui text-xs text-ink-muted" data-testid="policy-default-workbench">
       {{ WORKBENCH_SUMMARY }}
     </p>
