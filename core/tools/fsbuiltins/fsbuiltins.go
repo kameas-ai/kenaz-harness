@@ -165,7 +165,10 @@ func gateCheck(ctx context.Context, gate *corefs.Gate, op corefs.Op, rawPath str
 // followed for a read; for a write only the parent directory resolved, so
 // a leaf link is replaced, never written through). I/O on it means what
 // is read or written is what was checked: a link retargeted after the
-// check cannot redirect it. With no gate it is the canonical path.
+// check cannot redirect it, and the tools open it without following a link
+// in any component (nofollow.go), so a directory swapped for a link after
+// the check is refused too. With no gate it is the canonical path resolved
+// the same way (corefs.ResolveFor).
 func gateCheckPath(ctx context.Context, gate *corefs.Gate, op corefs.Op, rawPath string) (canonical, ioPath string, err error) {
 	canonical, err = corefs.Canonicalize(rawPath)
 	if err != nil {
@@ -173,7 +176,11 @@ func gateCheckPath(ctx context.Context, gate *corefs.Gate, op corefs.Op, rawPath
 	}
 	if gate == nil {
 		// No gate wired — permit unconditionally (test path).
-		return canonical, canonical, nil
+		resolved, ok := corefs.ResolveFor(op, canonical)
+		if !ok {
+			return "", "", corefs.ErrUnresolvablePath
+		}
+		return canonical, resolved, nil
 	}
 	d, resolved, err := gate.EvaluatePath(ctx, op, canonical)
 	if err != nil {
@@ -286,7 +293,7 @@ func (t *ReadFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 		return errResult("read_file: " + err.Error()), nil
 	}
 
-	f, err := os.Open(ioPath)
+	f, err := openCheckedForRead(ioPath)
 	if err != nil {
 		return errResult("read_file: " + err.Error()), nil
 	}
@@ -390,6 +397,8 @@ type dirEntry struct {
 type listDirResult struct {
 	Entries   []dirEntry `json:"entries"`
 	Truncated bool       `json:"truncated"`
+	// Note reports harness state directories a recursive listing skipped.
+	Note string `json:"note,omitempty"`
 }
 
 func (t *ListDirTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -407,33 +416,39 @@ func (t *ListDirTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMe
 		args.MaxEntries = 1000
 	}
 
-	_, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpRead, args.Path)
+	shownRoot, ioPath, err := gateCheckPath(ctx, t.gate, corefs.OpRead, args.Path)
 	if err != nil {
 		return errResult("list_dir: " + err.Error()), nil
 	}
-	// Walk the location the gate judged; entry paths are relative to it.
+	// Walk the location the gate judged, opened without following a link
+	// in any component; entry paths are relative to it.
 	canonical := ioPath
+	root, err := openDirNoFollow(canonical, false)
+	if err != nil {
+		if args.Recursive && !errors.Is(err, ErrPathChanged) {
+			// The filepath.WalkDir this replaced skipped an unreadable
+			// root and listed nothing.
+			return okResult(listDirResult{}), nil
+		}
+		return errResult("list_dir: " + err.Error()), nil
+	}
+	defer root.Close()
 
 	var entries []dirEntry
 	truncated := false
+	state := stateSkipperFor(t.gate, root)
 
 	if args.Recursive {
-		err = filepath.WalkDir(canonical, func(path string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return nil // skip unreadable entries
-			}
-			if path == canonical {
-				return nil // skip root itself
-			}
+		err = walkNoFollow(root, canonical, state.skip, func(path string, d fs.DirEntry, parent *os.File) error {
 			if len(entries) >= args.MaxEntries {
 				truncated = true
 				return filepath.SkipAll
 			}
-			entries = append(entries, toDirEntry(path, canonical, d))
+			entries = append(entries, toDirEntry(path, canonical, d, parent))
 			return nil
 		})
 	} else {
-		rawEntries, readErr := os.ReadDir(canonical)
+		rawEntries, readErr := readDirSorted(root)
 		if readErr != nil {
 			return errResult("list_dir: " + readErr.Error()), nil
 		}
@@ -443,7 +458,7 @@ func (t *ListDirTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMe
 				break
 			}
 			fullPath := filepath.Join(canonical, d.Name())
-			entries = append(entries, toDirEntry(fullPath, canonical, d))
+			entries = append(entries, toDirEntry(fullPath, canonical, d, root))
 		}
 	}
 
@@ -451,10 +466,16 @@ func (t *ListDirTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMe
 		return errResult("list_dir: walk: " + err.Error()), nil
 	}
 
-	return okResult(listDirResult{Entries: entries, Truncated: truncated}), nil
+	return okResult(listDirResult{Entries: entries, Truncated: truncated, Note: state.note(func(p string) string {
+		return underShown(p, canonical, shownRoot)
+	})}), nil
 }
 
-func toDirEntry(path, root string, d fs.DirEntry) dirEntry {
+// toDirEntry describes d, an entry of the opened directory parent. Its
+// size is read relative to parent without following a link (lsizeInDir),
+// not by path, so a swapped directory cannot make it report another
+// file's size.
+func toDirEntry(path, root string, d fs.DirEntry, parent *os.File) dirEntry {
 	rel, _ := filepath.Rel(root, path)
 	typ := "file"
 	if d.IsDir() {
@@ -462,10 +483,7 @@ func toDirEntry(path, root string, d fs.DirEntry) dirEntry {
 	} else if d.Type()&fs.ModeSymlink != 0 {
 		typ = "symlink"
 	}
-	var size int64
-	if info, err := d.Info(); err == nil {
-		size = info.Size()
-	}
+	size, _ := lsizeInDir(parent, d.Name())
 	return dirEntry{
 		Name: d.Name(),
 		Type: typ,
@@ -525,6 +543,8 @@ type globArgs struct {
 type globResult struct {
 	Matches   []string `json:"matches"`
 	Truncated bool     `json:"truncated"`
+	// Note reports harness state directories the walk skipped.
+	Note string `json:"note,omitempty"`
 }
 
 func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -553,9 +573,19 @@ func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	if err != nil {
 		return errResult("glob: " + err.Error()), nil
 	}
-	// Walk the location the gate judged; report matches under the path
-	// the caller named.
+	// Walk the location the gate judged, opened without following a link
+	// in any component; report matches under the path the caller named.
 	canonical := ioPath
+	rootDir, err := openDirNoFollow(canonical, false)
+	if err != nil {
+		if errors.Is(err, ErrPathChanged) {
+			return errResult("glob: " + err.Error()), nil
+		}
+		// A root that does not exist or cannot be read matches nothing,
+		// as the filepath.WalkDir this replaced reported it.
+		return okResult(globResult{}), nil
+	}
+	defer rootDir.Close()
 
 	var matches []string
 	truncated := false
@@ -567,16 +597,14 @@ func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 		maxDepth = len(strings.Split(filepath.ToSlash(rel), "/"))
 	}
 
-	err = filepath.WalkDir(canonical, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil // skip unreadable
-		}
+	state := stateSkipperFor(t.gate, rootDir)
+	err = walkNoFollow(rootDir, canonical, state.skip, func(path string, d fs.DirEntry, _ *os.File) error {
 		relPath, relErr := filepath.Rel(canonical, path)
 		if relErr != nil {
 			relPath = path
 		}
 		if d.IsDir() {
-			if maxDepth >= 0 && path != canonical && len(strings.Split(filepath.ToSlash(relPath), "/")) >= maxDepth {
+			if maxDepth >= 0 && len(strings.Split(filepath.ToSlash(relPath), "/")) >= maxDepth {
 				return filepath.SkipDir
 			}
 			return nil // only match files
@@ -599,7 +627,9 @@ func (t *GlobTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	}
 
 	sort.Strings(matches)
-	return okResult(globResult{Matches: matches, Truncated: truncated}), nil
+	return okResult(globResult{Matches: matches, Truncated: truncated, Note: state.note(func(p string) string {
+		return underShown(p, canonical, shown)
+	})}), nil
 }
 
 // splitGlobRoot splits a glob into the directory to walk (the base
@@ -762,7 +792,18 @@ type grepMatch struct {
 type grepResult struct {
 	Matches   []grepMatch `json:"matches"`
 	Truncated bool        `json:"truncated"`
+	// SkippedLinks counts in-tree links to files outside the grep root
+	// that were not read because the per-call cap on judging them
+	// (maxOutsideLinkChecks) was reached; Note says so in words.
+	SkippedLinks int    `json:"skipped_links,omitempty"`
+	Note         string `json:"note,omitempty"`
 }
+
+// maxOutsideLinkChecks caps how many in-tree links to files outside the
+// grep root one grep call sends to the gate (each may prompt). Links past
+// the cap are skipped and counted, so a tree full of links out (a pnpm
+// store, a monorepo) cannot raise a prompt storm.
+const maxOutsideLinkChecks = 3
 
 func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 	if t.enabled != nil && !t.enabled() {
@@ -807,16 +848,12 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	var matches []grepMatch
 	truncated := false
 
-	grepFile := func(filePath string) error {
-		data, readErr := os.ReadFile(filePath)
-		if readErr != nil {
-			return nil // skip unreadable files
-		}
+	grepData := func(filePath string, data []byte) {
 		lines := strings.Split(string(data), "\n")
 		for i, line := range lines {
 			if len(matches) >= args.MaxResults {
 				truncated = true
-				return nil
+				return
 			}
 			if re.MatchString(line) {
 				matches = append(matches, grepMatch{
@@ -826,43 +863,150 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 				})
 			}
 		}
-		return nil
+	}
+	// grepHandle reads an opened file and greps it; an unreadable file is
+	// skipped, as before.
+	grepHandle := func(filePath string, f *os.File) {
+		data, readErr := io.ReadAll(f)
+		_ = f.Close()
+		if readErr == nil {
+			grepData(filePath, data)
+		}
 	}
 
-	info, statErr := os.Stat(canonical)
+	// The root is opened without following a link in any component: a
+	// directory swapped for a link after the gate's check is refused.
+	rootF, openErr := openCheckedForRead(canonical)
+	if openErr != nil {
+		if errors.Is(openErr, ErrPathChanged) {
+			return errResult("grep: " + openErr.Error()), nil
+		}
+		return errResult("grep: stat: " + openErr.Error()), nil
+	}
+	info, statErr := rootF.Stat()
 	if statErr != nil {
+		_ = rootF.Close()
 		return errResult("grep: stat: " + statErr.Error()), nil
 	}
 
-	if info.IsDir() {
-		walkErr := filepath.WalkDir(canonical, func(path string, d fs.DirEntry, wErr error) error {
-			if wErr != nil {
+	if !info.IsDir() {
+		grepHandle(canonical, rootF)
+		return okResult(grepResult{Matches: matches, Truncated: truncated}), nil
+	}
+	defer rootF.Close()
+
+	outsideChecked, outsideSkipped := 0, 0
+	state := stateSkipperFor(t.gate, rootF)
+	walkErr := walkNoFollow(rootF, canonical, state.skip, func(path string, d fs.DirEntry, parent *os.File) error {
+		if d.IsDir() {
+			return nil
+		}
+		if truncated {
+			return filepath.SkipAll
+		}
+		if args.Include != "" {
+			matched, _ := filepath.Match(args.Include, d.Name())
+			if !matched {
 				return nil
 			}
-			if d.IsDir() {
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			// grep has always read the file an in-tree link points to.
+			// Resolve it first: a link to anything but a regular file is
+			// skipped without asking. A target inside the root grep was
+			// allowed on is read with no new check — the same judgement
+			// as a regular file in the tree. Only a target that leaves
+			// the tree is judged by the gate as a read of its own, at
+			// most maxOutsideLinkChecks times per call.
+			target, ok := corefs.ResolveFor(corefs.OpRead, path)
+			if !ok {
 				return nil
 			}
-			if truncated {
-				return filepath.SkipAll
+			if li, lerr := os.Lstat(target); lerr != nil || !li.Mode().IsRegular() {
+				return nil // a directory, device, dangling or looping link
 			}
-			if args.Include != "" {
-				matched, _ := filepath.Match(args.Include, d.Name())
-				if !matched {
+			// A target in harness state is never read on the root's
+			// judgement, even when the state dir sits inside the tree.
+			if !insideDir(target, canonical) || (state != nil && t.gate.InsideState(target)) {
+				if outsideChecked >= maxOutsideLinkChecks {
+					outsideSkipped++
 					return nil
 				}
+				outsideChecked++
+				_, judged, gerr := gateCheckPath(ctx, t.gate, corefs.OpRead, display(path))
+				if gerr != nil {
+					return nil // denied or unresolvable: skipped
+				}
+				target = judged
 			}
-			return grepFile(path)
-		})
-		if walkErr != nil {
-			return errResult("grep: walk: " + walkErr.Error()), nil
+			f, oerr := openCheckedForRead(target)
+			if oerr != nil {
+				return nil
+			}
+			if fi, serr := f.Stat(); serr != nil || !fi.Mode().IsRegular() {
+				_ = f.Close()
+				return nil
+			}
+			grepHandle(path, f)
+			return nil
 		}
-	} else {
-		if err := grepFile(canonical); err != nil {
-			return errResult("grep: " + err.Error()), nil
+		if !d.Type().IsRegular() {
+			return nil // a FIFO or device would block or never end
 		}
+		f, oerr := openInDir(parent, d.Name(), os.O_RDONLY, 0)
+		if oerr != nil {
+			return nil // unreadable, or swapped for a link: skipped, not followed
+		}
+		grepHandle(path, f)
+		return nil
+	})
+	if walkErr != nil {
+		return errResult("grep: walk: " + walkErr.Error()), nil
 	}
 
-	return okResult(grepResult{Matches: matches, Truncated: truncated}), nil
+	res := grepResult{Matches: matches, Truncated: truncated}
+	res.Note = state.note(display)
+	if outsideSkipped > 0 {
+		res.SkippedLinks = outsideSkipped
+		what := "links pointing outside %s were skipped"
+		if outsideSkipped == 1 {
+			what = "link pointing outside %s was skipped"
+		}
+		linkNote := fmt.Sprintf("%d "+what+"; grep a link's target directly to search it", outsideSkipped, shown)
+		if res.Note != "" {
+			res.Note += "; "
+		}
+		res.Note += linkNote
+	}
+	return okResult(res), nil
+}
+
+// stateSkipperFor is newStateSkipper for a possibly nil gate (no gate: no
+// state directories to skip).
+func stateSkipperFor(gate *corefs.Gate, root *os.File) *stateSkipper {
+	if gate == nil {
+		return nil
+	}
+	return newStateSkipper(gate, root)
+}
+
+// underShown re-roots p (below the resolved root) under the caller's
+// spelling of the root.
+func underShown(p, root, shown string) string {
+	if rel, err := filepath.Rel(root, p); err == nil {
+		return filepath.Join(shown, rel)
+	}
+	return p
+}
+
+// insideDir reports whether p is dir or lies below it (both cleaned,
+// resolved paths).
+func insideDir(p, dir string) bool {
+	if p == dir {
+		return true
+	}
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // ─── write_file ─────────────────────────────────────────────────────────────
@@ -953,9 +1097,9 @@ func (t *WriteFileTool) Call(ctx context.Context, raw json.RawMessage) (json.Raw
 }
 
 // verifyWritten confirms canonical is now a regular file of size n that
-// this process can open for reading.
+// this process can open for reading (no-follow, as the read tools open it).
 func verifyWritten(canonical string, n int64) error {
-	f, err := os.Open(canonical)
+	f, err := openCheckedForRead(canonical)
 	if err != nil {
 		return fmt.Errorf("written file is not readable back: %w", err)
 	}
@@ -987,39 +1131,6 @@ func identityHint(err error) string {
 		return " (the harness writes as " + who + ")"
 	}
 	return " (the harness writes as " + who + ", HOME=" + home + ")"
-}
-
-// atomicWrite writes data to path using a tmp-file-then-rename pattern.
-// Creates missing parent directories. The rename is atomic on POSIX
-// (same filesystem); Windows has weaker rename semantics but is still
-// better than a direct truncate+write.
-func atomicWrite(path string, data []byte, mode fs.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
-	}
-	tmp, err := os.CreateTemp(dir, ".fsbuiltins-write-*")
-	if err != nil {
-		return fmt.Errorf("create tmp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op after successful rename
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write tmp: %w", err)
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod tmp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close tmp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename: %w", err)
-	}
-	return nil
 }
 
 // ─── edit_file ──────────────────────────────────────────────────────────────
@@ -1107,13 +1218,15 @@ func (t *EditFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 
 	// Never read or write through a link: the gate judged the link's own
 	// location (resolveFor), not wherever it points. The file is opened
-	// without following a leaf link (openNoFollow), and its content and
-	// mode come from that one handle, so a link swapped in after the
-	// gate's check cannot feed another file's content into this edit.
+	// without following a link in any component (openNoFollow: a leaf
+	// link is ErrEditThroughLink, a swapped directory ErrPathChanged), and
+	// its content and mode come from that one handle, so a link swapped in
+	// after the gate's check cannot feed another file's content into this
+	// edit.
 	f, err := openNoFollow(ioPath)
 	if err != nil {
-		if errors.Is(err, ErrEditThroughLink) {
-			return errResult("edit_file: " + ErrEditThroughLink.Error()), nil
+		if errors.Is(err, ErrEditThroughLink) || errors.Is(err, ErrPathChanged) {
+			return errResult("edit_file: " + err.Error()), nil
 		}
 		return errResult("edit_file: read: " + err.Error()), nil
 	}

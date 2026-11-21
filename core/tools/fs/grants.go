@@ -187,6 +187,15 @@ func resolveFor(op Op, canonical string) (string, bool) {
 	return filepath.Join(rp, filepath.Base(canonical)), ok
 }
 
+// ResolveFor is resolveFor for callers outside the package that do I/O
+// with no gate wired (fsbuiltins' nil-gate test path): the location op on
+// canonical really acts, with every link the gate would follow resolved,
+// so a no-follow open of it does not trip over a benign alias such as
+// macOS's /var -> /private/var.
+func ResolveFor(op Op, canonical string) (string, bool) {
+	return resolveFor(op, canonical)
+}
+
 // resolveForWithDir is resolveFor plus the resolved directory a "this
 // directory" grant names, taken at the same moment. For a write the
 // directory is the one resolveFor already resolved; for a read (which
@@ -262,6 +271,20 @@ type privilege struct {
 	root string
 	// copy is the banner text for the prompt; empty when neither holds.
 	copy string
+}
+
+// StateDirs returns the harness state directories the gate protects
+// (GateOptions.StateDirs). Recursive builtins use it to skip state they
+// would otherwise walk into below a root that only contains it.
+func (g *Gate) StateDirs() []string {
+	return append([]string(nil), g.opts.StateDirs...)
+}
+
+// InsideState reports whether p is harness state as the gate classifies
+// it (privilege().inside: inside a StateDir, compared as the filesystem
+// sees it, and not exempted as a workspace inside it).
+func (g *Gate) InsideState(p string) bool {
+	return g.privilege(p).inside
 }
 
 // privilege classifies canonical against GateOptions.StateDirs.
