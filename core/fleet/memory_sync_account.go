@@ -226,11 +226,22 @@ func (m *MemorySync) ContinueOlderNotes(_ context.Context) error {
 const (
 	MemoryNoticeInheritedErase  = "inherited_erase"
 	MemoryNoticeInheritedOptOut = "inherited_opt_out"
+	// MemoryNoticeDisclosureUpdate: "I have read this" on the corrected
+	// disclosure (MemoryDisclosureRevision). Recorded for the signed-in
+	// account on this device and sent to Fleet as a re-acknowledgement
+	// (sendDisclosureReack); sync state is untouched.
+	MemoryNoticeDisclosureUpdate = "disclosure_update"
 )
 
+// covers reports whether the ack is for revision rev.
+func (a *MemoryDisclosureAck) covers(rev string) bool {
+	return a != nil && a.Revision == rev
+}
+
 // DismissNotice clears a notice for the account it belongs to.
-func (m *MemorySync) DismissNotice(_ context.Context, notice string) error {
-	if notice != MemoryNoticeInheritedErase && notice != MemoryNoticeInheritedOptOut {
+func (m *MemorySync) DismissNotice(ctx context.Context, notice string) error {
+	if notice != MemoryNoticeInheritedErase && notice != MemoryNoticeInheritedOptOut &&
+		notice != MemoryNoticeDisclosureUpdate {
 		return fmt.Errorf("fleet: memory sync: unknown notice %q", notice)
 	}
 	m.cycleMu.Lock()
@@ -238,6 +249,22 @@ func (m *MemorySync) DismissNotice(_ context.Context, notice string) error {
 	scope, err := m.ensureAccount()
 	if err != nil {
 		return err
+	}
+	if notice == MemoryNoticeDisclosureUpdate {
+		// Every account reads the disclosure for itself, so this isn't limited
+		// to the legacy owner. ensureAccount made the state this account's.
+		if err := m.update(func(s *memSyncState) {
+			s.DisclosureAck = &MemoryDisclosureAck{Revision: MemoryDisclosureRevision, At: m.now().UTC()}
+			s.DisclosureReackPending = true
+		}); err != nil {
+			return err
+		}
+		// Best effort now; the lane retries while it's pending. The member's
+		// answer is recorded either way, so a Fleet failure isn't an error.
+		if err := m.sendDisclosureReack(ctx); err != nil {
+			logging.L().Warn("fleet.memory_sync.disclosure_reack_failed", "err", err.Error())
+		}
+		return nil
 	}
 	if scope.Account != scope.LegacyOwner {
 		return nil // not this account's to dismiss

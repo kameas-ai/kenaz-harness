@@ -62,6 +62,14 @@ type fakeMemoryFleet struct {
 	// putLog records every enabled value a PUT /settings carried.
 	putLog   []bool
 	requests int
+	// consent is the stored consent_version ("" answers "v"); reacks records
+	// the raw body of every re-acknowledgement PUT (Fleet f4772414).
+	consent string
+	reacks  []map[string]any
+	// reackStatus forces the next re-acknowledgement to answer with this
+	// status and reackCode, once.
+	reackStatus int
+	reackCode   string
 	// status429 / status403 force the next N requests to fail.
 	status429, status403 int
 	pushes               []memPushRequest
@@ -331,8 +339,34 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Enabled        *bool     `json:"enabled"`
 			Scopes         *[]string `json:"scopes"`
 			ConsentVersion string    `json:"consent_version"`
+			Reacknowledge  bool      `json:"reacknowledge"`
 		}
 		_ = json.Unmarshal(body, &u)
+		if u.Reacknowledge {
+			// Fleet's re-acknowledgement contract (2026-11-15).
+			var raw map[string]any
+			_ = json.Unmarshal(body, &raw)
+			f.reacks = append(f.reacks, raw)
+			if f.reackStatus != 0 {
+				st, code := f.reackStatus, f.reackCode
+				f.reackStatus = 0
+				writeJSON(w, st, map[string]any{"code": code})
+				return
+			}
+			if u.Enabled != nil || u.Scopes != nil || u.ConsentVersion == "" {
+				writeJSON(w, 400, map[string]any{"code": "invalid_request_body"})
+				return
+			}
+			if !f.enabled {
+				writeJSON(w, 422, map[string]any{"code": "memory_sync_off"})
+				return
+			}
+			if !strings.HasPrefix(f.consent, "memory-sync/") {
+				f.consent = u.ConsentVersion
+			}
+			writeJSON(w, 200, f.settingsLocked())
+			return
+		}
 		if u.Enabled != nil && *u.Enabled && u.ConsentVersion == "" {
 			writeJSON(w, 422, map[string]any{"code": "consent_version_required"})
 			return
@@ -340,6 +374,9 @@ func (f *fakeMemoryFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if u.Enabled != nil {
 			f.enabled = *u.Enabled
 			f.putLog = append(f.putLog, *u.Enabled)
+		}
+		if u.ConsentVersion != "" {
+			f.consent = u.ConsentVersion
 		}
 		if u.Scopes != nil {
 			f.scopes = map[string]bool{}
@@ -388,7 +425,11 @@ func (f *fakeMemoryFleet) settingsLocked() MemorySyncSettings {
 		sc = append(sc, s)
 	}
 	sort.Strings(sc)
-	return MemorySyncSettings{Enabled: f.enabled, Scopes: sc, ConsentVersion: "v"}
+	cv := f.consent
+	if cv == "" {
+		cv = "v"
+	}
+	return MemorySyncSettings{Enabled: f.enabled, Scopes: sc, ConsentVersion: cv}
 }
 
 // fakeCursor mirrors fleet service/memory ParseCursorFull (#191): "" or

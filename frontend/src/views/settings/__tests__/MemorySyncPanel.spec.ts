@@ -16,7 +16,7 @@ function status(over: Partial<MemorySyncStatus> = {}): MemorySyncStatus {
     scopes: ['global', 'long_term'],
     consentVersion: '',
     optedInAt: '',
-    currentConsentVersion: '2026-10-07',
+    currentConsentVersion: '2026-11-14',
     liveRecords: 0,
     liveBytes: 0,
     maxRecords: 20000,
@@ -76,7 +76,7 @@ describe('MemorySyncPanel', () => {
     await wrapper.find('[data-testid="memory-sync-consent"]').setValue(true);
     await wrapper.find('[data-testid="memory-sync-enable"]').trigger('click');
     await flushPromises();
-    expect(memorySyncEnable).toHaveBeenCalledWith(['long_term'], '2026-10-07');
+    expect(memorySyncEnable).toHaveBeenCalledWith(['long_term'], '2026-11-14');
     expect(wrapper.find('[data-testid="memory-sync-on"]').exists()).toBe(true);
   });
 
@@ -228,5 +228,78 @@ describe('MemorySyncPanel', () => {
     expect(wrapper.find('[data-testid="memory-sync-local-erase-pending"]').text()).toBe(
       'Your notes were erased from Kameas Fleet but not yet from this device. It will keep trying.',
     );
+  });
+});
+
+describe('MemorySyncPanel — corrected disclosure re-acknowledgement', () => {
+  const NOTICE = '[data-testid="memory-sync-disclosure-update"]';
+  const ACK = '[data-testid="memory-sync-disclosure-update-ack"]';
+  const IDS = ['view', 'storage', 'org', 'connector', 'leave'];
+
+  it('shows once when sync is on and the account has not acknowledged it', async () => {
+    const { wrapper } = mountWith(status({ enabled: true, disclosureAcked: false }));
+    await flushPromises();
+    const notice = wrapper.find(NOTICE);
+    expect(notice.exists()).toBe(true);
+    expect(notice.find('h3').text()).toBe('What changed about memory sync');
+    expect(notice.text()).toContain('You can turn sync off at any time below.');
+    for (const id of IDS) {
+      expect(notice.find(`[data-testid="memory-sync-disclosure-update-${id}"]`).exists()).toBe(true);
+    }
+    // The sync controls stay available alongside it.
+    expect(wrapper.find('[data-testid="memory-sync-disable"]').exists()).toBe(true);
+  });
+
+  it('renders the same five points as the off-state disclosure (one source)', async () => {
+    const { MEMORY_SYNC_DISCLOSURE_POINTS } = await import('@/views/settings/memorySyncDisclosure');
+    expect(MEMORY_SYNC_DISCLOSURE_POINTS.map((p) => p.id)).toEqual(IDS);
+    const on = mountWith(status({ enabled: true, disclosureAcked: false }));
+    const off = mountWith(status({ enabled: false }));
+    await flushPromises();
+    for (const p of MEMORY_SYNC_DISCLOSURE_POINTS) {
+      expect(on.wrapper.find(`[data-testid="memory-sync-disclosure-update-${p.id}"]`).text()).toBe(p.text);
+      expect(off.wrapper.find(`[data-testid="memory-sync-disclosure-${p.id}"]`).text()).toBe(p.text);
+    }
+    expect(off.wrapper.find('[data-testid="memory-sync-disclosure"]').text()).toContain(
+      "They're stored on Kameas servers in a form Kameas can read.",
+    );
+  });
+
+  it('has exactly one button, reading "I have read this"', async () => {
+    const { wrapper } = mountWith(status({ enabled: true, disclosureAcked: false }));
+    await flushPromises();
+    const buttons = wrapper.find(NOTICE).findAll('button');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].text()).toBe('I have read this');
+    expect(wrapper.find(NOTICE).text()).not.toMatch(/I agree|Accept|Consent/);
+  });
+
+  it('records the ack and hides; sync state is untouched', async () => {
+    const { wrapper, memorySyncDismissNotice, memorySyncEnable, memorySyncDisable } = mountWith(
+      status({ enabled: true, disclosureAcked: false }),
+    );
+    memorySyncDismissNotice.mockImplementationOnce(async () =>
+      status({ enabled: true, disclosureAcked: true }),
+    );
+    await flushPromises();
+    await wrapper.find(ACK).trigger('click');
+    await flushPromises();
+    expect(memorySyncDismissNotice).toHaveBeenCalledWith('disclosure_update');
+    expect(memorySyncEnable).not.toHaveBeenCalled();
+    expect(memorySyncDisable).not.toHaveBeenCalled();
+    expect(wrapper.find(NOTICE).exists()).toBe(false);
+    expect(wrapper.find('[data-testid="memory-sync-on"]').exists()).toBe(true);
+  });
+
+  it('is hidden when sync is off', async () => {
+    const { wrapper } = mountWith(status({ enabled: false, disclosureAcked: false }));
+    await flushPromises();
+    expect(wrapper.find(NOTICE).exists()).toBe(false);
+  });
+
+  it('is hidden when the account already acknowledged it', async () => {
+    const { wrapper } = mountWith(status({ enabled: true, disclosureAcked: true }));
+    await flushPromises();
+    expect(wrapper.find(NOTICE).exists()).toBe(false);
   });
 });
